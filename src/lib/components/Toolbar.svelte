@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore } from "../stores/scene";
+  import { createWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
   import { openSection, toggleSection } from "../stores/ui";
   import { get } from "svelte/store";
@@ -18,11 +18,35 @@
     $sceneStore.widgets.find((w) => w.id === selectedId) ?? null
   );
   let currentFit = $derived(selectedWidget?.mediaFit ?? "ajuster");
+  let currentZoom = $derived(selectedWidget?.mediaZoom ?? 1);
+  let currentRot = $derived(selectedWidget?.mediaRot ?? 0);
 
   const FIT_MODES = ["ajuster", "remplir", "etendre", "etirer", "centrer", "vignette"];
 
   function onFitClick(fit: string) {
     if (selectedId) setMediaFit(selectedId, fit);
+  }
+
+  // Zoom média : oninput = maj locale (fluide), onchange (pointerup) = commit.
+  function onZoomInput(e: Event) {
+    if (!selectedId) return;
+    setMediaZoomLocal(selectedId, parseFloat((e.target as HTMLInputElement).value));
+  }
+  async function onZoomChange() {
+    await commitScene();
+  }
+
+  // Rotation média : même pattern.
+  function onRotInput(e: Event) {
+    if (!selectedId) return;
+    setMediaRotLocal(selectedId, parseFloat((e.target as HTMLInputElement).value));
+  }
+  async function onRotChange() {
+    await commitScene();
+  }
+
+  async function onResetMedia() {
+    if (selectedId) await resetMedia(selectedId);
   }
 
   async function onConnect() {
@@ -79,6 +103,39 @@
               {/each}
             </div>
           </div>
+          <div class="media-ctrl">
+            <div class="media-row">
+              <span class="field-label">Zoom média</span>
+              <span class="media-val">{currentZoom.toFixed(2)}</span>
+            </div>
+            <input
+              class="range"
+              type="range"
+              min="0.2"
+              max="5"
+              step="0.1"
+              value={currentZoom}
+              oninput={onZoomInput}
+              onchange={onZoomChange}
+            />
+          </div>
+          <div class="media-ctrl">
+            <div class="media-row">
+              <span class="field-label">Rotation média</span>
+              <span class="media-val">{Math.round(currentRot)}°</span>
+            </div>
+            <input
+              class="range"
+              type="range"
+              min="-180"
+              max="180"
+              step="5"
+              value={currentRot}
+              oninput={onRotInput}
+              onchange={onRotChange}
+            />
+          </div>
+          <button class="action" onclick={onResetMedia}>Reset média</button>
           {#if confirmDelete}
             <div class="confirm">
               <span class="confirm-label">Supprimer ce widget ?</span>
@@ -257,6 +314,27 @@
   }
   .fit-btn.active {
     opacity: 1;
+  }
+  .media-ctrl {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .media-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .media-val {
+    font-size: 0.75rem;
+    opacity: 0.8;
+    font-variant-numeric: tabular-nums;
+  }
+  .range {
+    width: 100%;
+    accent-color: var(--texte);
+    background: var(--fond);
+    color: var(--texte);
   }
   .confirm {
     display: flex;

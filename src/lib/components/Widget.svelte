@@ -33,6 +33,11 @@
   let rx = $derived(w.rotateX ?? 0);
   let ry = $derived(w.rotateY ?? 0);
   let fit = $derived(w.mediaFit ?? "ajuster");
+  let zoom = $derived(w.mediaZoom ?? 1);
+  let rot = $derived(w.mediaRot ?? 0);
+  // Transform centré sur l'élément média (img/video). Le cadre widget et le
+  // gizmo 3D ne bougent pas — overflow:hidden coupe le débordement.
+  let mediaTransform = $derived(`rotate(${rot}deg) scale(${zoom})`);
 
   // Kind : depuis le champ, sinon déduit de l'extension (widgets existants).
   const VIDEO_EXT = ["mp4", "webm"];
@@ -182,7 +187,7 @@
         src={MEDIA_BASE + w.media}
         alt=""
         draggable="false"
-        style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'};"
+        style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'}; transform:{mediaTransform}; transform-origin:center center;"
       />
     {:else if w.media && isVideo}
       <video
@@ -192,7 +197,7 @@
         playsinline
         preload="metadata"
         draggable="false"
-        style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'};"
+        style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'}; transform:{mediaTransform}; transform-origin:center center;"
         onclick={onVideoClick}
       ></video>
     {/if}

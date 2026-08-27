@@ -39,6 +39,8 @@ export async function createWidget(): Promise<void> {
     rotateX: 0,
     rotateY: 0,
     mediaFit: "ajuster",
+    mediaZoom: 1,
+    mediaRot: 0,
   };
   sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
   await commitScene();
@@ -114,6 +116,37 @@ export async function setMediaFit(id: string, fit: string): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
     widgets: s.widgets.map((w) => (w.id === id ? { ...w, mediaFit: fit } : w)),
+  }));
+  await commitScene();
+}
+
+/// Maj locale du zoom média (pendant le geste range). PAS d'invoke.
+/// Clamp 0.2 … 5.0.
+export function setMediaZoomLocal(id: string, zoom: number): void {
+  const z = Math.max(0.2, Math.min(5.0, zoom));
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, mediaZoom: z } : w)),
+  }));
+}
+
+/// Maj locale de la rotation média (pendant le geste range). PAS d'invoke.
+/// Clamp -180 … 180 (degrés).
+export function setMediaRotLocal(id: string, rotDeg: number): void {
+  const r = Math.max(-180, Math.min(180, rotDeg));
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, mediaRot: r } : w)),
+  }));
+}
+
+/// Reset média : zoom 1, rotation 0. Maj locale + commit immédiat.
+export async function resetMedia(id: string): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, mediaZoom: 1, mediaRot: 0 } : w
+    ),
   }));
   await commitScene();
 }

@@ -14,6 +14,8 @@ export interface Widget {
   rotateY?: number;
   mediaFit?: string;
   kind?: string;
+  mediaZoom?: number;
+  mediaRot?: number;
 }
 
 export interface Scene {

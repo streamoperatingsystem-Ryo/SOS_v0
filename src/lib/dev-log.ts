@@ -88,4 +88,10 @@ export const devLog: DevEntry[] = [
     date: "2026-08-27",
     note: "Bouton « Supprimer le widget » + confirmation Oui/Non, retire widget + deselect + commit, média conservé dans medias/.",
   },
+  {
+    id: 14,
+    titre: "Zoom et rotation 2D média",
+    date: "2026-08-27",
+    note: "mediaZoom (0.2…5) + mediaRot (−180…180) sur l'élément média, cadre widget fixe, overflow:hidden, dashboard + :4321 identiques, vidéo non recréée.",
+  },
 ];

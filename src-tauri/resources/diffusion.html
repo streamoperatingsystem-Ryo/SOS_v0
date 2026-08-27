@@ -37,12 +37,14 @@
         height: 100%;
         object-fit: fill;
         display: block;
+        transform-origin: center center;
       }
       .widget video {
         width: 100%;
         height: 100%;
         object-fit: fill;
         display: block;
+        transform-origin: center center;
       }
     </style>
   </head>
@@ -105,9 +107,15 @@
         el.style.transform = "perspective(800px) rotateX(" + rx + "deg) rotateY(" + ry + "deg)";
       }
 
-      function applyMediaStyle(mediaEl, fit) {
+      function applyMediaStyle(mediaEl, w) {
+        const fit = w.mediaFit || "ajuster";
         mediaEl.style.objectFit = FIT_CSS[fit] || "contain";
         mediaEl.style.objectPosition = fit === "centrer" ? "center" : "50% 50%";
+        // Zoom + rotation 2D du média (cadre widget fixe, overflow:hidden coupe).
+        const zoom = w.mediaZoom || 1;
+        const rot = w.mediaRot || 0;
+        mediaEl.style.transform = "rotate(" + rot + "deg) scale(" + zoom + ")";
+        mediaEl.style.transformOrigin = "center center";
       }
 
       function createMedia(w, kind) {
@@ -133,7 +141,6 @@
 
         for (const w of scene.widgets) {
           seen.add(w.id);
-          const fit = w.mediaFit || "ajuster";
           const kind = w.kind || (w.media ? kindFromMedia(w.media) : "image");
           const key = mediaKey(w.media);
           const entry = widgetMap.get(w.id);
@@ -142,12 +149,12 @@
             // ===== UPDATE : widget existant — style only =====
             applyWidgetStyle(entry.el, w);
             // Recréer le mediaEl SEULEMENT si le nom de fichier a changé.
-            // rotateX/Y/z/fit/mediaFit = style, jamais de recréation.
+            // rotateX/Y/z/fit/mediaFit/zoom/rot = style, jamais de recréation.
             if (entry.mediaKey !== key || entry.kind !== kind) {
               if (entry.mediaEl) entry.el.removeChild(entry.mediaEl);
               if (w.media) {
                 const mediaEl = createMedia(w, kind);
-                applyMediaStyle(mediaEl, fit);
+                applyMediaStyle(mediaEl, w);
                 entry.el.appendChild(mediaEl);
                 entry.mediaEl = mediaEl;
               } else {
@@ -156,8 +163,8 @@
               entry.mediaKey = key;
               entry.kind = kind;
             } else if (entry.mediaEl) {
-              // Même fichier : juste MAJ object-fit (mediaFit peut changer).
-              applyMediaStyle(entry.mediaEl, fit);
+              // Même fichier : MAJ object-fit + transform (style only).
+              applyMediaStyle(entry.mediaEl, w);
             }
           } else {
             // ===== CREATE : nouveau widget =====
@@ -167,7 +174,7 @@
             let mediaEl = null;
             if (w.media) {
               mediaEl = createMedia(w, kind);
-              applyMediaStyle(mediaEl, fit);
+              applyMediaStyle(mediaEl, w);
               el.appendChild(mediaEl);
             }
             stageEl.appendChild(el);

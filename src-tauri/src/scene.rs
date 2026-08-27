@@ -4,6 +4,8 @@ const DEFAULT_CANVAS_W: u32 = 1920;
 const DEFAULT_CANVAS_H: u32 = 1080;
 const DEFAULT_MEDIA_FIT: &str = "ajuster";
 const DEFAULT_KIND: &str = "image";
+const DEFAULT_MEDIA_ZOOM: f64 = 1.0;
+const DEFAULT_MEDIA_ROT: f64 = 0.0;
 
 fn default_canvas_w() -> u32 {
     DEFAULT_CANVAS_W
@@ -19,6 +21,14 @@ fn default_media_fit() -> String {
 
 fn default_kind() -> String {
     DEFAULT_KIND.to_string()
+}
+
+fn default_media_zoom() -> f64 {
+    DEFAULT_MEDIA_ZOOM
+}
+
+fn default_media_rot() -> f64 {
+    DEFAULT_MEDIA_ROT
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +51,10 @@ pub struct Widget {
     pub mediaFit: String,
     #[serde(default = "default_kind")]
     pub kind: String,
+    #[serde(default = "default_media_zoom")]
+    pub mediaZoom: f64,
+    #[serde(default = "default_media_rot")]
+    pub mediaRot: f64,
 }
 
 /// Scène unique (source de vérité). canvasW/canvasH = résolution OBS lue
