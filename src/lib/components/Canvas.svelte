@@ -3,8 +3,10 @@
   import { sceneStore, selectWidget } from "../stores/scene";
   import WidgetComp from "./Widget.svelte";
 
-  const CANVAS_W = 1920;
-  const CANVAS_H = 1080;
+  // Dims canvas = résolution OBS lue au connect (fallback 1920×1080).
+  // Widgets existants jamais rescalés quand ces dims changent.
+  let canvasW = $derived($sceneStore.canvasW ?? 1920);
+  let canvasH = $derived($sceneStore.canvasH ?? 1080);
 
   let containerEl: HTMLDivElement;
   let availW = $state(0);
@@ -12,7 +14,7 @@
 
   let scale = $derived(
     availW && availH
-      ? Math.min(availW / CANVAS_W, availH / CANVAS_H)
+      ? Math.min(availW / canvasW, availH / canvasH)
       : 0
   );
 
@@ -31,7 +33,7 @@
   {#if scale > 0}
     <div
       class="canvas"
-      style="width:{CANVAS_W}px; height:{CANVAS_H}px; transform: scale({scale});"
+      style="width:{canvasW}px; height:{canvasH}px; transform: scale({scale});"
       onpointerdown={() => selectWidget(null)}
       role="presentation"
     >

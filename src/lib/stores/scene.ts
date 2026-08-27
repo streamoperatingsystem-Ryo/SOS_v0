@@ -3,7 +3,11 @@
 import { writable, get } from "svelte/store";
 import { tauri, type Scene, type Widget } from "../tauri";
 
-export const sceneStore = writable<Scene>({ widgets: [] });
+export const sceneStore = writable<Scene>({
+  widgets: [],
+  canvasW: 1920,
+  canvasH: 1080,
+});
 export const loadedStore = writable(false);
 export const selectedIdStore = writable<string | null>(null);
 

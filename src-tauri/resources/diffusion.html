@@ -2,17 +2,19 @@
 <html lang="fr">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=1920, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>StreamOS — Diffusion</title>
     <style>
       :root {
         --fond: #0a0a0a;
         --texte: #e0e0e0;
+        --canvas-w: 1920px;
+        --canvas-h: 1080px;
       }
       * { margin: 0; padding: 0; box-sizing: border-box; }
       html, body {
-        width: 1920px;
-        height: 1080px;
+        width: var(--canvas-w);
+        height: var(--canvas-h);
         background: var(--fond);
         color: var(--texte);
         font-family: system-ui, sans-serif;
@@ -20,8 +22,8 @@
       }
       #stage {
         position: relative;
-        width: 1920px;
-        height: 1080px;
+        width: var(--canvas-w);
+        height: var(--canvas-h);
       }
       .widget {
         position: absolute;
@@ -41,7 +43,17 @@
     <script>
       // ZÉRO import Tauri. État uniquement via WebSocket snapshot.
       // Aucun texte visible à l'écran — logs console seulement.
+      // Dims canvas = résolution OBS reçue via snapshot (canvasW/canvasH),
+      // fallback 1920×1080 si absente. Widgets jamais rescalés.
       const stageEl = document.getElementById("stage");
+      const rootStyle = document.documentElement.style;
+
+      function applyCanvasDims(scene) {
+        const w = (scene && scene.canvasW) || 1920;
+        const h = (scene && scene.canvasH) || 1080;
+        rootStyle.setProperty("--canvas-w", w + "px");
+        rootStyle.setProperty("--canvas-h", h + "px");
+      }
 
       function renderScene(scene) {
         // Vide le stage
@@ -85,6 +97,7 @@
             const msg = JSON.parse(ev.data);
             if (msg.type === "snapshot" && msg.scene) {
               scene = msg.scene;
+              applyCanvasDims(msg.scene);
               renderScene(msg.scene);
               console.log("WS ok / widgets:", msg.scene.widgets.length);
             }

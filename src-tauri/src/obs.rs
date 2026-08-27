@@ -1,6 +1,8 @@
-/// Client OBS WebSocket v5 — one-shot : connecte, authentifie, s'assure que
-/// la scène "SOS" et la source navigateur "SOS-Diffusion" (1920×1080, URL :4321)
-/// existent sans doublon, puis se déconnecte.
+/// Client OBS WebSocket v5 — one-shot : connecte, authentifie, lit la
+/// résolution de canvas OBS (GetVideoSettings → baseWidth/baseHeight, fallback
+/// 1920×1080), s'assure que la scène "SOS" et la source navigateur
+/// "SOS-Diffusion" (URL :4321, dims = résolution OBS) existent sans doublon,
+/// puis se déconnecte. Retourne (canvasW, canvasH).
 ///
 /// IMPORTANT : la scène et la source ont des noms DIFFÉRENTS pour éviter
 /// l'ambiguïté côté OBS (GetSceneItemList attend un nom de scène, pas d'input).
@@ -14,12 +16,13 @@ use tokio_tungstenite::tungstenite::Message;
 const SCENE_NAME: &str = "SOS";
 const SOURCE_NAME: &str = "SOS-Diffusion";
 const SOURCE_URL: &str = "http://127.0.0.1:4321/";
-const SOURCE_W: u32 = 1920;
-const SOURCE_H: u32 = 1080;
+const FALLBACK_W: u32 = 1920;
+const FALLBACK_H: u32 = 1080;
 
-/// Connecte à OBS WebSocket, authentifie, et s'assure que la scène "SOS"
-/// + source navigateur "SOS-Diffusion" existent — idempotent, sans doublon.
-pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<(), String> {
+/// Connecte à OBS WebSocket, authentifie, lit la résolution OBS, et s'assure
+/// que la scène "SOS" + source navigateur "SOS-Diffusion" (dims = résolution
+/// OBS) existent — idempotent, sans doublon. Retourne (canvasW, canvasH).
+pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<(u32, u32), String> {
     let url = format!("ws://{}:{}", host, port);
     let (ws_stream, _response) = tokio_tungstenite::connect_async(&url)
         .await
@@ -66,7 +69,42 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
         return Err("OBS: authentification échouée (mot de passe incorrect ?)".into());
     }
 
-    // 4. GetSceneList → trouver la scène "SOS" + son sceneUuid
+    // 4. GetVideoSettings → baseWidth/baseHeight (résolution canvas OBS).
+    //    Non-fatal : si échec, fallback 1920×1080. Pas de poll — lu une seule
+    //    fois au connect. Les widgets existants ne sont pas rescalés.
+    let (canvas_w, canvas_h) = match rpc(
+        &mut write,
+        &mut read,
+        "GetVideoSettings",
+        "video_settings",
+        json!({}),
+    )
+    .await
+    {
+        Ok(data) => {
+            let w = data["baseWidth"].as_u64().unwrap_or(0) as u32;
+            let h = data["baseHeight"].as_u64().unwrap_or(0) as u32;
+            if w > 0 && h > 0 {
+                log::info!("OBS: résolution canvas = {}×{}", w, h);
+                (w, h)
+            } else {
+                log::warn!(
+                    "OBS: GetVideoSettings OK mais baseWidth/baseHeight invalides ({}, {}) → fallback {}×{}",
+                    w, h, FALLBACK_W, FALLBACK_H
+                );
+                (FALLBACK_W, FALLBACK_H)
+            }
+        }
+        Err(e) => {
+            log::warn!(
+                "OBS: GetVideoSettings échoué: {} → fallback {}×{}",
+                e, FALLBACK_W, FALLBACK_H
+            );
+            (FALLBACK_W, FALLBACK_H)
+        }
+    };
+
+    // 5. GetSceneList → trouver la scène "SOS" + son sceneUuid
     let scenes_resp = rpc(
         &mut write,
         &mut read,
@@ -105,7 +143,7 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
         uuid
     };
 
-    // 5. GetSceneItemList avec sceneName + sceneUuid — NON FATAL
+    // 6. GetSceneItemList avec sceneName + sceneUuid — NON FATAL
     //    Si échec : logger et continuer (source_in_scene = false)
     let mut source_in_scene = false;
     let items_result = rpc(
@@ -147,7 +185,7 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
         }
     }
 
-    // 6. GetInputList → input "SOS-Diffusion" existe ?
+    // 7. GetInputList → input "SOS-Diffusion" existe ?
     let inputs_resp = rpc(
         &mut write,
         &mut read,
@@ -172,13 +210,16 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
                 "inputName": SOURCE_NAME,
                 "inputSettings": {
                     "url": SOURCE_URL,
-                    "width": SOURCE_W,
-                    "height": SOURCE_H
+                    "width": canvas_w,
+                    "height": canvas_h
                 }
             }),
         )
         .await?;
-        log::info!("OBS: input \"{}\" existant — settings synchronisés", SOURCE_NAME);
+        log::info!(
+            "OBS: input \"{}\" existant — settings synchronisés ({}×{})",
+            SOURCE_NAME, canvas_w, canvas_h
+        );
 
         // Si pas dans la scène SOS → AddSceneItem avec sceneName + sceneUuid
         if !source_in_scene {
@@ -215,21 +256,20 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
                 "inputKind": "browser_source",
                 "inputSettings": {
                     "url": SOURCE_URL,
-                    "width": SOURCE_W,
-                    "height": SOURCE_H
+                    "width": canvas_w,
+                    "height": canvas_h
                 },
                 "sceneItemEnabled": true
             }),
         )
         .await?;
         log::info!(
-            "OBS: input \"{}\" créé (browser_source) dans la scène \"{}\"",
-            SOURCE_NAME,
-            SCENE_NAME
+            "OBS: input \"{}\" créé (browser_source, {}×{}) dans la scène \"{}\"",
+            SOURCE_NAME, canvas_w, canvas_h, SCENE_NAME
         );
     }
 
-    // 7. Refresh de la source navigateur (PressInputPropertiesButton)
+    // 8. Refresh de la source navigateur (PressInputPropertiesButton)
     //    Non-fatal : si échec, on log mais on ne faille pas la connexion.
     let refresh_result = rpc(
         &mut write,
@@ -249,7 +289,7 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
     }
 
     let _ = write.close().await;
-    Ok(())
+    Ok((canvas_w, canvas_h))
 }
 
 // --- Helpers WebSocket ---

@@ -14,6 +14,8 @@ export interface Widget {
 
 export interface Scene {
   widgets: Widget[];
+  canvasW?: number;
+  canvasH?: number;
 }
 
 export const tauri = {
@@ -32,8 +34,10 @@ export const tauri = {
     return invoke<string | null>("import_media", { widgetId });
   },
 
-  /// Connecte à OBS WebSocket, authentifie, s'assure que la scène "SOS"
-  /// + source navigateur "SOS" (1920×1080, URL :4321) existent sans doublon.
+  /// Connecte à OBS WebSocket, authentifie, lit la résolution canvas OBS
+  /// (GetVideoSettings → baseWidth/baseHeight, fallback 1920×1080), s'assure
+  /// que la scène "SOS" + source navigateur "SOS-Diffusion" (dims = résolution
+  /// OBS, URL :4321) existent sans doublon, puis mute la scène + save + snapshot.
   async obsConnect(host: string, port: number, password: string): Promise<void> {
     await invoke("obs_connect", { host, port, password });
   },

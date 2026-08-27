@@ -149,12 +149,42 @@ fn import_media(
     Ok(Some(rel))
 }
 
-/// Connecte à OBS WebSocket (host:port, password), authentifie, et s'assure
-/// que la scène "SOS" + source navigateur "SOS" (1920×1080, URL :4321)
-/// existent — idempotent, sans doublon. One-shot : se déconnecte après.
+/// Connecte à OBS WebSocket (host:port, password), authentifie, lit la
+/// résolution canvas OBS (GetVideoSettings → baseWidth/baseHeight, fallback
+/// 1920×1080), s'assure que la scène "SOS" + source navigateur "SOS-Diffusion"
+/// (dims = résolution OBS, URL :4321) existent sans doublon — one-shot.
+/// Puis mute la scène (canvasW/canvasH) + save config.json + snapshot WS.
+/// Pas de poll, pas de rescale des widgets existants.
 #[tauri::command]
-async fn obs_connect(host: String, port: u16, password: String) -> Result<(), String> {
-    obs::connect_and_setup(&host, port, &password).await
+async fn obs_connect(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+    host: String,
+    port: u16,
+    password: String,
+) -> Result<(), String> {
+    let (w, h) = obs::connect_and_setup(&host, port, &password).await?;
+
+    // Muter canvasW/canvasH si changement → save + snapshot (chaîne unique).
+    let changed = {
+        let mut current = state.scene.lock().unwrap();
+        if current.canvasW == w && current.canvasH == h {
+            false
+        } else {
+            current.canvasW = w;
+            current.canvasH = h;
+            true
+        }
+    };
+
+    if changed {
+        let snap = state.scene.lock().unwrap().clone();
+        config::save_scene(&app, &snap)?;
+        push_snapshot(&state);
+        log::info!("Canvas mis à jour : {}×{}", w, h);
+    }
+
+    Ok(())
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
