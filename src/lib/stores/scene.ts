@@ -36,16 +36,74 @@ export async function createWidget(): Promise<void> {
     largeur: 200,
     hauteur: 150,
     z,
+    rotateX: 0,
+    rotateY: 0,
   };
   sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
   await commitScene();
 }
 
+/// Clamp canvas : moitié du widget reste visible, widget jamais perdu.
+/// x ∈ [-w/2 , canvasW - w/2], y ∈ [-h/2 , canvasH - h/2].
+function clampWidget(w: Widget, canvasW: number, canvasH: number): Widget {
+  const minX = -w.largeur / 2;
+  const maxX = canvasW - w.largeur / 2;
+  const minY = -w.hauteur / 2;
+  const maxY = canvasH - w.hauteur / 2;
+  const x = Math.min(Math.max(w.x, minX), maxX);
+  const y = Math.min(Math.max(w.y, minY), maxY);
+  return { ...w, x, y };
+}
+
 /// Maj locale seule (pendant le drag). PAS d'invoke — UI fluide.
+/// Clamp canvas appliqué (moitié visible).
 export function moveWidgetLocal(id: string, x: number, y: number): void {
+  sceneStore.update((s) => {
+    const canvasW = s.canvasW ?? 1920;
+    const canvasH = s.canvasH ?? 1080;
+    return {
+      ...s,
+      widgets: s.widgets.map((w) =>
+        w.id === id ? clampWidget({ ...w, x, y }, canvasW, canvasH) : w
+      ),
+    };
+  });
+}
+
+/// Maj locale des dims + position (pendant le resize). PAS d'invoke.
+/// Mini 80×80, puis clamp canvas (moitié visible).
+export function resizeWidgetLocal(
+  id: string,
+  x: number,
+  y: number,
+  largeur: number,
+  hauteur: number
+): void {
+  sceneStore.update((s) => {
+    const canvasW = s.canvasW ?? 1920;
+    const canvasH = s.canvasH ?? 1080;
+    return {
+      ...s,
+      widgets: s.widgets.map((w) =>
+        w.id === id
+          ? clampWidget(
+              { ...w, x, y, largeur, hauteur },
+              canvasW,
+              canvasH
+            )
+          : w
+      ),
+    };
+  });
+}
+
+/// Maj locale des rotateX/rotateY (pendant le drag boule gizmo). PAS d'invoke.
+export function rotateWidgetLocal(id: string, rx: number, ry: number): void {
   sceneStore.update((s) => ({
     ...s,
-    widgets: s.widgets.map((w) => (w.id === id ? { ...w, x, y } : w)),
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, rotateX: rx, rotateY: ry } : w
+    ),
   }));
 }
 
