@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { sceneStore } from "../stores/scene";
+  import { sceneStore, selectWidget } from "../stores/scene";
   import WidgetComp from "./Widget.svelte";
 
   const CANVAS_W = 1920;
@@ -32,6 +32,8 @@
     <div
       class="canvas"
       style="width:{CANVAS_W}px; height:{CANVAS_H}px; transform: scale({scale});"
+      onpointerdown={() => selectWidget(null)}
+      role="presentation"
     >
       {#each $sceneStore.widgets as w (w.id)}
         <WidgetComp {w} {scale} />

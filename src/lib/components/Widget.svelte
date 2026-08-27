@@ -1,5 +1,6 @@
 <script lang="ts">
   import { moveWidgetLocal, commitScene, selectedIdStore, selectWidget } from "../stores/scene";
+  import { openSectionExplicit } from "../stores/ui";
   import type { Widget } from "../tauri";
 
   let { w, scale }: { w: Widget; scale: number } = $props();
@@ -16,7 +17,9 @@
   let selected = $derived($selectedIdStore === w.id);
 
   function onpointerdown(e: PointerEvent) {
+    e.stopPropagation();
     selectWidget(w.id);
+    openSectionExplicit("widgets");
     dragging = true;
     startX = e.clientX;
     startY = e.clientY;

@@ -1,11 +1,16 @@
 <script lang="ts">
   import { createWidget, importMedia, selectedIdStore } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
+  import { openSection, toggleSection } from "../stores/ui";
   import { get } from "svelte/store";
 
   let selectedId = $derived($selectedIdStore);
   let status = $derived($obsStatus);
   let error = $derived($obsError);
+  let open = $derived($openSection);
+
+  // id court = 8 premiers caractères
+  let shortId = $derived(selectedId ? selectedId.slice(0, 8) : "");
 
   async function onConnect() {
     await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
@@ -13,32 +18,62 @@
 </script>
 
 <aside class="sidebar">
-  <button onclick={createWidget}>Créer un widget</button>
-  <button onclick={importMedia} disabled={!selectedId}>Importer une image</button>
-
-  <div class="obs-section">
-    <span class="obs-label">OBS</span>
-    <input bind:value={$obsHost} placeholder="Hôte" spellcheck="false" />
-    <input bind:value={$obsPort} placeholder="Port" spellcheck="false" />
-    <input
-      bind:value={$obsPassword}
-      type="password"
-      placeholder="Mot de passe"
-      spellcheck="false"
-    />
-    <button
-      onclick={onConnect}
-      disabled={status === "connecting"}
-    >
-      {status === "connecting" ? "Connexion…" : "Connecter"}
+  <!-- Section Widgets -->
+  <div class="section">
+    <button class="header" onclick={() => toggleSection("widgets")}>
+      <span class="arrow">{open === "widgets" ? "▼" : "▶"}</span>
+      <span>Widgets</span>
     </button>
-    <span class="obs-status">
-      {#if status === "connected"}
-        OBS OK
-      {:else if status === "error"}
-        {error}
-      {/if}
-    </span>
+    {#if open === "widgets"}
+      <div class="content">
+        <button class="action" onclick={createWidget}>Créer un widget</button>
+        {#if !selectedId}
+          <p class="hint">Cliquer un widget sur le canvas</p>
+        {:else}
+          <button class="action" onclick={importMedia}>Importer une image</button>
+          {#if shortId}
+            <label class="field">
+              <span class="field-label">id</span>
+              <input value={shortId} readonly spellcheck="false" />
+            </label>
+          {/if}
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <!-- Section OBS -->
+  <div class="section">
+    <button class="header" onclick={() => toggleSection("obs")}>
+      <span class="arrow">{open === "obs" ? "▼" : "▶"}</span>
+      <span>OBS</span>
+    </button>
+    {#if open === "obs"}
+      <div class="content">
+        <input bind:value={$obsHost} placeholder="Hôte" spellcheck="false" />
+        <input bind:value={$obsPort} placeholder="Port" spellcheck="false" />
+        <input
+          bind:value={$obsPassword}
+          type="password"
+          placeholder="Mot de passe"
+          spellcheck="false"
+        />
+        <button
+          class="action"
+          onclick={onConnect}
+          disabled={status === "connecting"}
+        >
+          {status === "connecting" ? "Connexion…" : "Connecter"}
+        </button>
+        <span class="obs-status">
+          {#if status === "connected"}
+            OBS OK
+          {:else if status === "error"}
+            {error}
+          {/if}
+        </span>
+      </div>
+    {/if}
   </div>
 </aside>
 
@@ -46,46 +81,80 @@
   .sidebar {
     flex-shrink: 0;
     width: 240px;
-    padding: 0.75rem;
+    padding: 0.5rem;
     border-right: 1px solid var(--texte);
     display: flex;
     flex-direction: column;
-    gap: 0.5rem;
+    gap: 0.25rem;
     overflow-y: auto;
   }
-  button {
+  .section {
+    display: flex;
+    flex-direction: column;
+  }
+  .header {
     background: var(--fond);
     color: var(--texte);
     border: 1px solid var(--texte);
-    padding: 0.4rem 0.8rem;
+    padding: 0.4rem 0.6rem;
+    font: inherit;
+    cursor: pointer;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+  }
+  .header:hover {
+    background: var(--texte);
+    color: var(--fond);
+  }
+  .arrow {
+    font-size: 0.75rem;
+    width: 0.85rem;
+    text-align: center;
+  }
+  .content {
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    border: 1px solid var(--texte);
+    border-top: none;
+  }
+  .action {
+    background: var(--fond);
+    color: var(--texte);
+    border: 1px solid var(--texte);
+    padding: 0.35rem 0.6rem;
     font: inherit;
     cursor: pointer;
     text-align: left;
   }
-  button:hover {
+  .action:hover {
     background: var(--texte);
     color: var(--fond);
   }
-  button:disabled {
+  .action:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
-  button:disabled:hover {
+  .action:disabled:hover {
     background: var(--fond);
     color: var(--texte);
   }
-  .obs-section {
-    margin-top: 1rem;
-    padding-top: 0.75rem;
-    border-top: 1px solid var(--texte);
+  .hint {
+    font-size: 0.8rem;
+    opacity: 0.6;
+    line-height: 1.3;
+  }
+  .field {
     display: flex;
     flex-direction: column;
-    gap: 0.4rem;
+    gap: 0.15rem;
   }
-  .obs-label {
-    font-size: 0.8rem;
-    opacity: 0.7;
-    margin-bottom: 0.1rem;
+  .field-label {
+    font-size: 0.7rem;
+    opacity: 0.6;
   }
   input {
     background: var(--fond);
@@ -98,8 +167,11 @@
   }
   input:focus {
     outline: none;
-    border-color: var(--texte);
     background: rgba(224, 224, 224, 0.05);
+  }
+  input[readonly] {
+    opacity: 0.6;
+    cursor: default;
   }
   .obs-status {
     font-size: 0.8rem;
