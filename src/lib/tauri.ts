@@ -16,12 +16,21 @@ export interface Widget {
   kind?: string;
   mediaZoom?: number;
   mediaRot?: number;
+  mediaPaused?: boolean;
+  mediaTime?: number;
 }
 
 export interface Scene {
   widgets: Widget[];
   canvasW?: number;
   canvasH?: number;
+  bgMedia?: string;
+  bgKind?: string;
+  bgFit?: string;
+  bgZoom?: number;
+  bgRot?: number;
+  bgPaused?: boolean;
+  bgTime?: number;
 }
 
 export const tauri = {
@@ -39,6 +48,14 @@ export const tauri = {
   /// ("image"|"video") est déduit côté TS de l'extension du chemin retourné.
   async importMedia(widgetId: string): Promise<string | null> {
     return invoke<string | null>("import_media", { widgetId });
+  },
+
+  /// Importe un média (image OU vidéo) comme fond de scène. Retourne le
+  /// chemin relatif ("medias/<uuid>.<ext>") ou null si dialog annulé.
+  /// Mêmes limites que importMedia (helper commun Rust). Le kind est déduit
+  /// côté TS de l'extension du chemin retourné.
+  async importFond(): Promise<string | null> {
+    return invoke<string | null>("import_fond");
   },
 
   /// Connecte à OBS WebSocket, authentifie, lit la résolution canvas OBS

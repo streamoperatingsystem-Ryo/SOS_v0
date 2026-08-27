@@ -1,9 +1,11 @@
 <script lang="ts">
-  import { createWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene } from "../stores/scene";
+  import { createWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
   import { openSection, toggleSection } from "../stores/ui";
+  import { videoRegistry } from "../stores/video";
   import { get } from "svelte/store";
   import Gizmo3D from "./Gizmo3D.svelte";
+  import PlayerBar from "./PlayerBar.svelte";
 
   let selectedId = $derived($selectedIdStore);
   let status = $derived($obsStatus);
@@ -68,9 +70,144 @@
   function onSupprimerCancel() {
     confirmDelete = false;
   }
+
+  // ===== Fond de scène =====
+  let bgMedia = $derived($sceneStore.bgMedia ?? "");
+  let bgKind = $derived($sceneStore.bgKind ?? "image");
+  let bgFit = $derived($sceneStore.bgFit ?? "remplir");
+  let bgZoom = $derived($sceneStore.bgZoom ?? 1);
+  let bgRot = $derived($sceneStore.bgRot ?? 0);
+  let hasFond = $derived(bgMedia.length > 0);
+
+  // ===== Vidéo active (barre lecteur pilote :4321) =====
+  // La barre écrit mediaPaused/mediaTime dans la scène (commitScene → snapshot
+  // WS → :4321 applique play/pause/seek/loop). Le dashboard reste figé.
+  let selectedKind = $derived(selectedWidget?.kind ?? "image");
+  let widgetMediaPaused = $derived(selectedWidget?.mediaPaused ?? true);
+  let widgetMediaTime = $derived(selectedWidget?.mediaTime ?? 0);
+  let widgetVideoEl = $derived(
+    selectedId ? $videoRegistry.get(selectedId) : undefined
+  );
+  let fondVideoEl = $derived($videoRegistry.get("fond"));
+  let bgPaused = $derived($sceneStore.bgPaused ?? true);
+  let bgTime = $derived($sceneStore.bgTime ?? 0);
+
+  // Callbacks barre widget.
+  function onWidgetTogglePlay() {
+    if (selectedId) setWidgetMediaPaused(selectedId, !widgetMediaPaused);
+  }
+  function onWidgetSeek(t: number) {
+    if (selectedId) setWidgetMediaTime(selectedId, t);
+  }
+
+  // Callbacks barre fond.
+  function onBgTogglePlay() {
+    setBgPaused(!bgPaused);
+  }
+  function onBgSeek(t: number) {
+    setBgTime(t);
+  }
+
+  function onBgFitClick(fit: string) {
+    setBgFit(fit);
+  }
+
+  function onBgZoomInput(e: Event) {
+    setBgZoomLocal(parseFloat((e.target as HTMLInputElement).value));
+  }
+  async function onBgZoomChange() {
+    await commitScene();
+  }
+
+  function onBgRotInput(e: Event) {
+    setBgRotLocal(parseFloat((e.target as HTMLInputElement).value));
+  }
+  async function onBgRotChange() {
+    await commitScene();
+  }
+
+  async function onBgReset() {
+    await resetFond();
+  }
+
+  async function onBgSupprimer() {
+    await clearFond();
+  }
 </script>
 
 <aside class="sidebar">
+  <!-- Section Scène -->
+  <div class="section">
+    <button class="header" onclick={() => toggleSection("scene")}>
+      <span class="arrow">{open === "scene" ? "▼" : "▶"}</span>
+      <span>Scène</span>
+    </button>
+    {#if open === "scene"}
+      <div class="content">
+        <button class="action" onclick={importFond}>Importer un fond</button>
+        {#if hasFond}
+          <div class="fit-group">
+            <span class="field-label">Affichage fond</span>
+            <div class="fit-buttons">
+              {#each FIT_MODES as mode}
+                <button
+                  class="fit-btn"
+                  class:active={bgFit === mode}
+                  onclick={() => onBgFitClick(mode)}
+                >{mode}</button>
+              {/each}
+            </div>
+          </div>
+          <div class="media-ctrl">
+            <div class="media-row">
+              <span class="field-label">Zoom fond</span>
+              <span class="media-val">{bgZoom.toFixed(2)}</span>
+            </div>
+            <input
+              class="range"
+              type="range"
+              min="0.2"
+              max="5"
+              step="0.1"
+              value={bgZoom}
+              oninput={onBgZoomInput}
+              onchange={onBgZoomChange}
+            />
+          </div>
+          <div class="media-ctrl">
+            <div class="media-row">
+              <span class="field-label">Rotation fond</span>
+              <span class="media-val">{Math.round(bgRot)}°</span>
+            </div>
+            <input
+              class="range"
+              type="range"
+              min="-180"
+              max="180"
+              step="5"
+              value={bgRot}
+              oninput={onBgRotInput}
+              onchange={onBgRotChange}
+            />
+          </div>
+          <button class="action" onclick={onBgReset}>Reset fond</button>
+          <button class="action" onclick={onBgSupprimer}>Supprimer le fond</button>
+          {#if bgKind === "video"}
+            <PlayerBar
+              videoEl={fondVideoEl}
+              mediaPaused={bgPaused}
+              mediaTime={bgTime}
+              onTogglePlay={onBgTogglePlay}
+              onSeek={onBgSeek}
+            />
+          {/if}
+        {:else}
+          <p class="hint">Aucun fond. Cliquer « Importer un fond ».</p>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
   <!-- Section Widgets -->
   <div class="section">
     <button class="header" onclick={() => toggleSection("widgets")}>
@@ -136,6 +273,15 @@
             />
           </div>
           <button class="action" onclick={onResetMedia}>Reset média</button>
+          {#if selectedKind === "video"}
+            <PlayerBar
+              videoEl={widgetVideoEl}
+              mediaPaused={widgetMediaPaused}
+              mediaTime={widgetMediaTime}
+              onTogglePlay={onWidgetTogglePlay}
+              onSeek={onWidgetSeek}
+            />
+          {/if}
           {#if confirmDelete}
             <div class="confirm">
               <span class="confirm-label">Supprimer ce widget ?</span>

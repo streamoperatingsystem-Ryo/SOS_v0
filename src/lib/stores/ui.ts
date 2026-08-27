@@ -1,9 +1,9 @@
 // Store UI : section d'accordéon ouverte (une seule à la fois).
 import { writable } from "svelte/store";
 
-export type Section = "widgets" | "obs";
+export type Section = "scene" | "widgets" | "obs";
 
-export const openSection = writable<Section | null>("widgets");
+export const openSection = writable<Section | null>("scene");
 
 /// Bascule une section : si déjà ouverte → ferme, sinon → ouvre (et ferme l'autre).
 export function toggleSection(section: Section): void {

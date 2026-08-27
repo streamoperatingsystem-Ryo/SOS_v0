@@ -7,6 +7,7 @@
     selectWidget,
   } from "../stores/scene";
   import { openSectionExplicit } from "../stores/ui";
+  import { registerVideo, unregisterVideo } from "../stores/video";
   import type { Widget } from "../tauri";
 
   let { w, scale }: { w: Widget; scale: number } = $props();
@@ -59,27 +60,28 @@
   };
   let fitCss = $derived(FIT_CSS[fit] ?? "contain");
 
-  // Clic vidéo = play/pause (test seulement). Stoppe la propagation pour ne
-  // pas déclencher le drag de l'outer.
-  function onVideoClick(e: MouseEvent) {
-    e.stopPropagation();
-    const v = e.currentTarget as HTMLVideoElement;
-    if (v.paused) {
-      v.play();
-    } else {
-      v.pause();
-    }
-  }
-
-  // <video> src set impérativement — Svelte ne touche JAMAIS à l'attribut
-  // src du template. On ne set src QUE si w.media change (nom de fichier).
-  // Drag/resize/rotate = style only, currentTime préservé.
+  // Dashboard : aucune vidéo en lecture par défaut. preload="metadata" +
+  // paused + currentTime = 0 (vignette). La barre lecteur (Toolbar) pilote
+  // :4321 via mediaPaused/mediaTime (snapshot WS) — pas le dashboard.
+  // $effect mediaTime : applique la position une fois pour la vignette.
   let videoEl: HTMLVideoElement | undefined = $state(undefined);
   $effect(() => {
     if (!videoEl || !w.media) return;
     const newSrc = MEDIA_BASE + w.media;
     if (videoEl.src !== newSrc) {
       videoEl.src = newSrc;
+    }
+  });
+  $effect(() => {
+    if (!videoEl) return;
+    registerVideo(w.id, videoEl);
+    return () => unregisterVideo(w.id);
+  });
+  $effect(() => {
+    if (!videoEl) return;
+    const t = w.mediaTime ?? 0;
+    if (Number.isFinite(t) && Math.abs(videoEl.currentTime - t) > 0.05) {
+      videoEl.currentTime = t;
     }
   });
 
@@ -198,7 +200,6 @@
         preload="metadata"
         draggable="false"
         style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'}; transform:{mediaTransform}; transform-origin:center center;"
-        onclick={onVideoClick}
       ></video>
     {/if}
   </div>
@@ -248,8 +249,7 @@
     pointer-events: none;
   }
   .preview.video {
-    pointer-events: auto;
-    cursor: pointer;
+    pointer-events: none;
   }
   .handle {
     position: absolute;

@@ -46,16 +46,32 @@
         display: block;
         transform-origin: center center;
       }
+      #bg {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        z-index: 0;
+        pointer-events: none;
+      }
+      #bg img, #bg video {
+        width: 100%;
+        height: 100%;
+        display: block;
+        transform-origin: center center;
+      }
     </style>
   </head>
   <body>
-    <div id="stage"></div>
+    <div id="stage">
+      <div id="bg"></div>
+    </div>
     <script>
       // ZÉRO import Tauri. État uniquement via WebSocket snapshot.
       // Aucun texte visible à l'écran — logs console seulement.
       // Dims canvas = résolution OBS reçue via snapshot (canvasW/canvasH),
       // fallback 1920×1080 si absente. Widgets jamais rescalés.
       const stageEl = document.getElementById("stage");
+      const bgEl = document.getElementById("bg");
       const rootStyle = document.documentElement.style;
 
       function applyCanvasDims(scene) {
@@ -86,6 +102,11 @@
       // RÈGLE : currentTime ne bouge QUE si le nom de fichier change.
       // Drag, resize, rotateX/Y, z-index, mediaFit = style seulement.
       const widgetMap = new Map();
+
+      // État du fond de scène : { mediaEl, mediaKey, kind }.
+      // Même règle que les widgets : ne recréer le mediaEl QUE si le nom de
+      // fichier change. bgFit/zoom/rot = style only.
+      let bgState = { mediaEl: null, mediaKey: "", kind: "", mediaTime: 0 };
 
       // Nom de fichier seul (sans dossier "medias/", sans query, sans URL).
       // C'est la seule clé qui détermine si on recrée le mediaEl.
@@ -120,12 +141,11 @@
 
       function createMedia(w, kind) {
         if (kind === "video") {
-          // OBS : autoplay + boucle, muet, pas de contrôles ni de clic.
+          // OBS : muet, pas de contrôles ni de clic. play/pause/loop gérés par
+          // applyMediaState selon mediaPaused (snapshot WS depuis le dashboard).
           const vid = document.createElement("video");
           vid.src = "/" + w.media;
-          vid.autoplay = true;
           vid.muted = true;
-          vid.loop = true;
           vid.setAttribute("playsinline", "");
           return vid;
         }
@@ -134,8 +154,106 @@
         return img;
       }
 
+      function applyBgMediaStyle(mediaEl, scene) {
+        const fit = scene.bgFit || "remplir";
+        mediaEl.style.objectFit = FIT_CSS[fit] || "cover";
+        mediaEl.style.objectPosition = fit === "centrer" ? "center" : "50% 50%";
+        const zoom = scene.bgZoom || 1;
+        const rot = scene.bgRot || 0;
+        mediaEl.style.transform = "rotate(" + rot + "deg) scale(" + zoom + ")";
+        mediaEl.style.transformOrigin = "center center";
+      }
+
+      function createBgMedia(scene, kind) {
+        if (kind === "video") {
+          // OBS : muet, pas de contrôles ni de clic. play/pause/loop gérés par
+          // applyBgState selon bgPaused (snapshot WS depuis le dashboard).
+          const vid = document.createElement("video");
+          vid.src = "/" + scene.bgMedia;
+          vid.muted = true;
+          vid.setAttribute("playsinline", "");
+          return vid;
+        }
+        const img = document.createElement("img");
+        img.src = "/" + scene.bgMedia;
+        return img;
+      }
+
+      // Applique l'état lecture/pause/loop/seek d'une vidéo widget selon
+      // mediaPaused/mediaTime. Tracker entry.mediaTime pour ne reset
+      // currentTime que sur changement (pas sur chaque snapshot).
+      function applyMediaState(entry, w) {
+        if (!entry.mediaEl || entry.kind !== "video") return;
+        const paused = w.mediaPaused !== false; // défaut true
+        entry.mediaEl.loop = !paused;
+        if (paused) {
+          if (!entry.mediaEl.paused) entry.mediaEl.pause();
+        } else {
+          if (entry.mediaEl.paused) entry.mediaEl.play().catch(function () {});
+        }
+        const t = w.mediaTime || 0;
+        if (entry.mediaTime !== t) {
+          try { entry.mediaEl.currentTime = t; } catch (e) {}
+          entry.mediaTime = t;
+        }
+      }
+
+      // Applique l'état lecture/pause/loop/seek de la vidéo fond selon
+      // bgPaused/bgTime. Tracker bgState.mediaTime pour ne reset currentTime
+      // que sur changement.
+      function applyBgState(state, scene) {
+        if (!state.mediaEl || state.kind !== "video") return;
+        const paused = scene.bgPaused !== false; // défaut true
+        state.mediaEl.loop = !paused;
+        if (paused) {
+          if (!state.mediaEl.paused) state.mediaEl.pause();
+        } else {
+          if (state.mediaEl.paused) state.mediaEl.play().catch(function () {});
+        }
+        const t = scene.bgTime || 0;
+        if (state.mediaTime !== t) {
+          try { state.mediaEl.currentTime = t; } catch (e) {}
+          state.mediaTime = t;
+        }
+      }
+
+      // Rendu du fond de scène. Règle : ne recréer le mediaEl QUE si le nom
+      // de fichier (bgMedia) ou le kind change. Sinon style only.
+      function renderBg(scene) {
+        const rel = scene.bgMedia || "";
+        if (!rel) {
+          if (bgState.mediaEl) {
+            bgEl.removeChild(bgState.mediaEl);
+            bgState.mediaEl = null;
+            bgState.mediaKey = "";
+            bgState.kind = "";
+            bgState.mediaTime = 0;
+          }
+          return;
+        }
+        const kind = scene.bgKind || kindFromMedia(rel);
+        const key = mediaKey(rel);
+        if (bgState.mediaKey !== key || bgState.kind !== kind) {
+          if (bgState.mediaEl) bgEl.removeChild(bgState.mediaEl);
+          const mediaEl = createBgMedia(scene, kind);
+          applyBgMediaStyle(mediaEl, scene);
+          bgEl.appendChild(mediaEl);
+          bgState.mediaEl = mediaEl;
+          bgState.mediaKey = key;
+          bgState.kind = kind;
+          bgState.mediaTime = scene.bgTime || 0;
+          applyBgState(bgState, scene);
+        } else if (bgState.mediaEl) {
+          applyBgMediaStyle(bgState.mediaEl, scene);
+          applyBgState(bgState, scene);
+        }
+      }
+
       function renderScene(scene) {
         if (!scene || !scene.widgets) return;
+
+        // Fond de scène d'abord (calque sous les widgets, z-index 0).
+        renderBg(scene);
 
         const seen = new Set();
 
@@ -157,14 +275,18 @@
                 applyMediaStyle(mediaEl, w);
                 entry.el.appendChild(mediaEl);
                 entry.mediaEl = mediaEl;
+                entry.mediaTime = w.mediaTime || 0;
+                applyMediaState(entry, w);
               } else {
                 entry.mediaEl = null;
+                entry.mediaTime = 0;
               }
               entry.mediaKey = key;
               entry.kind = kind;
             } else if (entry.mediaEl) {
-              // Même fichier : MAJ object-fit + transform (style only).
+              // Même fichier : MAJ object-fit + transform (style only) + état lecture.
               applyMediaStyle(entry.mediaEl, w);
+              applyMediaState(entry, w);
             }
           } else {
             // ===== CREATE : nouveau widget =====
@@ -178,7 +300,9 @@
               el.appendChild(mediaEl);
             }
             stageEl.appendChild(el);
-            widgetMap.set(w.id, { el, mediaEl, mediaKey: key, kind });
+            const newEntry = { el, mediaEl, mediaKey: key, kind, mediaTime: w.mediaTime || 0 };
+            widgetMap.set(w.id, newEntry);
+            applyMediaState(newEntry, w);
           }
         }
 

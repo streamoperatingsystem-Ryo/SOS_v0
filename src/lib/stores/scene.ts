@@ -7,6 +7,13 @@ export const sceneStore = writable<Scene>({
   widgets: [],
   canvasW: 1920,
   canvasH: 1080,
+  bgMedia: "",
+  bgKind: "image",
+  bgFit: "remplir",
+  bgZoom: 1,
+  bgRot: 0,
+  bgPaused: true,
+  bgTime: 0,
 });
 export const loadedStore = writable(false);
 export const selectedIdStore = writable<string | null>(null);
@@ -41,6 +48,8 @@ export async function createWidget(): Promise<void> {
     mediaFit: "ajuster",
     mediaZoom: 1,
     mediaRot: 0,
+    mediaPaused: true,
+    mediaTime: 0,
   };
   sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
   await commitScene();
@@ -206,4 +215,94 @@ export async function importMedia(): Promise<void> {
     console.error("importMedia:", e);
     alert("Import refusé : " + e);
   }
+}
+
+/// Importe un média (image OU vidéo) comme fond de scène. Met à jour le store
+/// local (bgMedia + bgKind déduit de l'extension). Affiche une alerte en cas
+/// de refus (taille/format). Mêmes limites que importMedia (helper commun Rust).
+export async function importFond(): Promise<void> {
+  try {
+    const rel = await tauri.importFond();
+    if (rel) {
+      const kind = kindFromMedia(rel);
+      sceneStore.update((s) => ({ ...s, bgMedia: rel, bgKind: kind }));
+    }
+  } catch (e) {
+    console.error("importFond:", e);
+    alert("Import refusé : " + e);
+  }
+}
+
+/// Change le mode d'affichage du fond. Maj locale + commit immédiat
+/// (changement discret, pas de drag).
+export async function setBgFit(fit: string): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgFit: fit }));
+  await commitScene();
+}
+
+/// Maj locale du zoom fond (pendant le geste range). PAS d'invoke.
+/// Clamp 0.2 … 5.0.
+export function setBgZoomLocal(zoom: number): void {
+  const z = Math.max(0.2, Math.min(5.0, zoom));
+  sceneStore.update((s) => ({ ...s, bgZoom: z }));
+}
+
+/// Maj locale de la rotation fond (pendant le geste range). PAS d'invoke.
+/// Clamp -180 … 180 (degrés).
+export function setBgRotLocal(rotDeg: number): void {
+  const r = Math.max(-180, Math.min(180, rotDeg));
+  sceneStore.update((s) => ({ ...s, bgRot: r }));
+}
+
+/// Reset fond : zoom 1, rotation 0. Maj locale + commit immédiat.
+export async function resetFond(): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0 }));
+  await commitScene();
+}
+
+/// Supprime le fond : retire la référence bgMedia (garde bgKind/bgFit/bgZoom/
+/// bgRot). Maj locale + commit. Ne supprime PAS le fichier dans medias/.
+export async function clearFond(): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgMedia: "" }));
+  await commitScene();
+}
+
+// ===== Barre lecteur (pilote :4321 via snapshot, dashboard figé) =====
+
+/// Change l'état lecture/pause d'un widget vidéo → commit (snapshot :4321).
+/// Dashboard : ignore mediaPaused pour la lecture (toujours pause, vignette).
+export async function setWidgetMediaPaused(id: string, paused: boolean): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, mediaPaused: paused } : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Change la position (seek) d'un widget vidéo → commit (snapshot :4321).
+/// Dashboard : applique mediaTime une fois pour la vignette (frame figée).
+export async function setWidgetMediaTime(id: string, time: number): Promise<void> {
+  const t = Math.max(0, time);
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, mediaTime: t } : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Change l'état lecture/pause du fond vidéo → commit (snapshot :4321).
+export async function setBgPaused(paused: boolean): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgPaused: paused }));
+  await commitScene();
+}
+
+/// Change la position (seek) du fond vidéo → commit (snapshot :4321).
+export async function setBgTime(time: number): Promise<void> {
+  const t = Math.max(0, time);
+  sceneStore.update((s) => ({ ...s, bgTime: t }));
+  await commitScene();
 }

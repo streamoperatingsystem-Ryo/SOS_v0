@@ -76,18 +76,13 @@ fn check_magic_video(bytes: &[u8]) -> bool {
         || bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) // WebM / EBML
 }
 
-/// Importe un média (image OU vidéo) pour un widget : dialog → validation
-/// (extension + taille + magic bytes) → copie vers
-/// AppData/StreamOS/medias/<uuid>.<ext> → mutate scène (media + kind) →
-/// save → snapshot. Retourne `Some(media_rel_path)` si importé, `None` si
-/// dialog annulé.
-/// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm ≤ 80 Mo.
-#[tauri::command]
-fn import_media(
-    app: AppHandle,
-    state: tauri::State<AppState>,
-    widget_id: String,
-) -> Result<Option<String>, String> {
+/// Helper commun d'import média (widget OU fond de scène) : dialog fichier
+/// « Médias » → validation (extension + taille + magic bytes) → copie vers
+/// AppData/StreamOS/medias/<uuid>.<ext>. Retourne `Some((rel, kind))` si
+/// importé, `None` si dialog annulé. Image : png/jpg/jpeg/gif/webp ≤ 10 Mo.
+/// Vidéo : mp4/webm ≤ 80 Mo. Aucune mutation de la scène — l'appelant mutera
+/// le widget ciblé ou les champs fond après coup.
+fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String)>, String> {
     use std::fs;
     use std::io::Read;
     use tauri_plugin_dialog::DialogExt;
@@ -145,15 +140,34 @@ fn import_media(
     let _ = allowed_ext;
 
     // 6. Copie vers AppData/StreamOS/medias/<uuid>.<ext>
-    let dir = config::data_dir(&app)?;
+    let dir = config::data_dir(app)?;
     let uuid = uuid::Uuid::new_v4().simple().to_string();
     let dest_name = format!("{}.{}", uuid, ext);
     let dest = dir.join("medias").join(&dest_name);
     fs::copy(&src, &dest).map_err(|e| format!("copy: {}", e))?;
 
     let rel = format!("medias/{}", dest_name);
+    Ok(Some((rel, kind.to_string())))
+}
 
-    // 7. Mutate scène : set media + kind sur le widget ciblé
+/// Importe un média (image OU vidéo) pour un widget : dialog → validation
+/// (extension + taille + magic bytes) → copie vers
+/// AppData/StreamOS/medias/<uuid>.<ext> → mutate scène (media + kind) →
+/// save → snapshot. Retourne `Some(media_rel_path)` si importé, `None` si
+/// dialog annulé.
+/// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm ≤ 80 Mo.
+#[tauri::command]
+fn import_media(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+    widget_id: String,
+) -> Result<Option<String>, String> {
+    // 1. Helper commun : dialog + validation + copie (pas de mutation scène).
+    let Some((rel, kind)) = pick_and_copy_media(&app)? else {
+        return Ok(None); // dialog annulé
+    };
+
+    // 2. Mutate scène : set media + kind sur le widget ciblé
     {
         let mut current = state.scene.lock().unwrap();
         let w = current
@@ -162,10 +176,39 @@ fn import_media(
             .find(|w| w.id == widget_id)
             .ok_or_else(|| format!("Widget {} introuvable", widget_id))?;
         w.media = Some(rel.clone());
-        w.kind = kind.to_string();
+        w.kind = kind;
     }
 
-    // 8. Save config.json + push snapshot (chaîne unique)
+    // 3. Save config.json + push snapshot (chaîne unique)
+    let snap = state.scene.lock().unwrap().clone();
+    config::save_scene(&app, &snap)?;
+    push_snapshot(&state);
+
+    Ok(Some(rel))
+}
+
+/// Importe un média (image OU vidéo) comme fond de scène : dialog → validation
+/// → copie vers medias/ → mutate scène (bgMedia + bgKind) → save → snapshot.
+/// Retourne `Some(media_rel_path)` si importé, `None` si dialog annulé.
+/// Mêmes limites que import_media (helper commun pick_and_copy_media).
+#[tauri::command]
+fn import_fond(
+    app: AppHandle,
+    state: tauri::State<AppState>,
+) -> Result<Option<String>, String> {
+    // 1. Helper commun : dialog + validation + copie (pas de mutation scène).
+    let Some((rel, kind)) = pick_and_copy_media(&app)? else {
+        return Ok(None); // dialog annulé
+    };
+
+    // 2. Mutate scène : set bgMedia + bgKind
+    {
+        let mut current = state.scene.lock().unwrap();
+        current.bgMedia = rel.clone();
+        current.bgKind = kind;
+    }
+
+    // 3. Save config.json + push snapshot (chaîne unique)
     let snap = state.scene.lock().unwrap().clone();
     config::save_scene(&app, &snap)?;
     push_snapshot(&state);
@@ -254,7 +297,7 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_scene, update_scene, import_media, obs_connect])
+        .invoke_handler(tauri::generate_handler![get_scene, update_scene, import_media, import_fond, obs_connect])
         .run(tauri::generate_context!())
         .expect("erreur lors du lancement de StreamOS v0");
 }

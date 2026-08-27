@@ -94,4 +94,16 @@ export const devLog: DevEntry[] = [
     date: "2026-08-27",
     note: "mediaZoom (0.2…5) + mediaRot (−180…180) sur l'élément média, cadre widget fixe, overflow:hidden, dashboard + :4321 identiques, vidéo non recréée.",
   },
+  {
+    id: 15,
+    titre: "Fond de scène image/vidéo",
+    date: "2026-08-27",
+    note: "bgMedia/bgKind/bgFit/bgZoom/bgRot sur la scène, section Scène en haut de la sidebar, calque fond sous les widgets (dashboard clic play/pause, :4321 autoplay loop), import via helper commun, pas de reset vidéo.",
+  },
+  {
+    id: 16,
+    titre: "Barre lecteur dashboard (pilote :4321)",
+    date: "2026-08-27",
+    note: "Barre −5s/Lecture-Pause/+5s + seek dans la sidebar, pilote :4321 via mediaPaused/mediaTime (snapshot WS), dashboard figé (vignette à mediaTime), :4321 play/pause/loop selon mediaPaused, seek selon mediaTime.",
+  },
 ];

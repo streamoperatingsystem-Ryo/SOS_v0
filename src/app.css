@@ -1,6 +1,7 @@
 :root {
   --fond: #0a0a0a;
   --texte: #e0e0e0;
+  --ok: #4caf50;
   font-family: system-ui, -apple-system, sans-serif;
   color: var(--texte);
   background-color: var(--fond);

@@ -6,9 +6,18 @@
   import { get } from "svelte/store";
   import Toolbar from "./lib/components/Toolbar.svelte";
   import Canvas from "./lib/components/Canvas.svelte";
+  import DevPanel from "./lib/components/DevPanel.svelte";
 
   let serverError: string | null = null;
   let serverOk = false;
+  let devOpen = $state(false);
+
+  function toggleDev() {
+    devOpen = !devOpen;
+  }
+  function closeDev() {
+    devOpen = false;
+  }
 
   onMount(async () => {
     // Écoute des erreurs du serveur :4321 (bind strict)
@@ -31,18 +40,35 @@
   });
 </script>
 
+<!-- Clic hors du bloc Dev → ferme le panneau -->
+<svelte:window onclick={closeDev} />
+
 <main>
   <header>
     <span class="title">StreamOS v0</span>
-    <span class="status">
-      {#if serverError}
-        Erreur :4321 — {serverError}
-      {:else if serverOk}
-        :4321 prêt
-      {:else}
-        Démarrage…
-      {/if}
-    </span>
+    <div class="right">
+      <span class="status">
+        {#if serverError}
+          Erreur :4321 — {serverError}
+        {:else if serverOk}
+          :4321 prêt
+        {:else}
+          Démarrage…
+        {/if}
+      </span>
+      <!-- TEMPORAIRE — bouton Dev. Retirer avant release. -->
+      <div
+        class="dev-wrap"
+        role="presentation"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.stopPropagation()}
+      >
+        <button class="dev-btn" onclick={toggleDev}>Dev</button>
+        {#if devOpen}
+          <DevPanel />
+        {/if}
+      </div>
+    </div>
   </header>
 
   <div class="row">
@@ -69,8 +95,29 @@
   .title {
     font-weight: 600;
   }
+  .right {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
   .status {
     opacity: 0.7;
+  }
+  .dev-wrap {
+    position: relative;
+  }
+  .dev-btn {
+    background: var(--fond);
+    color: var(--texte);
+    border: 1px solid var(--texte);
+    padding: 0.15rem 0.5rem;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .dev-btn:hover {
+    background: var(--texte);
+    color: var(--fond);
   }
   .row {
     flex: 1;
