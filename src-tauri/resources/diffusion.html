@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=1920, initial-scale=1.0" />
+    <title>StreamOS — Diffusion</title>
+    <style>
+      :root {
+        --fond: #0a0a0a;
+        --texte: #e0e0e0;
+      }
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 1920px;
+        height: 1080px;
+        background: var(--fond);
+        color: var(--texte);
+        font-family: system-ui, sans-serif;
+        overflow: hidden;
+      }
+      #stage {
+        position: relative;
+        width: 1920px;
+        height: 1080px;
+      }
+      .widget {
+        position: absolute;
+        background: rgba(224, 224, 224, 0.15);
+        border: 1px solid rgba(224, 224, 224, 0.6);
+      }
+      .widget img {
+        width: 100%;
+        height: 100%;
+        object-fit: fill;
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="stage"></div>
+    <script>
+      // ZÉRO import Tauri. État uniquement via WebSocket snapshot.
+      // Aucun texte visible à l'écran — logs console seulement.
+      const stageEl = document.getElementById("stage");
+
+      function renderScene(scene) {
+        // Vide le stage
+        stageEl.innerHTML = "";
+        if (!scene || !scene.widgets) return;
+
+        for (const w of scene.widgets) {
+          const el = document.createElement("div");
+          el.className = "widget";
+          el.style.left = w.x + "px";
+          el.style.top = w.y + "px";
+          el.style.width = w.largeur + "px";
+          el.style.height = w.hauteur + "px";
+          el.style.zIndex = w.z;
+
+          if (w.media) {
+            const img = document.createElement("img");
+            img.src = "/" + w.media; // /medias/xxx.png → même origine :4321
+            el.appendChild(img);
+          }
+          stageEl.appendChild(el);
+        }
+      }
+
+      function connect() {
+        const proto = location.protocol === "https:" ? "wss:" : "ws:";
+        const ws = new WebSocket(proto + "//" + location.host + "/ws");
+
+        ws.onopen = () => {
+          console.log("WS ok");
+        };
+        ws.onclose = () => {
+          console.log("WS fermé — reconnexion dans 2s");
+          setTimeout(connect, 2000);
+        };
+        ws.onerror = () => {
+          console.error("WS erreur");
+        };
+        ws.onmessage = (ev) => {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === "snapshot" && msg.scene) {
+              scene = msg.scene;
+              renderScene(msg.scene);
+              console.log("WS ok / widgets:", msg.scene.widgets.length);
+            }
+          } catch (e) {
+            console.error("Snapshot invalide:", e);
+          }
+        };
+      }
+
+      let scene = { widgets: [] };
+      connect();
+    </script>
+  </body>
+</html>

@@ -1,0 +1,32 @@
+[package]
+name = "streamos-v0"
+version = "0.1.0"
+description = "StreamOS v0 — dashboard + diffusion"
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "streamos_v0_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+axum = { version = "0.8", features = ["ws"] }
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.7", features = ["fs"] }
+uuid = { version = "1", features = ["v4"] }
+log = "0.4"
+futures-util = { version = "0.3", features = ["sink"] }
+tokio-tungstenite = "0.26"
+sha2 = "0.10"
+base64 = "0.22"
+
+[features]
+custom-protocol = ["tauri/custom-protocol"]
