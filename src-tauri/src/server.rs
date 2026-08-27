@@ -7,22 +7,21 @@ use axum::{
 };
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
-use tokio::sync::broadcast;
 use tower_http::services::ServeDir;
 
-use crate::scene::Scene;
+use crate::api_deck;
+use crate::scenes::ScenesState;
 
 /// HTML embarqué (vanilla JS, zéro Tauri). Sert de page de diffusion pour OBS.
 const DIFFUSION_HTML: &str = include_str!("../resources/diffusion.html");
 
-/// Canal de diffusion des snapshots scène vers tous les clients WS connectés.
-pub type SnapshotTx = broadcast::Sender<String>;
-
+/// État du serveur :4321. Contient l'AppHandle + ScenesState (scène + id + canal).
+/// Les handlers /api/* et WS extraient st.scenes pour appeler scenes::*.
 pub struct ServerState {
-    pub snapshot_tx: SnapshotTx,
-    pub scene: Arc<Mutex<Scene>>,
+    pub app: AppHandle,
+    pub scenes: ScenesState,
 }
 
 /// Démarre le serveur HTTP+WS sur 127.0.0.1:4321.
@@ -30,16 +29,15 @@ pub struct ServerState {
 /// Ne JAMAIS fallback sur un autre port — OBS pointe sur :4321.
 pub async fn run_server(
     app: AppHandle,
-    snapshot_tx: SnapshotTx,
-    scene: Arc<Mutex<Scene>>,
+    state: ScenesState,
 ) -> Result<(), String> {
     let addr: SocketAddr = "127.0.0.1:4321"
         .parse()
         .map_err(|e| format!("Adresse invalide: {}", e))?;
 
-    let state = Arc::new(ServerState {
-        snapshot_tx: snapshot_tx.clone(),
-        scene,
+    let server_state = Arc::new(ServerState {
+        app: app.clone(),
+        scenes: state,
     });
 
     // Dossier medias servi sur /medias pour diffusion.html (chemin relatif).
@@ -49,7 +47,8 @@ pub async fn run_server(
         .route("/", get(index))
         .route("/ws", get(ws_handler))
         .nest_service("/medias", ServeDir::new(medias_dir))
-        .with_state(state);
+        .merge(api_deck::routes())
+        .with_state(server_state);
 
     let listener = tokio::net::TcpListener::bind(&addr)
         .await
@@ -82,13 +81,13 @@ async fn ws_handler(
 }
 
 async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
-    let mut rx = state.snapshot_tx.subscribe();
+    let mut rx = state.scenes.snapshot_tx.subscribe();
     let (mut sender, mut receiver) = socket.split();
 
     // Snapshot initial : envoyer l'état courant dès la connexion
     {
         let snapshot = {
-            let scene = state.scene.lock().unwrap();
+            let scene = state.scenes.scene.lock().unwrap();
             serde_json::json!({
                 "type": "snapshot",
                 "scene": &*scene

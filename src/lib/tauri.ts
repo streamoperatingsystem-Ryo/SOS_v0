@@ -18,6 +18,7 @@ export interface Widget {
   mediaRot?: number;
   mediaPaused?: boolean;
   mediaTime?: number;
+  trou?: boolean;
 }
 
 export interface Scene {
@@ -31,6 +32,12 @@ export interface Scene {
   bgRot?: number;
   bgPaused?: boolean;
   bgTime?: number;
+}
+
+/// Entrée de l'index des scènes (id + nom seulement, jamais le contenu).
+export interface SceneIndex {
+  id: string;
+  nom: string;
 }
 
 export const tauri = {
@@ -64,5 +71,46 @@ export const tauri = {
   /// OBS, URL :4321) existent sans doublon, puis mute la scène + save + snapshot.
   async obsConnect(host: string, port: number, password: string): Promise<void> {
     await invoke("obs_connect", { host, port, password });
+  },
+
+  // ===== Scènes (v0.14) =====
+
+  /// Liste l'index des scènes (ids + noms seulement, jamais le contenu).
+  async scenesLister(): Promise<SceneIndex[]> {
+    return invoke<SceneIndex[]>("scenes_lister");
+  },
+
+  /// Crée une nouvelle scène vide (1920×1080, 0 widget, pas de fond), bascule
+  /// dessus. Sauve la courante d'abord. Retourne l'entrée créée.
+  async sceneCreer(nom: string): Promise<SceneIndex> {
+    return invoke<SceneIndex>("scene_creer", { nom });
+  },
+
+  /// Ouvre une scène : sauve la courante, charge <id>.json, bascule, snapshot.
+  async sceneOuvrir(id: string): Promise<SceneIndex> {
+    return invoke<SceneIndex>("scene_ouvrir", { id });
+  },
+
+  /// Renomme une scène dans l'index.
+  async sceneRenommer(id: string, nom: string): Promise<void> {
+    await invoke("scene_renommer", { id, nom });
+  },
+
+  /// Retourne l'entrée courante ({ id, nom }).
+  async sceneCourante(): Promise<SceneIndex> {
+    return invoke<SceneIndex>("scene_courante");
+  },
+
+  /// Exporte la scène courante comme pack dossier portable.
+  /// nom_pack = nom du dossier à créer (fourni par l'UI, défaut = nom scène).
+  /// Dialog = dossier PARENT. Retourne true si exporté, false si annulé.
+  async sceneExporter(nomPack: string): Promise<boolean> {
+    return invoke<boolean>("scene_exporter", { nomPack });
+  },
+
+  /// Importe une scène depuis un .json (dialog Ouvrir). Valide schéma min,
+  /// copie en <nouvel-id>.json, bascule. Retourne l'entrée ou null si annulé.
+  async sceneImporter(): Promise<SceneIndex | null> {
+    return invoke<SceneIndex | null>("scene_importer");
   },
 };

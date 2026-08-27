@@ -15,7 +15,7 @@
       html, body {
         width: var(--canvas-w);
         height: var(--canvas-h);
-        background: var(--fond);
+        background: transparent;
         color: var(--texte);
         font-family: system-ui, sans-serif;
         overflow: hidden;
@@ -24,6 +24,11 @@
         position: relative;
         width: var(--canvas-w);
         height: var(--canvas-h);
+      }
+      .widget-wrap {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
       }
       .widget {
         position: absolute;
@@ -53,17 +58,25 @@
         z-index: 0;
         pointer-events: none;
       }
-      #bg img, #bg video {
-        width: 100%;
-        height: 100%;
+      /* Canvas qui affiche le fond avec les trous (destination-out).
+         L'img/video source est display:none, sert uniquement de source
+         pour drawImage. */
+      #bg-canvas {
+        position: absolute;
+        top: 0;
+        left: 0;
         display: block;
-        transform-origin: center center;
+      }
+      #bg img, #bg video {
+        display: none;
       }
     </style>
   </head>
   <body>
     <div id="stage">
-      <div id="bg"></div>
+      <div id="bg">
+        <canvas id="bg-canvas"></canvas>
+      </div>
     </div>
     <script>
       // ZÉRO import Tauri. État uniquement via WebSocket snapshot.
@@ -72,6 +85,8 @@
       // fallback 1920×1080 si absente. Widgets jamais rescalés.
       const stageEl = document.getElementById("stage");
       const bgEl = document.getElementById("bg");
+      const bgCanvas = document.getElementById("bg-canvas");
+      const bgCtx = bgCanvas.getContext("2d");
       const rootStyle = document.documentElement.style;
 
       function applyCanvasDims(scene) {
@@ -79,6 +94,9 @@
         const h = (scene && scene.canvasH) || 1080;
         rootStyle.setProperty("--canvas-w", w + "px");
         rootStyle.setProperty("--canvas-h", h + "px");
+        // Canvas physique = résolution scène (pas de scale CSS).
+        if (bgCanvas.width !== w) bgCanvas.width = w;
+        if (bgCanvas.height !== h) bgCanvas.height = h;
       }
 
       const FIT_CSS = {
@@ -96,16 +114,16 @@
         return VIDEO_EXT.indexOf(ext) >= 0 ? "video" : "image";
       }
 
-      // Map id → { el, mediaEl, mediaKey, kind }.
+      // Map id → { el, wrapEl, mediaEl, mediaKey, kind, mediaTime }.
       // On diff : MAJ style only sur les widgets existants, on ne touche
       // JAMAIS à video.src / currentTime / load() — la vidéo continue.
       // RÈGLE : currentTime ne bouge QUE si le nom de fichier change.
       // Drag, resize, rotateX/Y, z-index, mediaFit = style seulement.
       const widgetMap = new Map();
 
-      // État du fond de scène : { mediaEl, mediaKey, kind }.
-      // Même règle que les widgets : ne recréer le mediaEl QUE si le nom de
-      // fichier change. bgFit/zoom/rot = style only.
+      // État du fond de scène : { mediaEl, mediaKey, kind, mediaTime }.
+      // mediaEl (img/video) est display:none — sert uniquement de source
+      // pour drawImage dans peindreFond().
       let bgState = { mediaEl: null, mediaKey: "", kind: "", mediaTime: 0 };
 
       // Nom de fichier seul (sans dossier "medias/", sans query, sans URL).
@@ -122,7 +140,7 @@
         el.style.top = w.y + "px";
         el.style.width = w.largeur + "px";
         el.style.height = w.hauteur + "px";
-        el.style.zIndex = w.z;
+        // zIndex est sur le wrapper (.widget-wrap), pas sur .widget.
         const rx = w.rotateX || 0;
         const ry = w.rotateY || 0;
         el.style.transform = "perspective(800px) rotateX(" + rx + "deg) rotateY(" + ry + "deg)";
@@ -154,31 +172,6 @@
         return img;
       }
 
-      function applyBgMediaStyle(mediaEl, scene) {
-        const fit = scene.bgFit || "remplir";
-        mediaEl.style.objectFit = FIT_CSS[fit] || "cover";
-        mediaEl.style.objectPosition = fit === "centrer" ? "center" : "50% 50%";
-        const zoom = scene.bgZoom || 1;
-        const rot = scene.bgRot || 0;
-        mediaEl.style.transform = "rotate(" + rot + "deg) scale(" + zoom + ")";
-        mediaEl.style.transformOrigin = "center center";
-      }
-
-      function createBgMedia(scene, kind) {
-        if (kind === "video") {
-          // OBS : muet, pas de contrôles ni de clic. play/pause/loop gérés par
-          // applyBgState selon bgPaused (snapshot WS depuis le dashboard).
-          const vid = document.createElement("video");
-          vid.src = "/" + scene.bgMedia;
-          vid.muted = true;
-          vid.setAttribute("playsinline", "");
-          return vid;
-        }
-        const img = document.createElement("img");
-        img.src = "/" + scene.bgMedia;
-        return img;
-      }
-
       // Applique l'état lecture/pause/loop/seek d'une vidéo widget selon
       // mediaPaused/mediaTime. Tracker entry.mediaTime pour ne reset
       // currentTime que sur changement (pas sur chaque snapshot).
@@ -196,6 +189,171 @@
           try { entry.mediaEl.currentTime = t; } catch (e) {}
           entry.mediaTime = t;
         }
+      }
+
+      // ===== Fond de scène : canvas destination-out =====
+      // Le fond est dessiné sur #bg-canvas. Les trous (widgets w.trou=true)
+      // sont EFFACÉS du canvas via destination-out → alpha 0 → OBS visible.
+
+      // Calcule le rectangle source/dest pour drawImage selon le mode fit.
+      // Retourne { sx, sy, sw, sh, dx, dy, dw, dh } ou null (centrer + img plus
+      // petite que le canvas → pas de dessin).
+      function fitRects(imgW, imgH, cw, ch, fit) {
+        const ir = imgW / imgH;
+        const cr = cw / ch;
+        let dw, dh, dx, dy;
+        if (fit === "etirer") {
+          return { sx: 0, sy: 0, sw: imgW, sh: imgH, dx: 0, dy: 0, dw: cw, dh: ch };
+        }
+        if (fit === "centrer") {
+          dw = imgW; dh = imgH; dx = (cw - dw) / 2; dy = (ch - dh) / 2;
+          if (dw <= cw && dh <= ch) {
+            return { sx: 0, sy: 0, sw: imgW, sh: imgH, dx, dy, dw, dh };
+          }
+          // Plus grand que le canvas → comme "ajuster" (scale-down).
+          fit = "ajuster";
+        }
+        if (fit === "vignette") {
+          // scale-down = min(naturel, contain)
+          const scale = Math.min(cw / imgW, ch / imgH, 1);
+          dw = imgW * scale; dh = imgH * scale;
+          dx = (cw - dw) / 2; dy = (ch - dh) / 2;
+          return { sx: 0, sy: 0, sw: imgW, sh: imgH, dx, dy, dw, dh };
+        }
+        if (fit === "remplir" || fit === "etendre") {
+          // cover : remplit le canvas, crop le débordement
+          if (ir > cr) {
+            dh = ch; dw = ch * ir;
+          } else {
+            dw = cw; dh = cw / ir;
+          }
+          dx = (cw - dw) / 2; dy = (ch - dh) / 2;
+          return { sx: 0, sy: 0, sw: imgW, sh: imgH, dx, dy, dw, dh };
+        }
+        // ajuster (contain) : tient dans le canvas, bands noires
+        if (ir > cr) {
+          dw = cw; dh = cw / ir;
+        } else {
+          dh = ch; dw = ch * ir;
+        }
+        dx = (cw - dw) / 2; dy = (ch - dh) / 2;
+        return { sx: 0, sy: 0, sw: imgW, sh: imgH, dx, dy, dw, dh };
+      }
+
+      // Peint le fond sur #bg-canvas avec les trous (destination-out).
+      // Appelée à chaque snapshot (image) ou via rAF (vidéo).
+      function peindreFond(scene) {
+        const cw = bgCanvas.width;
+        const ch = bgCanvas.height;
+        bgCtx.clearRect(0, 0, cw, ch);
+
+        if (!bgState.mediaEl) return;
+        const src = bgState.mediaEl;
+        // Vidéo : readyState >= 2 (HAVE_CURRENT_DATA) pour drawImage.
+        // Image : complete && naturalWidth > 0.
+        const ready = bgState.kind === "video"
+          ? (src.readyState >= 2)
+          : (src.complete && src.naturalWidth > 0);
+        if (!ready) return;
+
+        const fit = scene.bgFit || "remplir";
+        const r = fitRects(src.videoWidth || src.naturalWidth,
+                           src.videoHeight || src.naturalHeight,
+                           cw, ch, fit);
+        if (!r) return;
+
+        // Zoom + rotation 2D du fond : on dessine dans un sous-canvas temporaire
+        // puis on drawImage avec transform. Plus simple : on set le transform
+        // du ctx autour du centre du canvas, drawImage, puis reset.
+        const zoom = scene.bgZoom || 1;
+        const rot = (scene.bgRot || 0) * Math.PI / 180;
+        bgCtx.save();
+        bgCtx.globalCompositeOperation = "source-over";
+        // Transform centré sur le canvas (origine = centre).
+        bgCtx.translate(cw / 2, ch / 2);
+        bgCtx.rotate(rot);
+        bgCtx.scale(zoom, zoom);
+        bgCtx.translate(-cw / 2, -ch / 2);
+        try {
+          bgCtx.drawImage(src, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
+        } catch (e) {
+          // drawImage peut échouer si la vidéo n'est pas prête → ignore.
+        }
+        bgCtx.restore();
+
+        // ===== Trous : destination-out =====
+        // Efface alpha dans la zone de chaque widget trou. Le trou suit TOUTES
+        // les transforms du widget (x y w h + rotateX/rotateY + perspective 800px),
+        // même ordre que le CSS .widget-3d : rotateY puis rotateX puis perspective.
+        // Fast path : rx=ry=0 → fillRect (sortie pixel-identique à v0.15b).
+        function projectCorner(lx, ly, rx, ry, d) {
+          const rxR = rx * Math.PI / 180;
+          const ryR = ry * Math.PI / 180;
+          // rotateY (autour de Y) : x' = cos(ry)*lx, z' = -sin(ry)*lx, y' = ly
+          const x1 = Math.cos(ryR) * lx;
+          const z1 = -Math.sin(ryR) * lx;
+          const y1 = ly;
+          // rotateX (autour de X) : y'' = cos(rx)*y' - sin(rx)*z', z'' = sin(rx)*y' + cos(rx)*z'
+          const y2 = Math.cos(rxR) * y1 - Math.sin(rxR) * z1;
+          const z2 = Math.sin(rxR) * y1 + Math.cos(rxR) * z1;
+          // perspective(d) : w = 1 - z/d, px = x/w, py = y/w
+          const w = 1 - z2 / d;
+          return { x: x1 / w, y: y2 / w };
+        }
+        const PERSP = 800;
+        bgCtx.save();
+        bgCtx.globalCompositeOperation = "destination-out";
+        const ws = scene.widgets || [];
+        let n = 0;
+        for (let i = 0; i < ws.length; i++) {
+          const w = ws[i];
+          if (w.trou === true) {
+            const rx = w.rotateX || 0;
+            const ry = w.rotateY || 0;
+            if (rx === 0 && ry === 0) {
+              // Fast path : rectangle AABB (identique v0.15b).
+              bgCtx.fillRect(w.x, w.y, w.largeur, w.hauteur);
+            } else {
+              // Quad projeté : 4 coins locaux (relatifs au centre, z=0)
+              // projetés par la même matrice que .widget-3d, puis translatés.
+              const cx = w.x + w.largeur / 2;
+              const cy = w.y + w.hauteur / 2;
+              const hw = w.largeur / 2;
+              const hh = w.hauteur / 2;
+              const c0 = projectCorner(-hw, -hh, rx, ry, PERSP);
+              const c1 = projectCorner( hw, -hh, rx, ry, PERSP);
+              const c2 = projectCorner( hw,  hh, rx, ry, PERSP);
+              const c3 = projectCorner(-hw,  hh, rx, ry, PERSP);
+              bgCtx.beginPath();
+              bgCtx.moveTo(cx + c0.x, cy + c0.y);
+              bgCtx.lineTo(cx + c1.x, cy + c1.y);
+              bgCtx.lineTo(cx + c2.x, cy + c2.y);
+              bgCtx.lineTo(cx + c3.x, cy + c3.y);
+              bgCtx.closePath();
+              bgCtx.fill();
+            }
+            n++;
+          }
+        }
+        bgCtx.restore();
+        bgCtx.globalCompositeOperation = "source-over";
+      }
+
+      // Boucle rAF pour le fond vidéo (sinon frame figée sans trou).
+      let rafId = 0;
+      function startBgLoop() {
+        if (rafId) return;
+        function tick() {
+          if (bgState.kind === "video" && bgState.mediaEl) {
+            peindreFond(currentScene);
+          }
+          rafId = requestAnimationFrame(tick);
+        }
+        rafId = requestAnimationFrame(tick);
+      }
+      function stopBgLoop() {
+        if (rafId) cancelAnimationFrame(rafId);
+        rafId = 0;
       }
 
       // Applique l'état lecture/pause/loop/seek de la vidéo fond selon
@@ -218,7 +376,8 @@
       }
 
       // Rendu du fond de scène. Règle : ne recréer le mediaEl QUE si le nom
-      // de fichier (bgMedia) ou le kind change. Sinon style only.
+      // de fichier (bgMedia) ou le kind change. Sinon style only (mais le
+      // mediaEl est display:none — le rendu visuel est sur #bg-canvas).
       function renderBg(scene) {
         const rel = scene.bgMedia || "";
         if (!rel) {
@@ -229,6 +388,9 @@
             bgState.kind = "";
             bgState.mediaTime = 0;
           }
+          // Pas de fond → canvas transparent (OBS visible partout).
+          bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+          stopBgLoop();
           return;
         }
         const kind = scene.bgKind || kindFromMedia(rel);
@@ -236,42 +398,89 @@
         if (bgState.mediaKey !== key || bgState.kind !== kind) {
           if (bgState.mediaEl) bgEl.removeChild(bgState.mediaEl);
           const mediaEl = createBgMedia(scene, kind);
-          applyBgMediaStyle(mediaEl, scene);
+          // mediaEl est display:none via CSS (#bg img, #bg video).
           bgEl.appendChild(mediaEl);
           bgState.mediaEl = mediaEl;
           bgState.mediaKey = key;
           bgState.kind = kind;
           bgState.mediaTime = scene.bgTime || 0;
           applyBgState(bgState, scene);
+          // Image : peindre quand loaded. Vidéo : rAF loop.
+          if (kind === "video") {
+            startBgLoop();
+          } else {
+            mediaEl.addEventListener("load", function () { peindreFond(scene); });
+            // Au cas où déjà cached :
+            if (mediaEl.complete) peindreFond(scene);
+          }
         } else if (bgState.mediaEl) {
-          applyBgMediaStyle(bgState.mediaEl, scene);
           applyBgState(bgState, scene);
         }
+      }
+
+      function createBgMedia(scene, kind) {
+        if (kind === "video") {
+          const vid = document.createElement("video");
+          vid.src = "/" + scene.bgMedia;
+          vid.muted = true;
+          vid.setAttribute("playsinline", "");
+          return vid;
+        }
+        const img = document.createElement("img");
+        img.src = "/" + scene.bgMedia;
+        return img;
       }
 
       function renderScene(scene) {
         if (!scene || !scene.widgets) return;
 
+        // Dims canvas (coords scène).
+        applyCanvasDims(scene);
+
         // Fond de scène d'abord (calque sous les widgets, z-index 0).
         renderBg(scene);
 
-        const seen = new Set();
+        // Peindre le fond (image : une fois ; vidéo : rAF loop géré dans renderBg).
+        peindreFond(scene);
 
-        for (const w of scene.widgets) {
+        // Log trous (une fois par snapshot — aide debug).
+        let nTrous = 0;
+        const rects = [];
+        for (let i = 0; i < scene.widgets.length; i++) {
+          const w = scene.widgets[i];
+          if (w.trou === true) {
+            nTrous++;
+            rects.push("[" + Math.round(w.x) + "," + Math.round(w.y) + ","
+              + Math.round(w.largeur) + "x" + Math.round(w.hauteur) + "]");
+          }
+        }
+        console.log("[Trou] n=" + nTrous + " rects=" + rects.join(" "));
+
+        var seen = new Set();
+
+        for (var i = 0; i < scene.widgets.length; i++) {
+          var w = scene.widgets[i];
+          var kind = w.kind || (w.media ? kindFromMedia(w.media) : "image");
+
+          // Trous : pas de DOM widget, juste marquer comme vu.
+          if (w.trou === true) {
+            seen.add(w.id);
+            continue;
+          }
+
           seen.add(w.id);
-          const kind = w.kind || (w.media ? kindFromMedia(w.media) : "image");
-          const key = mediaKey(w.media);
-          const entry = widgetMap.get(w.id);
+          var key = mediaKey(w.media);
+          var entry = widgetMap.get(w.id);
 
           if (entry) {
             // ===== UPDATE : widget existant — style only =====
             applyWidgetStyle(entry.el, w);
+            entry.wrapEl.style.zIndex = w.z;
             // Recréer le mediaEl SEULEMENT si le nom de fichier a changé.
-            // rotateX/Y/z/fit/mediaFit/zoom/rot = style, jamais de recréation.
             if (entry.mediaKey !== key || entry.kind !== kind) {
               if (entry.mediaEl) entry.el.removeChild(entry.mediaEl);
               if (w.media) {
-                const mediaEl = createMedia(w, kind);
+                var mediaEl = createMedia(w, kind);
                 applyMediaStyle(mediaEl, w);
                 entry.el.appendChild(mediaEl);
                 entry.mediaEl = mediaEl;
@@ -284,23 +493,26 @@
               entry.mediaKey = key;
               entry.kind = kind;
             } else if (entry.mediaEl) {
-              // Même fichier : MAJ object-fit + transform (style only) + état lecture.
               applyMediaStyle(entry.mediaEl, w);
               applyMediaState(entry, w);
             }
           } else {
             // ===== CREATE : nouveau widget =====
-            const el = document.createElement("div");
+            var wrapEl = document.createElement("div");
+            wrapEl.className = "widget-wrap";
+            wrapEl.style.zIndex = w.z;
+            var el = document.createElement("div");
             el.className = "widget";
             applyWidgetStyle(el, w);
-            let mediaEl = null;
+            var mediaEl = null;
             if (w.media) {
               mediaEl = createMedia(w, kind);
               applyMediaStyle(mediaEl, w);
               el.appendChild(mediaEl);
             }
-            stageEl.appendChild(el);
-            const newEntry = { el, mediaEl, mediaKey: key, kind, mediaTime: w.mediaTime || 0 };
+            wrapEl.appendChild(el);
+            stageEl.appendChild(wrapEl);
+            var newEntry = { el: el, wrapEl: wrapEl, mediaEl: mediaEl, mediaKey: key, kind: kind, mediaTime: w.mediaTime || 0 };
             widgetMap.set(w.id, newEntry);
             applyMediaState(newEntry, w);
           }
@@ -309,7 +521,7 @@
         // ===== DELETE : widgets disparus =====
         for (const [id, entry] of widgetMap) {
           if (!seen.has(id)) {
-            entry.el.remove();
+            entry.wrapEl.remove();
             widgetMap.delete(id);
           }
         }
@@ -333,7 +545,7 @@
           try {
             const msg = JSON.parse(ev.data);
             if (msg.type === "snapshot" && msg.scene) {
-              scene = msg.scene;
+              currentScene = msg.scene;
               applyCanvasDims(msg.scene);
               renderScene(msg.scene);
               console.log("WS ok / widgets:", msg.scene.widgets.length);
@@ -344,7 +556,7 @@
         };
       }
 
-      let scene = { widgets: [] };
+      let currentScene = { widgets: [] };
       connect();
     </script>
   </body>

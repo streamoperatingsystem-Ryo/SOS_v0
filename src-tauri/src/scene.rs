@@ -87,6 +87,8 @@ pub struct Widget {
     pub mediaPaused: bool,
     #[serde(default = "default_zero_f64")]
     pub mediaTime: f64,
+    #[serde(default)]
+    pub trou: bool,
 }
 
 /// Scène unique (source de vérité). canvasW/canvasH = résolution OBS lue

@@ -48,6 +48,7 @@
   }
   let kind = $derived(w.kind ?? (w.media ? kindFromMedia(w.media) : "image"));
   let isVideo = $derived(kind === "video");
+  let isTrou = $derived(w.trou === true);
 
   // Mapping mode → object-fit. "etendre" géré à part (img auto + min 100%).
   const FIT_CSS: Record<string, string> = {
@@ -204,6 +205,16 @@
     {/if}
   </div>
 
+  <!-- Overlay trou : cadre pointillé par-dessus le widget quand trou activé.
+       Le widget reste sélectionnable (l'outer hit-box est intact).
+       Tilté avec la même perspective que .widget-3d → correspond au trou :4321. -->
+  {#if isTrou}
+    <div
+      class="trou-overlay"
+      style="transform: perspective(800px) rotateX({rx}deg) rotateY({ry}deg);"
+    ></div>
+  {/if}
+
   <!-- Poignées resize : 4 coins + 4 bords. Widget sélectionné seulement. -->
   {#if selected}
     <div class="handle nw" onpointerdown={(e) => onHandleDown(e, "nw")}></div>
@@ -240,6 +251,14 @@
   .widget-3d.selected {
     outline: 2px solid var(--texte);
     outline-offset: -2px;
+  }
+  .trou-overlay {
+    position: absolute;
+    inset: 0;
+    border: 2px dashed var(--texte);
+    pointer-events: none;
+    box-sizing: border-box;
+    z-index: 2;
   }
   .preview {
     width: 100%;

@@ -55,6 +55,16 @@ export async function createWidget(): Promise<void> {
   await commitScene();
 }
 
+/// Active/désactive le mode trou sur un widget. Maj locale + commit.
+/// trou=true → :4321 média caché + rectangle masqué (fond + widgets dessous).
+export async function setWidgetTrou(id: string, trou: boolean): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, trou } : w)),
+  }));
+  await commitScene();
+}
+
 /// Clamp canvas : moitié du widget reste visible, widget jamais perdu.
 /// x ∈ [-w/2 , canvasW - w/2], y ∈ [-h/2 , canvasH - h/2].
 function clampWidget(w: Widget, canvasW: number, canvasH: number): Widget {

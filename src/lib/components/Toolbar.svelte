@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime } from "../stores/scene";
+  import { createWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime, setWidgetTrou } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
   import { openSection, toggleSection } from "../stores/ui";
   import { videoRegistry } from "../stores/video";
@@ -83,6 +83,7 @@
   // La barre écrit mediaPaused/mediaTime dans la scène (commitScene → snapshot
   // WS → :4321 applique play/pause/seek/loop). Le dashboard reste figé.
   let selectedKind = $derived(selectedWidget?.kind ?? "image");
+  let selectedTrou = $derived(selectedWidget?.trou === true);
   let widgetMediaPaused = $derived(selectedWidget?.mediaPaused ?? true);
   let widgetMediaTime = $derived(selectedWidget?.mediaTime ?? 0);
   let widgetVideoEl = $derived(
@@ -98,6 +99,11 @@
   }
   function onWidgetSeek(t: number) {
     if (selectedId) setWidgetMediaTime(selectedId, t);
+  }
+
+  // Toggle trou sur le widget sélectionné.
+  function onToggleTrou() {
+    if (selectedId) setWidgetTrou(selectedId, !selectedTrou);
   }
 
   // Callbacks barre fond.
@@ -228,6 +234,9 @@
             </label>
           {/if}
           <Gizmo3D />
+          <button class="action" onclick={onToggleTrou}>
+            {selectedTrou ? "Désactiver le trou" : "Activer le trou"}
+          </button>
           <div class="fit-group">
             <span class="field-label">Affichage</span>
             <div class="fit-buttons">

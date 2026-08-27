@@ -2,14 +2,16 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { loadScene } from "./lib/stores/scene";
+  import { loadScenesIndex, loadCurrentScene } from "./lib/stores/scenes";
   import { obsConnect, obsHost, obsPort, obsPassword } from "./lib/stores/obs";
   import { get } from "svelte/store";
   import Toolbar from "./lib/components/Toolbar.svelte";
   import Canvas from "./lib/components/Canvas.svelte";
+  import SceneBar from "./lib/components/SceneBar.svelte";
   import DevPanel from "./lib/components/DevPanel.svelte";
 
-  let serverError: string | null = null;
-  let serverOk = false;
+  let serverError = $state<string | null>(null);
+  let serverOk = $state(false);
   let devOpen = $state(false);
 
   function toggleDev() {
@@ -35,8 +37,10 @@
       obsConnect(get(obsHost), get(obsPort), get(obsPassword));
     });
 
-    // Charge la scène initiale (config.json)
+    // Charge la scène initiale (config.json) + index scènes + scène courante
     await loadScene();
+    await loadScenesIndex();
+    await loadCurrentScene();
   });
 </script>
 
@@ -73,7 +77,10 @@
 
   <div class="row">
     <Toolbar />
-    <Canvas />
+    <div class="canvas-col">
+      <SceneBar />
+      <Canvas />
+    </div>
   </div>
 </main>
 
@@ -122,6 +129,13 @@
   .row {
     flex: 1;
     display: flex;
+    min-height: 0;
+  }
+  .canvas-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
     min-height: 0;
   }
 </style>

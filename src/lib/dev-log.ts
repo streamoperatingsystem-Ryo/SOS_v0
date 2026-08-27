@@ -106,4 +106,16 @@ export const devLog: DevEntry[] = [
     date: "2026-08-27",
     note: "Barre −5s/Lecture-Pause/+5s + seek dans la sidebar, pilote :4321 via mediaPaused/mediaTime (snapshot WS), dashboard figé (vignette à mediaTime), :4321 play/pause/loop selon mediaPaused, seek selon mediaTime.",
   },
+  {
+    id: 17,
+    titre: "Scènes barre + API Stream Deck",
+    date: "2026-08-27",
+    note: "Multi-scènes sur disque (index.json ids+noms + <id>.json contenu, une seule en RAM), migration config.json au boot, barre haute pastilles + nom éditable au centre + boutons +/Exporter/Importer, commandes Tauri scenes_*, API HTTP /api/* sur :4321 (scenes/ouvrir/nouvelle/courante), export dossier portable (scene.json + medias/ référencés seulement, erreur si dossier existe), import dossier pack (copie medias uuid anti-collision + réécriture chemins) ou legacy .json (cases vides si médias manquants), changement de scène = selectedId null + snapshot.",
+  },
+  {
+    id: 18,
+    titre: "Trou alpha widget",
+    date: "2026-08-27",
+    note: "Widget kind=trou (géométrie inchangée, pas de média), dashboard cadre pointillé « Trou », :4321 zone transparente (alpha 0) via masques CSS SVG fill-rule=evenodd sur wrappers DOM par-widget, fond + widgets autour intacts, widgets z>trou recouvrent la caméra, html/body/#stage transparent.",
+  },
 ];

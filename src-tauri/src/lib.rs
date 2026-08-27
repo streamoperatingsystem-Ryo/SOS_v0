@@ -1,58 +1,72 @@
+mod api_deck;
 mod config;
 mod obs;
 mod scene;
+mod scenes;
 mod server;
 
-use scene::Scene;
-use std::sync::{Arc, Mutex};
+use scenes::{ScenesState, SceneIndex};
+use std::sync::Arc;
 use tauri::{AppHandle, Manager};
 use tokio::sync::broadcast;
 
-/// État global partagé : scène unique (source de vérité) + canal snapshot.
-struct AppState {
-    scene: Arc<Mutex<Scene>>,
-    snapshot_tx: broadcast::Sender<String>,
-}
-
-/// Sérialise la scène en message snapshot WS.
-fn snapshot_json(scene: &Scene) -> String {
-    serde_json::json!({
-        "type": "snapshot",
-        "scene": scene
-    })
-    .to_string()
-}
-
-/// Pousse le snapshot courant vers tous les clients WS connectés.
-fn push_snapshot(state: &AppState) {
-    let scene = state.scene.lock().unwrap();
-    let json = snapshot_json(&scene);
-    // send_err = aucun client connecté, c'est OK
-    let _ = state.snapshot_tx.send(json);
-}
+// ===== Commandes scène (lecture/écriture) =====
 
 #[tauri::command]
-fn get_scene(state: tauri::State<AppState>) -> Scene {
+fn get_scene(state: tauri::State<ScenesState>) -> scene::Scene {
     state.scene.lock().unwrap().clone()
 }
 
 #[tauri::command]
-fn update_scene(app: AppHandle, state: tauri::State<AppState>, scene: Scene) -> Result<(), String> {
+fn update_scene(app: AppHandle, state: tauri::State<ScenesState>, scene: scene::Scene) -> Result<(), String> {
     // 1. Muter l'état unique
     {
         let mut current = state.scene.lock().unwrap();
         *current = scene;
     }
-
-    // 2. Sauvegarder config.json
-    let scene_snapshot = state.scene.lock().unwrap().clone();
-    config::save_scene(&app, &scene_snapshot)?;
-
-    // 3. Pousser le snapshot WS (après save, pas d'état parallèle)
-    push_snapshot(&state);
-
+    // 2. Sauver <current_id>.json + snapshot WS (chaîne unique)
+    scenes::save_current(&app, &state)?;
     Ok(())
 }
+
+// ===== Commandes scènes (v0.14) =====
+
+#[tauri::command]
+fn scenes_lister(app: AppHandle) -> Result<Vec<SceneIndex>, String> {
+    scenes::lister(&app)
+}
+
+#[tauri::command]
+fn scene_creer(app: AppHandle, state: tauri::State<ScenesState>, nom: String) -> Result<SceneIndex, String> {
+    scenes::creer(&app, &state, &nom)
+}
+
+#[tauri::command]
+fn scene_ouvrir(app: AppHandle, state: tauri::State<ScenesState>, id: String) -> Result<SceneIndex, String> {
+    scenes::ouvrir(&app, &state, &id)
+}
+
+#[tauri::command]
+fn scene_renommer(app: AppHandle, id: String, nom: String) -> Result<(), String> {
+    scenes::renommer(&app, &id, &nom)
+}
+
+#[tauri::command]
+fn scene_courante(app: AppHandle, state: tauri::State<ScenesState>) -> Result<SceneIndex, String> {
+    scenes::courante(&app, &state)
+}
+
+#[tauri::command]
+fn scene_exporter(app: AppHandle, state: tauri::State<ScenesState>, nom_pack: String) -> Result<bool, String> {
+    scenes::exporter(&app, &state, &nom_pack)
+}
+
+#[tauri::command]
+fn scene_importer(app: AppHandle, state: tauri::State<ScenesState>) -> Result<Option<SceneIndex>, String> {
+    scenes::importer(&app, &state)
+}
+
+// ===== Import média (widget + fond) =====
 
 const MAX_IMG_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_VIDEO_BYTES: u64 = 80 * 1024 * 1024;
@@ -159,7 +173,7 @@ fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String)>, Stri
 #[tauri::command]
 fn import_media(
     app: AppHandle,
-    state: tauri::State<AppState>,
+    state: tauri::State<ScenesState>,
     widget_id: String,
 ) -> Result<Option<String>, String> {
     // 1. Helper commun : dialog + validation + copie (pas de mutation scène).
@@ -179,10 +193,8 @@ fn import_media(
         w.kind = kind;
     }
 
-    // 3. Save config.json + push snapshot (chaîne unique)
-    let snap = state.scene.lock().unwrap().clone();
-    config::save_scene(&app, &snap)?;
-    push_snapshot(&state);
+    // 3. Save <current_id>.json + push snapshot (chaîne unique)
+    scenes::save_current(&app, &state)?;
 
     Ok(Some(rel))
 }
@@ -194,7 +206,7 @@ fn import_media(
 #[tauri::command]
 fn import_fond(
     app: AppHandle,
-    state: tauri::State<AppState>,
+    state: tauri::State<ScenesState>,
 ) -> Result<Option<String>, String> {
     // 1. Helper commun : dialog + validation + copie (pas de mutation scène).
     let Some((rel, kind)) = pick_and_copy_media(&app)? else {
@@ -208,10 +220,8 @@ fn import_fond(
         current.bgKind = kind;
     }
 
-    // 3. Save config.json + push snapshot (chaîne unique)
-    let snap = state.scene.lock().unwrap().clone();
-    config::save_scene(&app, &snap)?;
-    push_snapshot(&state);
+    // 3. Save <current_id>.json + push snapshot (chaîne unique)
+    scenes::save_current(&app, &state)?;
 
     Ok(Some(rel))
 }
@@ -220,12 +230,12 @@ fn import_fond(
 /// résolution canvas OBS (GetVideoSettings → baseWidth/baseHeight, fallback
 /// 1920×1080), s'assure que la scène "SOS" + source navigateur "SOS-Diffusion"
 /// (dims = résolution OBS, URL :4321) existent sans doublon — one-shot.
-/// Puis mute la scène (canvasW/canvasH) + save config.json + snapshot WS.
+/// Puis mute la scène (canvasW/canvasH) + save <current_id>.json + snapshot WS.
 /// Pas de poll, pas de rescale des widgets existants.
 #[tauri::command]
 async fn obs_connect(
     app: AppHandle,
-    state: tauri::State<'_, AppState>,
+    state: tauri::State<'_, ScenesState>,
     host: String,
     port: u16,
     password: String,
@@ -245,9 +255,7 @@ async fn obs_connect(
     };
 
     if changed {
-        let snap = state.scene.lock().unwrap().clone();
-        config::save_scene(&app, &snap)?;
-        push_snapshot(&state);
+        scenes::save_current(&app, &state)?;
         log::info!("Canvas mis à jour : {}×{}", w, h);
     }
 
@@ -262,30 +270,32 @@ pub fn run() {
         .setup(|app| {
             let handle = app.handle().clone();
 
-            // Charge la scène depuis config.json (ou scène vide)
-            let scene = config::load_scene(&handle).unwrap_or_else(|e| {
-                log::error!("Erreur load_scene: {}", e);
-                Scene::new()
+            // Boot scènes : migration + chargement initial (UNE scène en RAM).
+            let (scene, current_id) = scenes::boot_scenes(&handle).unwrap_or_else(|e| {
+                log::error!("Erreur boot_scenes: {}", e);
+                (scene::Scene::new(), "defaut".to_string())
             });
 
-            let scene = Arc::new(Mutex::new(scene));
+            let scene = Arc::new(std::sync::Mutex::new(scene));
+            let current_id = Arc::new(std::sync::Mutex::new(current_id));
 
             // Canal broadcast pour les snapshots WS
             let (snapshot_tx, _snapshot_rx) = broadcast::channel::<String>(64);
 
-            let state = AppState {
+            let state = ScenesState {
                 scene: scene.clone(),
+                current_id: current_id.clone(),
                 snapshot_tx: snapshot_tx.clone(),
             };
-            app.manage(state);
+            app.manage(state.clone());
 
             // Démarre le serveur :4321 en arrière-plan.
             // run_server émet server_ready (bind OK) ou server_error (port pris)
             // directement — pas de probe externe, pas de fallback port.
             let server_handle = handle.clone();
-            let server_scene = scene.clone();
+            let server_state = state.clone();
             tauri::async_runtime::spawn(async move {
-                match server::run_server(server_handle, snapshot_tx, server_scene).await {
+                match server::run_server(server_handle, server_state).await {
                     Ok(()) => {
                         log::info!("Serveur :4321 arrêté normalement");
                     }
@@ -297,7 +307,20 @@ pub fn run() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![get_scene, update_scene, import_media, import_fond, obs_connect])
+        .invoke_handler(tauri::generate_handler![
+            get_scene,
+            update_scene,
+            import_media,
+            import_fond,
+            obs_connect,
+            scenes_lister,
+            scene_creer,
+            scene_ouvrir,
+            scene_renommer,
+            scene_courante,
+            scene_exporter,
+            scene_importer
+        ])
         .run(tauri::generate_context!())
         .expect("erreur lors du lancement de StreamOS v0");
 }

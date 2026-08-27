@@ -1,4 +1,3 @@
-use crate::scene::Scene;
 use std::fs;
 use std::path::PathBuf;
 use tauri::{AppHandle, Manager};
@@ -23,32 +22,4 @@ pub fn data_dir(app: &AppHandle) -> Result<PathBuf, String> {
     }
 
     Ok(dir)
-}
-
-fn config_path(app: &AppHandle) -> Result<PathBuf, String> {
-    Ok(data_dir(app)?.join("config.json"))
-}
-
-/// Charge la scène depuis config.json. Retourne une scène vide si le fichier
-/// n'existe pas encore.
-pub fn load_scene(app: &AppHandle) -> Result<Scene, String> {
-    let path = config_path(app)?;
-    if !path.exists() {
-        return Ok(Scene::new());
-    }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Erreur lecture config.json: {}", e))?;
-    let scene: Scene =
-        serde_json::from_str(&content).map_err(|e| format!("Erreur parse config.json: {}", e))?;
-    Ok(scene)
-}
-
-/// Sauvegarde la scène dans config.json.
-pub fn save_scene(app: &AppHandle, scene: &Scene) -> Result<(), String> {
-    let path = config_path(app)?;
-    let content =
-        serde_json::to_string_pretty(scene).map_err(|e| format!("Erreur sérialisation: {}", e))?;
-    fs::write(&path, content)
-        .map_err(|e| format!("Erreur écriture config.json: {}", e))?;
-    Ok(())
 }
