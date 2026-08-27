@@ -29,8 +29,16 @@
         position: absolute;
         background: rgba(224, 224, 224, 0.15);
         border: 1px solid rgba(224, 224, 224, 0.6);
+        transform-origin: center center;
+        overflow: hidden;
       }
       .widget img {
+        width: 100%;
+        height: 100%;
+        object-fit: fill;
+        display: block;
+      }
+      .widget video {
         width: 100%;
         height: 100%;
         object-fit: fill;
@@ -55,26 +63,124 @@
         rootStyle.setProperty("--canvas-h", h + "px");
       }
 
+      const FIT_CSS = {
+        ajuster: "contain",
+        remplir: "cover",
+        etirer: "fill",
+        centrer: "none",
+        vignette: "scale-down",
+        etendre: "cover"
+      };
+
+      const VIDEO_EXT = ["mp4", "webm"];
+      function kindFromMedia(rel) {
+        const ext = (rel.split(".").pop() || "").toLowerCase();
+        return VIDEO_EXT.indexOf(ext) >= 0 ? "video" : "image";
+      }
+
+      // Map id → { el, mediaEl, mediaKey, kind }.
+      // On diff : MAJ style only sur les widgets existants, on ne touche
+      // JAMAIS à video.src / currentTime / load() — la vidéo continue.
+      // RÈGLE : currentTime ne bouge QUE si le nom de fichier change.
+      // Drag, resize, rotateX/Y, z-index, mediaFit = style seulement.
+      const widgetMap = new Map();
+
+      // Nom de fichier seul (sans dossier "medias/", sans query, sans URL).
+      // C'est la seule clé qui détermine si on recrée le mediaEl.
+      function mediaKey(rel) {
+        if (!rel) return "";
+        const noQuery = rel.split("?")[0];
+        const parts = noQuery.split("/");
+        return parts[parts.length - 1] || "";
+      }
+
+      function applyWidgetStyle(el, w) {
+        el.style.left = w.x + "px";
+        el.style.top = w.y + "px";
+        el.style.width = w.largeur + "px";
+        el.style.height = w.hauteur + "px";
+        el.style.zIndex = w.z;
+        const rx = w.rotateX || 0;
+        const ry = w.rotateY || 0;
+        el.style.transform = "perspective(800px) rotateX(" + rx + "deg) rotateY(" + ry + "deg)";
+      }
+
+      function applyMediaStyle(mediaEl, fit) {
+        mediaEl.style.objectFit = FIT_CSS[fit] || "contain";
+        mediaEl.style.objectPosition = fit === "centrer" ? "center" : "50% 50%";
+      }
+
+      function createMedia(w, kind) {
+        if (kind === "video") {
+          // OBS : autoplay + boucle, muet, pas de contrôles ni de clic.
+          const vid = document.createElement("video");
+          vid.src = "/" + w.media;
+          vid.autoplay = true;
+          vid.muted = true;
+          vid.loop = true;
+          vid.setAttribute("playsinline", "");
+          return vid;
+        }
+        const img = document.createElement("img");
+        img.src = "/" + w.media; // /medias/xxx.png → même origine :4321
+        return img;
+      }
+
       function renderScene(scene) {
-        // Vide le stage
-        stageEl.innerHTML = "";
         if (!scene || !scene.widgets) return;
 
-        for (const w of scene.widgets) {
-          const el = document.createElement("div");
-          el.className = "widget";
-          el.style.left = w.x + "px";
-          el.style.top = w.y + "px";
-          el.style.width = w.largeur + "px";
-          el.style.height = w.hauteur + "px";
-          el.style.zIndex = w.z;
+        const seen = new Set();
 
-          if (w.media) {
-            const img = document.createElement("img");
-            img.src = "/" + w.media; // /medias/xxx.png → même origine :4321
-            el.appendChild(img);
+        for (const w of scene.widgets) {
+          seen.add(w.id);
+          const fit = w.mediaFit || "ajuster";
+          const kind = w.kind || (w.media ? kindFromMedia(w.media) : "image");
+          const key = mediaKey(w.media);
+          const entry = widgetMap.get(w.id);
+
+          if (entry) {
+            // ===== UPDATE : widget existant — style only =====
+            applyWidgetStyle(entry.el, w);
+            // Recréer le mediaEl SEULEMENT si le nom de fichier a changé.
+            // rotateX/Y/z/fit/mediaFit = style, jamais de recréation.
+            if (entry.mediaKey !== key || entry.kind !== kind) {
+              if (entry.mediaEl) entry.el.removeChild(entry.mediaEl);
+              if (w.media) {
+                const mediaEl = createMedia(w, kind);
+                applyMediaStyle(mediaEl, fit);
+                entry.el.appendChild(mediaEl);
+                entry.mediaEl = mediaEl;
+              } else {
+                entry.mediaEl = null;
+              }
+              entry.mediaKey = key;
+              entry.kind = kind;
+            } else if (entry.mediaEl) {
+              // Même fichier : juste MAJ object-fit (mediaFit peut changer).
+              applyMediaStyle(entry.mediaEl, fit);
+            }
+          } else {
+            // ===== CREATE : nouveau widget =====
+            const el = document.createElement("div");
+            el.className = "widget";
+            applyWidgetStyle(el, w);
+            let mediaEl = null;
+            if (w.media) {
+              mediaEl = createMedia(w, kind);
+              applyMediaStyle(mediaEl, fit);
+              el.appendChild(mediaEl);
+            }
+            stageEl.appendChild(el);
+            widgetMap.set(w.id, { el, mediaEl, mediaKey: key, kind });
           }
-          stageEl.appendChild(el);
+        }
+
+        // ===== DELETE : widgets disparus =====
+        for (const [id, entry] of widgetMap) {
+          if (!seen.has(id)) {
+            entry.el.remove();
+            widgetMap.delete(id);
+          }
         }
       }
 

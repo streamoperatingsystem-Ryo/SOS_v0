@@ -1,8 +1,9 @@
 <script lang="ts">
-  import { createWidget, importMedia, selectedIdStore } from "../stores/scene";
+  import { createWidget, importMedia, setMediaFit, selectedIdStore, sceneStore } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
   import { openSection, toggleSection } from "../stores/ui";
   import { get } from "svelte/store";
+  import Gizmo3D from "./Gizmo3D.svelte";
 
   let selectedId = $derived($selectedIdStore);
   let status = $derived($obsStatus);
@@ -11,6 +12,18 @@
 
   // id court = 8 premiers caractères
   let shortId = $derived(selectedId ? selectedId.slice(0, 8) : "");
+
+  // Widget sélectionné (pour lire mediaFit).
+  let selectedWidget = $derived(
+    $sceneStore.widgets.find((w) => w.id === selectedId) ?? null
+  );
+  let currentFit = $derived(selectedWidget?.mediaFit ?? "ajuster");
+
+  const FIT_MODES = ["ajuster", "remplir", "etendre", "etirer", "centrer", "vignette"];
+
+  function onFitClick(fit: string) {
+    if (selectedId) setMediaFit(selectedId, fit);
+  }
 
   async function onConnect() {
     await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
@@ -30,13 +43,26 @@
         {#if !selectedId}
           <p class="hint">Cliquer un widget sur le canvas</p>
         {:else}
-          <button class="action" onclick={importMedia}>Importer une image</button>
+          <button class="action" onclick={importMedia}>Importer un média</button>
           {#if shortId}
             <label class="field">
               <span class="field-label">id</span>
               <input value={shortId} readonly spellcheck="false" />
             </label>
           {/if}
+          <Gizmo3D />
+          <div class="fit-group">
+            <span class="field-label">Affichage</span>
+            <div class="fit-buttons">
+              {#each FIT_MODES as mode}
+                <button
+                  class="fit-btn"
+                  class:active={currentFit === mode}
+                  onclick={() => onFitClick(mode)}
+                >{mode}</button>
+              {/each}
+            </div>
+          </div>
         {/if}
       </div>
     {/if}
@@ -177,5 +203,32 @@
     font-size: 0.8rem;
     opacity: 0.7;
     word-break: break-word;
+  }
+  .fit-group {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+  }
+  .fit-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem;
+  }
+  .fit-btn {
+    background: var(--fond);
+    color: var(--texte);
+    border: 1px solid var(--texte);
+    opacity: 0.4;
+    padding: 0.3rem 0.4rem;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    text-align: center;
+  }
+  .fit-btn:hover {
+    opacity: 0.7;
+  }
+  .fit-btn.active {
+    opacity: 1;
   }
 </style>

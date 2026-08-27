@@ -70,4 +70,16 @@ export const devLog: DevEntry[] = [
     date: "2026-08-27",
     note: "Poignées coins+bords sur outer sélectionné, mini 80×80, clamp canvas moitié visible après drag et resize.",
   },
+  {
+    id: 11,
+    titre: "Modes affichage média",
+    date: "2026-08-27",
+    note: "mediaFit (ajuster/remplir/etendre/etirer/centrer/vignette), 6 boutons UI, rendu dashboard + :4321.",
+  },
+  {
+    id: 12,
+    titre: "Import vidéo mp4/webm ≤80 Mo",
+    date: "2026-08-27",
+    note: "Bouton « Importer un média », kind image|video, <video> dashboard (clic play/pause) + diffusion (autoplay loop), mediaFit appliqué.",
+  },
 ];

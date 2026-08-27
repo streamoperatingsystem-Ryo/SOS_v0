@@ -54,11 +54,13 @@ fn update_scene(app: AppHandle, state: tauri::State<AppState>, scene: Scene) -> 
     Ok(())
 }
 
-const MAX_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_IMG_BYTES: u64 = 10 * 1024 * 1024;
+const MAX_VIDEO_BYTES: u64 = 80 * 1024 * 1024;
 const IMG_EXT: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
+const VIDEO_EXT: &[&str] = &["mp4", "webm"];
 
 /// Vérifie les magic bytes pour PNG/JPEG/GIF/WebP.
-fn check_magic(bytes: &[u8]) -> bool {
+fn check_magic_image(bytes: &[u8]) -> bool {
     let p = |pre: &[u8]| bytes.starts_with(pre);
     p(&[0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]) // PNG
         || p(&[0xFF, 0xD8, 0xFF]) // JPEG
@@ -68,9 +70,18 @@ fn check_magic(bytes: &[u8]) -> bool {
             && &bytes[8..12] == &[0x57, 0x45, 0x42, 0x50]) // RIFF...WEBP
 }
 
-/// Importe une image pour un widget : dialog → validation → copie vers
-/// AppData/StreamOS/medias/<uuid>.<ext> → mutate scène → save → snapshot.
-/// Retourne `Some(media_rel_path)` si importé, `None` si dialog annulé.
+/// Vérifie les magic bytes pour MP4 (boîte `ftyp` à l'offset 4) et WebM (EBML).
+fn check_magic_video(bytes: &[u8]) -> bool {
+    bytes.len() >= 12 && &bytes[4..8] == b"ftyp" // MP4 / ISOBMFF
+        || bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) // WebM / EBML
+}
+
+/// Importe un média (image OU vidéo) pour un widget : dialog → validation
+/// (extension + taille + magic bytes) → copie vers
+/// AppData/StreamOS/medias/<uuid>.<ext> → mutate scène (media + kind) →
+/// save → snapshot. Retourne `Some(media_rel_path)` si importé, `None` si
+/// dialog annulé.
+/// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm ≤ 80 Mo.
 #[tauri::command]
 fn import_media(
     app: AppHandle,
@@ -81,11 +92,13 @@ fn import_media(
     use std::io::Read;
     use tauri_plugin_dialog::DialogExt;
 
-    // 1. Dialog fichier (filtre images)
+    // 1. Dialog fichier (un seul filtre « Médias » : images + vidéos)
+    let mut all_ext: Vec<&str> = IMG_EXT.to_vec();
+    all_ext.extend_from_slice(VIDEO_EXT);
     let file = app
         .dialog()
         .file()
-        .add_filter("Images", IMG_EXT)
+        .add_filter("Médias", &all_ext)
         .blocking_pick_file();
     let Some(file) = file else {
         return Ok(None); // dialog annulé
@@ -94,34 +107,44 @@ fn import_media(
         .into_path()
         .map_err(|e| format!("Chemin invalide: {}", e))?;
 
-    // 2. Taille ≤ 10 Mo
-    let meta = fs::metadata(&src).map_err(|e| format!("metadata: {}", e))?;
-    if meta.len() > MAX_BYTES {
-        return Err(format!(
-            "Fichier trop volumineux ({} octets > 10 Mo)",
-            meta.len()
-        ));
-    }
-
-    // 3. Magic bytes
-    let mut f = fs::File::open(&src).map_err(|e| format!("open: {}", e))?;
-    let mut head = [0u8; 12];
-    let n = f.read(&mut head).map_err(|e| format!("read: {}", e))?;
-    if !check_magic(&head[..n]) {
-        return Err("Format non supporté (magic bytes invalides)".into());
-    }
-
-    // 4. Extension autorisée
+    // 2. Extension → kind + liste autorisée
     let ext = src
         .extension()
         .and_then(|e| e.to_str())
         .map(|s| s.to_lowercase())
         .ok_or_else(|| "Extension manquante".to_string())?;
-    if !IMG_EXT.contains(&ext.as_str()) {
-        return Err(format!("Extension .{} non autorisée", ext));
+
+    let (kind, allowed_ext, max_bytes, magic_ok): (&str, &[&str], u64, fn(&[u8]) -> bool) =
+        if IMG_EXT.contains(&ext.as_str()) {
+            ("image", IMG_EXT, MAX_IMG_BYTES, check_magic_image)
+        } else if VIDEO_EXT.contains(&ext.as_str()) {
+            ("video", VIDEO_EXT, MAX_VIDEO_BYTES, check_magic_video)
+        } else {
+            return Err(format!("Extension .{} non autorisée", ext));
+        };
+
+    // 3. Taille ≤ limite du kind
+    let meta = fs::metadata(&src).map_err(|e| format!("metadata: {}", e))?;
+    if meta.len() > max_bytes {
+        return Err(format!(
+            "Fichier trop volumineux ({} octets > {} Mo)",
+            meta.len(),
+            max_bytes / 1024 / 1024
+        ));
     }
 
-    // 5. Copie vers AppData/StreamOS/medias/<uuid>.<ext>
+    // 4. Magic bytes (selon le kind)
+    let mut f = fs::File::open(&src).map_err(|e| format!("open: {}", e))?;
+    let mut head = [0u8; 32];
+    let n = f.read(&mut head).map_err(|e| format!("read: {}", e))?;
+    if !magic_ok(&head[..n]) {
+        return Err("Format non supporté (magic bytes invalides)".into());
+    }
+
+    // 5. (re-vérif extension déjà faite au §2 — allowed_ext cohérent avec kind)
+    let _ = allowed_ext;
+
+    // 6. Copie vers AppData/StreamOS/medias/<uuid>.<ext>
     let dir = config::data_dir(&app)?;
     let uuid = uuid::Uuid::new_v4().simple().to_string();
     let dest_name = format!("{}.{}", uuid, ext);
@@ -130,7 +153,7 @@ fn import_media(
 
     let rel = format!("medias/{}", dest_name);
 
-    // 6. Mutate scène : set media sur le widget ciblé
+    // 7. Mutate scène : set media + kind sur le widget ciblé
     {
         let mut current = state.scene.lock().unwrap();
         let w = current
@@ -139,9 +162,10 @@ fn import_media(
             .find(|w| w.id == widget_id)
             .ok_or_else(|| format!("Widget {} introuvable", widget_id))?;
         w.media = Some(rel.clone());
+        w.kind = kind.to_string();
     }
 
-    // 7. Save config.json + push snapshot (chaîne unique)
+    // 8. Save config.json + push snapshot (chaîne unique)
     let snap = state.scene.lock().unwrap().clone();
     config::save_scene(&app, &snap)?;
     push_snapshot(&state);

@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 
 const DEFAULT_CANVAS_W: u32 = 1920;
 const DEFAULT_CANVAS_H: u32 = 1080;
+const DEFAULT_MEDIA_FIT: &str = "ajuster";
+const DEFAULT_KIND: &str = "image";
 
 fn default_canvas_w() -> u32 {
     DEFAULT_CANVAS_W
@@ -9,6 +11,14 @@ fn default_canvas_w() -> u32 {
 
 fn default_canvas_h() -> u32 {
     DEFAULT_CANVAS_H
+}
+
+fn default_media_fit() -> String {
+    DEFAULT_MEDIA_FIT.to_string()
+}
+
+fn default_kind() -> String {
+    DEFAULT_KIND.to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -23,6 +33,14 @@ pub struct Widget {
     pub z: i32,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub media: Option<String>,
+    #[serde(default)]
+    pub rotateX: f64,
+    #[serde(default)]
+    pub rotateY: f64,
+    #[serde(default = "default_media_fit")]
+    pub mediaFit: String,
+    #[serde(default = "default_kind")]
+    pub kind: String,
 }
 
 /// Scène unique (source de vérité). canvasW/canvasH = résolution OBS lue

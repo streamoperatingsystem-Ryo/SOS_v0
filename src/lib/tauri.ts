@@ -10,6 +10,10 @@ export interface Widget {
   hauteur: number;
   z: number;
   media?: string;
+  rotateX?: number;
+  rotateY?: number;
+  mediaFit?: string;
+  kind?: string;
 }
 
 export interface Scene {
@@ -27,9 +31,10 @@ export const tauri = {
     await invoke("update_scene", { scene });
   },
 
-  /// Importe une image pour un widget. Retourne le chemin relatif
-  /// ("medias/<uuid>.<ext>") ou null si le dialog a été annulé.
-  /// Lance une erreur en cas de refus (taille/format).
+  /// Importe un média (image OU vidéo) pour un widget. Retourne le chemin
+  /// relatif ("medias/<uuid>.<ext>") ou null si le dialog a été annulé.
+  /// Lance une erreur en cas de refus (taille/format). Le kind
+  /// ("image"|"video") est déduit côté TS de l'extension du chemin retourné.
   async importMedia(widgetId: string): Promise<string | null> {
     return invoke<string | null>("import_media", { widgetId });
   },

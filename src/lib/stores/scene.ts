@@ -38,6 +38,7 @@ export async function createWidget(): Promise<void> {
     z,
     rotateX: 0,
     rotateY: 0,
+    mediaFit: "ajuster",
   };
   sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
   await commitScene();
@@ -107,6 +108,16 @@ export function rotateWidgetLocal(id: string, rx: number, ry: number): void {
   }));
 }
 
+/// Change le mode d'affichage média. Maj locale + commit immédiat
+/// (changement discret, pas de drag).
+export async function setMediaFit(id: string, fit: string): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, mediaFit: fit } : w)),
+  }));
+  await commitScene();
+}
+
 /// Pousse la scène vers Rust → save config.json + snapshot WS.
 /// Appelé au create et au pointerup (fin du drag).
 export async function commitScene(): Promise<void> {
@@ -122,19 +133,27 @@ export function selectWidget(id: string | null): void {
   selectedIdStore.set(id);
 }
 
-/// Importe une image pour le widget sélectionné. Met à jour le store local
-/// avec le chemin relatif retourné par Rust. Affiche une alerte en cas de
-/// refus (taille/format).
+/// Déduit le kind ("image"|"video") d'un chemin relatif média.
+const VIDEO_EXT = ["mp4", "webm"];
+function kindFromMedia(rel: string): string {
+  const ext = rel.split(".").pop()?.toLowerCase() ?? "";
+  return VIDEO_EXT.includes(ext) ? "video" : "image";
+}
+
+/// Importe un média (image OU vidéo) pour le widget sélectionné. Met à jour
+/// le store local avec le chemin relatif retourné par Rust + le kind déduit
+/// de l'extension. Affiche une alerte en cas de refus (taille/format).
 export async function importMedia(): Promise<void> {
   const id = get(selectedIdStore);
   if (!id) return;
   try {
     const rel = await tauri.importMedia(id);
     if (rel) {
+      const kind = kindFromMedia(rel);
       sceneStore.update((s) => ({
         ...s,
         widgets: s.widgets.map((w) =>
-          w.id === id ? { ...w, media: rel } : w
+          w.id === id ? { ...w, media: rel, kind } : w
         ),
       }));
     }

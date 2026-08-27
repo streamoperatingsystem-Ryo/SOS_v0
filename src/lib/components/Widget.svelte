@@ -32,6 +32,51 @@
   let selected = $derived($selectedIdStore === w.id);
   let rx = $derived(w.rotateX ?? 0);
   let ry = $derived(w.rotateY ?? 0);
+  let fit = $derived(w.mediaFit ?? "ajuster");
+
+  // Kind : depuis le champ, sinon déduit de l'extension (widgets existants).
+  const VIDEO_EXT = ["mp4", "webm"];
+  function kindFromMedia(rel: string): string {
+    const ext = rel.split(".").pop()?.toLowerCase() ?? "";
+    return VIDEO_EXT.includes(ext) ? "video" : "image";
+  }
+  let kind = $derived(w.kind ?? (w.media ? kindFromMedia(w.media) : "image"));
+  let isVideo = $derived(kind === "video");
+
+  // Mapping mode → object-fit. "etendre" géré à part (img auto + min 100%).
+  const FIT_CSS: Record<string, string> = {
+    ajuster: "contain",
+    remplir: "cover",
+    etirer: "fill",
+    centrer: "none",
+    vignette: "scale-down",
+    etendre: "cover",
+  };
+  let fitCss = $derived(FIT_CSS[fit] ?? "contain");
+
+  // Clic vidéo = play/pause (test seulement). Stoppe la propagation pour ne
+  // pas déclencher le drag de l'outer.
+  function onVideoClick(e: MouseEvent) {
+    e.stopPropagation();
+    const v = e.currentTarget as HTMLVideoElement;
+    if (v.paused) {
+      v.play();
+    } else {
+      v.pause();
+    }
+  }
+
+  // <video> src set impérativement — Svelte ne touche JAMAIS à l'attribut
+  // src du template. On ne set src QUE si w.media change (nom de fichier).
+  // Drag/resize/rotate = style only, currentTime préservé.
+  let videoEl: HTMLVideoElement | undefined = $state(undefined);
+  $effect(() => {
+    if (!videoEl || !w.media) return;
+    const newSrc = MEDIA_BASE + w.media;
+    if (videoEl.src !== newSrc) {
+      videoEl.src = newSrc;
+    }
+  });
 
   function onpointerdown(e: PointerEvent) {
     e.stopPropagation();
@@ -131,8 +176,25 @@
     class:selected
     style="transform: perspective(800px) rotateX({rx}deg) rotateY({ry}deg);"
   >
-    {#if w.media}
-      <img class="preview" src={MEDIA_BASE + w.media} alt="" draggable="false" />
+    {#if w.media && !isVideo}
+      <img
+        class="preview"
+        src={MEDIA_BASE + w.media}
+        alt=""
+        draggable="false"
+        style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'};"
+      />
+    {:else if w.media && isVideo}
+      <video
+        class="preview video"
+        bind:this={videoEl}
+        muted
+        playsinline
+        preload="metadata"
+        draggable="false"
+        style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'};"
+        onclick={onVideoClick}
+      ></video>
     {/if}
   </div>
 
@@ -167,6 +229,7 @@
     transform-origin: center center;
     pointer-events: none;
     box-sizing: border-box;
+    overflow: hidden;
   }
   .widget-3d.selected {
     outline: 2px solid var(--texte);
@@ -178,6 +241,10 @@
     object-fit: fill;
     display: block;
     pointer-events: none;
+  }
+  .preview.video {
+    pointer-events: auto;
+    cursor: pointer;
   }
   .handle {
     position: absolute;
