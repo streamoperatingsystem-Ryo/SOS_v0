@@ -133,6 +133,18 @@ export function selectWidget(id: string | null): void {
   selectedIdStore.set(id);
 }
 
+/// Supprime le widget sélectionné de la scène + commit (save + snapshot :4321).
+/// Le fichier média dans medias/ n'est PAS supprimé (un autre widget peut
+/// le référencer ; nettoyage = plus tard). Désélectionne après suppression.
+export async function deleteWidget(id: string): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.filter((w) => w.id !== id),
+  }));
+  selectedIdStore.set(null);
+  await commitScene();
+}
+
 /// Déduit le kind ("image"|"video") d'un chemin relatif média.
 const VIDEO_EXT = ["mp4", "webm"];
 function kindFromMedia(rel: string): string {

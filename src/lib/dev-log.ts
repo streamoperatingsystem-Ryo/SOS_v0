@@ -82,4 +82,10 @@ export const devLog: DevEntry[] = [
     date: "2026-08-27",
     note: "Bouton « Importer un média », kind image|video, <video> dashboard (clic play/pause) + diffusion (autoplay loop), mediaFit appliqué.",
   },
+  {
+    id: 13,
+    titre: "Supprimer widget",
+    date: "2026-08-27",
+    note: "Bouton « Supprimer le widget » + confirmation Oui/Non, retire widget + deselect + commit, média conservé dans medias/.",
+  },
 ];

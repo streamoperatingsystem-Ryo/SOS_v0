@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createWidget, importMedia, setMediaFit, selectedIdStore, sceneStore } from "../stores/scene";
+  import { createWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
   import { openSection, toggleSection } from "../stores/ui";
   import { get } from "svelte/store";
@@ -27,6 +27,22 @@
 
   async function onConnect() {
     await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
+  }
+
+  // Confirmation suppression : 2 états (idle → confirm).
+  let confirmDelete = $state(false);
+
+  function onSupprimerClick() {
+    confirmDelete = true;
+  }
+
+  async function onSupprimerConfirm() {
+    confirmDelete = false;
+    if (selectedId) await deleteWidget(selectedId);
+  }
+
+  function onSupprimerCancel() {
+    confirmDelete = false;
   }
 </script>
 
@@ -63,6 +79,17 @@
               {/each}
             </div>
           </div>
+          {#if confirmDelete}
+            <div class="confirm">
+              <span class="confirm-label">Supprimer ce widget ?</span>
+              <div class="confirm-buttons">
+                <button class="action" onclick={onSupprimerConfirm}>Oui</button>
+                <button class="action" onclick={onSupprimerCancel}>Non</button>
+              </div>
+            </div>
+          {:else}
+            <button class="action" onclick={onSupprimerClick}>Supprimer le widget</button>
+          {/if}
         {/if}
       </div>
     {/if}
@@ -230,5 +257,18 @@
   }
   .fit-btn.active {
     opacity: 1;
+  }
+  .confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .confirm-label {
+    font-size: 0.85rem;
+  }
+  .confirm-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.25rem;
   }
 </style>
