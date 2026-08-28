@@ -118,4 +118,22 @@ export const devLog: DevEntry[] = [
     date: "2026-08-27",
     note: "Widget kind=trou (géométrie inchangée, pas de média), dashboard cadre pointillé « Trou », :4321 zone transparente (alpha 0) via masques CSS SVG fill-rule=evenodd sur wrappers DOM par-widget, fond + widgets autour intacts, widgets z>trou recouvrent la caméra, html/body/#stage transparent.",
   },
+  {
+    id: 19,
+    titre: "Trou 3D quad projeté",
+    date: "2026-08-27",
+    note: "Le trou suit rotateX/rotateY du widget : diffusion.html remplace fillRect par un quad projeté (projectCorner = perspective 800px, même ordre que CSS rotateY puis rotateX), fast path fillRect si rx=ry=0. Dashboard : trou-overlay tilté avec la même perspective → cadre pointillé = trou :4321 pixel près.",
+  },
+  {
+    id: 20,
+    titre: "Source OBS calée sur le widget",
+    date: "2026-08-27",
+    note: "Bouton sidebar « Source OBS sous SOS » si widget.trou : dialog type (caméra/fenêtre/jeu) → énumération cibles via OBS WebSocket (GetInputPropertiesList sur input temp) → création source sous SOS-Diffusion (SetSceneItemIndex + SetSceneItemTransform = widget x/y/w/h). Champ obsSource sur Widget, sync au commitScene (reconnect one-shot, pointerup). Désactiver le trou → suppression source OBS. OBS offline → message, pas de crash.",
+  },
+  {
+    id: 21,
+    titre: "Réseau : Twitch Device Code + chat IRC + widget chat",
+    date: "2026-08-28",
+    note: "Section Connexions 5 plateformes (Twitch réel, autres « Bientôt »). Device Code Flow Twitch (twitch_auth.rs) + coffre keyring (Windows Credential Manager, service streamos-v0-twitch). Auto-resume boot si token valide. IRC WebSocket (twitch_chat.rs) → emit chat:message (dashboard) + chat_tx broadcast (diffusion :4321 WS type chat). Widget type « chat » : bulles carte arrondie, zébrage --fond, logo Twitch SVG 12px, filtre unifie/plateforme, taille police. Pas de 2e overlay, pas de play() dashboard.",
+  },
 ];

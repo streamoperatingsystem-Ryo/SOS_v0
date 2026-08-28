@@ -12,6 +12,10 @@
 
   let { w, scale }: { w: Widget; scale: number } = $props();
 
+  // Type du widget : "media" (défaut) ou "chat".
+  let widgetType = $derived(w.type ?? "media");
+  let isChat = $derived(widgetType === "chat");
+
   // Mini widget — jamais en dessous.
   const MIN = 80;
 
@@ -85,6 +89,11 @@
       videoEl.currentTime = t;
     }
   });
+
+  // ===== Widget chat (dashboard) =====
+  // RÈGLE D'OR : le dashboard est une CONFIG, pas un player.
+  // Aucune bulle, aucun scroll, aucun avatar. Juste « Chat actif » centré.
+  // Les bulles + avatar + badges s'affichent dans diffusion.html (OBS :4321).
 
   function onpointerdown(e: PointerEvent) {
     e.stopPropagation();
@@ -184,7 +193,12 @@
     class:selected
     style="transform: perspective(800px) rotateX({rx}deg) rotateY({ry}deg);"
   >
-    {#if w.media && !isVideo}
+    {#if isChat}
+      <!-- Widget chat (dashboard) : « Chat actif » centré seulement.
+           Aucune bulle, aucun scroll, aucun avatar. Les bulles s'affichent
+           dans diffusion.html (OBS :4321) via WS {"type":"chat"}. -->
+      <div class="chat-actif">Chat actif</div>
+    {:else if w.media && !isVideo}
       <img
         class="preview"
         src={MEDIA_BASE + w.media}
@@ -269,6 +283,16 @@
   }
   .preview.video {
     pointer-events: none;
+  }
+  .chat-actif {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    opacity: 0.6;
+    font-size: 0.9rem;
   }
   .handle {
     position: absolute;

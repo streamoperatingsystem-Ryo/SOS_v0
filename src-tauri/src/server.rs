@@ -82,6 +82,7 @@ async fn ws_handler(
 
 async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
     let mut rx = state.scenes.snapshot_tx.subscribe();
+    let mut chat_rx = state.scenes.chat_tx.subscribe();
     let (mut sender, mut receiver) = socket.split();
 
     // Snapshot initial : envoyer l'état courant dès la connexion
@@ -97,15 +98,23 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
         let _ = sender.send(Message::Text(snapshot.into())).await;
     }
 
-    // Tâche : pousser les snapshots vers le client
+    // Tâche : pousser les snapshots ET les messages chat vers le client.
+    // Les deux canaux sont fusionnés via select.
     let mut send_task = tokio::spawn(async move {
-        while let Ok(snapshot) = rx.recv().await {
-            if sender
-                .send(Message::Text(snapshot.into()))
-                .await
-                .is_err()
-            {
-                break;
+        loop {
+            tokio::select! {
+                Ok(snapshot) = rx.recv() => {
+                    if sender.send(Message::Text(snapshot.into())).await.is_err() {
+                        break;
+                    }
+                }
+                Ok(chat) = chat_rx.recv() => {
+                    if sender.send(Message::Text(chat.into())).await.is_err() {
+                        break;
+                    }
+                    eprintln!("[Serveur] WS chat → client");
+                }
+                else => { break; }
             }
         }
     });

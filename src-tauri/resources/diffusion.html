@@ -70,6 +70,74 @@
       #bg img, #bg video {
         display: none;
       }
+      /* Widget chat : bulles carte arrondie, zébrage via --fond, logo 12px,
+         avatar 24px, badges IRC (mod/vip/sub/broadcaster), emojis visibles. */
+      .widget.chat {
+        background: var(--fond);
+        overflow: hidden;
+      }
+      .chat-body {
+        width: 100%;
+        height: 100%;
+        overflow-y: auto;
+        overflow-wrap: break-word;
+        word-break: break-word;
+        padding: 0.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        pointer-events: none;
+        font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji",
+          "Noto Color Emoji", sans-serif;
+      }
+      .chat-msg {
+        display: flex;
+        align-items: baseline;
+        gap: 0.25rem;
+        padding: 0.2rem 0.3rem;
+        border-radius: 0.3rem;
+        line-height: 1.25;
+      }
+      /* Zébrage --fond : pair légèrement plus clair, impair = fond nu. */
+      .chat-msg.pair {
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .chat-msg .avatar {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        align-self: center;
+        object-fit: cover;
+      }
+      .chat-msg .badge {
+        font-size: 0.6em;
+        padding: 0 0.25rem;
+        border-radius: 0.2rem;
+        margin-right: 0.1rem;
+        font-weight: 700;
+        color: #fff;
+        flex-shrink: 0;
+        align-self: center;
+        line-height: 1.4;
+      }
+      .chat-msg .badge.mod { background: #00ad03; }
+      .chat-msg .badge.vip { background: #e005b9; }
+      .chat-msg .badge.sub { background: #6b35c9; }
+      .chat-msg .badge.broadcaster { background: #9146ff; }
+      .chat-msg .logo {
+        flex-shrink: 0;
+        align-self: center;
+        opacity: 0.85;
+      }
+      .chat-msg .pseudo {
+        font-weight: 600;
+        flex-shrink: 0;
+      }
+      .chat-msg .texte {
+        flex: 1;
+        min-width: 0;
+      }
     </style>
   </head>
   <body>
@@ -120,6 +188,114 @@
       // RÈGLE : currentTime ne bouge QUE si le nom de fichier change.
       // Drag, resize, rotateX/Y, z-index, mediaFit = style seulement.
       const widgetMap = new Map();
+
+      // Messages chat reçus via WS (type "chat"). Borné à 200.
+      let chatMessages = [];
+      const MAX_CHAT = 200;
+
+      // Logo Twitch SVG (12px) — inline, pas de fichier à servir.
+      const TWITCH_LOGO_SVG = '<svg class="logo" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
+        + '<path fill="currentColor" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/>'
+        + '<rect x="9" y="4" width="1" height="3"/><rect x="6" y="4" width="1" height="3"/></svg>';
+
+      // Rend le contenu HTML d'un message chat (avatar + badges + logo + pseudo + texte).
+      function renderChatMsg(m, i) {
+        var logo = m.plateforme === "twitch" ? TWITCH_LOGO_SVG : "";
+        var avatar = m.avatar
+          ? '<img class="avatar" src="' + escapeHtml(m.avatar) + '" width="24" height="24" alt="" referrerpolicy="no-referrer">'
+          : "";
+        var badges = renderBadges(m.badges);
+        return '<div class="chat-msg' + (i % 2 === 0 ? " pair" : "") + '">'
+          + avatar
+          + badges
+          + logo
+          + '<span class="pseudo"></span>'
+          + '<span class="texte"></span>'
+          + "</div>";
+      }
+
+      // Remplit un élément .chat-body avec les messages filtrés.
+      // Échappement HTML du pseudo + texte (sécurité XSS).
+      function escapeHtml(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      }
+
+      // Parse le tag IRC `badges` (ex. "moderator/1,subscriber/12,vip/1")
+      // → tableau d'identifiants courts : mod / vip / sub / broadcaster.
+      // Badges inconnus ignorés. Ordre conservé (mod avant vip avant sub).
+      function parseBadges(raw) {
+        if (!raw) return [];
+        var out = [];
+        var parts = raw.split(",");
+        for (var i = 0; i < parts.length; i++) {
+          var name = parts[i].split("/")[0];
+          if (name === "moderator") out.push("mod");
+          else if (name === "vip") out.push("vip");
+          else if (name === "subscriber") out.push("sub");
+          else if (name === "broadcaster") out.push("broadcaster");
+        }
+        return out;
+      }
+
+      // Construit le HTML des badges chips pour un message.
+      function renderBadges(badgesRaw) {
+        var ids = parseBadges(badgesRaw);
+        var html = "";
+        for (var i = 0; i < ids.length; i++) {
+          html += '<span class="badge ' + ids[i] + '">' + ids[i] + '</span>';
+        }
+        return html;
+      }
+
+      function fillChatBody(bodyEl, filtre, taillePolice) {
+        var msgs = filtre === "unifie"
+          ? chatMessages
+          : chatMessages.filter(function (m) { return m.plateforme === filtre; });
+        bodyEl.style.fontSize = taillePolice + "px";
+        // Vider + reconstruire (simple, peu de messages).
+        bodyEl.innerHTML = "";
+        for (var i = 0; i < msgs.length; i++) {
+          var m = msgs[i];
+          var div = document.createElement("div");
+          div.className = "chat-msg" + (i % 2 === 0 ? " pair" : "");
+          var logo = m.plateforme === "twitch" ? TWITCH_LOGO_SVG : "";
+          var avatar = m.avatar
+            ? '<img class="avatar" src="' + escapeHtml(m.avatar) + '" width="24" height="24" alt="" referrerpolicy="no-referrer">'
+            : "";
+          var badges = renderBadges(m.badges);
+          div.innerHTML = avatar
+            + badges
+            + logo
+            + '<span class="pseudo">' + escapeHtml(m.pseudo) + "</span>"
+            + '<span class="texte">' + escapeHtml(m.texte) + "</span>";
+          bodyEl.appendChild(div);
+        }
+        // Auto-scroll en bas.
+        bodyEl.scrollTop = bodyEl.scrollHeight;
+      }
+
+      // Re-rend les widgets chat existants (appelé sur nouveau message).
+      function rerenderChatWidgets() {
+        if (!currentScene || !currentScene.widgets) {
+          console.log("[Chat] rerender: currentScene vide — AUCUN widget");
+          return;
+        }
+        var nChat = 0, nFilled = 0;
+        for (var i = 0; i < currentScene.widgets.length; i++) {
+          var w = currentScene.widgets[i];
+          if ((w.type || "media") !== "chat") continue;
+          nChat++;
+          var entry = widgetMap.get(w.id);
+          if (entry && entry.chatBody) {
+            fillChatBody(entry.chatBody, w.chatFiltre || "unifie", w.taillePolice || 16);
+            nFilled++;
+          } else {
+            console.log("[Chat] rerender: widget " + w.id + " PAS dans widgetMap (DOM non créé)");
+          }
+        }
+        console.log("[Chat] rerender: " + nChat + " widget(s) chat, " + nFilled + " rempli(s), " + chatMessages.length + " message(s)");
+      }
 
       // État du fond de scène : { mediaEl, mediaKey, kind, mediaTime }.
       // mediaEl (img/video) est display:none — sert uniquement de source
@@ -460,7 +636,7 @@
 
         for (var i = 0; i < scene.widgets.length; i++) {
           var w = scene.widgets[i];
-          var kind = w.kind || (w.media ? kindFromMedia(w.media) : "image");
+          var wtype = w.type || "media";
 
           // Trous : pas de DOM widget, juste marquer comme vu.
           if (w.trou === true) {
@@ -469,8 +645,49 @@
           }
 
           seen.add(w.id);
-          var key = mediaKey(w.media);
           var entry = widgetMap.get(w.id);
+
+          if (wtype === "chat") {
+            // ===== Widget chat =====
+            if (entry) {
+              // UPDATE : style + re-remplir si filtre/taille a changé.
+              applyWidgetStyle(entry.el, w);
+              entry.wrapEl.style.zIndex = w.z;
+              var newFiltre = w.chatFiltre || "unifie";
+              var newTaille = w.taillePolice || 16;
+              if (entry.chatFiltre !== newFiltre || entry.taillePolice !== newTaille) {
+                entry.chatFiltre = newFiltre;
+                entry.taillePolice = newTaille;
+              }
+              fillChatBody(entry.chatBody, newFiltre, newTaille);
+            } else {
+              // CREATE : conteneur chat.
+              var wrapEl = document.createElement("div");
+              wrapEl.className = "widget-wrap";
+              wrapEl.style.zIndex = w.z;
+              var el = document.createElement("div");
+              el.className = "widget chat";
+              applyWidgetStyle(el, w);
+              var chatBody = document.createElement("div");
+              chatBody.className = "chat-body";
+              el.appendChild(chatBody);
+              wrapEl.appendChild(el);
+              stageEl.appendChild(wrapEl);
+              var filtre = w.chatFiltre || "unifie";
+              var taille = w.taillePolice || 16;
+              fillChatBody(chatBody, filtre, taille);
+              widgetMap.set(w.id, {
+                el: el, wrapEl: wrapEl, mediaEl: null, mediaKey: "",
+                kind: "chat", mediaTime: 0,
+                chatBody: chatBody, chatFiltre: filtre, taillePolice: taille
+              });
+            }
+            continue;
+          }
+
+          // ===== Widget média (chemin existant) =====
+          var kind = w.kind || (w.media ? kindFromMedia(w.media) : "image");
+          var key = mediaKey(w.media);
 
           if (entry) {
             // ===== UPDATE : widget existant — style only =====
@@ -548,10 +765,22 @@
               currentScene = msg.scene;
               applyCanvasDims(msg.scene);
               renderScene(msg.scene);
-              console.log("WS ok / widgets:", msg.scene.widgets.length);
+              // Log types de widgets pour vérifier que les widgets chat existent.
+              var types = (msg.scene.widgets || []).map(function (w) {
+                return w.type || "media";
+              });
+              console.log("[Snapshot] widgets=" + (msg.scene.widgets || []).length + " types=[" + types.join(",") + "]");
+            } else if (msg.type === "chat" && msg.message) {
+              // Message chat IRC → push + trim + re-rendre les widgets chat.
+              console.log("[Chat] message reçu pseudo=" + msg.message.pseudo + " avatar=" + (msg.message.avatar || "(none)"));
+              chatMessages.push(msg.message);
+              if (chatMessages.length > MAX_CHAT) {
+                chatMessages = chatMessages.slice(chatMessages.length - MAX_CHAT);
+              }
+              rerenderChatWidgets();
             }
           } catch (e) {
-            console.error("Snapshot invalide:", e);
+            console.error("Message WS invalide:", e);
           }
         };
       }

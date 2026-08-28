@@ -1,16 +1,30 @@
 <script lang="ts">
-  import { createWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime, setWidgetTrou } from "../stores/scene";
+  import { createWidget, createChatWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime, setWidgetTrou, deleteObsTrouSource, setChatFiltre, setChatTaillePolice } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
   import { openSection, toggleSection } from "../stores/ui";
   import { videoRegistry } from "../stores/video";
+  import { connexions, connecterTwitch, deconnecterTwitch, reconnecterTwitch, twitchErreur, twitchLogin, type ChatFiltre } from "../stores/chat";
+  import { followers, subs, viewers, broadcaster, communauteErreur, chargerCommunaute, chargerFollowers, chargerSubs, chargerViewers, resetCommunaute } from "../stores/communaute";
+  import { tauri } from "../tauri";
   import { get } from "svelte/store";
+  import { onMount } from "svelte";
+  import { listen } from "@tauri-apps/api/event";
   import Gizmo3D from "./Gizmo3D.svelte";
   import PlayerBar from "./PlayerBar.svelte";
+  import ObsSourceDialog from "./ObsSourceDialog.svelte";
 
   let selectedId = $derived($selectedIdStore);
   let status = $derived($obsStatus);
   let error = $derived($obsError);
   let open = $derived($openSection);
+  let cx = $derived($connexions);
+  let twitchErr = $derived($twitchErreur);
+  let login = $derived($twitchLogin);
+  let communauteErr = $derived($communauteErreur);
+  let followersData = $derived($followers);
+  let subsData = $derived($subs);
+  let viewersData = $derived($viewers);
+  let broadcasterData = $derived($broadcaster);
 
   // id court = 8 premiers caractères
   let shortId = $derived(selectedId ? selectedId.slice(0, 8) : "");
@@ -22,6 +36,12 @@
   let currentFit = $derived(selectedWidget?.mediaFit ?? "ajuster");
   let currentZoom = $derived(selectedWidget?.mediaZoom ?? 1);
   let currentRot = $derived(selectedWidget?.mediaRot ?? 0);
+
+  // Type du widget sélectionné ("media" | "chat").
+  let selectedType = $derived(selectedWidget?.type ?? "media");
+  let isChatWidget = $derived(selectedType === "chat");
+  let chatFiltreVal = $derived(selectedWidget?.chatFiltre ?? "unifie");
+  let chatTaille = $derived(selectedWidget?.taillePolice ?? 16);
 
   const FIT_MODES = ["ajuster", "remplir", "etendre", "etirer", "centrer", "vignette"];
 
@@ -55,6 +75,64 @@
     await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
   }
 
+  // ===== Connexions réseau =====
+  async function onTwitchConnect() {
+    await connecterTwitch();
+  }
+  async function onTwitchDisconnect() {
+    await deconnecterTwitch();
+  }
+
+  // ===== Chat widget (filtre + taille police) =====
+  const FILTRES: ChatFiltre[] = ["unifie", "twitch", "youtube", "kick", "facebook", "tiktok"];
+  function onFiltreClick(f: ChatFiltre) {
+    if (selectedId) setChatFiltre(selectedId, f);
+  }
+  function onTailleInput(e: Event) {
+    if (!selectedId) return;
+    setChatTaillePolice(selectedId, parseFloat((e.target as HTMLInputElement).value));
+  }
+
+  // Pop-out chat : toggle fenêtre Tauri always_on_top.
+  // « Détacher » ouvre, « Réattacher » ferme. IRC inchangé dans les deux cas.
+  // Si l'utilisateur ferme via la croix → Rust emit "popout-closed" → popoutOpen=false.
+  let popoutOpen = $state(false);
+
+  onMount(async () => {
+    await listen("popout-closed", () => {
+      popoutOpen = false;
+    });
+  });
+
+  // ===== Communauté =====
+  // $effect réactif : charge la communauté quand Twitch passe connecté,
+  // reset quand déconnecté. Plus fiable qu'un listener d'event async
+  // (pas de race condition avec l'enregistrement).
+  $effect(() => {
+    if (cx.twitch) {
+      console.log("[Communauté] twitch connecté → chargement");
+      chargerCommunaute();
+    } else {
+      console.log("[Communauté] twitch déconnecté → reset");
+      resetCommunaute();
+    }
+  });
+
+  async function onRafraichirCommunaute() {
+    await chargerCommunaute();
+  }
+  async function onReconnecterTwitch() {
+    await reconnecterTwitch();
+  }
+
+  async function onDetacher() {
+    try {
+      popoutOpen = await tauri.chatPopoutToggle();
+    } catch (e) {
+      console.warn("onDetacher:", e);
+    }
+  }
+
   // Confirmation suppression : 2 états (idle → confirm).
   let confirmDelete = $state(false);
 
@@ -84,6 +162,7 @@
   // WS → :4321 applique play/pause/seek/loop). Le dashboard reste figé.
   let selectedKind = $derived(selectedWidget?.kind ?? "image");
   let selectedTrou = $derived(selectedWidget?.trou === true);
+  let selectedObsSource = $derived(selectedWidget?.obsSource ?? null);
   let widgetMediaPaused = $derived(selectedWidget?.mediaPaused ?? true);
   let widgetMediaTime = $derived(selectedWidget?.mediaTime ?? 0);
   let widgetVideoEl = $derived(
@@ -104,6 +183,21 @@
   // Toggle trou sur le widget sélectionné.
   function onToggleTrou() {
     if (selectedId) setWidgetTrou(selectedId, !selectedTrou);
+  }
+
+  // ===== Source OBS sous SOS (Lot 2) =====
+  let obsDialogOpen = $state(false);
+
+  function onOpenObsDialog() {
+    if (!selectedId || !selectedTrou) return;
+    obsDialogOpen = true;
+  }
+  function onCloseObsDialog() {
+    obsDialogOpen = false;
+  }
+  async function onDeleteObsSource() {
+    if (!selectedId) return;
+    await deleteObsTrouSource(selectedId);
   }
 
   // Callbacks barre fond.
@@ -223,6 +317,7 @@
     {#if open === "widgets"}
       <div class="content">
         <button class="action" onclick={createWidget}>Créer un widget</button>
+        <button class="action" onclick={createChatWidget}>Créer un widget chat</button>
         {#if !selectedId}
           <p class="hint">Cliquer un widget sur le canvas</p>
         {:else}
@@ -234,62 +329,108 @@
             </label>
           {/if}
           <Gizmo3D />
-          <button class="action" onclick={onToggleTrou}>
-            {selectedTrou ? "Désactiver le trou" : "Activer le trou"}
-          </button>
-          <div class="fit-group">
-            <span class="field-label">Affichage</span>
-            <div class="fit-buttons">
-              {#each FIT_MODES as mode}
-                <button
-                  class="fit-btn"
-                  class:active={currentFit === mode}
-                  onclick={() => onFitClick(mode)}
-                >{mode}</button>
-              {/each}
+          {#if isChatWidget}
+            <!-- Widget chat : filtre + taille police (pas de fit/zoom/rot média, pas de trou) -->
+            <div class="fit-group">
+              <span class="field-label">Filtre chat</span>
+              <div class="fit-buttons">
+                {#each FILTRES as f}
+                  <button
+                    class="fit-btn"
+                    class:active={chatFiltreVal === f}
+                    onclick={() => onFiltreClick(f)}
+                  >{f}</button>
+                {/each}
+              </div>
             </div>
-          </div>
-          <div class="media-ctrl">
-            <div class="media-row">
-              <span class="field-label">Zoom média</span>
-              <span class="media-val">{currentZoom.toFixed(2)}</span>
+            <div class="media-ctrl">
+              <div class="media-row">
+                <span class="field-label">Taille police</span>
+                <span class="media-val">{chatTaille}px</span>
+              </div>
+              <input
+                class="range"
+                type="range"
+                min="8"
+                max="48"
+                step="1"
+                value={chatTaille}
+                oninput={onTailleInput}
+              />
             </div>
-            <input
-              class="range"
-              type="range"
-              min="0.2"
-              max="5"
-              step="0.1"
-              value={currentZoom}
-              oninput={onZoomInput}
-              onchange={onZoomChange}
-            />
-          </div>
-          <div class="media-ctrl">
-            <div class="media-row">
-              <span class="field-label">Rotation média</span>
-              <span class="media-val">{Math.round(currentRot)}°</span>
+            <button class="action" onclick={onDetacher}>
+              {popoutOpen ? "Réattacher" : "Détacher"}
+            </button>
+          {:else}
+            <!-- Widget média : trou + fit/zoom/rot -->
+            <button class="action" onclick={onToggleTrou}>
+              {selectedTrou ? "Désactiver le trou" : "Activer le trou"}
+            </button>
+            {#if selectedTrou}
+              {#if selectedObsSource}
+                <button class="action" onclick={onDeleteObsSource}>
+                  Supprimer la source OBS
+                </button>
+              {:else}
+                <button class="action" onclick={onOpenObsDialog}>
+                  Source OBS sous SOS
+                </button>
+              {/if}
+            {/if}
+            <div class="fit-group">
+              <span class="field-label">Affichage</span>
+              <div class="fit-buttons">
+                {#each FIT_MODES as mode}
+                  <button
+                    class="fit-btn"
+                    class:active={currentFit === mode}
+                    onclick={() => onFitClick(mode)}
+                  >{mode}</button>
+                {/each}
+              </div>
             </div>
-            <input
-              class="range"
-              type="range"
-              min="-180"
-              max="180"
-              step="5"
-              value={currentRot}
-              oninput={onRotInput}
-              onchange={onRotChange}
-            />
-          </div>
-          <button class="action" onclick={onResetMedia}>Reset média</button>
-          {#if selectedKind === "video"}
-            <PlayerBar
-              videoEl={widgetVideoEl}
-              mediaPaused={widgetMediaPaused}
-              mediaTime={widgetMediaTime}
-              onTogglePlay={onWidgetTogglePlay}
-              onSeek={onWidgetSeek}
-            />
+            <div class="media-ctrl">
+              <div class="media-row">
+                <span class="field-label">Zoom média</span>
+                <span class="media-val">{currentZoom.toFixed(2)}</span>
+              </div>
+              <input
+                class="range"
+                type="range"
+                min="0.2"
+                max="5"
+                step="0.1"
+                value={currentZoom}
+                oninput={onZoomInput}
+                onchange={onZoomChange}
+              />
+            </div>
+            <div class="media-ctrl">
+              <div class="media-row">
+                <span class="field-label">Rotation média</span>
+                <span class="media-val">{Math.round(currentRot)}°</span>
+              </div>
+              <input
+                class="range"
+                type="range"
+                min="-180"
+                max="180"
+                step="5"
+                value={currentRot}
+                oninput={onRotInput}
+                onchange={onRotChange}
+              />
+            </div>
+            <button class="action" onclick={onResetMedia}>Reset média</button>
+            {#if selectedKind === "video"}
+              <PlayerBar
+                videoEl={widgetVideoEl}
+                mediaPaused={widgetMediaPaused}
+                mediaTime={widgetMediaTime}
+                onTogglePlay={onWidgetTogglePlay}
+                onSeek={onWidgetSeek}
+              />
+            {/if}
           {/if}
           {#if confirmDelete}
             <div class="confirm">
@@ -302,6 +443,138 @@
           {:else}
             <button class="action" onclick={onSupprimerClick}>Supprimer le widget</button>
           {/if}
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <!-- Section Connexions -->
+  <div class="section">
+    <button class="header" onclick={() => toggleSection("connexions")}>
+      <span class="arrow">{open === "connexions" ? "▼" : "▶"}</span>
+      <span>Connexions</span>
+    </button>
+    {#if open === "connexions"}
+      <div class="content">
+        <div class="connexion-row">
+          <span class="dot" class:on={cx.twitch} class:off={!cx.twitch}></span>
+          <span class="plat-nom">Twitch</span>
+          {#if cx.twitch}
+            <button class="action small" onclick={onTwitchDisconnect}>Déconnecter</button>
+          {:else}
+            <button class="action small" onclick={onTwitchConnect}>Connecter</button>
+          {/if}
+        </div>
+        <div class="connexion-row">
+          <span class="dot off"></span>
+          <span class="plat-nom">YouTube</span>
+          <button class="action small" disabled>Bientôt</button>
+        </div>
+        <div class="connexion-row">
+          <span class="dot off"></span>
+          <span class="plat-nom">Kick</span>
+          <button class="action small" disabled>Bientôt</button>
+        </div>
+        <div class="connexion-row">
+          <span class="dot off"></span>
+          <span class="plat-nom">Facebook Live</span>
+          <button class="action small" disabled>Bientôt</button>
+        </div>
+        <div class="connexion-row">
+          <span class="dot off"></span>
+          <span class="plat-nom">TikTok</span>
+          <button class="action small" disabled>Bientôt</button>
+        </div>
+        {#if twitchErr}
+          <span class="obs-status">{twitchErr}</span>
+        {/if}
+      </div>
+    {/if}
+  </div>
+
+  <!-- Section Communauté -->
+  <div class="section">
+    <button class="header" onclick={() => toggleSection("communaute")}>
+      <span class="arrow">{open === "communaute" ? "▼" : "▶"}</span>
+      <span>Communauté</span>
+    </button>
+    {#if open === "communaute"}
+      <div class="content">
+        {#if !cx.twitch}
+          <p class="hint">Connecter Twitch pour voir la communauté.</p>
+        {:else if communauteErr === "need_reauth"}
+          <div class="need-reauth">
+            <span class="obs-status">Scopes manquants pour la communauté.</span>
+            <button class="action" onclick={onReconnecterTwitch}>
+              Reconnecter Twitch pour la communauté
+            </button>
+          </div>
+        {:else}
+          <!-- Broadcaster -->
+          {#if broadcasterData}
+            <div class="broadcaster">
+              {#if broadcasterData.profile_image_url}
+                <img
+                  class="avatar"
+                  src={broadcasterData.profile_image_url}
+                  alt={broadcasterData.display_name}
+                />
+              {/if}
+              <div class="bc-info">
+                <span class="bc-name">{broadcasterData.display_name}</span>
+                <span class="bc-type">{broadcasterData.broadcaster_type || "aucun"}</span>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Viewers live -->
+          <div class="communaute-row">
+            <span class="field-label">Viewers live</span>
+            <span class="communaute-val">
+              {#if viewersData !== null}
+                {viewersData}
+              {:else}
+                Hors-ligne
+              {/if}
+            </span>
+          </div>
+
+          <!-- Followers -->
+          <div class="communaute-row">
+            <span class="field-label">Followers ({followersData?.total ?? "…"})</span>
+          </div>
+          {#if followersData}
+            <div class="liste-scroll">
+              {#each followersData.liste as f}
+                <div class="liste-entry">
+                  <span class="liste-login">{f.login}</span>
+                  <span class="liste-date">{f.followed_at.slice(0, 10)}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <!-- Subs -->
+          <div class="communaute-row">
+            <span class="field-label">
+              Subs ({subsData?.total ?? "…"} · {subsData?.points ?? "…"} pts)
+            </span>
+          </div>
+          {#if subsData}
+            <div class="liste-scroll">
+              {#each subsData.liste as s}
+                <div class="liste-entry">
+                  <span class="liste-login">{s.login}</span>
+                  <span class="liste-tier">
+                    {s.tier === "1000" ? "Tier 1" : s.tier === "2000" ? "Tier 2" : s.tier === "3000" ? "Tier 3" : s.tier}
+                    {#if s.is_gift} (gift){/if}
+                  </span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <button class="action" onclick={onRafraichirCommunaute}>Rafraîchir</button>
         {/if}
       </div>
     {/if}
@@ -341,6 +614,10 @@
     {/if}
   </div>
 </aside>
+
+{#if obsDialogOpen && selectedId}
+  <ObsSourceDialog widgetId={selectedId} onClose={onCloseObsDialog} />
+{/if}
 
 <style>
   .sidebar {
@@ -503,5 +780,96 @@
     display: grid;
     grid-template-columns: 1fr 1fr;
     gap: 0.25rem;
+  }
+  .connexion-row {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0;
+  }
+  .dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    border: 1px solid var(--texte);
+    flex-shrink: 0;
+  }
+  .dot.on {
+    background: var(--connexion-ok);
+  }
+  .dot.off {
+    background: #555;
+  }
+  .plat-nom {
+    flex: 1;
+    font-size: 0.85rem;
+  }
+  .action.small {
+    padding: 0.15rem 0.4rem;
+    font-size: 0.78rem;
+  }
+  .need-reauth {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .broadcaster {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.3rem 0;
+  }
+  .avatar {
+    width: 2.2rem;
+    height: 2.2rem;
+    border-radius: 50%;
+    border: 1px solid var(--texte);
+    flex-shrink: 0;
+  }
+  .bc-info {
+    display: flex;
+    flex-direction: column;
+    gap: 0.05rem;
+  }
+  .bc-name {
+    font-weight: 600;
+    font-size: 0.9rem;
+  }
+  .bc-type {
+    font-size: 0.7rem;
+    opacity: 0.6;
+  }
+  .communaute-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.2rem 0;
+  }
+  .communaute-val {
+    font-size: 0.85rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .liste-scroll {
+    max-height: 120px;
+    overflow-y: auto;
+    border: 1px solid var(--texte);
+    padding: 0.2rem 0.3rem;
+    font-size: 0.78rem;
+  }
+  .liste-entry {
+    display: flex;
+    justify-content: space-between;
+    padding: 0.1rem 0;
+    border-bottom: 1px solid rgba(224, 224, 224, 0.08);
+  }
+  .liste-entry:last-child {
+    border-bottom: none;
+  }
+  .liste-login {
+    font-weight: 500;
+  }
+  .liste-date, .liste-tier {
+    opacity: 0.6;
+    font-size: 0.72rem;
   }
 </style>

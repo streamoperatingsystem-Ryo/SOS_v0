@@ -33,6 +33,9 @@ pub struct ScenesState {
     pub scene: Arc<Mutex<Scene>>,
     pub current_id: Arc<Mutex<String>>,
     pub snapshot_tx: broadcast::Sender<String>,
+    /// Canal broadcast pour les messages chat (IRC Twitch → diffusion :4321).
+    /// Le handler WS s'y abonne et forward `{"type":"chat","message":...}`.
+    pub chat_tx: broadcast::Sender<String>,
 }
 
 /// Sérialise la scène en message snapshot WS.

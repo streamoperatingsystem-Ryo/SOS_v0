@@ -4,6 +4,7 @@
 import { writable, get } from "svelte/store";
 import { tauri, type SceneIndex } from "../tauri";
 import { loadScene, selectWidget } from "./scene";
+import { obsHost, obsPort, obsPassword } from "./obs";
 
 export const scenesIndexStore = writable<SceneIndex[]>([]);
 export const currentSceneIdStore = writable<string>("");
@@ -45,6 +46,7 @@ export async function createScene(nom: string): Promise<void> {
 }
 
 /// Ouvre une scène (id), recharge l'UI. Désélectionne le widget courant.
+/// Après chargement : sync captures OBS (enable/disable + transform).
 export async function openScene(id: string): Promise<void> {
   try {
     await tauri.sceneOuvrir(id);
@@ -52,6 +54,14 @@ export async function openScene(id: string): Promise<void> {
     await loadCurrentScene();
     await loadScene();
     selectWidget(null);
+    // Sync captures OBS : activer les SOS-Trou-* de cette scène, cacher les autres.
+    try {
+      await tauri.sceneSyncCaptures(
+        get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
+      );
+    } catch (e) {
+      console.warn("openScene: sync captures OBS échoué (OBS offline ?):", e);
+    }
   } catch (e) {
     console.error("openScene:", e);
     alert("Ouverture scène refusée : " + e);

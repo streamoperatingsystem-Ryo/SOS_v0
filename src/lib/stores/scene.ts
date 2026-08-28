@@ -2,6 +2,7 @@
 // invoke update_scene (save + snapshot :4321) seulement au create + pointerup.
 import { writable, get } from "svelte/store";
 import { tauri, type Scene, type Widget } from "../tauri";
+import { obsHost, obsPort, obsPassword } from "./obs";
 
 export const sceneStore = writable<Scene>({
   widgets: [],
@@ -55,13 +56,81 @@ export async function createWidget(): Promise<void> {
   await commitScene();
 }
 
-/// Active/désactive le mode trou sur un widget. Maj locale + commit.
-/// trou=true → :4321 média caché + rectangle masqué (fond + widgets dessous).
-export async function setWidgetTrou(id: string, trou: boolean): Promise<void> {
+/// Ajoute un widget chat (300×400, type chat, z auto, filtre unifié, police 16).
+/// Pas de média, pas de trou. Commit immédiat → save + snapshot WS.
+export async function createChatWidget(): Promise<void> {
+  const current = get(sceneStore);
+  const z = current.widgets.reduce((m, w) => Math.max(m, w.z), -1) + 1;
+  const w: Widget = {
+    id: crypto.randomUUID(),
+    type: "chat",
+    x: 100,
+    y: 100,
+    largeur: 300,
+    hauteur: 400,
+    z,
+    rotateX: 0,
+    rotateY: 0,
+    chatFiltre: "unifie",
+    taillePolice: 16,
+  };
+  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  await commitScene();
+}
+
+/// Change le filtre chat d'un widget. Maj locale + commit.
+export async function setChatFiltre(id: string, filtre: string): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
-    widgets: s.widgets.map((w) => (w.id === id ? { ...w, trou } : w)),
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, chatFiltre: filtre } : w
+    ),
   }));
+  await commitScene();
+}
+
+/// Change la taille de police d'un widget chat. Maj locale + commit.
+export async function setChatTaillePolice(id: string, px: number): Promise<void> {
+  const p = Math.max(8, Math.min(48, Math.round(px)));
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, taillePolice: p } : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Active/désactive le mode trou sur un widget. Maj locale + commit.
+/// trou=true → :4321 média caché + rectangle masqué (fond + widgets dessous).
+/// trou=false + obsSource set → supprime la source OBS d'abord, puis clear.
+export async function setWidgetTrou(id: string, trou: boolean): Promise<void> {
+  if (!trou) {
+    // Désactivation : si une source OBS est liée, la supprimer avant de clear.
+    const w = get(sceneStore).widgets.find((x) => x.id === id);
+    if (w?.obsSource) {
+      try {
+        await tauri.obsDeleteTrouSource(
+          get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+          w.obsSource
+        );
+      } catch (e) {
+        // OBS offline → on clear quand même côté scène (pas de crash).
+        console.warn("setWidgetTrou: suppression OBS échouée:", e);
+      }
+    }
+    sceneStore.update((s) => ({
+      ...s,
+      widgets: s.widgets.map((x) =>
+        x.id === id ? { ...x, trou: false, obsSource: undefined } : x
+      ),
+    }));
+  } else {
+    sceneStore.update((s) => ({
+      ...s,
+      widgets: s.widgets.map((x) => (x.id === id ? { ...x, trou } : x)),
+    }));
+  }
   await commitScene();
 }
 
@@ -172,11 +241,38 @@ export async function resetMedia(id: string): Promise<void> {
 
 /// Pousse la scène vers Rust → save config.json + snapshot WS.
 /// Appelé au create et au pointerup (fin du drag).
+/// Après updateScene : sync OBS des sources trou (one-shot reconnect) si ≥1
+/// widget a obsSource. Erreur OBS → log discret, pas de crash.
 export async function commitScene(): Promise<void> {
   try {
     await tauri.updateScene(get(sceneStore));
   } catch (e) {
     console.error("commitScene:", e);
+    return;
+  }
+  // Sync OBS : sources trou liées aux widgets. One-shot reconnect par commit.
+  const scene = get(sceneStore);
+  const items = scene.widgets
+    .filter((w) => w.trou && w.obsSource)
+    .map((w) => ({
+      sourceName: w.obsSource!,
+      x: w.x,
+      y: w.y,
+      w: w.largeur,
+      h: w.hauteur,
+      fit: w.mediaFit ?? "ajuster",
+      zoom: w.mediaZoom ?? 1,
+      rot: w.mediaRot ?? 0,
+    }));
+  if (items.length > 0) {
+    try {
+      await tauri.obsSyncTrous(
+        get(obsHost), parseInt(get(obsPort), 10), get(obsPassword), items
+      );
+    } catch (e) {
+      // OBS offline → message discret, pas de crash. La scène reste OK.
+      console.warn("commitScene: sync OBS échouée:", e);
+    }
   }
 }
 
@@ -315,4 +411,99 @@ export async function setBgTime(time: number): Promise<void> {
   const t = Math.max(0, time);
   sceneStore.update((s) => ({ ...s, bgTime: t }));
   await commitScene();
+}
+
+// ===== Sources OBS "trou" (Lot 2) =====
+
+/// Crée une source OBS de capture sous SOS-Diffusion, calée sur le widget.
+/// Met à jour le store (obsSource) + commit (qui resync OBS). Retourne le nom.
+export async function createObsTrouSource(
+  id: string,
+  kind: "camera" | "window" | "game",
+  target: string | null
+): Promise<string> {
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  if (!w) throw new Error("Widget introuvable");
+  const sourceName = "SOS-Trou-" + id.slice(0, 8);
+  const name = await tauri.obsCreateTrouSource(
+    get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+    sourceName, kind, target, w.x, w.y, w.largeur, w.hauteur
+  );
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((x) =>
+      x.id === id ? { ...x, obsSource: name } : x
+    ),
+  }));
+  await commitScene();
+  return name;
+}
+
+/// Supprime la source OBS liée à un widget trou + clear obsSource + commit.
+export async function deleteObsTrouSource(id: string): Promise<void> {
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  if (!w?.obsSource) return;
+  try {
+    await tauri.obsDeleteTrouSource(
+      get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+      w.obsSource
+    );
+  } catch (e) {
+    console.warn("deleteObsTrouSource: suppression OBS échouée:", e);
+  }
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((x) =>
+      x.id === id ? { ...x, obsSource: undefined } : x
+    ),
+  }));
+  await commitScene();
+}
+
+/// Lie une source OBS existante au widget trou (pas de création, juste
+/// transform + reorder). Met à jour le store (obsSource) + commit.
+export async function linkExistingObsSource(
+  id: string,
+  sourceName: string
+): Promise<string> {
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  if (!w) throw new Error("Widget introuvable");
+  const name = await tauri.obsLinkExistingSource(
+    get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+    sourceName, w.x, w.y, w.largeur, w.hauteur
+  );
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((x) =>
+      x.id === id ? { ...x, obsSource: name } : x
+    ),
+  }));
+  await commitScene();
+  return name;
+}
+
+/// Crée une source OBS de capture depuis une cible PC (caméra/fenêtre/jeu)
+/// dans la scène contenant SOS-Diffusion. Nom source = SOS-Trou-<id8>.
+/// Si existe déjà → SetInputSettings + transform (pas de doublon).
+/// Met à jour le store (obsSource) + commit.
+export async function createObsTrouFromPc(
+  id: string,
+  kind: "camera" | "window" | "game",
+  target: string | null
+): Promise<string> {
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  if (!w) throw new Error("Widget introuvable");
+  const sourceName = "SOS-Trou-" + id.slice(0, 8);
+  const name = await tauri.obsCreateTrouFromPc(
+    get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+    sourceName, kind, target, w.x, w.y, w.largeur, w.hauteur
+  );
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((x) =>
+      x.id === id ? { ...x, obsSource: name } : x
+    ),
+  }));
+  await commitScene();
+  return name;
 }

@@ -2,13 +2,16 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Capacités par défaut pour StreamOS v0",
-  "windows": ["main"],
+  "windows": ["main", "chat-popout"],
   "permissions": [
     "core:default",
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit",
+    "core:window:allow-create",
+    "core:window:allow-close",
     "dialog:default",
-    "fs:default"
+    "fs:default",
+    "opener:default"
   ]
 }

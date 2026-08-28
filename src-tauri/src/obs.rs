@@ -12,31 +12,44 @@ use futures_util::{Sink, SinkExt, Stream, StreamExt};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use tokio_tungstenite::tungstenite::Message;
+use tokio_tungstenite::WebSocketStream;
+use tokio_tungstenite::MaybeTlsStream;
 
-const SCENE_NAME: &str = "SOS";
-const SOURCE_NAME: &str = "SOS-Diffusion";
+pub(crate) type WsSink = futures_util::stream::SplitSink<
+    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+    Message,
+>;
+pub(crate) type WsStreamHalf = futures_util::stream::SplitStream<
+    WebSocketStream<MaybeTlsStream<tokio::net::TcpStream>>,
+>;
+
+pub(crate) const SCENE_NAME: &str = "SOS";
+pub(crate) const SOURCE_NAME: &str = "SOS-Diffusion";
 const SOURCE_URL: &str = "http://127.0.0.1:4321/";
 const FALLBACK_W: u32 = 1920;
 const FALLBACK_H: u32 = 1080;
 
-/// Connecte à OBS WebSocket, authentifie, lit la résolution OBS, et s'assure
-/// que la scène "SOS" + source navigateur "SOS-Diffusion" (dims = résolution
-/// OBS) existent — idempotent, sans doublon. Retourne (canvasW, canvasH).
-pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<(u32, u32), String> {
+/// Connecte a OBS WebSocket et authentifie. Retourne (write, read) authentifie.
+/// Helper partage par connect_and_setup et obs_trou::*.
+pub(crate) async fn connect(
+    host: &str,
+    port: u16,
+    password: &str,
+) -> Result<(WsSink, WsStreamHalf), String> {
     let url = format!("ws://{}:{}", host, port);
     let (ws_stream, _response) = tokio_tungstenite::connect_async(&url)
         .await
-        .map_err(|e| format!("Connexion OBS échouée ({}): {}", url, e))?;
+        .map_err(|e| format!("Connexion OBS echouee ({}): {}", url, e))?;
 
     let (mut write, mut read) = ws_stream.split();
 
     // 1. Hello (op=0)
     let hello = recv_msg(&mut read).await?;
     if hello["op"] != 0 {
-        return Err(format!("OBS: attendu Hello (op=0), reçu op={}", hello["op"]));
+        return Err(format!("OBS: attendu Hello (op=0), recu op={}", hello["op"]));
     }
 
-    // 2. Identify (op=1) — avec auth si le serveur exige un mot de passe
+    // 2. Identify (op=1) avec auth si le serveur exige un mot de passe
     let identify = if let Some(auth) = hello["d"]["authentication"].as_object() {
         let challenge = auth["challenge"]
             .as_str()
@@ -56,18 +69,26 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
         h2.update(secret.as_bytes());
         h2.update(challenge.as_bytes());
         let response = STANDARD.encode(h2.finalize());
-
         json!({ "op": 1, "d": { "rpcVersion": 1, "authentication": response } })
     } else {
         json!({ "op": 1, "d": { "rpcVersion": 1 } })
     };
     send_msg(&mut write, &identify).await?;
 
-    // 3. Identified (op=2) — sinon auth échouée
+    // 3. Identified (op=2) sinon auth echouee
     let identified = recv_msg(&mut read).await?;
     if identified["op"] != 2 {
-        return Err("OBS: authentification échouée (mot de passe incorrect ?)".into());
+        return Err("OBS: authentification echouee (mot de passe incorrect ?)".into());
     }
+
+    Ok((write, read))
+}
+
+/// Connecte à OBS WebSocket, authentifie, lit la résolution OBS, et s'assure
+/// que la scène "SOS" + source navigateur "SOS-Diffusion" (dims = résolution
+/// OBS) existent — idempotent, sans doublon. Retourne (canvasW, canvasH).
+pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<(u32, u32), String> {
+    let (mut write, mut read) = connect(host, port, password).await?;
 
     // 4. GetVideoSettings → baseWidth/baseHeight (résolution canvas OBS).
     //    Non-fatal : si échec, fallback 1920×1080. Pas de poll — lu une seule
@@ -292,9 +313,42 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
     Ok((canvas_w, canvas_h))
 }
 
-// --- Helpers WebSocket ---
+/// Refresh standalone de la source navigateur "SOS-Diffusion" via
+/// PressInputPropertiesButton (refreshnocache) — équivalent au clic
+/// "Actualiser" d'OBS. One-shot : connect → refresh → close.
+/// Appelé quand serveur :4321 ready + OBS connecté (boot + reconnect).
+pub async fn refresh_diffusion(host: &str, port: u16, password: &str) -> Result<(), String> {
+    let (mut write, mut read) = connect(host, port, password).await?;
 
-async fn send_msg<W>(write: &mut W, msg: &Value) -> Result<(), String>
+    let refresh_result = rpc(
+        &mut write,
+        &mut read,
+        "PressInputPropertiesButton",
+        "refresh_diffusion",
+        json!({
+            "inputName": SOURCE_NAME,
+            "propertyName": "refreshnocache"
+        }),
+    )
+    .await;
+
+    let _ = write.close().await;
+
+    match refresh_result {
+        Ok(_) => {
+            eprintln!("[OBS] SOS-Diffusion rafraîchi");
+            Ok(())
+        }
+        Err(e) => {
+            eprintln!("[OBS] SOS-Diffusion refresh échoué (non-fatal): {}", e);
+            Err(e)
+        }
+    }
+}
+
+// --- Helpers WebSocket (pub(crate) pour obs_trou) ---
+
+pub(crate) async fn send_msg<W>(write: &mut W, msg: &Value) -> Result<(), String>
 where
     W: Sink<Message, Error = tokio_tungstenite::tungstenite::Error> + Unpin,
 {
@@ -307,7 +361,7 @@ where
 }
 
 /// Lit le prochain message JSON (ignore ping/pong/binary). Erreur si Close.
-async fn recv_msg<R>(read: &mut R) -> Result<Value, String>
+pub(crate) async fn recv_msg<R>(read: &mut R) -> Result<Value, String>
 where
     R: Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
 {
@@ -334,7 +388,7 @@ where
 /// Envoie une requête RPC (op=6) et attend la réponse correspondante (op=7).
 /// Ignore les événements (op=5) reçus entre-temps.
 /// Log la requête ET la réponse (status + comment) pour le debug.
-async fn rpc<W, R>(
+pub(crate) async fn rpc<W, R>(
     write: &mut W,
     read: &mut R,
     request_type: &str,

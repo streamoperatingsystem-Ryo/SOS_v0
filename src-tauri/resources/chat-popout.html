@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Chat pop-out</title>
+    <style>
+      /* Fond en dur — NE PAS dépendre de theme-sos.css (non chargé ici). */
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: #0e0e10;
+        color: #efeff1;
+        font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji",
+          "Noto Color Emoji", sans-serif;
+        overflow: hidden;
+      }
+      /* Chat body : même style que diffusion.html (bulles + zébrage). */
+      .chat-body {
+        width: 100%;
+        height: 100%;
+        overflow-y: auto;
+        overflow-wrap: break-word;
+        word-break: break-word;
+        padding: 0.25rem;
+        display: flex;
+        flex-direction: column;
+        gap: 0.15rem;
+        font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji",
+          "Noto Color Emoji", sans-serif;
+      }
+      .chat-msg {
+        display: flex;
+        align-items: baseline;
+        gap: 0.25rem;
+        padding: 0.2rem 0.3rem;
+        border-radius: 0.3rem;
+        line-height: 1.25;
+      }
+      .chat-msg.pair {
+        background: rgba(255, 255, 255, 0.05);
+      }
+      .chat-msg .avatar {
+        width: 24px;
+        height: 24px;
+        border-radius: 50%;
+        flex-shrink: 0;
+        align-self: center;
+        object-fit: cover;
+      }
+      .chat-msg .badge {
+        font-size: 0.6em;
+        padding: 0 0.25rem;
+        border-radius: 0.2rem;
+        margin-right: 0.1rem;
+        font-weight: 700;
+        color: #fff;
+        flex-shrink: 0;
+        align-self: center;
+        line-height: 1.4;
+      }
+      .chat-msg .badge.mod { background: #00ad03; }
+      .chat-msg .badge.vip { background: #e005b9; }
+      .chat-msg .badge.sub { background: #6b35c9; }
+      .chat-msg .badge.broadcaster { background: #9146ff; }
+      .chat-msg .logo {
+        flex-shrink: 0;
+        align-self: center;
+        opacity: 0.85;
+      }
+      .chat-msg .pseudo {
+        font-weight: 600;
+        flex-shrink: 0;
+      }
+      .chat-msg .texte {
+        flex: 1;
+        min-width: 0;
+      }
+    </style>
+  </head>
+  <body style="background:#0e0e10;color:#efeff1;margin:0">
+    <div class="chat-body" id="chatBody"></div>
+    <script>
+      // Pop-out chat : WS :4321 en dur, bulles seulement (pas de scène, pas d'OBS).
+      // Même rendu que diffusion.html (avatar + badges + logo + pseudo + texte).
+      var chatMessages = [];
+      var MAX_CHAT = 200;
+      var chatBody = document.getElementById("chatBody");
+
+      var TWITCH_LOGO_SVG = '<svg class="logo" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
+        + '<path fill="currentColor" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/>'
+        + '<rect x="9" y="4" width="1" height="3"/><rect x="6" y="4" width="1" height="3"/></svg>';
+
+      function escapeHtml(s) {
+        return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+      }
+
+      function parseBadges(raw) {
+        if (!raw) return [];
+        var out = [];
+        var parts = raw.split(",");
+        for (var i = 0; i < parts.length; i++) {
+          var name = parts[i].split("/")[0];
+          if (name === "moderator") out.push("mod");
+          else if (name === "vip") out.push("vip");
+          else if (name === "subscriber") out.push("sub");
+          else if (name === "broadcaster") out.push("broadcaster");
+        }
+        return out;
+      }
+
+      function renderBadges(badgesRaw) {
+        var ids = parseBadges(badgesRaw);
+        var html = "";
+        for (var i = 0; i < ids.length; i++) {
+          html += '<span class="badge ' + ids[i] + '">' + ids[i] + '</span>';
+        }
+        return html;
+      }
+
+      function fillChatBody() {
+        chatBody.innerHTML = "";
+        for (var i = 0; i < chatMessages.length; i++) {
+          var m = chatMessages[i];
+          var div = document.createElement("div");
+          div.className = "chat-msg" + (i % 2 === 0 ? " pair" : "");
+          var logo = m.plateforme === "twitch" ? TWITCH_LOGO_SVG : "";
+          var avatar = m.avatar
+            ? '<img class="avatar" src="' + escapeHtml(m.avatar) + '" width="24" height="24" alt="" referrerpolicy="no-referrer">'
+            : "";
+          var badges = renderBadges(m.badges);
+          div.innerHTML = avatar
+            + badges
+            + logo
+            + '<span class="pseudo">' + escapeHtml(m.pseudo) + "</span>"
+            + '<span class="texte">' + escapeHtml(m.texte) + "</span>";
+          chatBody.appendChild(div);
+        }
+        chatBody.scrollTop = chatBody.scrollHeight;
+      }
+
+      // WS en dur sur :4321 (même path que diffusion.html = /ws).
+      var WS_URL = "ws://127.0.0.1:4321/ws";
+
+      function connect() {
+        var ws = new WebSocket(WS_URL);
+
+        ws.onclose = function () {
+          setTimeout(connect, 2000);
+        };
+
+        ws.onerror = function () {
+        };
+
+        ws.onmessage = function (ev) {
+          try {
+            var msg = JSON.parse(ev.data);
+            if (msg.type === "chat" && msg.message) {
+              chatMessages.push(msg.message);
+              if (chatMessages.length > MAX_CHAT) {
+                chatMessages = chatMessages.slice(chatMessages.length - MAX_CHAT);
+              }
+              fillChatBody();
+            }
+            // Snapshot ignoré : le pop-out n'affiche que le chat.
+          } catch (e) {
+          }
+        };
+      }
+
+      connect();
+    </script>
+  </body>
+</html>

@@ -89,6 +89,19 @@ pub struct Widget {
     pub mediaTime: f64,
     #[serde(default)]
     pub trou: bool,
+    /// Nom de la source OBS liée au trou (None = pas de source OBS).
+    /// Convention : "SOS-Trou-<id8>". Quand Some → commitScene sync la
+    /// transform OBS (position + taille = widget x/y/largeur/hauteur).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub obsSource: Option<String>,
+    /// Filtre chat pour les widgets type "chat" : "unifie" (défaut) ou
+    /// une plateforme ("twitch", "youtube", "kick", "facebook", "tiktok").
+    /// None pour les widgets non-chat.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatFiltre: Option<String>,
+    /// Taille de police (px) pour les widgets type "chat". Défaut 16.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taillePolice: Option<u32>,
 }
 
 /// Scène unique (source de vérité). canvasW/canvasH = résolution OBS lue
