@@ -168,6 +168,58 @@
         flex: 1;
         min-width: 0;
       }
+
+      /* Widget clip de bienvenue : overlay bandeau (avatar + pseudo + CTA)
+         + <video> qui streame le clip Twitch depuis le CDN signé. */
+      .widget.welcome-clip {
+        background: #000;
+        overflow: hidden;
+        position: relative;
+      }
+      .welcome-clip-video {
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        display: block;
+      }
+      .welcome-clip-overlay {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        display: flex;
+        flex-direction: column;
+        pointer-events: none;
+        z-index: 2;
+      }
+      .welcome-clip-bandeau {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        padding: 0.4rem 0.6rem;
+        background: linear-gradient(180deg, rgba(0,0,0,0.85) 0%, rgba(0,0,0,0) 100%);
+        color: var(--texte);
+        font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji",
+          "Noto Color Emoji", sans-serif;
+      }
+      .welcome-clip-avatar {
+        width: 28px;
+        height: 28px;
+        border-radius: 50%;
+        object-fit: cover;
+        flex-shrink: 0;
+      }
+      .welcome-clip-pseudo {
+        font-weight: 700;
+        font-size: 1rem;
+        flex-shrink: 0;
+      }
+      .welcome-clip-cta {
+        font-size: 0.85rem;
+        opacity: 0.85;
+        margin-left: auto;
+        font-style: italic;
+      }
     </style>
   </head>
   <body>
@@ -732,6 +784,76 @@
             continue;
           }
 
+          if (wtype === "welcome-clip") {
+            // ===== Widget clip de bienvenue =====
+            // Conteneur avec overlay (bandeau pseudo + "Checkout and follow")
+            // + <video> caché tant que rien à jouer. La vidéo est contrôlée par
+            // les messages WS welcome-clip-play / welcome-clip-stop.
+            if (entry) {
+              // UPDATE : style only (position/taille/z pilotées par le snapshot).
+              applyWidgetStyle(entry.el, w);
+              entry.wrapEl.style.zIndex = w.z;
+            } else {
+              // CREATE : conteneur welcome-clip.
+              var wrapEl = document.createElement("div");
+              wrapEl.className = "widget-wrap";
+              wrapEl.style.zIndex = w.z;
+              var el = document.createElement("div");
+              el.className = "widget welcome-clip";
+              applyWidgetStyle(el, w);
+
+              // Overlay (bandeau pseudo + CTA + titre clip) — caché par défaut.
+              var overlayEl = document.createElement("div");
+              overlayEl.className = "welcome-clip-overlay";
+              overlayEl.style.display = "none";
+
+              var bandeauEl = document.createElement("div");
+              bandeauEl.className = "welcome-clip-bandeau";
+
+              var avatarEl = document.createElement("img");
+              avatarEl.className = "welcome-clip-avatar";
+              avatarEl.alt = "";
+              avatarEl.src = "";
+              avatarEl.style.display = "none";
+
+              var pseudoEl = document.createElement("span");
+              pseudoEl.className = "welcome-clip-pseudo";
+
+              var ctaEl = document.createElement("span");
+              ctaEl.className = "welcome-clip-cta";
+              ctaEl.textContent = "Checkout and follow";
+
+              bandeauEl.appendChild(avatarEl);
+              bandeauEl.appendChild(pseudoEl);
+              bandeauEl.appendChild(ctaEl);
+              overlayEl.appendChild(bandeauEl);
+
+              // <video> caché tant que rien à jouer.
+              var videoEl = document.createElement("video");
+              videoEl.className = "welcome-clip-video";
+              videoEl.playsInline = true;
+              videoEl.autoplay = true;
+              videoEl.muted = false;
+              videoEl.controls = false;
+              videoEl.style.display = "none";
+
+              el.appendChild(overlayEl);
+              el.appendChild(videoEl);
+              wrapEl.appendChild(el);
+              stageEl.appendChild(wrapEl);
+
+              widgetMap.set(w.id, {
+                el: el, wrapEl: wrapEl, mediaEl: null, mediaKey: "",
+                kind: "welcome-clip", mediaTime: 0,
+                welcomeOverlay: overlayEl,
+                welcomeVideo: videoEl,
+                welcomeAvatar: avatarEl,
+                welcomePseudo: pseudoEl,
+              });
+            }
+            continue;
+          }
+
           // ===== Widget média (chemin existant) =====
           var kind = w.kind || (w.media ? kindFromMedia(w.media) : "image");
           var key = mediaKey(w.media);
@@ -1246,11 +1368,80 @@
                 chatMessages = chatMessages.slice(chatMessages.length - MAX_CHAT);
               }
               rerenderChatWidgets();
+            } else if (msg.type === "welcome-clip-play") {
+              // Clip de bienvenue : trouver le 1er widget welcome-clip + jouer.
+              console.log("[Welcome] play viewer=" + (msg.viewer && msg.viewer.display_name));
+              playWelcomeClip(msg);
+            } else if (msg.type === "welcome-clip-stop") {
+              // Stop : cacher l'overlay + reset vidéo sur tous les widgets welcome-clip.
+              console.log("[Welcome] stop");
+              stopWelcomeClip();
             }
           } catch (e) {
             console.error("Message WS invalide:", e);
           }
         };
+      }
+
+      // ===== Clips de bienvenue : play / stop =====
+
+      /// Trouve le 1er widget welcome-clip dans widgetMap.
+      function findWelcomeClipEntry() {
+        for (const [id, entry] of widgetMap) {
+          if (entry.kind === "welcome-clip") return entry;
+        }
+        return null;
+      }
+
+      /// Joue un clip de bienvenue : affiche l'overlay + charge la vidéo MP4.
+      function playWelcomeClip(msg) {
+        var entry = findWelcomeClipEntry();
+        if (!entry) {
+          console.warn("[Welcome] aucun widget welcome-clip dans la scène — clip ignoré");
+          return;
+        }
+        var viewer = msg.viewer || {};
+        var clip = msg.clip || {};
+        var video = entry.welcomeVideo;
+        var overlay = entry.welcomeOverlay;
+        var avatar = entry.welcomeAvatar;
+        var pseudo = entry.welcomePseudo;
+
+        // Bandeau : avatar + pseudo + CTA.
+        if (viewer.avatar) {
+          avatar.src = viewer.avatar;
+          avatar.style.display = "inline-block";
+        } else {
+          avatar.style.display = "none";
+        }
+        pseudo.textContent = viewer.display_name || viewer.login || "";
+
+        // Afficher l'overlay.
+        overlay.style.display = "flex";
+
+        // Charger + jouer la vidéo.
+        video.src = clip.mp4_url || "";
+        video.style.display = "block";
+        video.play().catch(function (e) {
+          console.warn("[Welcome] video.play() échoué (autoplay policy) :", e);
+        });
+
+        // À la fin de la vidéo → le timer Rust émettra welcome-clip-stop.
+        // (pas de stop automatique ici — le timer Rust est la source de vérité)
+      }
+
+      /// Stop : cacher l'overlay + reset vidéo sur tous les widgets welcome-clip.
+      function stopWelcomeClip() {
+        for (const [id, entry] of widgetMap) {
+          if (entry.kind !== "welcome-clip") continue;
+          var video = entry.welcomeVideo;
+          var overlay = entry.welcomeOverlay;
+          video.pause();
+          video.removeAttribute("src");
+          video.load();
+          video.style.display = "none";
+          overlay.style.display = "none";
+        }
       }
 
       let currentScene = { widgets: [] };

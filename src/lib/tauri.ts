@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface Widget {
   id: string;
-  type: "media" | "chat";
+  type: "media" | "chat" | "welcome-clip";
   x: number;
   y: number;
   largeur: number;
@@ -473,4 +473,139 @@ export const tauri = {
   }> {
     return invoke("twitch_broadcaster");
   },
+
+  // ===== Clips de bienvenue (welcome) =====
+
+  /// État courant de la file d'attente (clip en cours + queue + config globale).
+  async welcomeEtat(): Promise<WelcomeQueueEtat> {
+    return invoke<WelcomeQueueEtat>("welcome_etat");
+  },
+
+  /// Registre Twitch complet : liste [login, ViewerConfig].
+  async welcomeRegistreTwitch(): Promise<[string, WelcomeViewerConfig][]> {
+    return invoke<[string, WelcomeViewerConfig][]>("welcome_registre_twitch");
+  },
+
+  /// Sauvegarde la config d'un viewer Twitch (registre + disque).
+  async welcomeSauverViewerTwitch(
+    login: string,
+    config: WelcomeViewerConfig
+  ): Promise<void> {
+    await invoke("welcome_sauver_viewer_twitch", { login, config });
+  },
+
+  /// Supprime un viewer Twitch du registre.
+  async welcomeSupprimerViewerTwitch(login: string): Promise<void> {
+    await invoke("welcome_supprimer_viewer_twitch", { login });
+  },
+
+  /// Active/désactive la config globale des clips de bienvenue.
+  async welcomeConfigGlobaleActif(actif: boolean): Promise<void> {
+    await invoke("welcome_config_globale_actif", { actif });
+  },
+
+  /// Stop le clip courant + vide la queue.
+  async welcomeStop(): Promise<void> {
+    await invoke("welcome_stop");
+  },
+
+  /// Skip le clip courant → passe au suivant.
+  async welcomeSkip(): Promise<void> {
+    await invoke("welcome_skip");
+  },
+
+  /// Retire un item spécifique de la queue (par id).
+  async welcomeRetirer(id: string): Promise<void> {
+    await invoke("welcome_retirer", { id });
+  },
+
+  /// Remonte un item dans la queue (vers le début).
+  async welcomeRemonter(id: string): Promise<void> {
+    await invoke("welcome_remonter", { id });
+  },
+
+  /// Descend un item dans la queue (vers la fin).
+  async welcomeDescendre(id: string): Promise<void> {
+    await invoke("welcome_descendre", { id });
+  },
+
+  /// Vide la queue (sans stopper le clip courant).
+  async welcomeVider(): Promise<void> {
+    await invoke("welcome_vider");
+  },
+
+  /// Reset le seen set (nouveau stream → tous les streamers redeviennent éligibles).
+  async welcomeResetSession(): Promise<void> {
+    await invoke("welcome_reset_session");
+  },
+
+  /// Liste les clips récents d'un broadcaster Twitch (Helix GET /clips).
+  async welcomeListerClipsStreamer(
+    broadcasterId: string,
+    first: number
+  ): Promise<WelcomeClipInfo[]> {
+    return invoke<WelcomeClipInfo[]>("welcome_lister_clips_streamer", {
+      broadcasterId,
+      first,
+    });
+  },
+
+  /// Résout l'URL MP4 signée d'un clip Twitch (slug) via GQL.
+  async welcomeResoudreMp4(slug: string): Promise<string> {
+    return invoke<string>("welcome_resoudre_mp4", { slug });
+  },
+
+  /// Attribution automatique : pour chaque follower, fetch ses clips → clip
+  /// aléatoire → résout MP4 → sauve config. Retourne { succes, echecs }.
+  /// Émet "welcome:attribution-progress" pendant le traitement.
+  async welcomeAttribuerAuto(
+    followers: { login: string; user_id: string; display_name?: string }[]
+  ): Promise<{ succes: number; echecs: number }> {
+    return invoke("welcome_attribuer_auto", { followers });
+  },
 };
+
+// ===== Types welcome (mirroir des structs Rust) =====
+
+export interface WelcomeViewerConfig {
+  actif: boolean;
+  clip_id: string;
+  clip_titre: string;
+  clip_thumbnail: string;
+  clip_mp4_url: string;
+  clip_duree_ms: number;
+  message: string;
+  display_name: string;
+  avatar?: string | null;
+}
+
+export interface WelcomeQueueItem {
+  id: string;
+  login: string;
+  display_name: string;
+  avatar: string | null;
+  plateforme: string;
+  clip_id: string;
+  clip_titre: string;
+  clip_mp4_url: string;
+  clip_duree_ms: number;
+  message: string;
+}
+
+export interface WelcomeQueueEtat {
+  en_attente: WelcomeQueueItem[];
+  current: WelcomeQueueItem | null;
+  config_globale_actif: boolean;
+}
+
+export interface WelcomeClipInfo {
+  id: string;
+  title: string;
+  url: string;
+  thumbnail_url: string;
+  duration: number;
+  created_at: string;
+  broadcaster_id: string;
+  broadcaster_login: string;
+  broadcaster_name: string;
+}

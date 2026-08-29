@@ -78,6 +78,30 @@ export async function createChatWidget(): Promise<void> {
   await commitScene();
 }
 
+/// Ajoute un widget clip de bienvenue (480×270, type welcome-clip, z auto).
+/// Préréglage : coin bas-droit (1440×810 sur canvas 1920×1080). Le clip se
+/// joue dans diffusion.html via WS {"type":"welcome-clip-play"}. La position/
+/// taille/z sont pilotées par le drag/resize existant. Commit immédiat.
+export async function createWelcomeClipWidget(): Promise<void> {
+  const current = get(sceneStore);
+  const z = current.widgets.reduce((m, w) => Math.max(m, w.z), -1) + 1;
+  const canvasW = current.canvasW ?? 1920;
+  const canvasH = current.canvasH ?? 1080;
+  const w: Widget = {
+    id: crypto.randomUUID(),
+    type: "welcome-clip",
+    x: canvasW - 480 - 20,
+    y: canvasH - 270 - 20,
+    largeur: 480,
+    hauteur: 270,
+    z,
+    rotateX: 0,
+    rotateY: 0,
+  };
+  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  await commitScene();
+}
+
 /// Change le filtre chat d'un widget. Maj locale + commit.
 export async function setChatFiltre(id: string, filtre: string): Promise<void> {
   sceneStore.update((s) => ({

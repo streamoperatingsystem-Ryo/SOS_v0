@@ -20,9 +20,10 @@
 
   let { w, scale }: { w: Widget; scale: number } = $props();
 
-  // Type du widget : "media" (défaut) ou "chat".
+  // Type du widget : "media" (défaut), "chat" ou "welcome-clip".
   let widgetType = $derived(w.type ?? "media");
   let isChat = $derived(widgetType === "chat");
+  let isWelcomeClip = $derived(widgetType === "welcome-clip");
 
   // Mini widget — jamais en dessous.
   const MIN = 80;
@@ -259,6 +260,14 @@
            Aucune bulle, aucun scroll, aucun avatar. Les bulles s'affichent
            dans diffusion.html (OBS :4321) via WS {"type":"chat"}. -->
       <div class="chat-actif">Chat actif</div>
+    {:else if isWelcomeClip}
+      <!-- Widget clip de bienvenue (dashboard) : placeholder seulement.
+           Le clip se joue dans diffusion.html (OBS :4321) via WS
+           {"type":"welcome-clip-play"}. Position/taille/z pilotées ici. -->
+      <div class="welcome-clip-actif">
+        <span class="welcome-clip-icon">▶</span>
+        <span>Clip de bienvenue</span>
+      </div>
     {:else if w.media && !isVideo}
       <img
         class="preview"
@@ -385,6 +394,24 @@
     pointer-events: none;
     opacity: 0.6;
     font-size: 0.9rem;
+  }
+  .welcome-clip-actif {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.4rem;
+    pointer-events: none;
+    opacity: 0.7;
+    font-size: 0.9rem;
+    background: #000;
+    color: var(--texte);
+  }
+  .welcome-clip-icon {
+    font-size: 1.6rem;
+    line-height: 1;
   }
   .handle {
     position: absolute;

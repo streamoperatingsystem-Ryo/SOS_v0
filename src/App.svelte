@@ -15,6 +15,10 @@
   import TwitchDeviceModal from "./lib/components/TwitchDeviceModal.svelte";
   import ConfirmDeleteWidgetModal from "./lib/components/ConfirmDeleteWidgetModal.svelte";
   import CadresModal from "./lib/components/CadresModal.svelte";
+  import WelcomeCommunauteModal from "./lib/components/WelcomeCommunauteModal.svelte";
+  import WelcomeQueuePanel from "./lib/components/WelcomeQueuePanel.svelte";
+  import { initWelcome, chargerWelcome } from "./lib/stores/welcome";
+  let welcomeModalOpen = $state(false);
 
   let serverError = $state<string | null>(null);
   let serverOk = $state(false);
@@ -121,6 +125,11 @@
 
     // 3. initChat (listeners twitch:connecte, chat:message, etc.)
     await initChat();
+
+    // 3b. initWelcome (listeners welcome:etat + welcome:attribution-progress)
+    //     + charge l'état initial de la queue + registre.
+    await initWelcome();
+    await chargerWelcome();
 
     // 4. Fallback : si :4321 déjà up (event manqué), boot OBS maintenant.
     const up = await checkServerUp();
@@ -253,6 +262,14 @@
 {#if $cadreModalOpen}
   <CadresModal mode={$cadreModalOpen} />
 {/if}
+
+<!-- Modale attribution clips de bienvenue (followers + clips) -->
+{#if welcomeModalOpen}
+  <WelcomeCommunauteModal onFermer={() => (welcomeModalOpen = false)} />
+{/if}
+
+<!-- Panel file d'attente clips de bienvenue (toujours visible, repliable) -->
+<WelcomeQueuePanel />
 
 <style>
   main {

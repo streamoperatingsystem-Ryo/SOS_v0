@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { createWidget, createChatWidget, importMedia, setMediaFit, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime, setWidgetTrou, deleteObsTrouSource, setChatFiltre, setChatTaillePolice, toggleCadreWidgetActif, toggleCadreAppActif } from "../stores/scene";
+  import { createWidget, createChatWidget, createWelcomeClipWidget, importMedia, setMediaFit, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime, setWidgetTrou, deleteObsTrouSource, setChatFiltre, setChatTaillePolice, toggleCadreWidgetActif, toggleCadreAppActif } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
   import { openSection, toggleSection, confirmDeleteWidget, cadreModalOpen } from "../stores/ui";
   import { videoRegistry } from "../stores/video";
@@ -379,6 +379,7 @@
       <div class="content">
         <button class="action" onclick={createWidget}>Créer un widget</button>
         <button class="action" onclick={createChatWidget}>Créer un widget chat</button>
+        <button class="action" onclick={createWelcomeClipWidget}>Créer un widget clip de bienvenue</button>
         {#if !selectedId}
           <p class="hint">Cliquer un widget sur le canvas</p>
         {:else}

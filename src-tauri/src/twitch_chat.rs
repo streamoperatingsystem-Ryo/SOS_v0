@@ -13,7 +13,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::broadcast;
 use tokio_tungstenite::tungstenite::Message;
 
@@ -180,6 +180,16 @@ async fn connect_irc(
                 match chat_tx.send(json_msg) {
                     Ok(n) => eprintln!("[Twitch] WS chat envoyé pseudo={} receivers={}", payload.pseudo, n),
                     Err(_) => eprintln!("[Twitch] WS chat AUCUN client pseudo={}", payload.pseudo),
+                }
+                // Clip de bienvenue : détection 1er message d'un streamer enregistré.
+                // Récupère WelcomeState depuis l'app (non-fatal si absent).
+                if let Some(welcome) = app.try_state::<crate::welcome::WelcomeState>() {
+                    welcome.on_message(
+                        "twitch",
+                        &payload.pseudo.to_lowercase(),
+                        &payload.pseudo,
+                        payload.avatar.clone(),
+                    );
                 }
             }
         }

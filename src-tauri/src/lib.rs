@@ -14,6 +14,8 @@ mod youtube_auth;
 mod youtube_chat;
 mod youtube_data;
 mod tiktok_chat;
+mod twitch_clips;
+mod welcome;
 
 use scenes::{ScenesState, SceneIndex};
 use std::sync::Arc;
@@ -1462,6 +1464,198 @@ fn tiktok_username_courant(app: AppHandle) -> Option<String> {
     crate::config::lire_tiktok_username(&app).ok().flatten()
 }
 
+// ===== Clips de bienvenue (welcome) =====
+
+/// Retourne l'état courant de la file d'attente welcome (clip en cours + queue).
+#[tauri::command]
+fn welcome_etat(state: tauri::State<'_, welcome::WelcomeState>) -> welcome::QueueEtat {
+    state.etat()
+}
+
+/// Retourne le registre Twitch complet (login → config viewer).
+#[tauri::command]
+fn welcome_registre_twitch(
+    state: tauri::State<'_, welcome::WelcomeState>,
+) -> Vec<(String, welcome::ViewerConfig)> {
+    state.lire_registre_twitch()
+}
+
+/// Sauvegarde la config d'un viewer Twitch dans le registre + disque.
+#[tauri::command]
+fn welcome_sauver_viewer_twitch(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    login: String,
+    config: welcome::ViewerConfig,
+) -> Result<(), String> {
+    state.sauver_viewer_twitch(&login, config)
+}
+
+/// Supprime un viewer Twitch du registre + disque.
+#[tauri::command]
+fn welcome_supprimer_viewer_twitch(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    login: String,
+) -> Result<(), String> {
+    state.supprimer_viewer_twitch(&login)
+}
+
+/// Active/désactive la config globale des clips de bienvenue.
+#[tauri::command]
+fn welcome_config_globale_actif(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    actif: bool,
+) -> Result<(), String> {
+    state.set_config_globale_actif(actif)
+}
+
+/// Stop le clip courant + vide la queue.
+#[tauri::command]
+fn welcome_stop(state: tauri::State<'_, welcome::WelcomeState>) {
+    state.stop();
+}
+
+/// Skip le clip courant → passe au suivant.
+#[tauri::command]
+fn welcome_skip(state: tauri::State<'_, welcome::WelcomeState>) {
+    state.skip();
+}
+
+/// Retire un item spécifique de la queue (par id).
+#[tauri::command]
+fn welcome_retirer(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    id: String,
+) {
+    state.retirer(&id);
+}
+
+/// Remonte un item dans la queue (vers le début).
+#[tauri::command]
+fn welcome_remonter(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    id: String,
+) {
+    state.remonter(&id);
+}
+
+/// Descend un item dans la queue (vers la fin).
+#[tauri::command]
+fn welcome_descendre(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    id: String,
+) {
+    state.descendre(&id);
+}
+
+/// Vide la queue (sans stopper le clip courant).
+#[tauri::command]
+fn welcome_vider(state: tauri::State<'_, welcome::WelcomeState>) {
+    state.vider();
+}
+
+/// Reset le seen set (nouveau stream → tous les streamers redeviennent éligibles).
+#[tauri::command]
+fn welcome_reset_session(state: tauri::State<'_, welcome::WelcomeState>) {
+    state.reset_session();
+}
+
+/// Liste les clips récents d'un broadcaster Twitch (GET /clips Helix).
+/// `broadcaster_id` = user_id du streamer. `first` = nombre de clips (max 100).
+#[tauri::command]
+async fn welcome_lister_clips_streamer(
+    state: tauri::State<'_, TwitchState>,
+    broadcaster_id: String,
+    first: u32,
+) -> Result<Vec<twitch_clips::ClipInfo>, String> {
+    let access = state
+        .access
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Twitch non connecté")?;
+    twitch_clips::liste_clips(&broadcaster_id, &access, first).await
+}
+
+/// Résout l'URL MP4 signée d'un clip Twitch (slug) via GQL.
+#[tauri::command]
+async fn welcome_resoudre_mp4(slug: String) -> Result<String, String> {
+    twitch_clips::resoudre_mp4(&slug).await
+}
+
+/// Attribution automatique : pour chaque follower, fetch ses clips → clip aléatoire
+/// → résout MP4 → sauve config. Retourne { succes, echecs }.
+/// `followers` = liste de { login, user_id, display_name }.
+#[tauri::command]
+async fn welcome_attribuer_auto(
+    app: AppHandle,
+    state: tauri::State<'_, TwitchState>,
+    welcome_state: tauri::State<'_, welcome::WelcomeState>,
+    followers: Vec<serde_json::Value>,
+) -> Result<serde_json::Value, String> {
+    let access = state
+        .access
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Twitch non connecté")?;
+
+    let mut succes = 0u32;
+    let mut echecs = 0u32;
+
+    for f in &followers {
+        let user_id = f["user_id"].as_str().unwrap_or("");
+        let login = f["login"].as_str().unwrap_or("").to_lowercase();
+        let display_name = f["display_name"]
+            .as_str()
+            .or_else(|| f["login"].as_str())
+            .unwrap_or("")
+            .to_string();
+
+        if user_id.is_empty() || login.is_empty() {
+            echecs += 1;
+            continue;
+        }
+
+        match twitch_clips::clip_aleatoire_resolu(user_id, &access).await {
+            Ok(Some(clip)) => {
+                let config = welcome::ViewerConfig {
+                    actif: true,
+                    clip_id: clip.info.id.clone(),
+                    clip_titre: clip.info.title.clone(),
+                    clip_thumbnail: clip.info.thumbnail_url.clone(),
+                    clip_mp4_url: clip.mp4_url.clone(),
+                    clip_duree_ms: clip.duree_ms,
+                    message: format!("Bienvenue {} !", display_name),
+                    display_name: display_name.clone(),
+                    avatar: None,
+                };
+                if let Err(e) = welcome_state.sauver_viewer_twitch(&login, config) {
+                    eprintln!("[Welcome] attribuer_auto: erreur save {} : {}", login, e);
+                    echecs += 1;
+                } else {
+                    succes += 1;
+                }
+            }
+            Ok(None) => {
+                eprintln!("[Welcome] attribuer_auto: aucun clip pour {}", login);
+                echecs += 1;
+            }
+            Err(e) => {
+                eprintln!("[Welcome] attribuer_auto: erreur {} : {}", login, e);
+                echecs += 1;
+            }
+        }
+        // Émettre progression vers le dashboard (non-fatal).
+        let _ = app.emit(
+            "welcome:attribution-progress",
+            serde_json::json!({ "succes": succes, "echecs": echecs, "login": login }),
+        );
+    }
+
+    eprintln!("[Welcome] attribuer_auto terminé : {} succes, {} echecs", succes, echecs);
+    Ok(serde_json::json!({ "succes": succes, "echecs": echecs }))
+}
+
 // ===== Énumération PC + création capture depuis SOS (Lot 3) =====
 
 /// Énumère les caméras du PC (PnP/DirectShow, SANS OBS).
@@ -1551,6 +1745,11 @@ pub fn run() {
                 chat_tx: chat_tx.clone(),
             };
             app.manage(state.clone());
+
+            // État Welcome (clips de bienvenue : registre + seen + queue).
+            // Récupère chat_tx depuis ScenesState pour émettre vers :4321.
+            let welcome_state = welcome::WelcomeState::new(handle.clone(), chat_tx.clone());
+            app.manage(welcome_state.clone());
 
             // État Twitch (handle IRC + cancel + drapeau connecté).
             let twitch_state = TwitchState::new();
@@ -1762,7 +1961,22 @@ pub fn run() {
             tiktok_connecter,
             tiktok_deconnecter,
             tiktok_etat,
-            tiktok_username_courant
+            tiktok_username_courant,
+            welcome_etat,
+            welcome_registre_twitch,
+            welcome_sauver_viewer_twitch,
+            welcome_supprimer_viewer_twitch,
+            welcome_config_globale_actif,
+            welcome_stop,
+            welcome_skip,
+            welcome_retirer,
+            welcome_remonter,
+            welcome_descendre,
+            welcome_vider,
+            welcome_reset_session,
+            welcome_lister_clips_streamer,
+            welcome_resoudre_mp4,
+            welcome_attribuer_auto
         ])
         .run(tauri::generate_context!())
         .expect("erreur lors du lancement de StreamOS v0");
