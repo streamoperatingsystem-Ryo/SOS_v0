@@ -1,5 +1,6 @@
 mod api_deck;
 mod config;
+mod kick;
 mod obs;
 mod obs_trou;
 mod pc_enum;
@@ -9,6 +10,10 @@ mod server;
 mod twitch_auth;
 mod twitch_chat;
 mod twitch_helix;
+mod youtube_auth;
+mod youtube_chat;
+mod youtube_data;
+mod tiktok_chat;
 
 use scenes::{ScenesState, SceneIndex};
 use std::sync::Arc;
@@ -54,6 +59,11 @@ fn scene_ouvrir(app: AppHandle, state: tauri::State<ScenesState>, id: String) ->
 #[tauri::command]
 fn scene_renommer(app: AppHandle, id: String, nom: String) -> Result<(), String> {
     scenes::renommer(&app, &id, &nom)
+}
+
+#[tauri::command]
+fn scene_supprimer(app: AppHandle, state: tauri::State<ScenesState>, id: String) -> Result<(), String> {
+    scenes::supprimer(&app, &state, &id)
 }
 
 #[tauri::command]
@@ -359,6 +369,24 @@ fn chat_popout_fermer(app: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+// ===== Contrôle de l'app (topbar) =====
+
+/// Arrête l'application (quitte proprement).
+#[tauri::command]
+fn app_arreter(app: AppHandle) -> Result<(), String> {
+    eprintln!("[App] arrêt demandé");
+    app.exit(0);
+    Ok(())
+}
+
+/// Redémarre l'application (relance le processus puis quitte).
+#[tauri::command]
+fn app_redemarrer(app: AppHandle) -> Result<(), String> {
+    eprintln!("[App] redémarrage demandé");
+    app.restart();
+    Ok(())
+}
+
 // ===== Captures liées à la sauvegarde (Lot C) =====
 
 /// Synchronise les captures SOS-Trou-* d'OBS avec la scène chargée.
@@ -472,7 +500,7 @@ async fn obs_link_existing_source(
 
 // ===== Connexions réseau (Lot réseau) =====
 
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tauri::Emitter;
 use twitch_auth::{Cancel, new_cancel};
 
@@ -544,6 +572,181 @@ impl TwitchState {
     }
     /// Récupère un clone du cancel courant.
     fn cancel_clone(&self) -> Cancel {
+        self.cancel.lock().unwrap().clone()
+    }
+}
+
+/// État Kick partagé : drapeau connecté + slug du canal + handle de la tâche
+/// WS + jeton d'annulation (swappable). Le client WebSocket Pusher vit côté
+/// Rust (tokio-tungstenite avec Origin: https://kick.com — nécessaire car le
+/// webview est rejeté par CORS avec Origin: localhost:1420).
+/// Géré via tauri::State. Clonable (Arc internes).
+#[derive(Clone)]
+pub struct KickState {
+    pub connected: Arc<std::sync::Mutex<bool>>,
+    pub slug: Arc<std::sync::Mutex<Option<String>>>,
+    pub ws_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub cancel: Arc<std::sync::Mutex<Arc<AtomicBool>>>,
+}
+
+impl KickState {
+    fn new() -> Self {
+        Self {
+            connected: Arc::new(std::sync::Mutex::new(false)),
+            slug: Arc::new(std::sync::Mutex::new(None)),
+            ws_handle: Arc::new(std::sync::Mutex::new(None)),
+            cancel: Arc::new(std::sync::Mutex::new(Arc::new(AtomicBool::new(false)))),
+        }
+    }
+    fn set_connected(&self, v: bool) {
+        *self.connected.lock().unwrap() = v;
+    }
+    fn is_connected(&self) -> bool {
+        *self.connected.lock().unwrap()
+    }
+    fn set_slug(&self, v: Option<String>) {
+        *self.slug.lock().unwrap() = v;
+    }
+    /// Slug du canal Kick connecté (ex: "xqc"). Non utilisé —
+    /// réservé pour l'affichage futur.
+    #[allow(dead_code)]
+    fn slug_courant(&self) -> Option<String> {
+        self.slug.lock().unwrap().clone()
+    }
+    /// Arrête le WS en cours (si actif) : flag cancel + abort handle.
+    fn stop_ws(&self) {
+        {
+            let c = self.cancel.lock().unwrap();
+            c.store(true, Ordering::SeqCst);
+        }
+        let mut h = self.ws_handle.lock().unwrap();
+        if let Some(handle) = h.take() {
+            handle.abort();
+        }
+    }
+    /// Prépare un nouveau cancel frais pour la prochaine connexion WS.
+    fn reset_cancel(&self) {
+        *self.cancel.lock().unwrap() = Arc::new(AtomicBool::new(false));
+    }
+    /// Clone du cancel courant.
+    fn cancel_clone(&self) -> Arc<AtomicBool> {
+        self.cancel.lock().unwrap().clone()
+    }
+}
+
+/// État YouTube partagé : handle de la tâche chat polling + jeton d'annulation
+/// (swappable) + drapeau connecté + login/channel_id/access token du compte.
+/// Géré via tauri::State. Même pattern que TwitchState.
+#[derive(Clone)]
+pub struct YoutubeState {
+    pub chat_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub cancel: Arc<std::sync::Mutex<youtube_auth::Cancel>>,
+    pub connected: Arc<std::sync::Mutex<bool>>,
+    pub login: Arc<std::sync::Mutex<Option<String>>>,
+    pub channel_id: Arc<std::sync::Mutex<Option<String>>>,
+    pub access: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl YoutubeState {
+    fn new() -> Self {
+        Self {
+            chat_handle: Arc::new(std::sync::Mutex::new(None)),
+            cancel: Arc::new(std::sync::Mutex::new(youtube_auth::new_cancel())),
+            connected: Arc::new(std::sync::Mutex::new(false)),
+            login: Arc::new(std::sync::Mutex::new(None)),
+            channel_id: Arc::new(std::sync::Mutex::new(None)),
+            access: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+
+    fn set_connected(&self, v: bool) {
+        *self.connected.lock().unwrap() = v;
+    }
+    fn is_connected(&self) -> bool {
+        *self.connected.lock().unwrap()
+    }
+    fn set_login(&self, v: Option<String>) {
+        *self.login.lock().unwrap() = v;
+    }
+    fn login_courant(&self) -> Option<String> {
+        self.login.lock().unwrap().clone()
+    }
+    fn set_channel_id(&self, v: Option<String>) {
+        *self.channel_id.lock().unwrap() = v;
+    }
+    fn set_access(&self, v: Option<String>) {
+        *self.access.lock().unwrap() = v;
+    }
+    fn access_courant(&self) -> Option<String> {
+        self.access.lock().unwrap().clone()
+    }
+    /// Arrête le chat polling en cours (si actif) : flag cancel + abort handle.
+    fn stop_chat(&self) {
+        {
+            let c = self.cancel.lock().unwrap();
+            c.store(true, Ordering::SeqCst);
+        }
+        let mut h = self.chat_handle.lock().unwrap();
+        if let Some(handle) = h.take() {
+            handle.abort();
+        }
+    }
+    /// Prépare un nouveau cancel (fresh) pour un prochain démarrage/flow.
+    fn reset_cancel(&self) {
+        *self.cancel.lock().unwrap() = youtube_auth::new_cancel();
+    }
+    /// Récupère un clone du cancel courant.
+    fn cancel_clone(&self) -> youtube_auth::Cancel {
+        self.cancel.lock().unwrap().clone()
+    }
+}
+
+/// État TikTok partagé : handle de la tâche chat + jeton d'annulation
+/// (swappable) + drapeau connecté + username du streamer suivi.
+/// Géré via tauri::State. Même pattern que KickState.
+#[derive(Clone)]
+pub struct TiktokState {
+    pub chat_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
+    pub cancel: Arc<std::sync::Mutex<Arc<AtomicBool>>>,
+    pub connected: Arc<std::sync::Mutex<bool>>,
+    pub username: Arc<std::sync::Mutex<Option<String>>>,
+}
+
+impl TiktokState {
+    fn new() -> Self {
+        Self {
+            chat_handle: Arc::new(std::sync::Mutex::new(None)),
+            cancel: Arc::new(std::sync::Mutex::new(Arc::new(AtomicBool::new(false)))),
+            connected: Arc::new(std::sync::Mutex::new(false)),
+            username: Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+    fn set_connected(&self, v: bool) {
+        *self.connected.lock().unwrap() = v;
+    }
+    fn is_connected(&self) -> bool {
+        *self.connected.lock().unwrap()
+    }
+    fn set_username(&self, v: Option<String>) {
+        *self.username.lock().unwrap() = v;
+    }
+    /// Arrête le chat en cours (si actif) : flag cancel + abort handle.
+    fn stop_chat(&self) {
+        {
+            let c = self.cancel.lock().unwrap();
+            c.store(true, Ordering::SeqCst);
+        }
+        let mut h = self.chat_handle.lock().unwrap();
+        if let Some(handle) = h.take() {
+            handle.abort();
+        }
+    }
+    /// Prépare un nouveau cancel frais pour la prochaine connexion.
+    fn reset_cancel(&self) {
+        *self.cancel.lock().unwrap() = Arc::new(AtomicBool::new(false));
+    }
+    /// Clone du cancel courant.
+    fn cancel_clone(&self) -> Arc<AtomicBool> {
         self.cancel.lock().unwrap().clone()
     }
 }
@@ -836,6 +1039,429 @@ async fn twitch_broadcaster(
         .map_err(helix_err_to_string)
 }
 
+// ===== Kick (lecture seule, WS côté Rust) =====
+
+/// Connecte au chat Kick : résout le slug → chatroom ID, fetch un viewer token,
+/// ouvre le WebSocket Pusher (côté Rust avec Origin: https://kick.com), subscribe
+/// au channel chatrooms.<id>.v2. Le WS tourne en arrière-plan (tokio::spawn).
+/// emit `kick:connecte` quand subscribed, `kick:deconnecte` sur close/error.
+#[tauri::command]
+async fn kick_connecter(
+    app: AppHandle,
+    state: tauri::State<'_, KickState>,
+    slug: String,
+) -> Result<(), String> {
+    if state.is_connected() {
+        return Ok(()); // déjà connecté
+    }
+
+    // Arrêter un éventuel WS précédent.
+    state.stop_ws();
+    state.reset_cancel();
+
+    // 1. Résoudre slug → chatroom ID
+    eprintln!("[Kick] connecter: resolve slug={}", slug);
+    let chatroom_id = kick::resolve_chatroom(&slug).await?;
+
+    // 2. Démarrer le WS Pusher cloud en arrière-plan
+    //    (pas besoin de viewer token ni cookies — le cloud Pusher public
+    //    n'a pas de protection Cloudflare)
+    let cancel = state.cancel_clone();
+    let handle = kick::run_ws(app.clone(), chatroom_id, cancel);
+
+    {
+        let mut h = state.ws_handle.lock().unwrap();
+        *h = Some(handle);
+    }
+    state.set_slug(Some(slug.clone()));
+    // Persister le slug pour l'auto-resume au prochain boot.
+    if let Err(e) = crate::config::sauver_kick_slug(&app, &slug) {
+        eprintln!("[Kick] WARN sauver slug: {}", e);
+    }
+    // set_connected(true) se fait dans run_ws quand subscription_succeeded.
+    Ok(())
+}
+
+/// Déconnecte Kick : arrête le WS (cancel + abort) + emit `kick:deconnecte`.
+#[tauri::command]
+fn kick_deconnecter(
+    app: AppHandle,
+    state: tauri::State<'_, KickState>,
+) -> Result<(), String> {
+    state.stop_ws();
+    state.set_connected(false);
+    state.set_slug(None);
+    // Effacer le slug persisté (déconnexion volontaire).
+    if let Err(e) = crate::config::effacer_kick_slug(&app) {
+        eprintln!("[Kick] WARN effacer slug: {}", e);
+    }
+    let _ = app.emit("kick:deconnecte", ());
+    eprintln!("[Kick] déconnecté");
+    Ok(())
+}
+
+/// Retourne l'état de connexion Kick (true/false).
+#[tauri::command]
+fn kick_etat(state: tauri::State<'_, KickState>) -> bool {
+    state.is_connected()
+}
+
+/// Retourne le slug Kick sauvegardé (pour pré-remplir l'input).
+/// None si pas de slug sauvegardé.
+#[tauri::command]
+fn kick_slug_courant(app: AppHandle) -> Option<String> {
+    crate::config::lire_kick_slug(&app).ok().flatten()
+}
+
+// ===== YouTube (chat polling + communauté Data API v3) =====
+
+/// Connecte YouTube : si token valide en coffre → valider + resolve channel +
+/// start chat polling + emit `youtube:connecte`. Sinon → Device Code Flow :
+/// emit `youtube:device` (user_code + uri) → spawn poll cancellable → succès :
+/// save + resolve channel + start chat + emit `youtube:connecte`.
+#[tauri::command]
+async fn youtube_connecter(
+    app: AppHandle,
+    state: tauri::State<'_, YoutubeState>,
+) -> Result<(), String> {
+    if state.is_connected() {
+        return Ok(()); // déjà connecté
+    }
+
+    // 1. Token en coffre ? → valider (refresh si 401) + chat direct.
+    if let Ok(Some(tokens)) = youtube_auth::lire_tokens() {
+        return connect_with_tokens_youtube(&app, state.inner(), tokens).await;
+    }
+
+    // 2. Pas de token → Device Code Flow.
+    let flow = match youtube_auth::demarrer_device_flow().await {
+        Ok(f) => f,
+        Err(e) => {
+            let _ = app.emit("youtube:erreur", &e);
+            return Err(e);
+        }
+    };
+
+    // Préparer un cancel frais pour ce flow.
+    state.reset_cancel();
+    let cancel = state.cancel_clone();
+
+    // Émettre les infos device vers le frontend (modal).
+    let device_info = serde_json::json!({
+        "user_code": flow.user_code,
+        "verification_uri": flow.verification_url,
+        "expires_in": flow.expires_in,
+    });
+    let _ = app.emit("youtube:device", &device_info);
+
+    // Poll en arrière-plan (cancellable). Sur succès → save + chat + connecte.
+    let app2 = app.clone();
+    let state2 = state.inner().clone();
+    let device_code = flow.device_code;
+    let interval = flow.interval;
+    let expires_in = flow.expires_in;
+    tauri::async_runtime::spawn(async move {
+        match youtube_auth::poll_token(device_code, interval, expires_in, cancel).await {
+            Ok(mut tokens) => {
+                // Resolve channel_id + login via Data API.
+                match youtube_data::resolve_channel(&tokens.access).await {
+                    Ok((channel_id, login)) => {
+                        tokens.channel_id = channel_id;
+                        tokens.login = login;
+                    }
+                    Err(e) => {
+                        eprintln!("[YouTube] WARN resolve channel échoué: {}", e);
+                        // Non-fatal : on continue sans channel_id/login.
+                    }
+                }
+                if let Err(e) = youtube_auth::sauver_tokens(&tokens) {
+                    eprintln!("[YouTube] ERR coffre save: {}", e);
+                }
+                let _ = connect_with_tokens_youtube(&app2, &state2, tokens).await;
+            }
+            Err(e) => {
+                eprintln!("[YouTube] ERR poll token: {}", e);
+                let _ = app2.emit("youtube:erreur", &e);
+            }
+        }
+    });
+
+    Ok(())
+}
+
+/// Helper : valide/refresh les tokens, resolve channel, démarre chat polling,
+/// emit `youtube:connecte`.
+async fn connect_with_tokens_youtube(
+    app: &AppHandle,
+    state: &YoutubeState,
+    mut tokens: youtube_auth::Tokens,
+) -> Result<(), String> {
+    // Valider le token via tokeninfo (non-fatal si échec).
+    if tokens.user_id.is_empty() {
+        if let Ok(uid) = youtube_auth::valider_token(&tokens.access).await {
+            tokens.user_id = uid;
+        }
+    }
+
+    // Resolve channel_id + login si manquants.
+    if tokens.channel_id.is_empty() || tokens.login.is_empty() {
+        match youtube_data::resolve_channel(&tokens.access).await {
+            Ok((channel_id, login)) => {
+                tokens.channel_id = channel_id;
+                tokens.login = login;
+                // Re-sauver avec les infos complètes.
+                if let Err(e) = youtube_auth::sauver_tokens(&tokens) {
+                    eprintln!("[YouTube] WARN coffre save (resolve): {}", e);
+                }
+            }
+            Err(e) => {
+                eprintln!("[YouTube] WARN resolve channel: {}", e);
+                // Non-fatal : on continue sans channel_id/login.
+            }
+        }
+    }
+
+    // NE PAS démarrer le chat polling automatiquement — l'utilisateur doit
+    // cliquer sur "Chat live ON" manuellement (bouton dans la Toolbar).
+    // Le chat polling consomme de l'API quota YouTube, on évite le polling
+    // inutile quand l'utilisateur ne stream pas.
+    state.set_connected(true);
+    state.set_login(Some(tokens.login.clone()));
+    state.set_channel_id(Some(tokens.channel_id.clone()));
+    state.set_access(Some(tokens.access.clone()));
+    let _ = app.emit("youtube:connecte", &tokens.login);
+    eprintln!("[YouTube] connecté en tant que {} (chat OFF par défaut)", tokens.login);
+    Ok(())
+}
+
+/// Démarre manuellement le chat polling YouTube Live. Appelé par le bouton
+/// "Chat live ON" dans la Toolbar. Si pas de live actif → emit youtube:pas-de-live
+/// et la tâche s'arrête immédiatement (l'utilisateur réessaiera quand il stream).
+#[tauri::command]
+fn youtube_demarrer_chat(
+    app: AppHandle,
+    state: tauri::State<'_, YoutubeState>,
+) -> Result<(), String> {
+    if !state.is_connected() {
+        return Err("YouTube non connecté".to_string());
+    }
+    // Arrêter un éventuel chat précédent.
+    state.stop_chat();
+    state.reset_cancel();
+    let cancel = state.cancel_clone();
+    let access = state.access_courant().ok_or("Pas de token access")?;
+    let channel_id = state
+        .login
+        .lock()
+        .unwrap()
+        .as_ref()
+        .and_then(|_| state.channel_id.lock().unwrap().clone())
+        .ok_or("Pas de channel_id")?;
+    let chat_tx = app
+        .try_state::<ScenesState>()
+        .ok_or("ScenesState absent")?
+        .chat_tx
+        .clone();
+    let handle = youtube_chat::demarrer(
+        app.clone(),
+        chat_tx,
+        access,
+        channel_id,
+        cancel,
+    );
+    {
+        let mut h = state.chat_handle.lock().unwrap();
+        *h = Some(handle);
+    }
+    eprintln!("[YouTube] chat polling démarré manuellement");
+    Ok(())
+}
+
+/// Arrête le chat polling YouTube Live sans déconnecter le compte
+/// (bouton "Chat live OFF"). Le token et les infos chaîne restent en mémoire.
+#[tauri::command]
+fn youtube_arreter_chat(
+    app: AppHandle,
+    state: tauri::State<'_, YoutubeState>,
+) -> Result<(), String> {
+    state.stop_chat();
+    state.reset_cancel();
+    let _ = app.emit("youtube:pas-de-live", ());
+    eprintln!("[YouTube] chat polling arrêté manuellement");
+    Ok(())
+}
+
+/// Annule le Device Code Flow YouTube en cours.
+#[tauri::command]
+fn youtube_annuler_device_flow(state: tauri::State<'_, YoutubeState>) -> Result<(), String> {
+    let c = state.cancel.lock().unwrap();
+    c.store(true, Ordering::SeqCst);
+    Ok(())
+}
+
+/// Déconnecte YouTube : arrête chat + révoque token (best-effort) + efface coffre
+/// + emit `youtube:deconnecte`.
+#[tauri::command]
+async fn youtube_deconnecter(
+    app: AppHandle,
+    state: tauri::State<'_, YoutubeState>,
+) -> Result<(), String> {
+    state.stop_chat();
+    state.set_connected(false);
+    state.set_login(None);
+    state.set_channel_id(None);
+    state.set_access(None);
+    // Revoke best-effort.
+    if let Ok(Some(tokens)) = youtube_auth::lire_tokens() {
+        if let Err(e) = youtube_auth::revoke_token(&tokens.access).await {
+            eprintln!("[YouTube] WARN revoke échoué (on efface quand même): {}", e);
+        }
+    }
+    let _ = youtube_auth::effacer_tokens();
+    let _ = app.emit("youtube:deconnecte", ());
+    eprintln!("[YouTube] déconnecté");
+    Ok(())
+}
+
+/// Retourne l'état de connexion YouTube (true/false).
+#[tauri::command]
+fn youtube_etat(state: tauri::State<'_, YoutubeState>) -> bool {
+    state.is_connected()
+}
+
+/// Retourne le login de la chaîne YouTube connectée (ou null si déconnecté).
+#[tauri::command]
+fn youtube_login_courant(state: tauri::State<'_, YoutubeState>) -> Option<String> {
+    state.login_courant()
+}
+
+/// Channel info : GET /channels?part=snippet,statistics&mine=true.
+#[tauri::command]
+async fn youtube_communaute_channel(
+    state: tauri::State<'_, YoutubeState>,
+) -> Result<youtube_data::ChannelInfo, String> {
+    let access = state
+        .access_courant()
+        .ok_or("YouTube non connecté")?;
+    youtube_data::channel_info(&access)
+        .await
+        .map_err(|e| match e {
+            youtube_data::YoutubeError::Deconnecte => "YouTube non connecté".to_string(),
+            youtube_data::YoutubeError::Autre(s) => s,
+        })
+}
+
+/// Members : GET /members?part=snippet.
+#[tauri::command]
+async fn youtube_communaute_members(
+    state: tauri::State<'_, YoutubeState>,
+) -> Result<youtube_data::MembersResp, String> {
+    let access = state
+        .access_courant()
+        .ok_or("YouTube non connecté")?;
+    youtube_data::members(&access)
+        .await
+        .map_err(|e| match e {
+            youtube_data::YoutubeError::Deconnecte => "YouTube non connecté".to_string(),
+            youtube_data::YoutubeError::Autre(s) => s,
+        })
+}
+
+/// Live viewers : search?channelId=...&eventType=live → /videos → concurrentViewers.
+#[tauri::command]
+async fn youtube_communaute_viewers(
+    state: tauri::State<'_, YoutubeState>,
+) -> Result<Option<u32>, String> {
+    let access = state
+        .access_courant()
+        .ok_or("YouTube non connecté")?;
+    let channel_id = state
+        .channel_id
+        .lock().unwrap()
+        .clone()
+        .ok_or("YouTube non connecté")?;
+    youtube_data::live_viewers(&access, &channel_id)
+        .await
+        .map_err(|e| match e {
+            youtube_data::YoutubeError::Deconnecte => "YouTube non connecté".to_string(),
+            youtube_data::YoutubeError::Autre(s) => s,
+        })
+}
+
+// ===== TikTok (chat live via PirateTok — reverse engineering Webcast) =====
+
+/// Connecte au chat TikTok Live d'un streamer (username sans @).
+/// Démarre le WebSocket PirateTok en arrière-plan (tokio::spawn).
+/// emit `tiktok:connecte` quand connecté, `tiktok:deconnecte` sur close/error,
+/// `chat:message` pour chaque message chat, `tiktok:viewers` pour le count.
+#[tauri::command]
+async fn tiktok_connecter(
+    app: AppHandle,
+    state: tauri::State<'_, TiktokState>,
+    username: String,
+) -> Result<(), String> {
+    if state.is_connected() {
+        return Ok(()); // déjà connecté
+    }
+
+    // Arrêter un éventuel chat précédent.
+    state.stop_chat();
+    state.reset_cancel();
+
+    // Récupérer le chat_tx (broadcast vers :4321).
+    let chat_tx = app
+        .try_state::<ScenesState>()
+        .map(|s| s.chat_tx.clone())
+        .ok_or("ScenesState non initialisé")?;
+
+    // Démarrer le WebSocket PirateTok en arrière-plan.
+    let cancel = state.cancel_clone();
+    let handle = tiktok_chat::demarrer(app.clone(), chat_tx, username.clone(), cancel);
+
+    {
+        let mut h = state.chat_handle.lock().unwrap();
+        *h = Some(handle);
+    }
+    state.set_username(Some(username.clone()));
+    // Persister le username pour l'auto-resume au prochain boot.
+    if let Err(e) = crate::config::sauver_tiktok_username(&app, &username) {
+        eprintln!("[TikTok] WARN sauver username: {}", e);
+    }
+    // set_connected(true) se fait via l'event tiktok:connecte (frontend listener).
+    // Mais on le set aussi ici car l'event arrive async.
+    Ok(())
+}
+
+/// Déconnecte TikTok : arrête le chat (cancel + abort) + emit `tiktok:deconnecte`.
+#[tauri::command]
+fn tiktok_deconnecter(
+    app: AppHandle,
+    state: tauri::State<'_, TiktokState>,
+) -> Result<(), String> {
+    state.stop_chat();
+    state.set_connected(false);
+    state.set_username(None);
+    if let Err(e) = crate::config::effacer_tiktok_username(&app) {
+        eprintln!("[TikTok] WARN effacer username: {}", e);
+    }
+    let _ = app.emit("tiktok:deconnecte", ());
+    eprintln!("[TikTok] déconnecté");
+    Ok(())
+}
+
+/// Retourne l'état de connexion TikTok (true/false).
+#[tauri::command]
+fn tiktok_etat(state: tauri::State<'_, TiktokState>) -> bool {
+    state.is_connected()
+}
+
+/// Retourne le username TikTok sauvegardé (pour pré-remplir l'input).
+/// None si pas de username sauvegardé.
+#[tauri::command]
+fn tiktok_username_courant(app: AppHandle) -> Option<String> {
+    crate::config::lire_tiktok_username(&app).ok().flatten()
+}
+
 // ===== Énumération PC + création capture depuis SOS (Lot 3) =====
 
 /// Énumère les caméras du PC (PnP/DirectShow, SANS OBS).
@@ -930,6 +1556,18 @@ pub fn run() {
             let twitch_state = TwitchState::new();
             app.manage(twitch_state.clone());
 
+            // État Kick (drapeau connecté + slug canal). Le WS est côté frontend (LOT 2).
+            let kick_state = KickState::new();
+            app.manage(kick_state.clone());
+
+            // État YouTube (handle chat polling + cancel + drapeau connecté + login).
+            let youtube_state = YoutubeState::new();
+            app.manage(youtube_state.clone());
+
+            // État TikTok (handle chat + cancel + drapeau connecté + username).
+            let tiktok_state = TiktokState::new();
+            app.manage(tiktok_state.clone());
+
             // Auto-resume : si token valide en coffre → IRC + point vert.
             // Pas de modal. Si token absent/invalide → reste déconnecté.
             let resume_app = handle.clone();
@@ -949,6 +1587,102 @@ pub fn run() {
                     }
                     Err(e) => {
                         eprintln!("[Twitch] ERR lecture coffre: {}", e);
+                    }
+                }
+            });
+
+            // Auto-resume Kick : si slug sauvegardé → reconnecter automatiquement.
+            // Non-fatal si échec (slug invalide, réseau) — l'utilisateur reconnectera.
+            let kick_app = handle.clone();
+            let kick_state_clone = kick_state.clone();
+            tauri::async_runtime::spawn(async move {
+                match crate::config::lire_kick_slug(&kick_app) {
+                    Ok(Some(slug)) => {
+                        eprintln!("[Kick] auto-resume: slug trouvé ({})", slug);
+                        match kick::resolve_chatroom(&slug).await {
+                            Ok(chatroom_id) => {
+                                kick_state_clone.reset_cancel();
+                                let cancel = kick_state_clone.cancel_clone();
+                                let handle = kick::run_ws(kick_app.clone(), chatroom_id, cancel);
+                                {
+                                    let mut h = kick_state_clone.ws_handle.lock().unwrap();
+                                    *h = Some(handle);
+                                }
+                                kick_state_clone.set_slug(Some(slug));
+                                // set_connected(true) se fait dans run_ws quand subscribed.
+                            }
+                            Err(e) => {
+                                eprintln!("[Kick] ERR auto-resume resolve: {}", e);
+                            }
+                        }
+                    }
+                    Ok(None) => {
+                        eprintln!("[Kick] aucun slug sauvegardé (déconnecté)");
+                    }
+                    Err(e) => {
+                        eprintln!("[Kick] ERR lecture slug: {}", e);
+                    }
+                }
+            });
+
+            // Auto-resume YouTube : si token valide en coffre → valider + chat polling.
+            // Non-fatal si échec (token expiré, réseau) — l'utilisateur reconnectera.
+            let yt_app = handle.clone();
+            let yt_state = youtube_state.clone();
+            tauri::async_runtime::spawn(async move {
+                match youtube_auth::lire_tokens() {
+                    Ok(Some(tokens)) => {
+                        eprintln!("[YouTube] auto-resume: token trouvé en coffre...");
+                        if let Err(e) =
+                            connect_with_tokens_youtube(&yt_app, &yt_state, tokens).await
+                        {
+                            eprintln!("[YouTube] ERR auto-resume échoué: {}", e);
+                        }
+                    }
+                    Ok(None) => {
+                        eprintln!("[YouTube] aucun token en coffre (déconnecté)");
+                    }
+                    Err(e) => {
+                        eprintln!("[YouTube] ERR lecture coffre: {}", e);
+                    }
+                }
+            });
+
+            // Auto-resume TikTok : si username sauvegardé → reconnecter le chat.
+            // Non-fatal si échec (streamer hors-ligne, réseau) — l'utilisateur reconnectera.
+            let tt_app = handle.clone();
+            let tt_state = tiktok_state.clone();
+            tauri::async_runtime::spawn(async move {
+                match crate::config::lire_tiktok_username(&tt_app) {
+                    Ok(Some(username)) => {
+                        eprintln!("[TikTok] auto-resume: username trouvé ({})", username);
+                        let chat_tx = tt_app
+                            .try_state::<ScenesState>()
+                            .map(|s| s.chat_tx.clone());
+                        if let Some(chat_tx) = chat_tx {
+                            tt_state.stop_chat();
+                            tt_state.reset_cancel();
+                            let cancel = tt_state.cancel_clone();
+                            let handle = tiktok_chat::demarrer(
+                                tt_app.clone(),
+                                chat_tx,
+                                username.clone(),
+                                cancel,
+                            );
+                            {
+                                let mut h = tt_state.chat_handle.lock().unwrap();
+                                *h = Some(handle);
+                            }
+                            tt_state.set_username(Some(username));
+                        } else {
+                            eprintln!("[TikTok] ERR auto-resume: ScenesState non trouvé");
+                        }
+                    }
+                    Ok(None) => {
+                        eprintln!("[TikTok] aucun username sauvegardé (déconnecté)");
+                    }
+                    Err(e) => {
+                        eprintln!("[TikTok] ERR lecture username: {}", e);
                     }
                 }
             });
@@ -980,11 +1714,14 @@ pub fn run() {
             obs_refresh_diffusion,
             chat_popout_toggle,
             chat_popout_fermer,
+            app_arreter,
+            app_redemarrer,
             scene_sync_captures,
             scenes_lister,
             scene_creer,
             scene_ouvrir,
             scene_renommer,
+            scene_supprimer,
             scene_courante,
             scene_exporter,
             scene_importer,
@@ -1007,7 +1744,25 @@ pub fn run() {
             twitch_communaute_followers,
             twitch_communaute_subs,
             twitch_communaute_viewers,
-            twitch_broadcaster
+            twitch_broadcaster,
+            kick_connecter,
+            kick_deconnecter,
+            kick_etat,
+            kick_slug_courant,
+            youtube_connecter,
+            youtube_deconnecter,
+            youtube_etat,
+            youtube_login_courant,
+            youtube_annuler_device_flow,
+            youtube_demarrer_chat,
+            youtube_arreter_chat,
+            youtube_communaute_channel,
+            youtube_communaute_members,
+            youtube_communaute_viewers,
+            tiktok_connecter,
+            tiktok_deconnecter,
+            tiktok_etat,
+            tiktok_username_courant
         ])
         .run(tauri::generate_context!())
         .expect("erreur lors du lancement de StreamOS v0");

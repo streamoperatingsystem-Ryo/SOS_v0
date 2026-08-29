@@ -1,35 +1,43 @@
 <script lang="ts">
-  // Modal Device Code Flow Twitch. Affiche user_code + bouton ouvrir lien +
-  // bouton Annuler. Se ferme sur twitch:connecte (géré par le store qui clear
-  // twitchDevice) ou sur Annuler (annulerDeviceFlow).
+  // Modal Device Code Flow (Twitch OU YouTube). Affiche user_code + bouton ouvrir lien +
+  // bouton Annuler. Se ferme sur twitch:connecte/youtube:connecte (géré par le store qui clear
+  // twitchDevice/youtubeDevice) ou sur Annuler (annulerDeviceFlow/annulerYoutubeDeviceFlow).
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { twitchDevice, annulerDeviceFlow } from "../stores/chat";
+  import { youtubeDevice, youtubeErreur } from "../stores/chat";
+  import { annulerYoutubeDeviceFlow } from "../stores/youtube";
 
   let device = $derived($twitchDevice);
+  let ytDevice = $derived($youtubeDevice);
 
   async function onOuvrirLien() {
-    if (!device) return;
+    const uri = device?.verification_uri || ytDevice?.verification_uri;
+    if (!uri) return;
     try {
-      await openUrl(device.verification_uri);
+      await openUrl(uri);
     } catch (e) {
       console.error("openUrl:", e);
     }
   }
 
   async function onAnnuler() {
-    await annulerDeviceFlow();
+    if (device) {
+      await annulerDeviceFlow();
+    } else if (ytDevice) {
+      await annulerYoutubeDeviceFlow();
+    }
   }
 </script>
 
-{#if device}
+{#if device || ytDevice}
   <div class="overlay" role="dialog" aria-modal="true">
     <div class="modal">
-      <h2>Connexion Twitch</h2>
+      <h2>Connexion {device ? "Twitch" : "YouTube"}</h2>
       <p class="hint">
         Ouvre le lien, entre ce code, puis autorise l'accès.
       </p>
       <div class="code-box">
-        <span class="code">{device.user_code}</span>
+        <span class="code">{device?.user_code || ytDevice?.user_code}</span>
       </div>
       <button class="action" onclick={onOuvrirLien}>Ouvrir le lien</button>
       <button class="action" onclick={onAnnuler}>Annuler</button>

@@ -35,10 +35,36 @@ export interface BroadcasterInfo {
   description: string;
 }
 
+// ===== YouTube =====
+
+export interface YoutubeChannelInfo {
+  display_name: string;
+  profile_image_url: string;
+  subscriber_count: number;
+  view_count: number;
+  video_count: number;
+  description: string;
+}
+
+export interface YoutubeMemberEntry {
+  display_name: string;
+  memberships_level: string;
+}
+
+export interface YoutubeMembersResp {
+  total: number;
+  liste: YoutubeMemberEntry[];
+}
+
 export const followers = writable<FollowersResp | null>(null);
 export const subs = writable<SubsResp | null>(null);
 export const viewers = writable<number | null>(null);
 export const broadcaster = writable<BroadcasterInfo | null>(null);
+
+// ===== YouTube stores =====
+export const youtubeChannel = writable<YoutubeChannelInfo | null>(null);
+export const youtubeMembers = writable<YoutubeMembersResp | null>(null);
+export const youtubeViewers = writable<number | null>(null);
 
 /// Erreur communauté. "need_reauth" = 403 (scopes manquants). null = OK.
 export const communauteErreur = writable<string | null>(null);
@@ -114,6 +140,7 @@ export async function chargerBroadcaster(): Promise<void> {
 }
 
 /// Charge tout en parallèle (Promise.allSettled). Agrège les erreurs.
+/// Charge Twitch ET YouTube si connectés.
 export async function chargerCommunaute(): Promise<void> {
   console.log("[Communauté] chargerCommunaute() appelé");
   await Promise.allSettled([
@@ -125,6 +152,53 @@ export async function chargerCommunaute(): Promise<void> {
   console.log("[Communauté] chargerCommunaute() terminé");
 }
 
+// ===== YouTube =====
+
+/// Charge les infos chaîne YouTube (display_name, avatar, stats).
+export async function chargerYoutubeChannel(): Promise<void> {
+  console.log("[Communauté] chargerYoutubeChannel()...");
+  try {
+    const resp = await tauri.youtubeCommunauteChannel();
+    youtubeChannel.set(resp);
+    console.log("[Communauté] YouTube channel OK:", resp.display_name);
+  } catch (e) {
+    console.error("[Communauté] YouTube channel ERR:", String(e));
+  }
+}
+
+/// Charge les members YouTube.
+export async function chargerYoutubeMembers(): Promise<void> {
+  console.log("[Communauté] chargerYoutubeMembers()...");
+  try {
+    const resp = await tauri.youtubeCommunauteMembers();
+    youtubeMembers.set(resp);
+    console.log("[Communauté] YouTube members OK:", resp.total);
+  } catch (e) {
+    console.error("[Communauté] YouTube members ERR:", String(e));
+  }
+}
+
+/// Charge les live viewers YouTube (null si pas live).
+export async function chargerYoutubeViewers(): Promise<void> {
+  console.log("[Communauté] chargerYoutubeViewers()...");
+  try {
+    const resp = await tauri.youtubeCommunauteViewers();
+    youtubeViewers.set(resp);
+    console.log("[Communauté] YouTube viewers OK:", resp);
+  } catch (e) {
+    console.error("[Communauté] YouTube viewers ERR:", String(e));
+  }
+}
+
+/// Charge toute la communauté YouTube en parallèle.
+export async function chargerCommunauteYoutube(): Promise<void> {
+  await Promise.allSettled([
+    chargerYoutubeChannel(),
+    chargerYoutubeMembers(),
+    chargerYoutubeViewers(),
+  ]);
+}
+
 /// Remet à zéro (après déconnexion).
 export function resetCommunaute(): void {
   followers.set(null);
@@ -132,4 +206,8 @@ export function resetCommunaute(): void {
   viewers.set(null);
   broadcaster.set(null);
   communauteErreur.set(null);
+  // YouTube
+  youtubeChannel.set(null);
+  youtubeMembers.set(null);
+  youtubeViewers.set(null);
 }

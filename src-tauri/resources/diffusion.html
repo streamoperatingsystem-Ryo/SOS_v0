@@ -51,6 +51,21 @@
         display: block;
         transform-origin: center center;
       }
+      /* Overlay cadre SVG widget : position absolute, inset 0, au-dessus du
+         média, pointer-events:none pour ne pas bloquer. */
+      .cadre-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 5;
+      }
+      /* Overlay cadre app : bord extérieur du canvas, au-dessus des widgets. */
+      #cadre-app-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 100;
+      }
       #bg {
         position: absolute;
         inset: 0;
@@ -130,6 +145,21 @@
         align-self: center;
         opacity: 0.85;
       }
+      .chat-msg .plat-badge {
+        flex-shrink: 0;
+        align-self: center;
+        font-size: 0.55em;
+        font-weight: 700;
+        padding: 0 0.2rem;
+        border-radius: 0.15rem;
+        color: #fff;
+        line-height: 1.4;
+        margin-right: 0.1rem;
+      }
+      .chat-msg .plat-badge.twitch { background: #9146ff; }
+      .chat-msg .plat-badge.kick { background: #53fc18; color: #000; }
+      .chat-msg .plat-badge.youtube { background: #ff0000; }
+      .chat-msg .plat-badge.tiktok { background: #000; }
       .chat-msg .pseudo {
         font-weight: 600;
         flex-shrink: 0;
@@ -198,9 +228,23 @@
         + '<path fill="currentColor" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/>'
         + '<rect x="9" y="4" width="1" height="3"/><rect x="6" y="4" width="1" height="3"/></svg>';
 
+      // Logo Kick SVG (K vert, marque Kick).
+      const KICK_LOGO_SVG = '<svg class="logo" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">'
+        + '<path fill="#53fc18" d="M5 2h4v6h2V6h2V4h2V2h4v6h-2v2h-2v4h2v2h2v6h-4v-2h-2v-2h-2v4H5z"/></svg>';
+
+      // Retourne le logo/badge HTML selon la plateforme du message.
+      // Twitch + Kick = SVG logo ; autres = badge texte coloré.
+      function logoPlateforme(p) {
+        if (p === "twitch") return TWITCH_LOGO_SVG;
+        if (p === "kick") return KICK_LOGO_SVG;
+        if (p === "youtube") return '<span class="plat-badge youtube">YT</span>';
+        if (p === "tiktok") return '<span class="plat-badge tiktok">TT</span>';
+        return "";
+      }
+
       // Rend le contenu HTML d'un message chat (avatar + badges + logo + pseudo + texte).
       function renderChatMsg(m, i) {
-        var logo = m.plateforme === "twitch" ? TWITCH_LOGO_SVG : "";
+        var logo = logoPlateforme(m.plateforme);
         var avatar = m.avatar
           ? '<img class="avatar" src="' + escapeHtml(m.avatar) + '" width="24" height="24" alt="" referrerpolicy="no-referrer">'
           : "";
@@ -259,7 +303,7 @@
           var m = msgs[i];
           var div = document.createElement("div");
           div.className = "chat-msg" + (i % 2 === 0 ? " pair" : "");
-          var logo = m.plateforme === "twitch" ? TWITCH_LOGO_SVG : "";
+          var logo = logoPlateforme(m.plateforme);
           var avatar = m.avatar
             ? '<img class="avatar" src="' + escapeHtml(m.avatar) + '" width="24" height="24" alt="" referrerpolicy="no-referrer">'
             : "";
@@ -619,6 +663,9 @@
         // Peindre le fond (image : une fois ; vidéo : rAF loop géré dans renderBg).
         peindreFond(scene);
 
+        // Cadre de l'application (bord canvas) — un overlay global sur #stage.
+        applyCadreApp(scene);
+
         // Log trous (une fois par snapshot — aide debug).
         let nTrous = 0;
         const rects = [];
@@ -713,6 +760,8 @@
               applyMediaStyle(entry.mediaEl, w);
               applyMediaState(entry, w);
             }
+            // Cadre widget : clip-path + overlay SVG (recréé seulement si changé).
+            applyCadreWidget(entry.el, entry, w, scene.cadreWidget);
           } else {
             // ===== CREATE : nouveau widget =====
             var wrapEl = document.createElement("div");
@@ -729,9 +778,11 @@
             }
             wrapEl.appendChild(el);
             stageEl.appendChild(wrapEl);
-            var newEntry = { el: el, wrapEl: wrapEl, mediaEl: mediaEl, mediaKey: key, kind: kind, mediaTime: w.mediaTime || 0 };
+            var newEntry = { el: el, wrapEl: wrapEl, mediaEl: mediaEl, mediaKey: key, kind: kind, mediaTime: w.mediaTime || 0, cadreOverlayEl: null, cadreKey: "" };
             widgetMap.set(w.id, newEntry);
             applyMediaState(newEntry, w);
+            // Cadre widget : clip-path + overlay SVG.
+            applyCadreWidget(el, newEntry, w, scene.cadreWidget);
           }
         }
 
@@ -742,6 +793,423 @@
             widgetMap.delete(id);
           }
         }
+      }
+
+      // ===== Cadres SVG (portage vanilla JS — pas de build pour diffusion) =====
+
+      function clampStrokeWidth(sw) {
+        var n = Number(sw);
+        return Number.isFinite(n) ? Math.max(1, Math.min(20, n)) : 4;
+      }
+
+      // --- Cadre inline (arrondis / carre) ---
+      function renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre) {
+        var c = /^#[0-9a-f]{6}$/i.test(couleur || "") ? couleur : "#ffffff";
+        var cFin = /^#[0-9a-f]{6}$/i.test(couleurFin || "") ? couleurFin : c;
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var rx = style === "arrondis" ? 8 : 0;
+        var gradId = "grad-cadre-" + (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + style;
+        return '<svg width="' + (W + offset * 2) + '" height="' + (H + offset * 2) + '" viewBox="-' + offset + ' -' + offset + ' ' + (W + offset * 2) + ' ' + (H + offset * 2) + '" preserveAspectRatio="none" style="position:absolute;top:-' + offset + 'px;left:-' + offset + 'px;pointer-events:none;z-index:5;">'
+          + '<defs><linearGradient id="' + gradId + '" x1="0%" y1="0%" x2="100%" y2="100%">'
+          + '<stop offset="0%" stop-color="' + c + '" stop-opacity="1"/>'
+          + '<stop offset="100%" stop-color="' + cFin + '" stop-opacity="1"/>'
+          + '</linearGradient></defs>'
+          + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + rx + '" ry="' + rx + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '"/>'
+          + '</svg>';
+      }
+
+      // --- Cyberpunk ---
+      var CYBERPUNK_VARIANTES = {
+        defaut: { c1: "#00f0ff", c2: "#ff00ff", c3: "#ffffff" },
+        "vert-magenta": { c1: "#39ff14", c2: "#ff00ff", c3: "#ffffff" },
+        "orange-cyan": { c1: "#ff8800", c2: "#00f0ff", c3: "#ffffff" },
+        "violet-cyan": { c1: "#8c4dff", c2: "#00f0ff", c3: "#ffffff" },
+        "rouge-cyan": { c1: "#ff2244", c2: "#00f0ff", c3: "#ffffff" }
+      };
+      function getCyberpunkBevelSize(sw) {
+        return Math.max(8, Math.round(clampStrokeWidth(sw) * 3.5));
+      }
+      function getCyberpunkClipPath(W, H, sw) {
+        var s = Math.min(getCyberpunkBevelSize(sw), W / 4, H / 4);
+        return "path('M " + s + " 0 L " + (W - s) + " 0 L " + W + " " + s + " L " + W + " " + (H - s) + " L " + (W - s) + " " + H + " L " + s + " " + H + " L 0 " + (H - s) + " L 0 " + s + " Z')";
+      }
+      function renderCyberpunk(W, H, idCadre, strokeWidth, variante) {
+        var pal = CYBERPUNK_VARIANTES[variante] || CYBERPUNK_VARIANTES.defaut;
+        var c1 = pal.c1, c2 = pal.c2, c3 = pal.c3;
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var bevel = getCyberpunkBevelSize(ep);
+        var margin = Math.max(4, ep);
+        var svgW = W + offset * 2 + margin * 2;
+        var svgH = H + offset * 2 + margin * 2;
+        var viewX = -(offset + margin);
+        var viewY = -(offset + margin);
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-cyberpunk-" + uid;
+        var gradInnerId = "grad-inner-" + uid;
+        var clipPathId = "clip-cyberpunk-" + uid;
+        var pathBorder = "M " + bevel + " 0 L " + (W - bevel) + " 0 L " + W + " " + bevel + " L " + W + " " + (H - bevel) + " L " + (W - bevel) + " " + H + " L " + bevel + " " + H + " L 0 " + (H - bevel) + " L 0 " + bevel + " Z";
+        var d = Math.max(2, ep * 0.8);
+        var b = Math.min(bevel * 1.6, W / 5, H / 5);
+        var traitFin = Math.max(0.8, ep * 0.22);
+        function bracketCoin(cx, cy, sx, sy) {
+          var X = function (x) { return cx + x * sx; };
+          var Y = function (y) { return cy + y * sy; };
+          var plaque = "M " + X(b + d) + " " + Y(-d) + " L " + X(bevel * 0.55) + " " + Y(-d) + " L " + X(-d) + " " + Y(bevel * 0.55) + " L " + X(-d) + " " + Y(b + d) + " L " + X(-d * 2.2) + " " + Y(b + d) + " L " + X(-d * 2.2) + " " + Y(bevel * 0.35) + " L " + X(bevel * 0.35) + " " + Y(-d * 2.2) + " L " + X(b + d) + " " + Y(-d * 2.2) + " Z";
+          var chevron = "M " + X(bevel * 0.9) + " " + Y(-d * 3.4) + " L " + X(bevel * 0.28) + " " + Y(-d * 3.4) + " L " + X(-d * 3.4) + " " + Y(bevel * 0.28) + " L " + X(-d * 3.4) + " " + Y(bevel * 0.9);
+          var dx = X(bevel * 0.62), dy = Y(bevel * 0.62);
+          var dr = Math.max(1.4, ep * 0.4);
+          return "<g>" +
+            '<path d="' + plaque + '" fill="' + c2 + '" fill-opacity="0.28" stroke="' + c1 + '" stroke-width="' + traitFin + '" stroke-linejoin="miter"/>' +
+            '<path d="' + chevron + '" fill="none" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.85"/>' +
+            '<circle cx="' + dx + '" cy="' + dy + '" r="' + dr + '" fill="' + c3 + '" stroke="' + c1 + '" stroke-width="' + Math.max(0.6, ep * 0.12) + '"/>' +
+            "</g>";
+        }
+        var brackets = bracketCoin(0, 0, 1, 1) + bracketCoin(W, 0, -1, 1) + bracketCoin(W, H, -1, -1) + bracketCoin(0, H, 1, -1);
+        var co = Math.max(2, ep);
+        var pr = Math.max(1, ep * 0.28);
+        var midX = W / 2, midY = H / 2;
+        var segH = Math.min(bevel * 1.4, W / 8);
+        var segV = Math.min(bevel * 1.4, H / 8);
+        var circuits = [
+          '<path d="M ' + (midX - segH * 2.2) + " " + -co + " L " + (midX - segH * 0.4) + " " + -co + '" stroke="' + c1 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (midX - segH * 2.2) + '" cy="' + -co + '" r="' + pr + '" fill="' + c1 + '"/>',
+          '<path d="M ' + (midX + segH * 0.4) + " " + -co + " L " + (midX + segH * 2.2) + " " + -co + '" stroke="' + c1 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (midX + segH * 2.2) + '" cy="' + -co + '" r="' + pr + '" fill="' + c1 + '"/>',
+          '<path d="M ' + (midX - segH * 2.2) + " " + (H + co) + " L " + (midX - segH * 0.4) + " " + (H + co) + '" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (midX - segH * 2.2) + '" cy="' + (H + co) + '" r="' + pr + '" fill="' + c2 + '"/>',
+          '<path d="M ' + (midX + segH * 0.4) + " " + (H + co) + " L " + (midX + segH * 2.2) + " " + (H + co) + '" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (midX + segH * 2.2) + '" cy="' + (H + co) + '" r="' + pr + '" fill="' + c2 + '"/>',
+          '<path d="M ' + -co + " " + (midY - segV) + " L " + -co + " " + (midY + segV) + '" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + -co + '" cy="' + (midY + segV) + '" r="' + pr + '" fill="' + c2 + '"/>',
+          '<path d="M ' + (W + co) + " " + (midY - segV) + " L " + (W + co) + " " + (midY + segV) + '" stroke="' + c1 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (W + co) + '" cy="' + (midY - segV) + '" r="' + pr + '" fill="' + c1 + '"/>'
+        ].join("\n    ");
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<clipPath id="' + clipPathId + '"><path d="' + pathBorder + '"/></clipPath>'
+          + '<linearGradient id="' + gradId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + c1 + '"/><stop offset="50%" stop-color="' + c2 + '"/><stop offset="100%" stop-color="' + c1 + '"/></linearGradient>'
+          + '<linearGradient id="' + gradInnerId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + c3 + '" stop-opacity="0.9"/><stop offset="50%" stop-color="' + c1 + '" stop-opacity="0.6"/><stop offset="100%" stop-color="' + c3 + '" stop-opacity="0.9"/></linearGradient>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipPathId + ')">'
+          + '<path d="' + pathBorder + '" fill="none" stroke="' + c1 + '" stroke-width="' + (ep * 2.2) + '" stroke-linejoin="miter" opacity="0.25"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradInnerId + ')" stroke-width="' + Math.max(1, ep * 0.35) + '" stroke-linejoin="miter" opacity="0.8"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="' + c3 + '" stroke-width="' + Math.max(0.8, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.4"/>'
+          + "</g><g>" + circuits + "</g>" + brackets
+          + "</svg>";
+      }
+
+      // --- Story ---
+      var STORY_VARIANTES = {
+        pink: { vif: "#ff4d8d", clair: "#ff80b5", profond: "#e63973", pale: "#ffd6e8" },
+        blue: { vif: "#4d88ff", clair: "#80b5ff", profond: "#3973e6", pale: "#d6e8ff" },
+        purple: { vif: "#8c4dff", clair: "#b580ff", profond: "#7339e6", pale: "#e8d6ff" },
+        green: { vif: "#4dff88", clair: "#80ffb5", profond: "#39e673", pale: "#d6ffe8" },
+        orange: { vif: "#ff884d", clair: "#ffb580", profond: "#e67339", pale: "#ffe8d6" },
+        yellow: { vif: "#ffd700", clair: "#ffed4d", profond: "#e6a800", pale: "#fff5d6" }
+      };
+      function getStoryClipSize(sw) {
+        return Math.max(12, Math.round(clampStrokeWidth(sw) * 4));
+      }
+      function getStoryClipPath(W, H, sw) {
+        var s = Math.min(getStoryClipSize(sw), W / 4, H / 4);
+        var parts = [
+          "M " + s + " 0", "L " + (W - s) + " 0",
+          "C " + (W - s * 0.65) + " " + (-s * 0.12) + " " + (W - s * 0.12) + " " + (-s * 0.12) + " " + (W - s * 0.4) + " " + (s * 0.08),
+          "C " + (W - s * 0.68) + " " + (s * 0.28) + " " + (W + s * 0.12) + " " + (s * 0.65) + " " + W + " " + s,
+          "L " + W + " " + (H - s),
+          "C " + (W + s * 0.12) + " " + (H - s * 0.65) + " " + (W - s * 0.68) + " " + (H - s * 0.28) + " " + (W - s * 0.4) + " " + (H - s * 0.08),
+          "C " + (W - s * 0.12) + " " + (H + s * 0.12) + " " + (W - s * 0.65) + " " + (H + s * 0.12) + " " + (W - s) + " " + H,
+          "L " + s + " " + H,
+          "C " + (s * 0.65) + " " + (H + s * 0.12) + " " + (s * 0.12) + " " + (H + s * 0.12) + " " + (s * 0.4) + " " + (H - s * 0.08),
+          "C " + (s * 0.68) + " " + (H - s * 0.28) + " " + (-s * 0.12) + " " + (H - s * 0.65) + " 0 " + (H - s),
+          "L 0 " + s,
+          "C " + (-s * 0.12) + " " + (s * 0.65) + " " + (s * 0.68) + " " + (s * 0.28) + " " + (s * 0.4) + " " + (s * 0.08),
+          "C " + (s * 0.12) + " " + (-s * 0.12) + " " + (s * 0.65) + " " + (-s * 0.12) + " " + s + " 0", "Z"
+        ];
+        return "path('" + parts.join(" ") + "')";
+      }
+      function heartShape(cx, cy, s) {
+        return "M " + cx + " " + (cy + s * 0.25) + " C " + (cx - s * 0.42) + " " + (cy - s * 0.08) + " " + (cx - s * 0.42) + " " + (cy - s * 0.42) + " " + cx + " " + (cy - s * 0.18) + " C " + (cx + s * 0.42) + " " + (cy - s * 0.42) + " " + (cx + s * 0.42) + " " + (cy - s * 0.08) + " " + cx + " " + (cy + s * 0.25) + " Z";
+      }
+      function renderStory(W, H, idCadre, strokeWidth, variante) {
+        var palette = STORY_VARIANTES[variante] || STORY_VARIANTES.pink;
+        var blanc = "#ffffff";
+        var ep = clampStrokeWidth(strokeWidth);
+        var s = Math.min(getStoryClipSize(ep), W / 4, H / 4);
+        var margin = Math.max(10, ep * 2.5);
+        var svgW = W + margin * 2, svgH = H + margin * 2;
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-story-" + uid, innerGradId = "grad-inner-story-" + uid, clipId = "clip-story-" + uid;
+        var borderPath = [
+          "M " + s + " 0", "L " + (W - s) + " 0",
+          "C " + (W - s * 0.65) + " " + (-s * 0.12) + " " + (W - s * 0.12) + " " + (-s * 0.12) + " " + (W - s * 0.4) + " " + (s * 0.08),
+          "C " + (W - s * 0.68) + " " + (s * 0.28) + " " + (W + s * 0.12) + " " + (s * 0.65) + " " + W + " " + s,
+          "L " + W + " " + (H - s),
+          "C " + (W + s * 0.12) + " " + (H - s * 0.65) + " " + (W - s * 0.68) + " " + (H - s * 0.28) + " " + (W - s * 0.4) + " " + (H - s * 0.08),
+          "C " + (W - s * 0.12) + " " + (H + s * 0.12) + " " + (W - s * 0.65) + " " + (H + s * 0.12) + " " + (W - s) + " " + H,
+          "L " + s + " " + H,
+          "C " + (s * 0.65) + " " + (H + s * 0.12) + " " + (s * 0.12) + " " + (H + s * 0.12) + " " + (s * 0.4) + " " + (H - s * 0.08),
+          "C " + (s * 0.68) + " " + (H - s * 0.28) + " " + (-s * 0.12) + " " + (H - s * 0.65) + " 0 " + (H - s),
+          "L 0 " + s,
+          "C " + (-s * 0.12) + " " + (s * 0.65) + " " + (s * 0.68) + " " + (s * 0.28) + " " + (s * 0.4) + " " + (s * 0.08),
+          "C " + (s * 0.12) + " " + (-s * 0.12) + " " + (s * 0.65) + " " + (-s * 0.12) + " " + s + " 0", "Z"
+        ].join(" ");
+        var cornerHeartSize = Math.max(6, ep * 1.5);
+        var smallHeartSize = Math.max(3, ep * 0.7);
+        var cornerHearts = [
+          { cx: s * 0.25, cy: s * 0.25 }, { cx: W - s * 0.25, cy: s * 0.25 },
+          { cx: s * 0.25, cy: H - s * 0.25 }, { cx: W - s * 0.25, cy: H - s * 0.25 }
+        ];
+        var cornerHeartsSvg = cornerHearts.map(function (h) {
+          return '<path d="' + heartShape(h.cx, h.cy, cornerHeartSize) + '" fill="' + blanc + '" opacity="0.92"/>';
+        }).join("");
+        var safeStart = s + Math.max(15, ep * 3);
+        var safeEndTop = W - s - Math.max(15, ep * 3);
+        var safeEndSide = H - s - Math.max(15, ep * 3);
+        var numTop = Math.max(0, Math.floor((safeEndTop - safeStart) / 70));
+        var numSide = Math.max(0, Math.floor((safeEndSide - safeStart) / 70));
+        var smallHeartsSvg = "";
+        for (var i = 0; i < numTop; i++) {
+          var x = safeStart + (numTop > 0 ? (i + 1) * (safeEndTop - safeStart) / (numTop + 1) : 0);
+          smallHeartsSvg += '<path d="' + heartShape(x, 0, smallHeartSize) + '" fill="' + blanc + '"/>';
+          smallHeartsSvg += '<path d="' + heartShape(x, H, smallHeartSize) + '" fill="' + blanc + '"/>';
+        }
+        for (var j = 0; j < numSide; j++) {
+          var y = safeStart + (numSide > 0 ? (j + 1) * (safeEndSide - safeStart) / (numSide + 1) : 0);
+          smallHeartsSvg += '<path d="' + heartShape(0, y, smallHeartSize) + '" fill="' + blanc + '"/>';
+          smallHeartsSvg += '<path d="' + heartShape(W, y, smallHeartSize) + '" fill="' + blanc + '"/>';
+        }
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + palette.vif + '"/><stop offset="50%" stop-color="' + palette.clair + '"/><stop offset="100%" stop-color="' + palette.profond + '"/></linearGradient>'
+          + '<linearGradient id="' + innerGradId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + blanc + '" stop-opacity="0.7"/><stop offset="50%" stop-color="' + palette.pale + '" stop-opacity="0.5"/><stop offset="100%" stop-color="' + blanc + '" stop-opacity="0.7"/></linearGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + palette.vif + '" stroke-width="' + (ep * 2) + '" stroke-linejoin="round" opacity="0.2"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="round"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + innerGradId + ')" stroke-width="' + Math.max(1, ep * 0.3) + '" stroke-linejoin="round" opacity="0.7"/>'
+          + "</g>"
+          + "<g>" + cornerHeartsSvg + "</g>"
+          + '<g opacity="0.75">' + smallHeartsSvg + "</g>"
+          + "</svg>";
+      }
+
+      // --- Thin Line ---
+      var THINLINE_VARIANTES = {
+        graphite: { principal: "#2d2d2d", accent: "#4a4a4a" },
+        argent: { principal: "#a0a0a0", accent: "#c0c0c0" },
+        "blanc-pure": { principal: "#ffffff", accent: "#e0e0e0" }
+      };
+      function getThinLineClipSize(sw) {
+        return Math.max(6, Math.round(clampStrokeWidth(sw) * 1.5));
+      }
+      function getThinLineClipPath(W, H, sw) {
+        var r = getThinLineClipSize(sw);
+        var rEff = Math.min(r, W / 4, H / 4);
+        return "path('M " + rEff + " 0 L " + (W - rEff) + " 0 Q " + W + " 0 " + W + " " + rEff + " L " + W + " " + (H - rEff) + " Q " + W + " " + H + " " + (W - rEff) + " " + H + " L " + rEff + " " + H + " Q 0 " + H + " 0 " + (H - rEff) + " L 0 " + rEff + " Q 0 0 " + rEff + " 0 Z')";
+      }
+      function renderThinLine(W, H, idCadre, strokeWidth, variante) {
+        var p = THINLINE_VARIANTES[variante] || THINLINE_VARIANTES.graphite;
+        var ep = clampStrokeWidth(strokeWidth);
+        var r = Math.min(getThinLineClipSize(ep), W / 4, H / 4);
+        var margin = Math.max(4, ep);
+        var svgW = W + margin * 2, svgH = H + margin * 2;
+        var cornerLen = Math.max(10, ep * 3);
+        var cornerGap = Math.max(3, ep * 0.8);
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
+          + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + r + '" ry="' + r + '" fill="none" stroke="' + p.principal + '" stroke-width="' + ep + '"/>'
+          + '<g stroke="' + p.accent + '" stroke-width="' + Math.max(1, ep * 0.6) + '" fill="none" stroke-linecap="square">'
+          + '<path d="M ' + (-cornerGap) + " " + (cornerLen + cornerGap) + " L " + (-cornerGap) + " " + (-cornerGap) + " L " + (cornerLen + cornerGap) + " " + (-cornerGap) + '"/>'
+          + '<path d="M ' + (W - cornerLen - cornerGap) + " " + (-cornerGap) + " L " + (W + cornerGap) + " " + (-cornerGap) + " L " + (W + cornerGap) + " " + (cornerLen + cornerGap) + '"/>'
+          + '<path d="M ' + (-cornerGap) + " " + (H - cornerLen - cornerGap) + " L " + (-cornerGap) + " " + (H + cornerGap) + " L " + (cornerLen + cornerGap) + " " + (H + cornerGap) + '"/>'
+          + '<path d="M ' + (W - cornerLen - cornerGap) + " " + (H + cornerGap) + " L " + (W + cornerGap) + " " + (H + cornerGap) + " L " + (W + cornerGap) + " " + (H - cornerLen - cornerGap) + '"/>'
+          + "</g>"
+          + '<g fill="' + p.accent + '">'
+          + '<circle cx="' + (W / 2) + '" cy="0" r="' + Math.max(2, ep * 0.5) + '"/>'
+          + '<circle cx="' + (W / 2) + '" cy="' + H + '" r="' + Math.max(2, ep * 0.5) + '"/>'
+          + '<circle cx="0" cy="' + (H / 2) + '" r="' + Math.max(2, ep * 0.5) + '"/>'
+          + '<circle cx="' + W + '" cy="' + (H / 2) + '" r="' + Math.max(2, ep * 0.5) + '"/>'
+          + "</g></svg>";
+      }
+
+      // --- Hexagon ---
+      var HEXAGON_VARIANTES = {
+        ambre: { principal: "#f59e0b", profond: "#b45309", clair: "#fcd34d" },
+        azure: { principal: "#0ea5e9", profond: "#0369a1", clair: "#7dd3fc" },
+        emerald: { principal: "#10b981", profond: "#047857", clair: "#6ee7b7" },
+        violet: { principal: "#8b5cf6", profond: "#6d28d9", clair: "#c4b5fd" },
+        steel: { principal: "#64748b", profond: "#334155", clair: "#cbd5e1" }
+      };
+      function getHexagonClipSize(sw) {
+        return Math.max(12, Math.round(clampStrokeWidth(sw) * 4));
+      }
+      function getHexagonClipPath(W, H, sw) {
+        var s = Math.min(getHexagonClipSize(sw), W / 4, H / 4);
+        var parts = ["M " + s + " 0", "L " + (W - s) + " 0", "L " + W + " " + (s * 0.5), "L " + W + " " + (H - s * 0.5), "L " + (W - s) + " " + H, "L " + s + " " + H, "L 0 " + (H - s * 0.5), "L 0 " + (s * 0.5), "Z"];
+        return "path('" + parts.join(" ") + "')";
+      }
+      function hexPath(cx, cy, r) {
+        var pts = [];
+        for (var i = 0; i < 6; i++) {
+          var angle = (Math.PI / 3) * i - Math.PI / 6;
+          pts.push((cx + r * Math.cos(angle)) + " " + (cy + r * Math.sin(angle)));
+        }
+        return "M " + pts.join(" L ") + " Z";
+      }
+      function renderHexagon(W, H, idCadre, strokeWidth, variante) {
+        var p = HEXAGON_VARIANTES[variante] || HEXAGON_VARIANTES.ambre;
+        var ep = clampStrokeWidth(strokeWidth);
+        var s = Math.min(getHexagonClipSize(ep), W / 4, H / 4);
+        var margin = Math.max(10, ep * 2.5);
+        var svgW = W + margin * 2, svgH = H + margin * 2;
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-hex-" + uid, clipId = "clip-hex-" + uid;
+        var borderPath = ["M " + s + " 0", "L " + (W - s) + " 0", "L " + W + " " + (s * 0.5), "L " + W + " " + (H - s * 0.5), "L " + (W - s) + " " + H, "L " + s + " " + H, "L 0 " + (H - s * 0.5), "L 0 " + (s * 0.5), "Z"].join(" ");
+        var hexR = Math.max(5, ep * 1.4);
+        var corners = [
+          { cx: s * 0.5, cy: s * 0.35 }, { cx: W - s * 0.5, cy: s * 0.35 },
+          { cx: s * 0.5, cy: H - s * 0.35 }, { cx: W - s * 0.5, cy: H - s * 0.35 }
+        ];
+        var cornerHexes = corners.map(function (c) {
+          return '<path d="' + hexPath(c.cx, c.cy, hexR) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.35) + '"/>';
+        }).join("");
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + p.principal + '"/><stop offset="100%" stop-color="' + p.profond + '"/></linearGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + p.principal + '" stroke-width="' + (ep * 2) + '" stroke-linejoin="miter" opacity="0.2"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" stroke-linejoin="miter" opacity="0.6"/>'
+          + "</g>"
+          + '<g opacity="0.7">' + cornerHexes
+          + '<path d="' + hexPath(W / 2, 0, hexR * 0.7) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" opacity="0.5"/>'
+          + '<path d="' + hexPath(W / 2, H, hexR * 0.7) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" opacity="0.5"/></g>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.4" transform="translate(' + (ep * 0.6) + " " + (ep * 0.6) + ") scale(" + Math.max(0.01, 1 - (ep * 1.2) / W) + " " + Math.max(0.01, 1 - (ep * 1.2) / H) + ')"/>'
+          + "</svg>";
+      }
+
+      // --- Dispatch ---
+      var CADRES_RENDERERS = {
+        cyberpunk: renderCyberpunk,
+        story: renderStory,
+        "thin-line": renderThinLine,
+        hexagon: renderHexagon
+      };
+      var CADRES_CLIP_PATHS = {
+        cyberpunk: getCyberpunkClipPath,
+        story: getStoryClipPath,
+        "thin-line": getThinLineClipPath,
+        hexagon: getHexagonClipPath
+      };
+
+      function genererCadreSVG(cadre, W, H, idCadre) {
+        if (!cadre) return "";
+        var style = cadre.style || "carre";
+        var variante = cadre.variante;
+        var strokeWidth = cadre.strokeWidth || 4;
+        var couleur = cadre.couleur || "#ffffff";
+        var couleurFin = cadre.couleurFin || "#000000";
+        if (style === "arrondis" || style === "carre") {
+          return renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre);
+        }
+        var fn = CADRES_RENDERERS[style];
+        if (fn) return fn(W, H, idCadre, strokeWidth, variante);
+        return "";
+      }
+
+      function genererCadreClipPath(cadre, W, H) {
+        if (!cadre) return null;
+        var style = cadre.style || "carre";
+        var variante = cadre.variante;
+        var strokeWidth = cadre.strokeWidth || 4;
+        if (style === "arrondis") {
+          var r = Math.min(8, W / 4, H / 4);
+          return "path('M " + r + " 0 L " + (W - r) + " 0 Q " + W + " 0 " + W + " " + r + " L " + W + " " + (H - r) + " Q " + W + " " + H + " " + (W - r) + " " + H + " L " + r + " " + H + " Q 0 " + H + " 0 " + (H - r) + " L 0 " + r + " Q 0 0 " + r + " 0 Z')";
+        }
+        if (style === "carre") return null;
+        var fn = CADRES_CLIP_PATHS[style];
+        if (!fn) return null;
+        try { return fn(W, H, strokeWidth, variante); } catch (e) { return null; }
+      }
+
+      // Clé de hachage pour détecter les changements de cadre (évite recréer
+      // le SVG à chaque snapshot si rien n'a bougé).
+      function cadreKey(cadre, W, H) {
+        if (!cadre) return "";
+        return (cadre.style || "") + "|" + (cadre.variante || "") + "|"
+          + (cadre.strokeWidth || 0) + "|" + (cadre.couleur || "") + "|"
+          + (cadre.couleurFin || "") + "|" + Math.round(W) + "x" + Math.round(H);
+      }
+
+      // Applique le cadre widget sur un élément .widget : clip-path sur el +
+      // overlay SVG dans un div .cadre-overlay enfant. Recrée seulement si
+      // la clé a changé (style/variante/strokeWidth/dims).
+      function applyCadreWidget(el, entry, w, cadre) {
+        var cadreActif = cadre && cadre.actif && (cadre.strokeWidth || 0) > 0 && !w.trou;
+        if (!cadreActif) {
+          // Nettoyer : retirer clip-path + overlay si présent.
+          el.style.clipPath = "";
+          el.style.webkitClipPath = "";
+          if (entry.cadreOverlayEl) {
+            entry.cadreOverlayEl.remove();
+            entry.cadreOverlayEl = null;
+            entry.cadreKey = "";
+          }
+          return;
+        }
+        var newKey = cadreKey(cadre, w.largeur, w.hauteur);
+        // Clip-path : appliquer à chaque fois (cheap, pas de recréation DOM).
+        var clip = genererCadreClipPath(cadre, w.largeur, w.hauteur);
+        if (clip) {
+          el.style.clipPath = clip;
+          el.style.webkitClipPath = clip;
+        } else {
+          el.style.clipPath = "";
+          el.style.webkitClipPath = "";
+        }
+        // Overlay SVG : recréer seulement si la clé a changé.
+        if (entry.cadreKey !== newKey) {
+          if (entry.cadreOverlayEl) entry.cadreOverlayEl.remove();
+          var overlay = document.createElement("div");
+          overlay.className = "cadre-overlay";
+          overlay.innerHTML = genererCadreSVG(cadre, w.largeur, w.hauteur, "w-" + w.id);
+          el.appendChild(overlay);
+          entry.cadreOverlayEl = overlay;
+          entry.cadreKey = newKey;
+        }
+      }
+
+      // Applique le cadre app (bord canvas) sur #stage. Un seul overlay global.
+      var cadreAppOverlayEl = null;
+      var cadreAppKey = "";
+      function applyCadreApp(scene) {
+        var cadre = scene.cadreApp;
+        var cadreActif = cadre && cadre.actif && (cadre.strokeWidth || 0) > 0;
+        if (!cadreActif) {
+          if (cadreAppOverlayEl) {
+            cadreAppOverlayEl.remove();
+            cadreAppOverlayEl = null;
+            cadreAppKey = "";
+          }
+          return;
+        }
+        var W = scene.canvasW || 1920;
+        var H = scene.canvasH || 1080;
+        var newKey = cadreKey(cadre, W, H);
+        if (cadreAppKey === newKey && cadreAppOverlayEl) return;
+        if (cadreAppOverlayEl) cadreAppOverlayEl.remove();
+        var overlay = document.createElement("div");
+        overlay.id = "cadre-app-overlay";
+        overlay.innerHTML = genererCadreSVG(cadre, W, H, "app");
+        stageEl.appendChild(overlay);
+        cadreAppOverlayEl = overlay;
+        cadreAppKey = newKey;
       }
 
       function connect() {

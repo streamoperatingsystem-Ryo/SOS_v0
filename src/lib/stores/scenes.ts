@@ -80,6 +80,24 @@ export async function renameScene(id: string, nom: string): Promise<void> {
   }
 }
 
+/// Supprime une scène (fichier + entrée index). Si la scène supprimée est la
+/// courante, Rust bascule sur la 1ère restante → on recharge la scène RAM.
+export async function deleteScene(id: string): Promise<void> {
+  try {
+    const wasCurrent = id === get(currentSceneIdStore);
+    await tauri.sceneSupprimer(id);
+    await loadScenesIndex();
+    if (wasCurrent) {
+      await loadCurrentScene();
+      await loadScene();
+      selectWidget(null);
+    }
+  } catch (e) {
+    console.error("deleteScene:", e);
+    alert("Suppression refusée : " + e);
+  }
+}
+
 /// Exporte la scène courante comme pack dossier portable.
 /// Demande le nom du pack (input, défaut = nom de scène courante).
 /// Dialog = dossier PARENT. Crée <parent>/<nom-pack>/scene.json + medias/.

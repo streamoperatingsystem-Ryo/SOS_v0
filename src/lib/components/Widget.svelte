@@ -5,10 +5,18 @@
     commitScene,
     selectedIdStore,
     selectWidget,
+    buildSnapTargets,
+    computeSnap,
+    sceneStore,
+    type SnapTarget,
   } from "../stores/scene";
+  import { afficherGuidesDrag, masquerGuides } from "../stores/guides";
   import { openSectionExplicit } from "../stores/ui";
   import { registerVideo, unregisterVideo } from "../stores/video";
   import type { Widget } from "../tauri";
+  import { get } from "svelte/store";
+  import CadreSVG from "./CadreSVG.svelte";
+  import { genererClipPathCadre } from "../cadres/registre";
 
   let { w, scale }: { w: Widget; scale: number } = $props();
 
@@ -30,6 +38,10 @@
   let startWY = 0;
   let startW = 0;
   let startH = 0;
+
+  // Grille magnétique : cibles figées au pointerdown (snapshot, pas de get() par frame).
+  // Bypass si Alt enfoncé (free-drag sans aimantation).
+  let snapTargets: { xs: SnapTarget[]; ys: SnapTarget[] } | null = null;
 
   // Préfixe URL pour les médias servis par le serveur :4321 (dashboard ≠ :4321).
   const MEDIA_BASE = "http://127.0.0.1:4321/";
@@ -53,6 +65,17 @@
   let kind = $derived(w.kind ?? (w.media ? kindFromMedia(w.media) : "image"));
   let isVideo = $derived(kind === "video");
   let isTrou = $derived(w.trou === true);
+
+  // ===== Cadre de scène (overlay SVG + clip-path) =====
+  // cadreWidget est lu depuis le store scène (un cadre pour tous les widgets).
+  // Masqué sur les widgets trou (cohérent : un trou n'a pas de bordure visible).
+  let cadre = $derived($sceneStore.cadreWidget ?? null);
+  let cadreActif = $derived(!!cadre?.actif && (cadre?.strokeWidth ?? 0) > 0 && !isTrou);
+  let clipPathCorps = $derived(
+    cadreActif && cadre
+      ? genererClipPathCadre(cadre.style, cadre.variante, w.largeur, w.hauteur, cadre.strokeWidth) ?? ""
+      : ""
+  );
 
   // Mapping mode → object-fit. "etendre" géré à part (img auto + min 100%).
   const FIT_CSS: Record<string, string> = {
@@ -104,6 +127,10 @@
     startY = e.clientY;
     startWX = w.x;
     startWY = w.y;
+    // Snapshot des cibles de snap (figé pendant tout le drag — pas de get() par frame).
+    snapTargets = buildSnapTargets(get(sceneStore), w.id);
+    // Afficher les guides d'alignement (dashboard uniquement).
+    afficherGuidesDrag({ x: w.x, y: w.y, width: w.largeur, height: w.hauteur });
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
   }
 
@@ -119,15 +146,29 @@
     startWY = w.y;
     startW = w.largeur;
     startH = w.hauteur;
+    // Snapshot des cibles de snap (figé pendant tout le resize).
+    snapTargets = buildSnapTargets(get(sceneStore), w.id);
+    // Afficher les guides d'alignement (dashboard uniquement).
+    afficherGuidesDrag({ x: w.x, y: w.y, width: w.largeur, height: w.hauteur });
     // Capture sur l'outer : move/up écoutés sur l'outer.
     outerEl.setPointerCapture(e.pointerId);
   }
 
   function onpointermove(e: PointerEvent) {
     if (dragging) {
-      const nx = startWX + (e.clientX - startX) / scale;
-      const ny = startWY + (e.clientY - startY) / scale;
+      const rawX = startWX + (e.clientX - startX) / scale;
+      const rawY = startWY + (e.clientY - startY) / scale;
+      // Grille magnétique sauf si Alt enfoncé (free-drag).
+      let nx = rawX;
+      let ny = rawY;
+      if (!e.altKey && snapTargets) {
+        const snap = computeSnap(rawX, rawY, w.largeur, w.hauteur, snapTargets);
+        nx = snap.x;
+        ny = snap.y;
+      }
       moveWidgetLocal(w.id, nx, ny);
+      // Mettre à jour les guides visuels pendant le drag.
+      afficherGuidesDrag({ x: nx, y: ny, width: w.largeur, height: w.hauteur });
       return;
     }
     if (resizing) {
@@ -161,7 +202,21 @@
       } else if (handle.includes("s")) {
         nh = Math.max(MIN, startH + dy);
       }
+      // Grille magnétique sur le resize sauf si Alt enfoncé.
+      if (!e.altKey && snapTargets) {
+        const snap = computeSnap(nx, ny, nw, nh, snapTargets);
+        // Ajuste position selon le snap (les dims restent les mêmes sauf
+        // pour les poignées w/n où le snap décale aussi la taille).
+        const ddx = snap.x - nx;
+        const ddy = snap.y - ny;
+        nx = snap.x;
+        ny = snap.y;
+        if (handle.includes("w")) nw -= ddx;
+        if (handle.includes("n")) nh -= ddy;
+      }
       resizeWidgetLocal(w.id, nx, ny, nw, nh);
+      // Mettre à jour les guides visuels pendant le resize.
+      afficherGuidesDrag({ x: nx, y: ny, width: nw, height: nh });
     }
   }
 
@@ -170,6 +225,8 @@
     dragging = false;
     resizing = false;
     handle = "";
+    snapTargets = null;
+    masquerGuides();
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
     await commitScene();
   }
@@ -187,11 +244,15 @@
   role="button"
   tabindex="0"
 >
-  <!-- Inner = bloc visuel incliné (cadre + image). pointer-events:none. -->
+  <!-- Inner = bloc visuel incliné (cadre + image). pointer-events:none.
+       Quand un cadre de scène est actif : clip-path découpe le contenu selon
+       la forme du cadre (coins biseautés, hexagone, etc.) et la bordure native
+       .widget-3d est masquée (le cadre SVG remplace). -->
   <div
     class="widget-3d"
     class:selected
-    style="transform: perspective(800px) rotateX({rx}deg) rotateY({ry}deg);"
+    class:avec-cadre={cadreActif}
+    style="transform: perspective(800px) rotateX({rx}deg) rotateY({ry}deg);{clipPathCorps ? ` clip-path: ${clipPathCorps}; -webkit-clip-path: ${clipPathCorps};` : ''}"
   >
     {#if isChat}
       <!-- Widget chat (dashboard) : « Chat actif » centré seulement.
@@ -216,6 +277,24 @@
         draggable="false"
         style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'}; transform:{mediaTransform}; transform-origin:center center;"
       ></video>
+    {/if}
+
+    <!-- Cadre de scène (overlay SVG) — visible en dashboard ET en diffusion.
+         Ne capture pas les événements (pointer-events: none) pour ne pas
+         bloquer le drag/sélection. Masqué sur les widgets trou. -->
+    {#if cadreActif && cadre}
+      <div class="widget-cadre">
+        <CadreSVG
+          style={cadre.style}
+          variante={cadre.variante}
+          largeur={w.largeur}
+          hauteur={w.hauteur}
+          strokeWidth={cadre.strokeWidth}
+          couleur={cadre.couleur}
+          couleurFin={cadre.couleurFin}
+          idCadre="w-{w.id}"
+        />
+      </div>
     {/if}
   </div>
 
@@ -262,9 +341,22 @@
     box-sizing: border-box;
     overflow: hidden;
   }
+  /* Quand un cadre SVG est actif : masquer la bordure native (le cadre SVG
+     remplace). L'outline de sélection reste pour le feedback dashboard. */
+  .widget-3d.avec-cadre {
+    border-color: transparent;
+  }
   .widget-3d.selected {
     outline: 2px solid var(--texte);
     outline-offset: -2px;
+  }
+  /* Overlay cadre SVG : position absolute, inset 0, au-dessus du média,
+     sous les poignées resize. pointer-events:none pour ne pas bloquer le drag. */
+  .widget-cadre {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 5;
   }
   .trou-overlay {
     position: absolute;

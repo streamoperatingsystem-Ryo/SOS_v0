@@ -4,6 +4,8 @@
   import { openSectionExplicit } from "../stores/ui";
   import { registerVideo, unregisterVideo } from "../stores/video";
   import WidgetComp from "./Widget.svelte";
+  import AlignmentGuides from "./AlignmentGuides.svelte";
+  import CadreSVG from "./CadreSVG.svelte";
 
   // Dims canvas = résolution OBS lue au connect (fallback 1920×1080).
   // Widgets existants jamais rescalés quand ces dims changent.
@@ -43,6 +45,10 @@
   };
   let bgFitCss = $derived(FIT_CSS[bgFit] ?? "cover");
   let bgMediaTransform = $derived(`rotate(${bgRot}deg) scale(${bgZoom})`);
+
+  // ===== Cadre de l'application (bord extérieur du canvas) =====
+  let cadreApp = $derived($sceneStore.cadreApp ?? null);
+  let cadreAppActif = $derived(!!cadreApp?.actif && (cadreApp?.strokeWidth ?? 0) > 0);
 
   // <video> fond src set impérativement — Svelte ne touche JAMAIS à l'attribut
   // src du template. On ne set src QUE si bgMedia change (nom de fichier).
@@ -124,6 +130,29 @@
       {#each $sceneStore.widgets as w (w.id)}
         <WidgetComp {w} {scale} />
       {/each}
+
+      <!-- Cadre de l'application (overlay SVG bord canvas). Au-dessus des
+           widgets, pointer-events:none. Visible en dashboard ET diffusion. -->
+      {#if cadreAppActif && cadreApp}
+        <div class="cadre-app-overlay">
+          <CadreSVG
+            style={cadreApp.style}
+            variante={cadreApp.variante}
+            largeur={canvasW}
+            hauteur={canvasH}
+            strokeWidth={cadreApp.strokeWidth}
+            couleur={cadreApp.couleur}
+            couleurFin={cadreApp.couleurFin}
+            idCadre="app"
+          />
+        </div>
+      {/if}
+
+      <!-- Guides d'alignement (dashboard uniquement — jamais en diffusion).
+           4 traits rouges aux bords du widget + labels distance px + viseur
+           central (cyan → jaune quand proche du centre). Apparaissent
+           pendant le drag/resize d'un widget. -->
+      <AlignmentGuides />
     </div>
   {/if}
 </div>
@@ -162,5 +191,12 @@
   }
   .bg-video {
     pointer-events: none;
+  }
+  /* Overlay cadre app : bord extérieur du canvas, au-dessus des widgets. */
+  .cadre-app-overlay {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 100;
   }
 </style>

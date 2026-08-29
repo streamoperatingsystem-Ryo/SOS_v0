@@ -24,6 +24,20 @@ export interface Widget {
   taillePolice?: number;
 }
 
+/// Configuration d'un cadre SVG (widget ou bord canvas).
+/// `style` = ID du registre ("carre", "arrondis", "cyberpunk", "story",
+/// "thin-line", "hexagon"). `variante` = variante de couleur (presets).
+/// `couleur`/`couleurFin` = dégradé pour les cadres personnalisables.
+/// `actif` = cadre visible.
+export interface CadreConfig {
+  style: string;
+  variante?: string;
+  strokeWidth: number;
+  couleur: string;
+  couleurFin: string;
+  actif: boolean;
+}
+
 export interface Scene {
   widgets: Widget[];
   canvasW?: number;
@@ -35,6 +49,8 @@ export interface Scene {
   bgRot?: number;
   bgPaused?: boolean;
   bgTime?: number;
+  cadreWidget?: CadreConfig;
+  cadreApp?: CadreConfig;
 }
 
 /// Entrée de l'index des scènes (id + nom seulement, jamais le contenu).
@@ -94,6 +110,16 @@ export const tauri = {
     await invoke("chat_popout_fermer");
   },
 
+  /// Arrête l'application (quitte proprement).
+  async appArreter(): Promise<void> {
+    await invoke("app_arreter");
+  },
+
+  /// Redémarre l'application (relance le processus puis quitte).
+  async appRedemarrer(): Promise<void> {
+    await invoke("app_redemarrer");
+  },
+
   /// Synchronise les captures SOS-Trou-* d'OBS avec la scène chargée.
   /// Active + sync transform les items liés, cache les autres. Non-fatal.
   async sceneSyncCaptures(host: string, port: number, password: string): Promise<void> {
@@ -121,6 +147,12 @@ export const tauri = {
   /// Renomme une scène dans l'index.
   async sceneRenommer(id: string, nom: string): Promise<void> {
     await invoke("scene_renommer", { id, nom });
+  },
+
+  /// Supprime une scène (fichier + entrée index). Refuse si dernière scène.
+  /// Si la scène supprimée est la courante, bascule sur la 1ère restante.
+  async sceneSupprimer(id: string): Promise<void> {
+    await invoke("scene_supprimer", { id });
   },
 
   /// Retourne l'entrée courante ({ id, nom }).
@@ -293,6 +325,118 @@ export const tauri = {
   /// lance un nouveau Device Code Flow avec les scopes étendus.
   async twitchReconnecter(): Promise<void> {
     await invoke("twitch_reconnecter");
+  },
+
+  // ===== Kick (lecture seule, WS côté Rust) =====
+
+  /// Connecte au chat Kick : Rust fait TOUT (resolve slug → fetch token →
+  /// WS Pusher avec Origin: https://kick.com → subscribe → forward messages).
+  /// emit kick:connecte quand subscribed, kick:deconnecte sur close/error.
+  async kickConnecter(slug: string): Promise<void> {
+    await invoke("kick_connecter", { slug });
+  },
+
+  /// Déconnecte Kick : arrête le WS côté Rust + emit kick:deconnecte.
+  async kickDeconnecter(): Promise<void> {
+    await invoke("kick_deconnecter");
+  },
+
+  /// Retourne l'état de connexion Kick (true/false).
+  async kickEtat(): Promise<boolean> {
+    return invoke<boolean>("kick_etat");
+  },
+
+  /// Retourne le slug Kick sauvegardé (pour pré-remplir l'input).
+  async kickSlugCourant(): Promise<string | null> {
+    return invoke<string | null>("kick_slug_courant");
+  },
+
+  // ===== YouTube (chat polling + communauté Data API v3) =====
+
+  /// Démarre la connexion YouTube. Si token en coffre → chat polling direct.
+  /// Sinon → Device Code Flow (emit youtube:device → poll → youtube:connecte).
+  async youtubeConnecter(): Promise<void> {
+    await invoke("youtube_connecter");
+  },
+
+  /// Annule le Device Code Flow YouTube en cours.
+  async youtubeAnnulerDeviceFlow(): Promise<void> {
+    await invoke("youtube_annuler_device_flow");
+  },
+
+  /// Démarre manuellement le chat polling YouTube Live (bouton "Chat live ON").
+  /// Si pas de live actif → emit youtube:pas-de-live et la tâche s'arrête.
+  async youtubeDemarrerChat(): Promise<void> {
+    await invoke("youtube_demarrer_chat");
+  },
+
+  /// Arrête le chat polling YouTube Live sans déconnecter le compte (bouton "Chat live OFF").
+  async youtubeArreterChat(): Promise<void> {
+    await invoke("youtube_arreter_chat");
+  },
+
+  /// Déconnecte YouTube : arrête chat + efface token du coffre.
+  async youtubeDeconnecter(): Promise<void> {
+    await invoke("youtube_deconnecter");
+  },
+
+  /// Retourne l'état de connexion YouTube (true/false).
+  async youtubeEtat(): Promise<boolean> {
+    return invoke<boolean>("youtube_etat");
+  },
+
+  /// Retourne le login de la chaîne YouTube connectée (ou null si déconnecté).
+  async youtubeLoginCourant(): Promise<string | null> {
+    return invoke<string | null>("youtube_login_courant");
+  },
+
+  /// Channel info : display_name, avatar, subscriberCount, viewCount, videoCount.
+  async youtubeCommunauteChannel(): Promise<{
+    display_name: string;
+    profile_image_url: string;
+    subscriber_count: number;
+    view_count: number;
+    video_count: number;
+    description: string;
+  }> {
+    return invoke("youtube_communaute_channel");
+  },
+
+  /// Members : liste + total (displayName, membershipsLevel).
+  async youtubeCommunauteMembers(): Promise<{
+    total: number;
+    liste: { display_name: string; memberships_level: string }[];
+  }> {
+    return invoke("youtube_communaute_members");
+  },
+
+  /// Live viewers : concurrentViewers (null si pas live).
+  async youtubeCommunauteViewers(): Promise<number | null> {
+    return invoke<number | null>("youtube_communaute_viewers");
+  },
+
+  // ===== TikTok (chat live via PirateTok) =====
+
+  /// Connecte au chat TikTok Live d'un streamer (username sans @).
+  /// Rust fait TOUT : resolve room ID → WebSocket PirateTok → forward messages.
+  /// emit tiktok:connecte quand connecté, tiktok:deconnecte sur close/error.
+  async tiktokConnecter(username: string): Promise<void> {
+    await invoke("tiktok_connecter", { username });
+  },
+
+  /// Déconnecte TikTok : arrête le chat côté Rust + emit tiktok:deconnecte.
+  async tiktokDeconnecter(): Promise<void> {
+    await invoke("tiktok_deconnecter");
+  },
+
+  /// Retourne l'état de connexion TikTok (true/false).
+  async tiktokEtat(): Promise<boolean> {
+    return invoke<boolean>("tiktok_etat");
+  },
+
+  /// Retourne le username TikTok sauvegardé (pour pré-remplir l'input).
+  async tiktokUsernameCourant(): Promise<string | null> {
+    return invoke<string | null>("tiktok_username_courant");
   },
 
   // ===== Communauté lecture (Helix) =====

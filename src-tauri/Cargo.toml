@@ -1,6 +1,6 @@
 [package]
 name = "streamos-v0"
-version = "0.1.0"
+version = "0.1.1"
 description = "StreamOS v0 — dashboard + diffusion"
 edition = "2021"
 rust-version = "1.77"
@@ -30,6 +30,7 @@ base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 keyring = { version = "3", features = ["windows-native"] }
 tauri-plugin-opener = "2"
+piratetok-live-rs = { version = "0.2.1", path = "../vendor/piratetok-live-rs", default-features = false }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

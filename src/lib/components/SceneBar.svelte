@@ -19,6 +19,7 @@
     exportScene,
     importScene,
     renameScene,
+    deleteScene,
   } from "../stores/scenes";
 
   let index = $derived($scenesIndexStore);
@@ -61,6 +62,24 @@
     editingPastilleId = id;
     pastilleNomLocal = index.find((s) => s.id === id)?.nom ?? "";
     queueMicrotask(() => pastilleInputEl?.focus());
+  }
+
+  // Confirmation suppression scène : 2 états dans le menu contextuel.
+  let confirmDeleteSceneId = $state<string | null>(null);
+
+  function demarrerSuppression(id: string) {
+    confirmDeleteSceneId = id;
+  }
+
+  async function onSupprimerSceneConfirm() {
+    const id = confirmDeleteSceneId;
+    confirmDeleteSceneId = null;
+    fermerMenu();
+    if (id) await deleteScene(id);
+  }
+
+  function onSupprimerSceneCancel() {
+    confirmDeleteSceneId = null;
   }
 
   async function onPastilleCommit(id: string) {
@@ -187,6 +206,19 @@
     <button class="ctx-item" role="menuitem" onclick={() => demarrerRename(menuSceneId!)}>
       Renommer
     </button>
+    {#if confirmDeleteSceneId === menuSceneId}
+      <div class="ctx-confirm">
+        <span class="ctx-confirm-label">Supprimer ?</span>
+        <div class="ctx-confirm-buttons">
+          <button class="ctx-item danger" role="menuitem" onclick={onSupprimerSceneConfirm}>Oui</button>
+          <button class="ctx-item" role="menuitem" onclick={onSupprimerSceneCancel}>Non</button>
+        </div>
+      </div>
+    {:else}
+      <button class="ctx-item danger" role="menuitem" onclick={() => demarrerSuppression(menuSceneId!)}>
+        Supprimer
+      </button>
+    {/if}
   </div>
 {/if}
 
@@ -321,5 +353,26 @@
   .ctx-item:hover {
     background: var(--texte);
     color: var(--fond);
+  }
+  .ctx-item.danger:hover {
+    background: #c0392b;
+    color: #fff;
+  }
+  .ctx-confirm {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.2rem 0;
+  }
+  .ctx-confirm-label {
+    font-size: 0.75rem;
+    padding: 0 0.6rem;
+    opacity: 0.8;
+  }
+  .ctx-confirm-buttons {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 0.2rem;
+    padding: 0 0.2rem;
   }
 </style>

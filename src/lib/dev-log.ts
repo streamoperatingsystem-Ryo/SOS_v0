@@ -136,4 +136,40 @@ export const devLog: DevEntry[] = [
     date: "2026-08-28",
     note: "Section Connexions 5 plateformes (Twitch réel, autres « Bientôt »). Device Code Flow Twitch (twitch_auth.rs) + coffre keyring (Windows Credential Manager, service streamos-v0-twitch). Auto-resume boot si token valide. IRC WebSocket (twitch_chat.rs) → emit chat:message (dashboard) + chat_tx broadcast (diffusion :4321 WS type chat). Widget type « chat » : bulles carte arrondie, zébrage --fond, logo Twitch SVG 12px, filtre unifie/plateforme, taille police. Pas de 2e overlay, pas de play() dashboard.",
   },
+  {
+    id: 22,
+    titre: "Twitch Communauté Helix",
+    date: "2026-08-28",
+    note: "twitch_helix.rs : followers (pagination 100/page, login+followed_at), subs (total+points, liste tier 1/2/3 + gift), viewers (GetStreams), broadcaster (avatar+display_name+type). communaute.ts : chargerCommunaute (4 appels parallèle), 403 → communauteErreur=\"need_reauth\" → banner « Reconnecter Twitch pour la communauté » (reconnecterTwitch = revoke token + nouveau Device Flow scopes étendus). $effect Toolbar : twitch connecté → chargerCommunaute, déconnecté → resetCommunaute. Section Communauté sidebar : broadcaster (avatar+nom+type), viewers live ou Hors-ligne, followers (total + liste login+date), subs (total+points, liste tier+gift), bouton Rafraîchir.",
+  },
+  {
+    id: 23,
+    titre: "Pop-out chat (fenêtre détachable)",
+    date: "2026-08-28",
+    note: "chat_popout_toggle : WebviewWindowBuilder always_on_top 360×520 resizable, custom protocol streamos-chat://localhost/chat (HTML via include_str! chat-popout.html servi par register_uri_scheme_protocol). chat-popout.html : fond en dur #0e0e10 (pas de theme-sos.css), bulles + zébrage comme diffusion.html, écoute event chat:message. Bouton sidebar « Détacher »/« Réattacher » (toggle), croix native → emit popout-closed → bouton redevient « Détacher ». IRC inchangé dans les deux cas. chat_popout_fermer pour fermeture explicite.",
+  },
+  {
+    id: 24,
+    titre: "Kick : WebSocket Pusher cloud",
+    date: "2026-08-29",
+    note: "kick.rs : resolve_chatroom (GET kick.com/api/v2/channels/<slug>, headers UA+Referer+Origin pour Cloudflare, détection réponse HTML=blocage CF) → chatroom.id. run_ws : WS Pusher cloud wss://ws-us2.pusher.com (app key 32cbd69e4b950bf97679, cluster us2), subscribe chatrooms.<id>.v2, ping/pong 20s, App\\Events\\ChatMessageEvent (data double-encodée) → ChatMessage plateforme=\"kick\" + double diffusion emit chat:message + chat_tx. KickState : connected + slug + cancel(AtomicBool) + ws_handle(JoinHandle), stop_ws (cancel+abort), reset_cancel, cancel_clone. config.rs : kick.json {slug} sauver/lire/effacer. Auto-resume boot : lire_kick_slug → resolve_chatroom → run_ws. Store kick.ts : connecterKick(slug), deconnecterKick, lireSlugSauve. Toolbar : input slug + bouton Connecter/Déconnecter.",
+  },
+  {
+    id: 25,
+    titre: "TikTok : WebSocket Webcast (PirateTok)",
+    date: "2026-08-29",
+    note: "tiktok_chat.rs : crate piratetok-live-rs vendored dans vendor/ (build.rs neutralisé — bug Windows path separators). WS Webcast protobuf : Chat → ChatMessage plateforme=\"tiktok\" (pseudo=nickname, avatar=avatar_thumb.url_list[0]), RoomUserSeq → emit tiktok:viewers, Gift (log seulement, pas de forward — prévu event dédié plus tard), Like (ignoré). Auto-reconnect géré par PirateTok (50 retries, backoff exponentiel). TiktokState : chat_handle + cancel + connected + username. config.rs : tiktok.json {username} sauver/lire/effacer. Auto-resume boot : lire_tiktok_username → tiktok_chat::demarrer. Store tiktok.ts : connecterTiktok(username), deconnecterTiktok, lireUsernameSauve. Toolbar : input username + bouton Connecter/Déconnecter.",
+  },
+  {
+    id: 26,
+    titre: "YouTube : Device Flow + chat polling + Data API",
+    date: "2026-08-29",
+    note: "youtube_auth.rs : Device Code Flow Google (oauth2.googleapis.com), scope youtube.readonly, keyring streamos-v0-youtube, Tokens {access, refresh, user_id, channel_id, login}, refresh sur 401 + retry, revoke à la déconnexion. youtube_chat.rs : polling GET /liveChat/messages (pollingIntervalMillis respecté), resolve activeLiveChatId via /videos?part=liveStreamingDetails&mine=true, retry 30s si pas de live (emit youtube:erreur), backoff reconnexion, event youtube:pas-de-live → bouton Chat OFF. youtube_data.rs : channel (snippet+statistics → avatar, abonnés, vues, vidéos), members (GET /members, 403 géré gracieusement avec Device Flow), live viewers (concurrentViewers). YoutubeState : chat_handle + cancel + connected + login + channel_id + access. Auto-resume boot : lire_tokens keyring → connect_with_tokens_youtube. Store youtube.ts : connecterYoutube, deconnecterYoutube, demarrerChatYoutube/arreterChatYoutube (toggle Chat ON/OFF indépendant de la connexion compte). Toolbar : bouton Connecter/Déconnecter + Chat ON/OFF. Communauté YouTube dans sidebar : channel avatar+abonnés, viewers live, vues totales, vidéos, members liste.",
+  },
+  {
+    id: 27,
+    titre: "Topbar multi-plateformes + séparateurs",
+    date: "2026-08-29",
+    note: "App.svelte header : 6 indicateurs (Twitch/Kick/YouTube/TikTok/OBS/:4321) avec points vert/gris + libellé. Séparateurs verticaux (1px, opacité 25%) entre chaque indicateur. Slug Kick + username TikTok affichés à côté du libellé quand connecté (symétrie avec login Twitch/YouTube). Stores kickSlug + tiktokUsername dans chat.ts : listeners kick:connecte (lit slug persisté via kickSlugCourant car l'event émet le channel Pusher) + tiktok:connecte (payload=username directement), reset à null sur déconnexion, lecture au boot si auto-resume a déjà connecté.",
+  },
 ];

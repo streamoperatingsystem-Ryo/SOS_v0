@@ -1,7 +1,7 @@
 // Store scène côté dashboard. Source UI live pendant le drag.
 // invoke update_scene (save + snapshot :4321) seulement au create + pointerup.
 import { writable, get } from "svelte/store";
-import { tauri, type Scene, type Widget } from "../tauri";
+import { tauri, type Scene, type Widget, type CadreConfig } from "../tauri";
 import { obsHost, obsPort, obsPassword } from "./obs";
 
 export const sceneStore = writable<Scene>({
@@ -244,6 +244,13 @@ export async function resetMedia(id: string): Promise<void> {
 /// Après updateScene : sync OBS des sources trou (one-shot reconnect) si ≥1
 /// widget a obsSource. Erreur OBS → log discret, pas de crash.
 export async function commitScene(): Promise<void> {
+  // Guard : ne pas commiter tant que la scène n'est pas chargée depuis Rust.
+  // Sinon on risque d'écraser la scène RAM (vraie scène chargée par boot_scenes)
+  // avec la scène vide initiale du sceneStore → perte de données sur disque.
+  if (!get(loadedStore)) {
+    console.warn("commitScene: ignoré (scène pas encore chargée)");
+    return;
+  }
   try {
     await tauri.updateScene(get(sceneStore));
   } catch (e) {
@@ -506,4 +513,142 @@ export async function createObsTrouFromPc(
   }));
   await commitScene();
   return name;
+}
+
+// ===== Grille magnétique (snap entre widgets + canvas) =====
+// Cibles figées au début du drag (snapshot) → pas de get(sceneStore) par frame.
+// Seuil en px canvas (pas screen). Bypass si Alt enfoncé (free-drag).
+// Les guides visuels (AlignmentGuides) restent affichés en parallèle.
+
+export const SNAP_PX = 6;
+
+type SnapSide = "left" | "center" | "right" | "top" | "bottom";
+export type SnapTarget = { pos: number; side: SnapSide };
+
+/// Snapshot des cibles de snap pour un drag donné.
+/// Construit la liste des bords/centres des autres widgets + bords/centre canvas.
+/// Appelé UNE FOIS au pointerdown (pas par frame).
+export function buildSnapTargets(scene: Scene, draggedId: string): {
+  xs: SnapTarget[];
+  ys: SnapTarget[];
+} {
+  const cw = scene.canvasW ?? 1920;
+  const ch = scene.canvasH ?? 1080;
+  const xs: SnapTarget[] = [
+    { pos: 0, side: "left" },
+    { pos: cw / 2, side: "center" },
+    { pos: cw, side: "right" },
+  ];
+  const ys: SnapTarget[] = [
+    { pos: 0, side: "top" },
+    { pos: ch / 2, side: "center" },
+    { pos: ch, side: "bottom" },
+  ];
+  for (const o of scene.widgets) {
+    if (o.id === draggedId) continue;
+    xs.push({ pos: o.x, side: "left" });
+    xs.push({ pos: o.x + o.largeur / 2, side: "center" });
+    xs.push({ pos: o.x + o.largeur, side: "right" });
+    ys.push({ pos: o.y, side: "top" });
+    ys.push({ pos: o.y + o.hauteur / 2, side: "center" });
+    ys.push({ pos: o.y + o.hauteur, side: "bottom" });
+  }
+  return { xs, ys };
+}
+
+/// Calcule le snap pour une position brute donnée.
+/// Retourne la position snappée (ou la position brute si aucun snap).
+export function computeSnap(
+  rawX: number,
+  rawY: number,
+  w: number,
+  h: number,
+  targets: { xs: SnapTarget[]; ys: SnapTarget[] }
+): { x: number; y: number } {
+  // Points du widget déplacé (côté + position courante).
+  const dragXs: SnapTarget[] = [
+    { pos: rawX, side: "left" },
+    { pos: rawX + w / 2, side: "center" },
+    { pos: rawX + w, side: "right" },
+  ];
+  const dragYs: SnapTarget[] = [
+    { pos: rawY, side: "top" },
+    { pos: rawY + h / 2, side: "center" },
+    { pos: rawY + h, side: "bottom" },
+  ];
+
+  let snapX: number | null = null;
+  let snapY: number | null = null;
+  let bestDX = SNAP_PX;
+  let bestDY = SNAP_PX;
+
+  // X : pour chaque point du widget déplacé, cherche la cible la plus proche.
+  for (const d of dragXs) {
+    for (const t of targets.xs) {
+      const delta = t.pos - d.pos;
+      const ad = Math.abs(delta);
+      if (ad <= bestDX) {
+        bestDX = ad;
+        snapX = rawX + delta;
+      }
+    }
+  }
+  // Y : idem.
+  for (const d of dragYs) {
+    for (const t of targets.ys) {
+      const delta = t.pos - d.pos;
+      const ad = Math.abs(delta);
+      if (ad <= bestDY) {
+        bestDY = ad;
+        snapY = rawY + delta;
+      }
+    }
+  }
+
+  return {
+    x: snapX ?? rawX,
+    y: snapY ?? rawY,
+  };
+}
+
+// ===== Cadres SVG (widget + app) =====
+
+const CADRE_DEFAUT: CadreConfig = {
+  style: "carre",
+  strokeWidth: 4,
+  couleur: "#ffffff",
+  couleurFin: "#000000",
+  actif: false,
+};
+
+/// Met à jour le cadre des widgets (merge partiel + commit).
+export async function mettreAJourCadreScene(patch: Partial<CadreConfig>): Promise<void> {
+  sceneStore.update((s) => {
+    const cadreActuel = s.cadreWidget ?? { ...CADRE_DEFAUT };
+    return { ...s, cadreWidget: { ...cadreActuel, ...patch } };
+  });
+  await commitScene();
+}
+
+/// Met à jour le cadre de l'application (bord canvas, merge partiel + commit).
+export async function mettreAJourCadreApp(patch: Partial<CadreConfig>): Promise<void> {
+  sceneStore.update((s) => {
+    const cadreActuel = s.cadreApp ?? { ...CADRE_DEFAUT };
+    return { ...s, cadreApp: { ...cadreActuel, ...patch } };
+  });
+  await commitScene();
+}
+
+/// Bascule l'état actif du cadre des widgets.
+export async function toggleCadreWidgetActif(): Promise<void> {
+  const s = get(sceneStore);
+  const cadre = s.cadreWidget ?? { ...CADRE_DEFAUT };
+  await mettreAJourCadreScene({ actif: !cadre.actif });
+}
+
+/// Bascule l'état actif du cadre de l'application.
+export async function toggleCadreAppActif(): Promise<void> {
+  const s = get(sceneStore);
+  const cadre = s.cadreApp ?? { ...CADRE_DEFAUT };
+  await mettreAJourCadreApp({ actif: !cadre.actif });
 }

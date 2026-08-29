@@ -1,10 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { loadScene } from "./lib/stores/scene";
+  import { loadScene, selectedIdStore, loadedStore } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene } from "./lib/stores/scenes";
+  import { confirmDeleteWidget, cadreModalOpen } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsHost, obsPort, obsPassword } from "./lib/stores/obs";
-  import { initChat, twitchDevice, twitchLogin, connexions } from "./lib/stores/chat";
+  import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions } from "./lib/stores/chat";
   import { tauri } from "./lib/tauri";
   import { get } from "svelte/store";
   import Toolbar from "./lib/components/Toolbar.svelte";
@@ -12,6 +13,8 @@
   import SceneBar from "./lib/components/SceneBar.svelte";
   import DevPanel from "./lib/components/DevPanel.svelte";
   import TwitchDeviceModal from "./lib/components/TwitchDeviceModal.svelte";
+  import ConfirmDeleteWidgetModal from "./lib/components/ConfirmDeleteWidgetModal.svelte";
+  import CadresModal from "./lib/components/CadresModal.svelte";
 
   let serverError = $state<string | null>(null);
   let serverOk = $state(false);
@@ -24,6 +27,9 @@
   // États dérivés pour le bandeau unique (Twitch / OBS / :4321).
   let cx = $derived($connexions);
   let login = $derived($twitchLogin);
+  let ytLogin = $derived($youtubeLogin);
+  let kickSl = $derived($kickSlug);
+  let ttUser = $derived($tiktokUsername);
   let obsSt = $derived($obsStatus);
 
   function toggleDev() {
@@ -31,6 +37,25 @@
   }
   function closeDev() {
     devOpen = false;
+  }
+
+  // ===== Boutons topbar : Arrêter / Redémarrer / Refresh OBS =====
+  async function onArreter() {
+    try {
+      await tauri.appArreter();
+    } catch (e) {
+      console.error("onArreter:", e);
+    }
+  }
+  async function onRedemarrer() {
+    try {
+      await tauri.appRedemarrer();
+    } catch (e) {
+      console.error("onRedemarrer:", e);
+    }
+  }
+  async function onRefreshObs() {
+    await refreshDiffusion();
   }
 
   // Refresh SOS-Diffusion : appelle obs_refresh_diffusion (refreshnocache).
@@ -123,30 +148,76 @@
 
     return () => unsubObs();
   });
+
+  // Suppr : demande confirmation suppression widget (même flux que bouton Toolbar).
+  // Attaché via <svelte:window onkeydown> (cf. template) — pas window.addEventListener —
+  // pour (1) s'attacher synchrone au mount (pas après les awaits du onMount),
+  // (2) tourner dans le contexte d'événement Svelte (la mise à jour du store
+  //     confirmDeleteWidget déclenche bien le re-render, comme le bouton Toolbar),
+  // (3) être nettoyé automatiquement au destroy/HMR.
+  // Aucun conflit avec le onkeydown de SceneBar (qui ne gère que Escape et ne
+  // propage ni ne prévient rien) : plusieurs <svelte:window onkeydown> coexistent.
+  // Ignore si focus dans un input/contenteditable (rename scène, etc.).
+  function onSupprKey(e: KeyboardEvent) {
+    if (e.key !== "Delete") return;
+    const t = e.target as HTMLElement;
+    if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+    if (!get(loadedStore)) return;
+    const id = get(selectedIdStore);
+    if (!id) return;
+    e.preventDefault();
+    // Ouvre la modale de confirmation (ConfirmDeleteWidgetModal montée ci-dessous).
+    confirmDeleteWidget.set(true);
+  }
 </script>
 
-<!-- Clic hors du bloc Dev → ferme le panneau -->
-<svelte:window onclick={closeDev} />
+<!-- Clic hors du bloc Dev → ferme le panneau.
+     onkeydown : touche Suppr → confirmation suppression widget (handler onSupprKey). -->
+<svelte:window onclick={closeDev} onkeydown={onSupprKey} />
 
 <main>
   <header>
     <span class="title">StreamOS v0</span>
     <div class="right">
-      <!-- Bandeau unique : Twitch / OBS / :4321 (lecture seule) -->
+      <!-- Bandeau unique : Twitch / Kick / YouTube / TikTok / OBS / :4321 (lecture seule) -->
       <span class="bandeau">
         <span class="indicateur" class:on={cx.twitch} class:off={!cx.twitch}>
           <span class="dot" class:on={cx.twitch} class:off={!cx.twitch}></span>
           Twitch{#if cx.twitch && login} : {login}{/if}
         </span>
+        <span class="bandeau-sep"></span>
+        <span class="indicateur" class:on={cx.kick} class:off={!cx.kick}>
+          <span class="dot" class:on={cx.kick} class:off={!cx.kick}></span>
+          Kick{#if cx.kick && kickSl} : {kickSl}{/if}
+        </span>
+        <span class="bandeau-sep"></span>
+        <span class="indicateur" class:on={cx.youtube} class:off={!cx.youtube}>
+          <span class="dot" class:on={cx.youtube} class:off={!cx.youtube}></span>
+          YouTube{#if cx.youtube && ytLogin} : {ytLogin}{/if}
+        </span>
+        <span class="bandeau-sep"></span>
+        <span class="indicateur" class:on={cx.tiktok} class:off={!cx.tiktok}>
+          <span class="dot" class:on={cx.tiktok} class:off={!cx.tiktok}></span>
+          TikTok{#if cx.tiktok && ttUser} : {ttUser}{/if}
+        </span>
+        <span class="bandeau-sep"></span>
         <span class="indicateur" class:on={obsSt === "connected"} class:off={obsSt !== "connected"}>
           <span class="dot" class:on={obsSt === "connected"} class:off={obsSt !== "connected"}></span>
           OBS{#if obsSt === "connected"} OK{:else if obsSt === "error"} Err{/if}
         </span>
+        <span class="bandeau-sep"></span>
         <span class="indicateur" class:on={serverOk} class:off={!serverOk}>
           <span class="dot" class:on={serverOk} class:off={!serverOk}></span>
           :4321{#if serverError} Err{:else if serverOk} prêt{:else} …{/if}
         </span>
       </span>
+      <!-- Boutons contrôle : Arrêter / Redémarrer / Refresh OBS -->
+      <span class="bandeau-sep"></span>
+      <div class="ctrl-buttons">
+        <button class="ctrl-btn" onclick={onArreter} title="Arrêter l'application">■</button>
+        <button class="ctrl-btn" onclick={onRedemarrer} title="Redémarrer l'application">↻</button>
+        <button class="ctrl-btn" onclick={onRefreshObs} title="Refresh OBS / SOS-Diffusion">⟳</button>
+      </div>
       <!-- TEMPORAIRE — bouton Dev. Retirer avant release. -->
       <div
         class="dev-wrap"
@@ -171,8 +242,16 @@
   </div>
 </main>
 
-{#if $twitchDevice}
+{#if $twitchDevice || $youtubeDevice}
   <TwitchDeviceModal />
+{/if}
+
+<!-- Modale confirmation suppression widget (bouton Toolbar + touche Suppr) -->
+<ConfirmDeleteWidgetModal />
+
+<!-- Modale galerie de cadres SVG (section Personnalisation) -->
+{#if $cadreModalOpen}
+  <CadresModal mode={$cadreModalOpen} />
 {/if}
 
 <style>
@@ -203,6 +282,13 @@
     align-items: center;
     gap: 0.7rem;
     font-size: 0.8rem;
+  }
+  .bandeau-sep {
+    width: 1px;
+    height: 0.9rem;
+    background: var(--texte);
+    opacity: 0.25;
+    flex-shrink: 0;
   }
   .indicateur {
     display: inline-flex;
@@ -239,6 +325,27 @@
   .dev-btn:hover {
     background: var(--texte);
     color: var(--fond);
+  }
+  .ctrl-buttons {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+  }
+  .ctrl-btn {
+    background: var(--fond);
+    color: var(--texte);
+    border: 1px solid var(--texte);
+    padding: 0.1rem 0.4rem;
+    font: inherit;
+    font-size: 0.85rem;
+    line-height: 1;
+    cursor: pointer;
+    opacity: 0.7;
+  }
+  .ctrl-btn:hover {
+    background: var(--texte);
+    color: var(--fond);
+    opacity: 1;
   }
   .row {
     flex: 1;

@@ -313,6 +313,47 @@ pub fn renommer(app: &AppHandle, id: &str, nom: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Supprime une scène : retire <id>.json + entrée index. Si la scène supprimée
+/// est la courante, bascule sur la 1ère scène restante (ou scène vide si plus
+/// aucune). Refuse si c'est la dernière scène (au moins 1 obligatoire).
+pub fn supprimer(app: &AppHandle, state: &ScenesState, id: &str) -> Result<(), String> {
+    let mut idx = load_index(app)?;
+    if idx.len() <= 1 {
+        return Err("Impossible de supprimer la dernière scène".into());
+    }
+    let pos = idx.iter().position(|s| s.id == id)
+        .ok_or_else(|| format!("Scène {} introuvable dans l'index", id))?;
+
+    // 1. Supprimer <id>.json du disque (non-fatal si absent)
+    if let Ok(path) = scene_file_path(app, id) {
+        if path.exists() {
+            let _ = fs::remove_file(&path);
+        }
+    }
+
+    // 2. Retirer l'entrée de l'index + sauver
+    let entry = idx.remove(pos);
+    save_index(app, &idx)?;
+
+    // 3. Si la scène supprimée est la courante → basculer sur la 1ère restante
+    let current_id = state.current_id.lock().unwrap().clone();
+    if current_id == id {
+        let new_id = idx[0].id.clone();
+        let scene = load_scene_file(app, &new_id).unwrap_or_else(|_| Scene::new());
+        {
+            let mut s = state.scene.lock().unwrap();
+            *s = scene;
+            let mut cid = state.current_id.lock().unwrap();
+            *cid = new_id.clone();
+        }
+        save_current_id_config(app, &new_id)?;
+        push_snapshot(state);
+    }
+
+    log::info!("Scène supprimée : « {} » (id={})", entry.nom, id);
+    Ok(())
+}
+
 /// Retourne l'entrée courante ({ id, nom }).
 pub fn courante(app: &AppHandle, state: &ScenesState) -> Result<SceneIndex, String> {
     let id = state.current_id.lock().unwrap().clone();

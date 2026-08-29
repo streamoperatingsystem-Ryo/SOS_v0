@@ -69,6 +69,21 @@
         align-self: center;
         opacity: 0.85;
       }
+      .chat-msg .plat-badge {
+        flex-shrink: 0;
+        align-self: center;
+        font-size: 0.55em;
+        font-weight: 700;
+        padding: 0 0.2rem;
+        border-radius: 0.15rem;
+        color: #fff;
+        line-height: 1.4;
+        margin-right: 0.1rem;
+      }
+      .chat-msg .plat-badge.twitch { background: #9146ff; }
+      .chat-msg .plat-badge.kick { background: #53fc18; color: #000; }
+      .chat-msg .plat-badge.youtube { background: #ff0000; }
+      .chat-msg .plat-badge.tiktok { background: #000; }
       .chat-msg .pseudo {
         font-weight: 600;
         flex-shrink: 0;
@@ -91,6 +106,17 @@
       var TWITCH_LOGO_SVG = '<svg class="logo" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
         + '<path fill="currentColor" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/>'
         + '<rect x="9" y="4" width="1" height="3"/><rect x="6" y="4" width="1" height="3"/></svg>';
+
+      var KICK_LOGO_SVG = '<svg class="logo" viewBox="0 0 24 24" width="12" height="12" aria-hidden="true">'
+        + '<path fill="#53fc18" d="M5 2h4v6h2V6h2V4h2V2h4v6h-2v2h-2v4h2v2h2v6h-4v-2h-2v-2h-2v4H5z"/></svg>';
+
+      function logoPlateforme(p) {
+        if (p === "twitch") return TWITCH_LOGO_SVG;
+        if (p === "kick") return KICK_LOGO_SVG;
+        if (p === "youtube") return '<span class="plat-badge youtube">YT</span>';
+        if (p === "tiktok") return '<span class="plat-badge tiktok">TT</span>';
+        return "";
+      }
 
       function escapeHtml(s) {
         return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;")
@@ -126,7 +152,7 @@
           var m = chatMessages[i];
           var div = document.createElement("div");
           div.className = "chat-msg" + (i % 2 === 0 ? " pair" : "");
-          var logo = m.plateforme === "twitch" ? TWITCH_LOGO_SVG : "";
+          var logo = logoPlateforme(m.plateforme);
           var avatar = m.avatar
             ? '<img class="avatar" src="' + escapeHtml(m.avatar) + '" width="24" height="24" alt="" referrerpolicy="no-referrer">'
             : "";

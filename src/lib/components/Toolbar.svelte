@@ -1,10 +1,14 @@
 <script lang="ts">
-  import { createWidget, createChatWidget, importMedia, setMediaFit, deleteWidget, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime, setWidgetTrou, deleteObsTrouSource, setChatFiltre, setChatTaillePolice } from "../stores/scene";
+  import { createWidget, createChatWidget, importMedia, setMediaFit, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime, setWidgetTrou, deleteObsTrouSource, setChatFiltre, setChatTaillePolice, toggleCadreWidgetActif, toggleCadreAppActif } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
-  import { openSection, toggleSection } from "../stores/ui";
+  import { openSection, toggleSection, confirmDeleteWidget, cadreModalOpen } from "../stores/ui";
   import { videoRegistry } from "../stores/video";
   import { connexions, connecterTwitch, deconnecterTwitch, reconnecterTwitch, twitchErreur, twitchLogin, type ChatFiltre } from "../stores/chat";
-  import { followers, subs, viewers, broadcaster, communauteErreur, chargerCommunaute, chargerFollowers, chargerSubs, chargerViewers, resetCommunaute } from "../stores/communaute";
+  import { connecterKick, deconnecterKick, kickErreur as kickErreurStore, lireSlugSauve } from "../stores/kick";
+  import { connecterYoutube, deconnecterYoutube, demarrerChatYoutube } from "../stores/youtube";
+  import { connecterTiktok, deconnecterTiktok, lireUsernameSauve } from "../stores/tiktok";
+  import { youtubeErreur as youtubeErreurStore, youtubeLogin as youtubeLoginStore, tiktokErreur as tiktokErreurStore, youtubeChatActif as youtubeChatActifStore } from "../stores/chat";
+  import { followers, subs, viewers, broadcaster, communauteErreur, chargerCommunaute, chargerFollowers, chargerSubs, chargerViewers, resetCommunaute, chargerCommunauteYoutube, youtubeChannel, youtubeMembers, youtubeViewers } from "../stores/communaute";
   import { tauri } from "../tauri";
   import { get } from "svelte/store";
   import { onMount } from "svelte";
@@ -19,12 +23,20 @@
   let open = $derived($openSection);
   let cx = $derived($connexions);
   let twitchErr = $derived($twitchErreur);
+  let kickErr = $derived($kickErreurStore);
+  let ytErr = $derived($youtubeErreurStore);
+  let ytLogin = $derived($youtubeLoginStore);
+  let ytChatOn = $derived($youtubeChatActifStore);
+  let ttErr = $derived($tiktokErreurStore);
   let login = $derived($twitchLogin);
   let communauteErr = $derived($communauteErreur);
   let followersData = $derived($followers);
   let subsData = $derived($subs);
   let viewersData = $derived($viewers);
   let broadcasterData = $derived($broadcaster);
+  let ytChannel = $derived($youtubeChannel);
+  let ytMembers = $derived($youtubeMembers);
+  let ytViewers = $derived($youtubeViewers);
 
   // id court = 8 premiers caractères
   let shortId = $derived(selectedId ? selectedId.slice(0, 8) : "");
@@ -42,6 +54,12 @@
   let isChatWidget = $derived(selectedType === "chat");
   let chatFiltreVal = $derived(selectedWidget?.chatFiltre ?? "unifie");
   let chatTaille = $derived(selectedWidget?.taillePolice ?? 16);
+
+  // ===== Cadres SVG (section Personnalisation) =====
+  let cadreWidget = $derived($sceneStore.cadreWidget ?? null);
+  let cadreApp = $derived($sceneStore.cadreApp ?? null);
+  let cadreWidgetActif = $derived(!!cadreWidget?.actif);
+  let cadreAppActif = $derived(!!cadreApp?.actif);
 
   const FIT_MODES = ["ajuster", "remplir", "etendre", "etirer", "centrer", "vignette"];
 
@@ -82,9 +100,41 @@
   async function onTwitchDisconnect() {
     await deconnecterTwitch();
   }
+  async function onKickConnect() {
+    const slug = kickSlug.trim();
+    if (!slug) return;
+    await connecterKick(slug);
+  }
+  async function onKickDisconnect() {
+    await deconnecterKick();
+  }
+  async function onYoutubeConnect() {
+    await connecterYoutube();
+  }
+  async function onYoutubeDisconnect() {
+    await deconnecterYoutube();
+  }
+  async function onYoutubeChatToggle() {
+    if (ytChatOn) {
+      // OFF : arrêter le chat polling sans déconnecter le compte.
+      await arreterChatYoutube();
+      youtubeChatActifStore.set(false);
+    } else {
+      youtubeChatActifStore.set(true);
+      await demarrerChatYoutube();
+    }
+  }
+  async function onTiktokConnect() {
+    const username = tiktokUsername.trim().replace(/^@/, "");
+    if (!username) return;
+    await connecterTiktok(username);
+  }
+  async function onTiktokDisconnect() {
+    await deconnecterTiktok();
+  }
 
   // ===== Chat widget (filtre + taille police) =====
-  const FILTRES: ChatFiltre[] = ["unifie", "twitch", "youtube", "kick", "facebook", "tiktok"];
+  const FILTRES: ChatFiltre[] = ["unifie", "twitch", "youtube", "kick", "tiktok"];
   function onFiltreClick(f: ChatFiltre) {
     if (selectedId) setChatFiltre(selectedId, f);
   }
@@ -97,11 +147,21 @@
   // « Détacher » ouvre, « Réattacher » ferme. IRC inchangé dans les deux cas.
   // Si l'utilisateur ferme via la croix → Rust emit "popout-closed" → popoutOpen=false.
   let popoutOpen = $state(false);
+  let kickSlug = $state("");
+  let tiktokUsername = $state("");
 
   onMount(async () => {
     await listen("popout-closed", () => {
       popoutOpen = false;
     });
+    // Pré-remplir le slug Kick si sauvegardé (au cas où l'auto-resume échoue).
+    if (!kickSlug) {
+      kickSlug = (await lireSlugSauve()) ?? "";
+    }
+    // Pré-remplir le username TikTok si sauvegardé (au cas où l'auto-resume échoue).
+    if (!tiktokUsername) {
+      tiktokUsername = (await lireUsernameSauve()) ?? "";
+    }
   });
 
   // ===== Communauté =====
@@ -118,8 +178,19 @@
     }
   });
 
+  // $effect YouTube : charge la communauté YouTube quand connecté.
+  $effect(() => {
+    if (cx.youtube) {
+      console.log("[Communauté] youtube connecté → chargement");
+      chargerCommunauteYoutube();
+    }
+  });
+
   async function onRafraichirCommunaute() {
     await chargerCommunaute();
+    if (cx.youtube) {
+      await chargerCommunauteYoutube();
+    }
   }
   async function onReconnecterTwitch() {
     await reconnecterTwitch();
@@ -133,20 +204,10 @@
     }
   }
 
-  // Confirmation suppression : 2 états (idle → confirm).
-  let confirmDelete = $state(false);
-
+  // Suppression widget : ouvre la modale de confirmation (ConfirmDeleteWidgetModal,
+  // montée dans App.svelte). La touche Suppr déclenche le même store.
   function onSupprimerClick() {
-    confirmDelete = true;
-  }
-
-  async function onSupprimerConfirm() {
-    confirmDelete = false;
-    if (selectedId) await deleteWidget(selectedId);
-  }
-
-  function onSupprimerCancel() {
-    confirmDelete = false;
+    confirmDeleteWidget.set(true);
   }
 
   // ===== Fond de scène =====
@@ -432,17 +493,7 @@
               />
             {/if}
           {/if}
-          {#if confirmDelete}
-            <div class="confirm">
-              <span class="confirm-label">Supprimer ce widget ?</span>
-              <div class="confirm-buttons">
-                <button class="action" onclick={onSupprimerConfirm}>Oui</button>
-                <button class="action" onclick={onSupprimerCancel}>Non</button>
-              </div>
-            </div>
-          {:else}
-            <button class="action" onclick={onSupprimerClick}>Supprimer le widget</button>
-          {/if}
+          <button class="action" onclick={onSupprimerClick}>Supprimer le widget</button>
         {/if}
       </div>
     {/if}
@@ -466,27 +517,48 @@
           {/if}
         </div>
         <div class="connexion-row">
-          <span class="dot off"></span>
+          <span class="dot" class:on={cx.youtube} class:off={!cx.youtube}></span>
           <span class="plat-nom">YouTube</span>
-          <button class="action small" disabled>Bientôt</button>
+          {#if cx.youtube}
+            <button class="action small" onclick={onYoutubeDisconnect}>Déconnecter</button>
+            <button class="action small" class:on={ytChatOn} class:off={!ytChatOn} onclick={onYoutubeChatToggle}>
+              {ytChatOn ? "Chat ON" : "Chat OFF"}
+            </button>
+          {:else}
+            <button class="action small" onclick={onYoutubeConnect}>Connecter</button>
+          {/if}
         </div>
         <div class="connexion-row">
-          <span class="dot off"></span>
+          <span class="dot" class:on={cx.kick} class:off={!cx.kick}></span>
           <span class="plat-nom">Kick</span>
-          <button class="action small" disabled>Bientôt</button>
+          {#if cx.kick}
+            <button class="action small" onclick={onKickDisconnect}>Déconnecter</button>
+          {:else}
+            <input class="plat-input" type="text" placeholder="slug" bind:value={kickSlug} spellcheck="false" />
+            <button class="action small" onclick={onKickConnect}>Connecter</button>
+          {/if}
         </div>
         <div class="connexion-row">
-          <span class="dot off"></span>
-          <span class="plat-nom">Facebook Live</span>
-          <button class="action small" disabled>Bientôt</button>
-        </div>
-        <div class="connexion-row">
-          <span class="dot off"></span>
+          <span class="dot" class:on={cx.tiktok} class:off={!cx.tiktok}></span>
           <span class="plat-nom">TikTok</span>
-          <button class="action small" disabled>Bientôt</button>
+          {#if cx.tiktok}
+            <button class="action small" onclick={onTiktokDisconnect}>Déconnecter</button>
+          {:else}
+            <input class="plat-input" type="text" placeholder="username" bind:value={tiktokUsername} spellcheck="false" />
+            <button class="action small" onclick={onTiktokConnect}>Connecter</button>
+          {/if}
         </div>
         {#if twitchErr}
           <span class="obs-status">{twitchErr}</span>
+        {/if}
+        {#if kickErr}
+          <span class="obs-status">{kickErr}</span>
+        {/if}
+        {#if ytErr}
+          <span class="obs-status">{ytErr}</span>
+        {/if}
+        {#if ttErr}
+          <span class="obs-status">{ttErr}</span>
         {/if}
       </div>
     {/if}
@@ -576,6 +648,68 @@
 
           <button class="action" onclick={onRafraichirCommunaute}>Rafraîchir</button>
         {/if}
+
+        <!-- ===== YouTube ===== -->
+        {#if cx.youtube}
+          <hr class="sep" />
+          <div class="communaute-row">
+            <span class="field-label" style="font-weight:600">YouTube</span>
+          </div>
+
+          <!-- Channel info -->
+          {#if ytChannel}
+            <div class="broadcaster">
+              {#if ytChannel.profile_image_url}
+                <img
+                  class="avatar"
+                  src={ytChannel.profile_image_url}
+                  alt={ytChannel.display_name}
+                />
+              {/if}
+              <div class="bc-info">
+                <span class="bc-name">{ytChannel.display_name}</span>
+                <span class="bc-type">{ytChannel.subscriber_count} abonnés</span>
+              </div>
+            </div>
+          {/if}
+
+          <!-- Live viewers -->
+          <div class="communaute-row">
+            <span class="field-label">Viewers live</span>
+            <span class="communaute-val">
+              {#if ytViewers !== null && ytViewers !== undefined}
+                {ytViewers}
+              {:else}
+                Hors-ligne
+              {/if}
+            </span>
+          </div>
+
+          <!-- Stats -->
+          <div class="communaute-row">
+            <span class="field-label">Vues totales</span>
+            <span class="communaute-val">{ytChannel?.view_count ?? "…"}</span>
+          </div>
+          <div class="communaute-row">
+            <span class="field-label">Vidéos</span>
+            <span class="communaute-val">{ytChannel?.video_count ?? "…"}</span>
+          </div>
+
+          <!-- Members -->
+          <div class="communaute-row">
+            <span class="field-label">Members ({ytMembers?.total ?? "…"})</span>
+          </div>
+          {#if ytMembers}
+            <div class="liste-scroll">
+              {#each ytMembers.liste as m}
+                <div class="liste-entry">
+                  <span class="liste-login">{m.display_name}</span>
+                  <span class="liste-tier">{m.memberships_level}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+        {/if}
       </div>
     {/if}
   </div>
@@ -610,6 +744,38 @@
             {error}
           {/if}
         </span>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Section Personnalisation (cadres SVG) -->
+  <div class="section">
+    <button class="header" onclick={() => toggleSection("personnalisation")}>
+      <span class="arrow">{open === "personnalisation" ? "▼" : "▶"}</span>
+      <span>Personnalisation</span>
+    </button>
+    {#if open === "personnalisation"}
+      <div class="content">
+        <!-- Cadre des widgets -->
+        <div class="cadre-bloc">
+          <span class="cadre-bloc-titre">Cadre des widgets</span>
+          <button class="action" onclick={() => toggleCadreWidgetActif()}>
+            {cadreWidgetActif ? "Désactiver" : "Activer"}
+          </button>
+          <button class="action" onclick={() => cadreModalOpen.set("widget")}>
+            Galerie
+          </button>
+        </div>
+        <!-- Cadre de l'application -->
+        <div class="cadre-bloc">
+          <span class="cadre-bloc-titre">Cadre de l'application</span>
+          <button class="action" onclick={() => toggleCadreAppActif()}>
+            {cadreAppActif ? "Désactiver" : "Activer"}
+          </button>
+          <button class="action" onclick={() => cadreModalOpen.set("app")}>
+            Galerie
+          </button>
+        </div>
       </div>
     {/if}
   </div>
@@ -768,19 +934,6 @@
     background: var(--fond);
     color: var(--texte);
   }
-  .confirm {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-  .confirm-label {
-    font-size: 0.85rem;
-  }
-  .confirm-buttons {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.25rem;
-  }
   .connexion-row {
     display: flex;
     align-items: center;
@@ -806,6 +959,12 @@
   }
   .action.small {
     padding: 0.15rem 0.4rem;
+    font-size: 0.78rem;
+  }
+  .plat-input {
+    width: 70px;
+    flex-shrink: 0;
+    padding: 0.1rem 0.3rem;
     font-size: 0.78rem;
   }
   .need-reauth {
@@ -839,6 +998,12 @@
     font-size: 0.7rem;
     opacity: 0.6;
   }
+  .sep {
+    border: none;
+    border-top: 1px solid var(--texte);
+    opacity: 0.2;
+    margin: 0.5rem 0;
+  }
   .communaute-row {
     display: flex;
     justify-content: space-between;
@@ -871,5 +1036,21 @@
   .liste-date, .liste-tier {
     opacity: 0.6;
     font-size: 0.72rem;
+  }
+  /* Section Personnalisation — cadres SVG */
+  .cadre-bloc {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    padding: 0.3rem 0;
+    border-bottom: 1px solid rgba(224, 224, 224, 0.1);
+  }
+  .cadre-bloc:last-child {
+    border-bottom: none;
+  }
+  .cadre-bloc-titre {
+    font-size: 0.8rem;
+    font-weight: 600;
+    opacity: 0.85;
   }
 </style>

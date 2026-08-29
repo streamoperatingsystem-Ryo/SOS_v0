@@ -59,6 +59,52 @@ fn default_zero_f64() -> f64 {
     0.0
 }
 
+fn default_cadre_style() -> String {
+    "carre".to_string()
+}
+
+fn default_cadre_stroke_width() -> f64 {
+    4.0
+}
+
+fn default_cadre_couleur() -> String {
+    "#ffffff".to_string()
+}
+
+fn default_cadre_couleur_fin() -> String {
+    "#000000".to_string()
+}
+
+/// Configuration d'un cadre SVG (widget ou bord canvas).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CadreConfig {
+    #[serde(default = "default_cadre_style")]
+    pub style: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variante: Option<String>,
+    #[serde(default = "default_cadre_stroke_width")]
+    pub strokeWidth: f64,
+    #[serde(default = "default_cadre_couleur")]
+    pub couleur: String,
+    #[serde(default = "default_cadre_couleur_fin")]
+    pub couleurFin: String,
+    #[serde(default)]
+    pub actif: bool,
+}
+
+impl Default for CadreConfig {
+    fn default() -> Self {
+        Self {
+            style: default_cadre_style(),
+            variante: None,
+            strokeWidth: default_cadre_stroke_width(),
+            couleur: default_cadre_couleur(),
+            couleurFin: default_cadre_couleur_fin(),
+            actif: false,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Widget {
     pub id: String,
@@ -95,7 +141,7 @@ pub struct Widget {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obsSource: Option<String>,
     /// Filtre chat pour les widgets type "chat" : "unifie" (défaut) ou
-    /// une plateforme ("twitch", "youtube", "kick", "facebook", "tiktok").
+    /// une plateforme ("twitch", "youtube", "kick", "tiktok").
     /// None pour les widgets non-chat.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub chatFiltre: Option<String>,
@@ -129,6 +175,12 @@ pub struct Scene {
     pub bgPaused: bool,
     #[serde(default = "default_zero_f64")]
     pub bgTime: f64,
+    /// Cadre appliqué à chaque widget (clip-path + overlay SVG). None = aucun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cadreWidget: Option<CadreConfig>,
+    /// Cadre appliqué au bord extérieur du canvas. None = aucun.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cadreApp: Option<CadreConfig>,
 }
 
 impl Default for Scene {
@@ -144,6 +196,8 @@ impl Default for Scene {
             bgRot: DEFAULT_BG_ROT,
             bgPaused: true,
             bgTime: 0.0,
+            cadreWidget: None,
+            cadreApp: None,
         }
     }
 }

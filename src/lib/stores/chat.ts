@@ -16,7 +16,6 @@ export interface Connexions {
   twitch: boolean;
   youtube: boolean;
   kick: boolean;
-  facebook: boolean;
   tiktok: boolean;
 }
 
@@ -26,7 +25,7 @@ export interface DeviceInfo {
   expires_in: number;
 }
 
-export type ChatFiltre = "unifie" | "twitch" | "youtube" | "kick" | "facebook" | "tiktok";
+export type ChatFiltre = "unifie" | "twitch" | "youtube" | "kick" | "tiktok";
 
 const MAX_MESSAGES = 200;
 
@@ -34,7 +33,6 @@ export const connexions = writable<Connexions>({
   twitch: false,
   youtube: false,
   kick: false,
-  facebook: false,
   tiktok: false,
 });
 
@@ -52,6 +50,32 @@ export const twitchErreur = writable<string | null>(null);
 
 /// Login du compte Twitch connecté (null si déconnecté). Affiché dans le bandeau.
 export const twitchLogin = writable<string | null>(null);
+
+/// Infos Device Code Flow YouTube (pilotage modal). null = pas de flow en cours.
+export const youtubeDevice = writable<DeviceInfo | null>(null);
+
+/// Erreur YouTube (affichage discret). null = pas d'erreur.
+export const youtubeErreur = writable<string | null>(null);
+
+/// Erreur TikTok (affichage discret). null = pas d'erreur.
+export const tiktokErreur = writable<string | null>(null);
+
+/// Login de la chaîne YouTube connectée (null si déconnecté). Affiché dans le bandeau.
+export const youtubeLogin = writable<string | null>(null);
+
+/// Chat live YouTube actif (true = polling en cours, false = arrêté).
+/// Contrôlé par le bouton "Chat live ON/OFF" dans la Toolbar.
+/// Passe à false automatiquement quand le live se termine ou n'existe pas.
+export const youtubeChatActif = writable<boolean>(false);
+
+/// Slug du canal Kick connecté (null si déconnecté). Affiché dans le bandeau.
+/// Kick n'émet pas le slug dans son event (il émet le channel Pusher), donc
+/// on lit le slug persisté via kickSlugCourant() après connexion.
+export const kickSlug = writable<string | null>(null);
+
+/// Username du streamer TikTok suivi (null si déconnecté). Affiché dans le bandeau.
+/// tiktok:connecte émet directement le username dans son payload.
+export const tiktokUsername = writable<string | null>(null);
 
 let initialized = false;
 
@@ -94,16 +118,107 @@ export async function initChat(): Promise<void> {
     twitchErreur.set(e.payload);
   });
 
+  // Kick : connecté/déconnecté (le WS est côté Rust, ces events viennent
+  // de Rust qui marque l'état). L'event émet le channel Pusher (pas le slug),
+  // donc on lit le slug persisté pour l'afficher dans le bandeau.
+  await listen<string>("kick:connecte", async () => {
+    connexions.update((c) => ({ ...c, kick: true }));
+    try {
+      kickSlug.set(await tauri.kickSlugCourant());
+    } catch {
+      kickSlug.set(null);
+    }
+  });
+  await listen("kick:deconnecte", () => {
+    connexions.update((c) => ({ ...c, kick: false }));
+    kickSlug.set(null);
+  });
+
+  // YouTube : Device Code Flow + connecté/déconnecté/erreur.
+  await listen<DeviceInfo>("youtube:device", (e) => {
+    youtubeDevice.set(e.payload);
+    youtubeErreur.set(null);
+  });
+  await listen<string>("youtube:connecte", (e) => {
+    connexions.update((c) => ({ ...c, youtube: true }));
+    youtubeLogin.set(e.payload);
+    youtubeDevice.set(null);
+    youtubeErreur.set(null);
+  });
+  await listen("youtube:deconnecte", () => {
+    connexions.update((c) => ({ ...c, youtube: false }));
+    youtubeLogin.set(null);
+    youtubeChatActif.set(false);
+  });
+  await listen<string>("youtube:erreur", (e) => {
+    youtubeErreur.set(e.payload);
+  });
+
+  // Chat live YouTube : pas de live actif → le polling s'arrête, bouton OFF.
+  await listen("youtube:pas-de-live", () => {
+    youtubeChatActif.set(false);
+  });
+
+  // TikTok : connecté/déconnecté/erreur (le WS PirateTok est côté Rust).
+  // tiktok:connecte émet le username du streamer dans son payload.
+  await listen<string>("tiktok:connecte", (e) => {
+    connexions.update((c) => ({ ...c, tiktok: true }));
+    tiktokUsername.set(e.payload);
+  });
+  await listen("tiktok:deconnecte", () => {
+    connexions.update((c) => ({ ...c, tiktok: false }));
+    tiktokUsername.set(null);
+  });
+  await listen<string>("tiktok:erreur", (e) => {
+    tiktokErreur.set(e.payload);
+  });
+
   // Lire l'état initial (l'auto-resume Rust a pu déjà émettre twitch:connecte).
+  // Ne pas écraser si déjà à jour : si twitch:connecte a déjà mis twitch=true,
+  // retourner la même référence évite de re-déclencher le $effect → chargerCommunaute().
   try {
     const etat = await tauri.twitchEtat();
-    connexions.update((c) => ({ ...c, twitch: etat }));
+    connexions.update((c) => c.twitch === etat ? c : ({ ...c, twitch: etat }));
     if (etat) {
       const login = await tauri.twitchLoginCourant();
       twitchLogin.set(login);
     }
   } catch (e) {
     console.error("initChat: twitchEtat:", e);
+  }
+
+  // Lire l'état Kick initial (l'auto-resume Rust a pu déjà émettre kick:connecte).
+  try {
+    const kickOn = await tauri.kickEtat();
+    connexions.update((c) => c.kick === kickOn ? c : ({ ...c, kick: kickOn }));
+    if (kickOn) {
+      kickSlug.set(await tauri.kickSlugCourant());
+    }
+  } catch (e) {
+    console.error("initChat: kickEtat:", e);
+  }
+
+  // Lire l'état YouTube initial (l'auto-resume Rust a pu déjà émettre youtube:connecte).
+  try {
+    const ytOn = await tauri.youtubeEtat();
+    connexions.update((c) => c.youtube === ytOn ? c : ({ ...c, youtube: ytOn }));
+    if (ytOn) {
+      const login = await tauri.youtubeLoginCourant();
+      youtubeLogin.set(login);
+    }
+  } catch (e) {
+    console.error("initChat: youtubeEtat:", e);
+  }
+
+  // Lire l'état TikTok initial (l'auto-resume Rust a pu déjà émettre tiktok:connecte).
+  try {
+    const ttOn = await tauri.tiktokEtat();
+    connexions.update((c) => c.tiktok === ttOn ? c : ({ ...c, tiktok: ttOn }));
+    if (ttOn) {
+      tiktokUsername.set(await tauri.tiktokUsernameCourant());
+    }
+  } catch (e) {
+    console.error("initChat: tiktokEtat:", e);
   }
 }
 
