@@ -24,6 +24,7 @@ export interface CadreOpts {
   variante?: string;
   couleur?: string;
   couleurFin?: string;
+  gradientAngle?: number;
 }
 
 function clampStrokeWidth(sw: number): number {

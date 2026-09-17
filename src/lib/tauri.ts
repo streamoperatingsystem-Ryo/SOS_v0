@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface Widget {
   id: string;
-  type: "media" | "chat" | "welcome-clip";
+  type: "media" | "chat" | "camera" | "welcome-clip" | "input-viewer" | "speedrun";
   x: number;
   y: number;
   largeur: number;
@@ -14,20 +14,190 @@ export interface Widget {
   rotateY?: number;
   mediaFit?: string;
   kind?: string;
+  /// Nom original du fichier média importé (sans chemin, avec extension).
+  /// undefined pour les widgets sans média. Affiché dans l'en-tête de la
+  /// carte d'édition pour identifier le widget au lieu de l'ID technique.
+  mediaNom?: string;
   mediaZoom?: number;
   mediaRot?: number;
+  mediaOffsetX?: number;
+  mediaOffsetY?: number;
+  /// Effets visuels du média (0 = neutre) : luminosité (-100..100),
+  /// contraste (-100..100), teinte (0..360 deg), flou (0..20 px),
+  /// pixelisation (0..50, 0 = désactivé).
+  mediaLum?: number;
+  mediaContraste?: number;
+  mediaTeinte?: number;
+  mediaFlou?: number;
+  mediaPixel?: number;
   mediaPaused?: boolean;
   mediaTime?: number;
   trou?: boolean;
   obsSource?: string;
   chatFiltre?: string;
   taillePolice?: number;
+  /// Identifiant du device caméra pour les widgets type "camera" :
+  /// FriendlyName PnP (pc_enumerate_cameras) = valeur video_device_id de la
+  /// source OBS dshow_input "SOS-Caméra". undefined = device par défaut.
+  cameraDeviceId?: string;
+  /// Mode d'affichage des widgets type "input-viewer" : "clavier" (défaut),
+  /// "souris", "numpad" ou "manette".
+  inputMode?: string;
+  /// Layout clavier ("azerty" défaut | "qwerty") pour les widgets
+  /// type "input-viewer" en mode clavier.
+  inputLayout?: string;
+  /// Skin manette ("xbox" défaut | "ps" | "8bitdo") pour les widgets
+  /// type "input-viewer" en mode manette.
+  inputSkin?: string;
+  /// Couleur des touches pressées (input-viewer). Défaut #8b5cf6.
+  inputCouleur?: string;
+  /// Mapping des touches manette (input-viewer mode manette). Permet de
+  /// remapper chaque bouton affiché vers un index physique différent +
+  /// inverser les axes X/Y du D-pad (bug 8BitDo etc.).
+  inputMapping?: InputMapping;
+  /// Chemin du fichier .asl (Auto Split Language) pour les widgets
+  /// type "speedrun". undefined = pas de script ASL chargé.
+  speedrunCheminAsl?: string;
+  /// Chemin du fichier .lss (LiveSplit Splits) pour les widgets
+  /// type "speedrun". undefined = pas de fichier LSS chargé.
+  speedrunCheminLss?: string;
+  /// Settings ASL (start/split/reset activés) pour les widgets
+  /// type "speedrun". undefined = defaults {start:true, split:true, reset:true}.
+  speedrunSettings?: SpeedrunSettings;
+  /// Police Google Font pour les widgets type "speedrun" (id police, voir
+  /// fonts.ts). undefined = "Rajdhani" (défaut). Reprise de la liste POLICES_TITRE.
+  srPolice?: string;
+  /// Taille de police de base (px) pour les widgets type "speedrun". undefined = 16.
+  /// Toutes les tailles internes du splitter sont en em → suit cette base.
+  srTaillePolice?: number;
+  /// Chaîne de morphs (bulge/pinch) appliquée au média, dans l'ordre.
+  /// undefined/vide = rendu natif (img/video), zéro coût GL.
+  morphs?: MorphPoint[];
+  /// Titre optionnel affiché au-dessus ou en dessous du widget. undefined/vide
+  /// = pas de titre. Le texte est rendu avec une police Google Font
+  /// (titrePolice) et un gradient de couleur reprenant celui du cadre SVG
+  /// actif de la scène (fallback blanc→gris si aucun cadre actif).
+  titre?: string;
+  /// Position du titre : "dessus" (défaut) ou "dessous".
+  titrePosition?: "dessus" | "dessous";
+  /// Identifiant de la police Google Font (ex: "BebasNeue"). Voir fonts.ts.
+  titrePolice?: string;
+  /// Taille du titre en pixels (12-72). Défaut 24.
+  titreTaille?: number;
+  /// Titre en gras. Défaut false.
+  titreGras?: boolean;
+  /// Titre en italique. Défaut false.
+  titreItalique?: boolean;
+  /// Titre souligné. Défaut false.
+  titreSouligne?: boolean;
+  /// Espacement des lettres en px (-2 à 20). Défaut 0.
+  titreEspacement?: number;
+}
+
+/// Mapping des touches manette pour un widget input-viewer.
+/// `buttons` : tableau de 16 entrées, index = bouton affiché, valeur = index
+/// physique lu par gilrs/XInput. Défaut = identité [0,1,...,15].
+/// `dpadInvertY`/`dpadInvertX` : inverser l'axe Y/X du D-pad quand la manette
+/// reporte le D-pad sur les axes (8BitDo rétro en D-Input).
+export interface InputMapping {
+  buttons: number[];
+  dpadInvertY: boolean;
+  dpadInvertX: boolean;
+}
+
+// ===== Types Speedrun Splitter (mirroir des structs Rust) =====
+
+/// Settings ASL (quelles méthodes auto-split sont activées).
+export interface SpeedrunSettings {
+  start: boolean;
+  split: boolean;
+  reset: boolean;
+}
+
+/// Config speedrun persistée (speedrun.json) pour rechargement auto au boot.
+export interface SpeedrunConfig {
+  chemin_asl?: string;
+  chemin_lss?: string;
+  settings: SpeedrunSettings;
+  /// Settings ASL individuels (120+ pour MGS) persistés entre sessions.
+  /// Map : code-signature → bool (coché/décoché).
+  settings_asl?: Record<string, boolean>;
+}
+
+/// Segment LSS (un split du fichier LiveSplit).
+export interface LssSegment {
+  nom: string;
+  pb_real_time: number | null;
+  pb_game_time: number | null;
+}
+
+/// Run LSS complète (fichier LiveSplit Splits).
+export interface LssRun {
+  nom_jeu: string;
+  nom_categorie: string;
+  segments: LssSegment[];
+}
+
+/// Setting info retourné par le chargement ASL.
+export interface SpeedrunSettingInfo {
+  id: string;
+  label: string;
+  value: boolean;
+  parent?: string | null;
+}
+
+/// Setting ASL individuel (ex: "OL-s00a" → "Dock", coché/décoché).
+/// Retourné par speedrunChargerAsl pour la modale de configuration.
+export interface AslSettingDetail {
+  id: string;
+  label: string;
+  value: boolean;
+  parent: string | null;
+}
+
+/// Résultat du chargement d'un ASL : settings de base + settings individuels +
+/// dictionnaire code→nom (D.Names.Split) pour l'auto-mapping LSS.
+export interface AslLoadResult {
+  settings: SpeedrunSettingInfo[];
+  settings_detailles: AslSettingDetail[];
+  /// Paires [code, nom] (ex: [["OL-s00a", "Dock"], ...]).
+  noms_splits: [string, string][];
+}
+
+/// Event speedrun émis par le moteur (event Tauri speedrun:event).
+export interface SpeedrunEvent {
+  type:
+    | "started"
+    | "split"
+    | "reset"
+    | "ended"
+    | "gameTime"
+    | "time"
+    | "connected"
+    | "disconnected"
+    | "error"
+    | "settings-list"
+    | "stopped"
+    | "loaded"
+    | "paused"
+    | "resumed"
+    | "splitSkipped"
+    | "splitUndone";
+  time?: string;
+  index?: number;
+  realTime?: string;
+  gameTime?: string | null;
+  process?: string;
+  pid?: number;
+  message?: string;
+  settings?: SpeedrunSettingInfo[];
 }
 
 /// Configuration d'un cadre SVG (widget ou bord canvas).
 /// `style` = ID du registre ("carre", "arrondis", "cyberpunk", "story",
-/// "thin-line", "hexagon"). `variante` = variante de couleur (presets).
+/// "thin-line", "hexagon", "mgstyle"). `variante` = variante de couleur (presets).
 /// `couleur`/`couleurFin` = dégradé pour les cadres personnalisables.
+/// `gradientAngle` = angle du dégradé en degrés (0-360, défaut 135 = diagonal).
 /// `actif` = cadre visible.
 export interface CadreConfig {
   style: string;
@@ -35,6 +205,7 @@ export interface CadreConfig {
   strokeWidth: number;
   couleur: string;
   couleurFin: string;
+  gradientAngle: number;
   actif: boolean;
 }
 
@@ -47,16 +218,165 @@ export interface Scene {
   bgFit?: string;
   bgZoom?: number;
   bgRot?: number;
+  bgOffsetX?: number;
+  bgOffsetY?: number;
+  /// Effets visuels du fond (0 = neutre) : luminosité (-100..100),
+  /// contraste (-100..100), teinte (0..360 deg), flou (0..20 px),
+  /// pixelisation (0..50, 0 = désactivé).
+  bgLum?: number;
+  bgContraste?: number;
+  bgTeinte?: number;
+  bgFlou?: number;
+  bgPixel?: number;
   bgPaused?: boolean;
   bgTime?: number;
   cadreWidget?: CadreConfig;
   cadreApp?: CadreConfig;
+  /// Chaîne de morphs appliquée au FOND de scène (bulge/pinch), dans l'ordre.
+  /// Coordonnées normalisées (0-1) du canvas. undefined/vide = rendu natif.
+  bgMorphs?: MorphPoint[];
+  /// Titre optionnel affiché à l'intérieur du fond de l'application, en haut
+  /// ou en bas. undefined/vide = pas de titre. Le texte est rendu avec une
+  /// police Google Font (bgTitrePolice) et un gradient de couleur reprenant
+  /// celui du cadre de l'application (cadreApp).
+  bgTitre?: string;
+  /// Position du titre du fond : "haut" (défaut) ou "bas" (intérieur du fond).
+  bgTitrePosition?: "haut" | "bas";
+  /// Identifiant de la police Google Font (ex: "BebasNeue"). Voir fonts.ts.
+  bgTitrePolice?: string;
+  /// Taille du titre du fond en pixels (12-72). Défaut 24.
+  bgTitreTaille?: number;
+  /// Titre du fond en gras. Défaut false.
+  bgTitreGras?: boolean;
+  /// Titre du fond en italique. Défaut false.
+  bgTitreItalique?: boolean;
+  /// Titre du fond souligné. Défaut false.
+  bgTitreSouligne?: boolean;
+  /// Espacement des lettres du titre du fond en px (-2 à 20). Défaut 0.
+  bgTitreEspacement?: number;
 }
 
 /// Entrée de l'index des scènes (id + nom seulement, jamais le contenu).
 export interface SceneIndex {
   id: string;
   nom: string;
+  /// Titre masqué dans la pastille de la barre « Vos scènes » (œil) —
+  /// l'onglet devient orange. Absent des anciens index.json → false.
+  nomMasque?: boolean;
+}
+
+/// Un point de morphing (bulge/pinch radial) — coordonnées normalisées (0-1)
+/// relatives à la zone visible (widget ou canvas pour le fond).
+export interface MorphPoint {
+  x: number;
+  y: number;
+  rayon: number;
+  intensite: number;
+  mode: "agrandir" | "retrecir";
+}
+
+/// Config d'un type d'alerte (follow/raid/sub/resub/subgift/bits).
+export interface AlerteTypeConfig {
+  actif: boolean;
+  duree_ms: number;
+  texte_template: string;
+  couleur: string;
+  taille_px: number;
+  cooldown_viewer_s: number;
+  cooldown_global_s: number;
+  /// Chemin relatif du son importé ("medias/<uuid>.<ext>"). undefined = silence.
+  /// Utilisé en mode image (son séparé) ; en mode vidéo le son est porté par
+  /// la vidéo elle-même.
+  son?: string;
+  /// Média de l'alerte ("medias/<uuid>.<ext>") : image (avec son séparé) ou
+  /// vidéo (son inclus). undefined = icône emoji + texte (comportement historique).
+  media?: string;
+  /// Kind du média : "image" | "video".
+  media_kind?: string;
+}
+
+/// Position/taille de l'overlay alerte côté diffusion (pixels canvas).
+/// Même mécanique que l'overlay des clips de bienvenue.
+export interface AlertesOverlayConfig {
+  x: number;
+  y: number;
+  largeur: number;
+  hauteur: number;
+}
+
+/// Position/taille du squelette de position unifié (source de vérité partagée
+/// par les overlays "clip de bienvenue" et "alertes"). Voir position_overlay.rs.
+export interface PositionOverlayConfig {
+  x: number;
+  y: number;
+  largeur: number;
+  hauteur: number;
+}
+
+/// Config complète des alertes (champ absent = défaut du type côté Rust).
+export interface AlertesConfig {
+  follow?: AlerteTypeConfig;
+  raid?: AlerteTypeConfig;
+  sub?: AlerteTypeConfig;
+  resub?: AlerteTypeConfig;
+  subgift?: AlerteTypeConfig;
+  bits?: AlerteTypeConfig;
+  overlay?: AlertesOverlayConfig;
+}
+
+/// Config d'une commande chat ("!commande" tapée par un viewer → overlay
+/// diffusion, même moteur que les alertes : file + cooldowns + timer).
+export interface CommandeConfig {
+  /// ID unique (uuid) — vide sur une nouvelle commande, généré côté Rust.
+  id: string;
+  actif: boolean;
+  /// Mot de la commande SANS le "!" (ex: "hype"). Normalisé lowercase.
+  commande: string;
+  duree_ms: number;
+  /// Variables : {pseudo} {commande} {message} (reste de la ligne).
+  texte_template: string;
+  couleur: string;
+  taille_px: number;
+  cooldown_viewer_s: number;
+  cooldown_global_s: number;
+  /// Chemin relatif du son importé ("medias/<uuid>.<ext>"). Mode image.
+  son?: string;
+  /// Média ("medias/<uuid>.<ext>") : image (avec son séparé) ou vidéo (son
+  /// inclus). undefined = icône + texte.
+  media?: string;
+  media_kind?: string;
+}
+
+// ===== Types Pad numérique (mirroir des structs Rust pad_numerique.rs) =====
+
+/// Configuration d'une touche du pad (16 touches × 3 plages).
+export interface ToucheConfig {
+  /// Type de média : "audio" | "image" | "video". undefined = touche vide.
+  media_type?: string;
+  /// Chemin relatif du média ("medias/<uuid>.<ext>"). undefined = pas de média.
+  media?: string;
+  /// Kind du média : "image" | "video" (pour image/video).
+  media_kind?: string;
+  /// Chemin relatif du son ("medias/<uuid>.<ext>"). Pour audio = média principal,
+  /// pour image = son séparé. undefined = silence.
+  son?: string;
+  /// Durée d'affichage en ms (1000-60000). Défaut 5000.
+  duree_ms: number;
+  /// Volume de lecture (0.0-1.0). Défaut 1.0.
+  volume: number;
+  /// Effet bounce activé (image/video).
+  bounce: boolean;
+  /// Effet zoom activé (image/video).
+  zoom: boolean;
+}
+
+/// Config globale du pad (persistée dans pad_numerique.json).
+export interface PadConfig {
+  actif: boolean;
+  /// Plage courante (0, 1 ou 2).
+  plage_actuelle: number;
+  /// Clé "NumpadX_plage" → config de la touche.
+  touches: Record<string, ToucheConfig>;
 }
 
 export const tauri = {
@@ -69,11 +389,11 @@ export const tauri = {
   },
 
   /// Importe un média (image OU vidéo) pour un widget. Retourne le chemin
-  /// relatif ("medias/<uuid>.<ext>") ou null si le dialog a été annulé.
-  /// Lance une erreur en cas de refus (taille/format). Le kind
-  /// ("image"|"video") est déduit côté TS de l'extension du chemin retourné.
-  async importMedia(widgetId: string): Promise<string | null> {
-    return invoke<string | null>("import_media", { widgetId });
+  /// relatif ("medias/<uuid>.<ext>") + le nom original du fichier, ou null si
+  /// le dialog a été annulé. Lance une erreur en cas de refus (taille/format).
+  /// Le kind ("image"|"video") est déduit côté TS de l'extension du chemin.
+  async importMedia(widgetId: string): Promise<[string, string] | null> {
+    return invoke<[string, string] | null>("import_media", { widgetId });
   },
 
   /// Importe un média (image OU vidéo) comme fond de scène. Retourne le
@@ -147,6 +467,17 @@ export const tauri = {
   /// Renomme une scène dans l'index.
   async sceneRenommer(id: string, nom: string): Promise<void> {
     await invoke("scene_renommer", { id, nom });
+  },
+
+  /// Déplace une scène dans l'index (glisser-déposer barre « Vos scènes »).
+  /// position = index cible après retrait de l'entrée (borné côté Rust).
+  async sceneDeplacer(id: string, position: number): Promise<void> {
+    await invoke("scene_deplacer", { id, position });
+  },
+
+  /// Masque/affiche le titre d'une scène dans sa pastille (œil, orange).
+  async sceneMasquerNom(id: string, masque: boolean): Promise<void> {
+    await invoke("scene_masquer_nom", { id, masque });
   },
 
   /// Supprime une scène (fichier + entrée index). Refuse si dernière scène.
@@ -254,6 +585,185 @@ export const tauri = {
     return invoke("obs_link_existing_source", {
       host, port, password, sourceName, x, y, w, h,
     });
+  },
+
+  // ===== Widget caméra (source OBS "SOS-Caméra" sous SOS-Diffusion) =====
+
+  /// Crée / met à jour la source "SOS-Caméra" (dshow_input) dans la scène
+  /// « SOS », sous SOS-Diffusion, calée sur le widget (centre + cover).
+  /// device = FriendlyName PnP (= video_device_id dshow) ou null (device
+  /// par défaut d'OBS). Appelée à la création du widget et au changement
+  /// de device. Non-fatal si OBS offline (auto-guérison au prochain
+  /// scene_sync_captures : boot / openScene / connexion OBS).
+  async cameraSync(
+    host: string,
+    port: number,
+    password: string,
+    device: string | null,
+    x: number,
+    y: number,
+    w: number,
+    h: number
+  ): Promise<void> {
+    await invoke("camera_sync", { host, port, password, device, x, y, w, h });
+  },
+
+  /// Cache l'item de scène "SOS-Caméra" (SetSceneItemEnabled false) à la
+  /// suppression du widget. L'input OBS est conservé (jamais RemoveInput) —
+  /// la recréation du widget le réutilisera. Non-fatal si l'item est absent.
+  async cameraHide(host: string, port: number, password: string): Promise<void> {
+    await invoke("camera_hide", { host, port, password });
+  },
+
+  // ===== Alertes (follow/raid/sub/resub/subgift/bits) =====
+
+  /// Config complète des alertes.
+  async alertesEtat(): Promise<AlertesConfig> {
+    return invoke<AlertesConfig>("alertes_etat");
+  },
+
+  /// Remplace la config d'un type d'alerte + persiste + push WS diffusion.
+  async alertesSetConfig(typeAlerte: string, config: AlerteTypeConfig): Promise<void> {
+    await invoke("alertes_set_config", { typeAlerte, config });
+  },
+
+  /// Remplace la position/taille de l'overlay alerte (même mécanique que
+  /// welcomeSetOverlayConfig) + persiste + push WS diffusion.
+  async alertesSetOverlayConfig(
+    x: number,
+    y: number,
+    largeur: number,
+    hauteur: number
+  ): Promise<void> {
+    await invoke("alertes_set_overlay_config", { x, y, largeur, hauteur });
+  },
+
+  /// Retourne la config du squelette de position unifié (source de vérité
+  /// partagée par les overlays "clip de bienvenue" et "alertes").
+  async positionOverlayEtat(): Promise<PositionOverlayConfig> {
+    return invoke<PositionOverlayConfig>("position_overlay_etat");
+  },
+
+  /// Remplace la config du squelette de position unifié + persiste
+  /// (position_overlay.json) + push WS `position-overlay-config` vers la
+  /// diffusion (applique aux deux overlays en live).
+  async positionOverlaySet(config: PositionOverlayConfig): Promise<void> {
+    await invoke("position_overlay_set", { config });
+  },
+
+  /// Test manuel : déclenche une alerte avec données factices (bypass cooldowns).
+  async alertesTester(typeAlerte: string): Promise<void> {
+    await invoke("alertes_tester", { typeAlerte });
+  },
+
+  /// Déclenche une alerte depuis le frontend. Utilisé par la diff des follows
+  /// (pas d'event IRC) — point d'extension pour les futures plateformes.
+  async alerteDeclencher(
+    typeAlerte: string,
+    pseudo: string,
+    userId: string,
+    nbViewers: number,
+    nbBits: number,
+    nbMois: number,
+    destinataire: string
+  ): Promise<void> {
+    await invoke("alerte_declencher", {
+      typeAlerte, pseudo, userId, nbViewers, nbBits, nbMois, destinataire,
+    });
+  },
+
+  /// Importe un son (mp3/ogg/wav ≤ 10 Mo) pour une alerte. Retourne le chemin
+  /// relatif ("medias/<uuid>.<ext>") ou null si dialog annulé.
+  async importSon(): Promise<string | null> {
+    return invoke<string | null>("import_son");
+  },
+
+  // ===== Commandes chat (!commande → overlay diffusion) =====
+
+  /// Liste complète des commandes chat.
+  async commandesEtat(): Promise<CommandeConfig[]> {
+    return invoke<CommandeConfig[]>("commandes_etat");
+  },
+
+  /// Ajoute/remplace une commande (upsert par id) + persiste + push WS.
+  /// Retourne la config stockée (id généré si vide).
+  async commandeSetConfig(config: CommandeConfig): Promise<CommandeConfig> {
+    return invoke<CommandeConfig>("commande_set_config", { config });
+  },
+
+  /// Supprime une commande + persiste + push WS diffusion.
+  async commandeSupprimer(id: string): Promise<void> {
+    await invoke("commande_supprimer", { id });
+  },
+
+  /// Test manuel : déclenche une commande côté diffusion (bypass cooldowns).
+  async commandeTester(id: string): Promise<void> {
+    await invoke("commande_tester", { id });
+  },
+
+  // ===== Input Viewer (capture globale clavier + souris → overlay diffusion) =====
+
+  /// Active/désactive la capture globale des entrées (clavier + souris).
+  /// ON → thread poll clavier 60Hz + hook souris WH_MOUSE_LL. Zéro coût quand
+  /// OFF. L'état est émis directement sur le WS :4321 (input-viewer-etat).
+  async inputViewerSetActif(actif: boolean): Promise<void> {
+    await invoke("input_viewer_set_actif", { actif });
+  },
+
+  /// true si la capture Input Viewer est active (état du bouton ON/OFF).
+  async inputViewerEtatActif(): Promise<boolean> {
+    return invoke<boolean>("input_viewer_etat_actif");
+  },
+
+  /// Importe un média (image OU vidéo) pour une alerte. Le dialog est filtré
+  /// selon le kind demandé. Retourne le chemin relatif ("medias/<uuid>.<ext>")
+  /// ou null si dialog annulé. Lance une erreur en cas de refus
+  /// (taille/format/kind inattendu).
+  async importAlerteMedia(kind: "image" | "video"): Promise<string | null> {
+    return invoke<string | null>("import_alerte_media", { kindAttendu: kind });
+  },
+
+  // ===== Pad numérique (16 touches Numpad × 3 plages → overlay diffusion) =====
+
+  /// Retourne la config complète du pad (actif, plage, touches).
+  async padEtat(): Promise<PadConfig> {
+    return invoke<PadConfig>("pad_etat");
+  },
+
+  /// Active/désactive le pad + démarre/arrête la capture clavier globale.
+  async padSetActif(actif: boolean): Promise<void> {
+    await invoke("pad_set_actif", { actif });
+  },
+
+  /// Remplace la config d'une touche (upsert) + persiste + émet état.
+  async padSetTouche(code: string, plage: number, config: ToucheConfig): Promise<void> {
+    await invoke("pad_set_touche", { code, plage, config });
+  },
+
+  /// Supprime (reset) la config d'une touche + persiste + émet état.
+  async padSupprimerTouche(code: string, plage: number): Promise<void> {
+    await invoke("pad_supprimer_touche", { code, plage });
+  },
+
+  /// Change la plage courante (0-2) + persiste + émet état.
+  async padSetPlage(plage: number): Promise<void> {
+    await invoke("pad_set_plage", { plage });
+  },
+
+  /// Test manuel : déclenche une touche côté diffusion (bypass capture).
+  async padTesterTouche(code: string, plage: number): Promise<void> {
+    await invoke("pad_tester_touche", { code, plage });
+  },
+
+  /// Importe un média (image OU vidéo) pour une touche du pad. Dialog filtré
+  /// selon le kind. Retourne le chemin relatif ou null si annulé.
+  async padImporterMedia(kind: "image" | "video"): Promise<string | null> {
+    return invoke<string | null>("pad_importer_media", { kindAttendu: kind });
+  },
+
+  /// Importe un son (mp3/ogg/wav ≤ 10 Mo) pour une touche du pad.
+  async padImporterSon(): Promise<string | null> {
+    return invoke<string | null>("pad_importer_son");
   },
 
   // ===== Énumération PC + création capture depuis SOS (Lot 3) =====
@@ -442,19 +952,45 @@ export const tauri = {
   // ===== Communauté lecture (Helix) =====
 
   /// Followers : liste + total (pagination max 10 pages).
+  /// Enrichi avec display_name + profile_image_url (batch /users).
+  /// Détecte les unfollows par comparaison avec le snapshot précédent.
   /// Erreur "need_reauth" si 403 (scopes manquants).
   async twitchCommunauteFollowers(): Promise<{
     total: number;
-    liste: { login: string; user_id: string; followed_at: string }[];
+    liste: {
+      login: string;
+      user_id: string;
+      followed_at: string;
+      display_name: string;
+      profile_image_url: string;
+    }[];
   }> {
     return invoke("twitch_communaute_followers");
   },
 
+  /// Followers allégé (user_id + followed_at uniquement) pour le polling
+  /// des alertes. Pas d'avatars, pas d'unfollows, pas de snapshot disque.
+  async twitchFollowersLight(): Promise<{
+    user_id: string;
+    login: string;
+    followed_at: string;
+  }[]> {
+    return invoke("twitch_followers_light");
+  },
+
   /// Subs : liste + total + points (pagination max 10 pages).
+  /// Enrichi avec display_name + profile_image_url (batch /users).
   async twitchCommunauteSubs(): Promise<{
     total: number;
     points: number;
-    liste: { login: string; user_id: string; tier: string; is_gift: boolean }[];
+    liste: {
+      login: string;
+      user_id: string;
+      tier: string;
+      is_gift: boolean;
+      display_name: string;
+      profile_image_url: string;
+    }[];
   }> {
     return invoke("twitch_communaute_subs");
   },
@@ -464,14 +1000,114 @@ export const tauri = {
     return invoke<number | null>("twitch_communaute_viewers");
   },
 
-  /// Broadcaster : display_name, avatar, type, description.
+  /// Unfollows : historique des unfollows détectés au démarrage (lecture disque).
+  async twitchCommunauteUnfollows(): Promise<
+    {
+      user_id: string;
+      login: string;
+      date_unfollow: string;
+      display_name: string;
+      profile_image_url: string;
+    }[]
+  > {
+    return invoke("twitch_communaute_unfollows");
+  },
+
+  /// Broadcaster : user_id, login, display_name, avatar, type, description.
   async twitchBroadcaster(): Promise<{
+    user_id: string;
+    login: string;
     display_name: string;
     profile_image_url: string;
     broadcaster_type: string;
     description: string;
   }> {
     return invoke("twitch_broadcaster");
+  },
+
+  // ===== Modération Twitch (Helix lecture + écriture) =====
+
+  /// Liste les VIPs de la chaîne.
+  async twitchListerVips(): Promise<
+    { user_id: string; login: string; display_name: string; profile_image_url: string }[]
+  > {
+    return invoke("twitch_lister_vips");
+  },
+
+  /// Liste les modérateurs de la chaîne.
+  async twitchListerModerateurs(): Promise<
+    { user_id: string; login: string; display_name: string; profile_image_url: string }[]
+  > {
+    return invoke("twitch_lister_moderateurs");
+  },
+
+  /// Liste les utilisateurs bannis/timeout de la chaîne.
+  async twitchListerBannis(): Promise<
+    {
+      user_id: string;
+      login: string;
+      created_at: string;
+      expires_at: string | null;
+      reason: string;
+      display_name: string;
+      profile_image_url: string;
+    }[]
+  > {
+    return invoke("twitch_lister_bannis");
+  },
+
+  /// Résout un login Twitch en user_id (recherche par pseudo).
+  /// Retourne null si l'utilisateur n'existe pas.
+  async twitchResoudreUser(
+    login: string
+  ): Promise<{ user_id: string; login: string; display_name: string } | null> {
+    return invoke("twitch_resoudre_user", { login });
+  },
+
+  /// Bannir ou timeout un utilisateur. duree = undefined → ban permanent,
+  /// number → timeout de n secondes.
+  async twitchBannir(
+    userId: string,
+    raison: string,
+    duree?: number
+  ): Promise<void> {
+    await invoke("twitch_bannir", { userId, raison, duree });
+  },
+
+  /// Débannir un utilisateur.
+  async twitchDebannir(userId: string): Promise<void> {
+    await invoke("twitch_debannir", { userId });
+  },
+
+  /// Ajouter un VIP.
+  async twitchAjouterVip(userId: string): Promise<void> {
+    await invoke("twitch_ajouter_vip", { userId });
+  },
+
+  /// Retirer un VIP.
+  async twitchRetirerVip(userId: string): Promise<void> {
+    await invoke("twitch_retirer_vip", { userId });
+  },
+
+  /// Ajouter un modérateur.
+  async twitchAjouterModerateur(userId: string): Promise<void> {
+    await invoke("twitch_ajouter_moderateur", { userId });
+  },
+
+  /// Retirer un modérateur.
+  async twitchRetirerModerateur(userId: string): Promise<void> {
+    await invoke("twitch_retirer_moderateur", { userId });
+  },
+
+  /// Supprimer un message de chat (par message_id).
+  async twitchSupprimerMessage(messageId: string): Promise<void> {
+    await invoke("twitch_supprimer_message", { messageId });
+  },
+
+  /// Envoie une commande IRC au chat Twitch (ex: "/clear").
+  /// Retourne false si l'IRC n'est pas démarré.
+  async twitchEnvoyerCommandeChat(commande: string): Promise<boolean> {
+    return invoke<boolean>("twitch_envoyer_commande_chat", { commande });
   },
 
   // ===== Clips de bienvenue (welcome) =====
@@ -502,6 +1138,32 @@ export const tauri = {
   /// Active/désactive la config globale des clips de bienvenue.
   async welcomeConfigGlobaleActif(actif: boolean): Promise<void> {
     await invoke("welcome_config_globale_actif", { actif });
+  },
+
+  /// Met à jour la config de l'overlay welcome (position/taille côté diffusion).
+  async welcomeSetOverlayConfig(config: WelcomeOverlayConfig): Promise<void> {
+    await invoke("welcome_set_overlay_config", { config });
+  },
+
+  /// Test manuel : lance un clip côté diffusion (bypass queue). Résout MP4 +
+  /// émet welcome-clip-play. Utilisé par la modale Interactions chat.
+  async welcomeTesterClip(
+    clipId: string,
+    clipTitre: string,
+    clipDureeMs: number,
+    displayName: string,
+  ): Promise<void> {
+    await invoke("welcome_tester_clip", {
+      clipId,
+      clipTitre,
+      clipDureeMs,
+      displayName,
+    });
+  },
+
+  /// Définit la durée d'affichage globale des clips (0 = durée naturelle).
+  async welcomeSetDureeAffichage(ms: number): Promise<void> {
+    await invoke("welcome_set_duree_affichage", { ms });
   },
 
   /// Stop le clip courant + vide la queue.
@@ -563,6 +1225,103 @@ export const tauri = {
   ): Promise<{ succes: number; echecs: number }> {
     return invoke("welcome_attribuer_auto", { followers });
   },
+
+  // ===== Bandeau premier message =====
+
+  /// État courant du bandeau (config : actif, duree_ms, position).
+  async bandeauEtat(): Promise<BandeauEtat> {
+    return invoke<BandeauEtat>("bandeau_etat");
+  },
+
+  /// Met à jour la config du bandeau (merge partiel). undefined = inchangé.
+  async bandeauSetConfig(
+    actif?: boolean,
+    dureeMs?: number,
+    position?: "bas" | "haut"
+  ): Promise<void> {
+    await invoke("bandeau_set_config", { actif, dureeMs, position });
+  },
+
+  /// Stop immédiat du bandeau courant.
+  async bandeauStop(): Promise<void> {
+    await invoke("bandeau_stop");
+  },
+
+  /// Reset le seen set (nouveau stream → tous les viewers redeviennent éligibles).
+  async bandeauResetSession(): Promise<void> {
+    await invoke("bandeau_reset_session");
+  },
+
+  /// Test manuel : lance un bandeau côté diffusion (bypass détection).
+  async bandeauTester(displayName: string, message: string): Promise<void> {
+    await invoke("bandeau_tester", { displayName, message });
+  },
+
+  // ===== Speedrun Splitter =====
+
+  /// Charge un fichier .asl (Auto Split Language). Retourne les settings de
+  /// base (start/split/reset) + les settings individuels (120+ pour MGS) +
+  /// le dictionnaire code→nom (D.Names.Split) pour l'auto-mapping LSS.
+  async speedrunChargerAsl(path: string): Promise<AslLoadResult> {
+    return invoke<AslLoadResult>("speedrun_charger_asl", { path });
+  },
+
+  /// Charge un fichier .lss (LiveSplit Splits). Retourne les segments
+  /// (nom + PB real/game time) + nom du jeu + catégorie.
+  async speedrunChargerLss(path: string): Promise<LssRun> {
+    return invoke<LssRun>("speedrun_charger_lss", { path });
+  },
+
+  /// Démarre le splitter avec un nombre total de splits + settings ASL.
+  async speedrunDemarrer(
+    totalSplits: number,
+    start: boolean,
+    split: boolean,
+    reset: boolean
+  ): Promise<void> {
+    await invoke("speedrun_demarrer", { totalSplits, start, split, reset });
+  },
+
+  /// Arrête le splitter (stop la boucle de polling + cleanup thread).
+  async speedrunArreter(): Promise<void> {
+    await invoke("speedrun_arreter");
+  },
+
+  /// Met à jour les settings ASL pendant que le splitter tourne.
+  async speedrunMajSettings(
+    start: boolean,
+    split: boolean,
+    reset: boolean
+  ): Promise<void> {
+    await invoke("speedrun_maj_settings", { start, split, reset });
+  },
+
+  /// Retourne true si le splitter est actif (boucle de polling en cours).
+  async speedrunEstActif(): Promise<boolean> {
+    return invoke<boolean>("speedrun_est_actif");
+  },
+
+  /// Envoie une action manuelle au splitter : "start", "split", "skip",
+  /// "undo", "reset", "pause".
+  async speedrunActionManuelle(action: string): Promise<void> {
+    await invoke("speedrun_action_manuelle", { action });
+  },
+
+  /// Lit la config speedrun sauvegardée (speedrun.json).
+  async speedrunLireConfig(): Promise<SpeedrunConfig> {
+    return invoke<SpeedrunConfig>("speedrun_lire_config");
+  },
+
+  /// Sauve la config speedrun (speedrun.json).
+  async speedrunSauverConfig(config: SpeedrunConfig): Promise<void> {
+    await invoke("speedrun_sauver_config", { config });
+  },
+
+  /// Met à jour les settings ASL individuels (120+ pour MGS) dans le runtime
+  /// Boa. Appelé quand l'utilisateur valide la modale de configuration.
+  async speedrunMajSettingsAsl(valeurs: Record<string, boolean>): Promise<void> {
+    await invoke("speedrun_maj_settings_asl", { valeurs });
+  },
 };
 
 // ===== Types welcome (mirroir des structs Rust) =====
@@ -577,6 +1336,7 @@ export interface WelcomeViewerConfig {
   message: string;
   display_name: string;
   avatar?: string | null;
+  bio?: string | null;
 }
 
 export interface WelcomeQueueItem {
@@ -584,6 +1344,7 @@ export interface WelcomeQueueItem {
   login: string;
   display_name: string;
   avatar: string | null;
+  bio: string | null;
   plateforme: string;
   clip_id: string;
   clip_titre: string;
@@ -592,10 +1353,19 @@ export interface WelcomeQueueItem {
   message: string;
 }
 
+export interface WelcomeOverlayConfig {
+  x: number;
+  y: number;
+  largeur: number;
+  hauteur: number;
+}
+
 export interface WelcomeQueueEtat {
   en_attente: WelcomeQueueItem[];
   current: WelcomeQueueItem | null;
   config_globale_actif: boolean;
+  overlay: WelcomeOverlayConfig;
+  duree_affichage_ms: number;
 }
 
 export interface WelcomeClipInfo {
@@ -608,4 +1378,12 @@ export interface WelcomeClipInfo {
   broadcaster_id: string;
   broadcaster_login: string;
   broadcaster_name: string;
+}
+
+// ===== Types bandeau premier message (mirroir des structs Rust) =====
+
+export interface BandeauEtat {
+  actif: boolean;
+  duree_ms: number;
+  position: "bas" | "haut";
 }

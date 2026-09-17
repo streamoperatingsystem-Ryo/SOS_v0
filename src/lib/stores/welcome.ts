@@ -3,7 +3,7 @@
 // des actions (stop, skip, retirer, remonter, descendre, vider, reset).
 import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
-import { tauri, type WelcomeQueueEtat, type WelcomeViewerConfig } from "../tauri";
+import { tauri, type WelcomeQueueEtat, type WelcomeViewerConfig, type WelcomeOverlayConfig } from "../tauri";
 
 export const welcomeEtat = writable<WelcomeQueueEtat | null>(null);
 export const welcomeRegistre = writable<[string, WelcomeViewerConfig][]>([]);
@@ -98,6 +98,28 @@ export async function welcomeResetSession(): Promise<void> {
 
 export async function welcomeSetConfigGlobaleActif(actif: boolean): Promise<void> {
   await tauri.welcomeConfigGlobaleActif(actif);
+  await refresh();
+}
+
+export async function welcomeSetOverlayConfig(config: WelcomeOverlayConfig): Promise<void> {
+  await tauri.welcomeSetOverlayConfig(config);
+  await refresh();
+}
+
+/// Test manuel : lance un clip côté diffusion (bypass queue). Résout MP4 +
+/// émet welcome-clip-play. Utilisé pour tester un clip au clic dans la modale.
+export async function welcomeTesterClip(
+  clipId: string,
+  clipTitre: string,
+  clipDureeMs: number,
+  displayName: string,
+): Promise<void> {
+  await tauri.welcomeTesterClip(clipId, clipTitre, clipDureeMs, displayName);
+  await refresh();
+}
+
+export async function welcomeSetDureeAffichage(ms: number): Promise<void> {
+  await tauri.welcomeSetDureeAffichage(ms);
   await refresh();
 }
 

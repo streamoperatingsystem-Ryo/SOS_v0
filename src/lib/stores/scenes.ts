@@ -80,6 +80,33 @@ export async function renameScene(id: string, nom: string): Promise<void> {
   }
 }
 
+/// Persiste le déplacement d'une scène (glisser-déposer de la barre
+/// « Vos scènes »). Le store a DÉJÀ été réordonné de façon optimiste par le
+/// composant — en cas d'erreur on recharge l'index pour resynchroniser.
+export async function deplacerScene(id: string, position: number): Promise<void> {
+  try {
+    await tauri.sceneDeplacer(id, position);
+  } catch (e) {
+    console.error("deplacerScene:", e);
+    alert("Réordonnancement refusé : " + e);
+    await loadScenesIndex();
+  }
+}
+
+/// Masque/affiche le titre d'une scène dans sa pastille (œil — l'onglet
+/// devient orange quand masqué). Met à jour le store local.
+export async function masquerNomScene(id: string, masque: boolean): Promise<void> {
+  try {
+    await tauri.sceneMasquerNom(id, masque);
+    scenesIndexStore.update((idx) =>
+      idx.map((s) => (s.id === id ? { ...s, nomMasque: masque } : s))
+    );
+  } catch (e) {
+    console.error("masquerNomScene:", e);
+    alert("Masquage refusé : " + e);
+  }
+}
+
 /// Supprime une scène (fichier + entrée index). Si la scène supprimée est la
 /// courante, Rust bascule sur la 1ère restante → on recharge la scène RAM.
 export async function deleteScene(id: string): Promise<void> {

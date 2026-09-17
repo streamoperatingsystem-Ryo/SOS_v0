@@ -1,7 +1,8 @@
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
-    extract::State,
-    response::Html,
+    extract::{Path, State},
+    http::{header, StatusCode},
+    response::{Html, IntoResponse, Response},
     routing::get,
     Router,
 };
@@ -9,6 +10,7 @@ use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
+use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
 use crate::api_deck;
@@ -16,6 +18,53 @@ use crate::scenes::ScenesState;
 
 /// HTML embarqué (vanilla JS, zéro Tauri). Sert de page de diffusion pour OBS.
 const DIFFUSION_HTML: &str = include_str!("../resources/diffusion.html");
+
+/// Polices Google Font embarquées (woff2, subset latin) pour les titres de
+/// widgets. Servies sur /fonts/{name} — chargées par le dashboard ET la
+/// diffusion (même origine :4321).
+fn font_bytes(name: &str) -> Option<&'static [u8]> {
+    match name {
+        "Anton" => Some(include_bytes!("../resources/fonts/Anton.woff2")),
+        "Audiowide" => Some(include_bytes!("../resources/fonts/Audiowide.woff2")),
+        "BebasNeue" => Some(include_bytes!("../resources/fonts/BebasNeue.woff2")),
+        "BlackOpsOne" => Some(include_bytes!("../resources/fonts/BlackOpsOne.woff2")),
+        "Bungee" => Some(include_bytes!("../resources/fonts/Bungee.woff2")),
+        "Caveat" => Some(include_bytes!("../resources/fonts/Caveat.woff2")),
+        "Creepster" => Some(include_bytes!("../resources/fonts/Creepster.woff2")),
+        "Fredoka" => Some(include_bytes!("../resources/fonts/Fredoka.woff2")),
+        "Lobster" => Some(include_bytes!("../resources/fonts/Lobster.woff2")),
+        "Montserrat" => Some(include_bytes!("../resources/fonts/Montserrat.woff2")),
+        "Orbitron" => Some(include_bytes!("../resources/fonts/Orbitron.woff2")),
+        "Oswald" => Some(include_bytes!("../resources/fonts/Oswald.woff2")),
+        "Pacifico" => Some(include_bytes!("../resources/fonts/Pacifico.woff2")),
+        "PermanentMarker" => Some(include_bytes!("../resources/fonts/PermanentMarker.woff2")),
+        "PressStart2P" => Some(include_bytes!("../resources/fonts/PressStart2P.woff2")),
+        "Rajdhani" => Some(include_bytes!("../resources/fonts/Rajdhani.woff2")),
+        "Righteous" => Some(include_bytes!("../resources/fonts/Righteous.woff2")),
+        "RussoOne" => Some(include_bytes!("../resources/fonts/RussoOne.woff2")),
+        "Satisfy" => Some(include_bytes!("../resources/fonts/Satisfy.woff2")),
+        "Teko" => Some(include_bytes!("../resources/fonts/Teko.woff2")),
+        _ => None,
+    }
+}
+
+/// Handler GET /fonts/{name} — sert une police woff2 embarquée.
+/// Le paramètre {name} capture le segment complet (ex: "BebasNeue.woff2"),
+/// on strip l'extension .woff2 avant de chercher dans font_bytes.
+async fn font_handler(Path(name): Path<String>) -> Response {
+    let key = name
+        .strip_suffix(".woff2")
+        .map(|s| s.to_string())
+        .unwrap_or(name);
+    match font_bytes(&key) {
+        Some(bytes) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "font/woff2"), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+            bytes,
+        ).into_response(),
+        None => (StatusCode::NOT_FOUND, "Police introuvable").into_response(),
+    }
+}
 
 /// État du serveur :4321. Contient l'AppHandle + ScenesState (scène + id + canal).
 /// Les handlers /api/* et WS extraient st.scenes pour appeler scenes::*.
@@ -46,8 +95,13 @@ pub async fn run_server(
     let app_router = Router::new()
         .route("/", get(index))
         .route("/ws", get(ws_handler))
+        .route("/fonts/{name}", get(font_handler))
         .nest_service("/medias", ServeDir::new(medias_dir))
         .merge(api_deck::routes())
+        // CORS permissif : le dashboard (localhost:1420 / tauri.localhost) charge
+        // les médias de :4321 en cross-origin — requis pour texImage2D WebGL
+        // (morphing) sans tainted canvas. Localhost only, pas de risque.
+        .layer(CorsLayer::permissive())
         .with_state(server_state);
 
     let listener = tokio::net::TcpListener::bind(&addr)
@@ -85,12 +139,17 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
     let mut chat_rx = state.scenes.chat_tx.subscribe();
     let (mut sender, mut receiver) = socket.split();
 
-    // Snapshot initial : envoyer l'état courant dès la connexion
+    // Snapshot initial : envoyer l'état courant dès la connexion.
+    // `sceneId` inclus (même contrat que scenes::push_snapshot) — la
+    // diffusion l'initialise SANS déclencher le fondu au noir.
     {
         let snapshot = {
+            // Ordre des locks : scene PUIS current_id (convention scenes.rs).
             let scene = state.scenes.scene.lock().unwrap();
+            let id = state.scenes.current_id.lock().unwrap();
             serde_json::json!({
                 "type": "snapshot",
+                "sceneId": &*id,
                 "scene": &*scene
             })
             .to_string()
@@ -99,30 +158,56 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
     }
 
     // Tâche : pousser les snapshots ET les messages chat vers le client.
-    // Les deux canaux sont fusionnés via select.
+    // Les deux canaux sont fusionnés via select. Gère Lagged (broadcast
+    // channel saturé → messages perdus) sans déconnecter le WS : on log et
+    // on continue. Seul Closed (émetteur droppé) déconnecte.
     let mut send_task = tokio::spawn(async move {
         loop {
             tokio::select! {
-                Ok(snapshot) = rx.recv() => {
-                    if sender.send(Message::Text(snapshot.into())).await.is_err() {
-                        break;
+                snap_result = rx.recv() => {
+                    match snap_result {
+                        Ok(snapshot) => {
+                            if sender.send(Message::Text(snapshot.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            eprintln!("[Serveur] WS snapshot lagged ({} perdus) — continue", n);
+                        }
+                        Err(_) => break,
                     }
                 }
-                Ok(chat) = chat_rx.recv() => {
-                    if sender.send(Message::Text(chat.into())).await.is_err() {
-                        break;
+                chat_result = chat_rx.recv() => {
+                    match chat_result {
+                        Ok(chat) => {
+                            if sender.send(Message::Text(chat.into())).await.is_err() {
+                                break;
+                            }
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            eprintln!("[Serveur] WS chat lagged ({} perdus) — continue", n);
+                        }
+                        Err(_) => break,
                     }
-                    eprintln!("[Serveur] WS chat → client");
                 }
-                else => { break; }
             }
         }
     });
 
-    // Tâche : lire les messages entrants (on ignore le contenu, v0)
+    // Tâche : lire les messages entrants. La diffusion peut demander un
+    // resync de l'état speedrun (LSS) à la (re)connexion — on re-émet la
+    // dernière run LSS chargée vers ce client via le canal chat_tx.
     let mut recv_task = tokio::spawn(async move {
-        while let Some(Ok(_msg)) = receiver.next().await {
-            // On ne traite pas les messages entrants en v0
+        while let Some(Ok(msg)) = receiver.next().await {
+            if let Message::Text(txt) = msg {
+                // Resync speedrun : la diffusion demande l'état LSS courant.
+                // Non-fatal si aucune run chargée (reemit_lss est un no-op).
+                if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&txt) {
+                    if parsed.get("type").and_then(|v| v.as_str()) == Some("speedrun-resync") {
+                        crate::speedrun::commands::reemit_lss();
+                    }
+                }
+            }
         }
     });
 

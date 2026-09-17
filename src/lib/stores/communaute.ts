@@ -8,6 +8,8 @@ export interface FollowerEntry {
   login: string;
   user_id: string;
   followed_at: string;
+  display_name: string;
+  profile_image_url: string;
 }
 
 export interface FollowersResp {
@@ -20,6 +22,8 @@ export interface SubEntry {
   user_id: string;
   tier: string;
   is_gift: boolean;
+  display_name: string;
+  profile_image_url: string;
 }
 
 export interface SubsResp {
@@ -29,6 +33,8 @@ export interface SubsResp {
 }
 
 export interface BroadcasterInfo {
+  user_id: string;
+  login: string;
   display_name: string;
   profile_image_url: string;
   broadcaster_type: string;
@@ -68,6 +74,32 @@ export const youtubeViewers = writable<number | null>(null);
 
 /// Erreur communauté. "need_reauth" = 403 (scopes manquants). null = OK.
 export const communauteErreur = writable<string | null>(null);
+
+// ===== Unfollows =====
+
+export interface UnfollowEntry {
+  user_id: string;
+  login: string;
+  /// Date de détection ISO 8601 (moment du démarrage StreamOS).
+  date_unfollow: string;
+  display_name: string;
+  profile_image_url: string;
+}
+
+/// Historique des unfollows détectés au démarrage (lecture disque).
+export const unfollows = writable<UnfollowEntry[] | null>(null);
+
+/// Charge l'historique des unfollows depuis le disque.
+export async function chargerUnfollows(): Promise<void> {
+  console.log("[Communauté] chargerUnfollows()...");
+  try {
+    const resp = await tauri.twitchCommunauteUnfollows();
+    unfollows.set(resp);
+    console.log("[Communauté] unfollows OK:", resp.length);
+  } catch (e) {
+    console.error("[Communauté] unfollows ERR:", String(e));
+  }
+}
 
 /// Charge les followers. Sur "need_reauth" → communauteErreur = "need_reauth".
 export async function chargerFollowers(): Promise<void> {
@@ -140,7 +172,7 @@ export async function chargerBroadcaster(): Promise<void> {
 }
 
 /// Charge tout en parallèle (Promise.allSettled). Agrège les erreurs.
-/// Charge Twitch ET YouTube si connectés.
+/// Charge Twitch ET YouTube si connectés. Inclut les unfollows (lecture disque).
 export async function chargerCommunaute(): Promise<void> {
   console.log("[Communauté] chargerCommunaute() appelé");
   await Promise.allSettled([
@@ -148,6 +180,7 @@ export async function chargerCommunaute(): Promise<void> {
     chargerFollowers(),
     chargerSubs(),
     chargerViewers(),
+    chargerUnfollows(),
   ]);
   console.log("[Communauté] chargerCommunaute() terminé");
 }
@@ -206,6 +239,8 @@ export function resetCommunaute(): void {
   viewers.set(null);
   broadcaster.set(null);
   communauteErreur.set(null);
+  // Unfollows (persistés sur disque, mais reset du store en mémoire)
+  unfollows.set(null);
   // YouTube
   youtubeChannel.set(null);
   youtubeMembers.set(null);

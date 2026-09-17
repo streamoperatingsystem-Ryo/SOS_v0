@@ -3,8 +3,8 @@
   // Dessine sur un <canvas> HTML :
   //   - 4 traits aux bords du widget (gauche, droite, haut, bas)
   //   - Labels avec la distance en px canvas logique
-  //   - Viseur central (croix + cercle) — cyan par défaut, JAUNE quand le
-  //     widget est proche du centre (snap visuel)
+  //   - Viseur central (croix + cercle) — vert --ctrl-refresh par défaut,
+  //     JAUNE --ctrl-centre quand le widget est proche du centre (snap visuel)
   //   - Label "CENTRE" quand le widget est aligné au centre
   //
   // Rendu à l'intérieur du canvas (coordonnées canvas logiques).
@@ -39,6 +39,12 @@
     }
   });
 
+  // Lit une variable CSS :root (canvas JS ne supporte pas var() directement).
+  function cssVar(nom: string, fallback: string): string {
+    const v = getComputedStyle(document.documentElement).getPropertyValue(nom).trim();
+    return v || fallback;
+  }
+
   function dessinerGuides(etat: typeof $guidesEtat): void {
     if (!ctx) return;
     ctx.clearRect(0, 0, canvasW, canvasH);
@@ -47,8 +53,8 @@
 
     const widgetRect = etat.widgetRect;
 
-    // Styles communs
-    const couleurTrait = "#e74c3c";
+    // Styles communs — couleurs centralisées --ctrl-* (app.css :root).
+    const couleurTrait = cssVar("--ctrl-arreter", "#c0392b");
     const epaisseurTrait = 2;
     const couleurLabel = "#ffffff";
     const couleurFondLabel = "rgba(0, 0, 0, 0.75)";
@@ -112,7 +118,9 @@
     const procheCy = Math.abs(elCy - cy) < 6;
     const proche = procheCx || procheCy;
 
-    const couleurViseur = proche ? "#FFEE00" : "#00E5FF";
+    const couleurViseur = proche
+      ? cssVar("--ctrl-centre", "#FFEE00")
+      : cssVar("--ctrl-refresh", "#22c55e");
     ctx.save();
     ctx.strokeStyle = couleurViseur;
     ctx.lineWidth = proche ? 2.5 : 1.5;

@@ -10,6 +10,8 @@ export interface ChatMessage {
   pseudo: string;
   texte: string;
   badges?: string;
+  /// ID du message (Twitch uniquement, pour la suppression via Helix).
+  message_id?: string;
 }
 
 export interface Connexions {

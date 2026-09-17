@@ -1,8 +1,120 @@
 :root {
-  --fond: #0a0a0a;
-  --texte: #e0e0e0;
-  --ok: #4caf50;
-  --connexion-ok: #22c55e;
+  /* ===== Thème HUD sci-fi (2026-09-15) — remplace le thème sobre noir/blanc/gris
+     Palette noir bleuté + accents néon violet/orange + dégradé signature.
+     Source unique du chrome dashboard (cf. AGENTS.md → Variables CSS UI).
+     EXCLUS volontairement : widgets canvas (Widget.svelte, WYSIWYG diffusion),
+     diffusion.html (rendu OBS — règle figée cadres), palettes cadres SVG
+     (src/lib/cadres/*.ts — exception volontaire), guides snap (AlignmentGuides). */
+  --fond: #08080f;
+  --texte: #e5e7eb;
+  --gris: #8b8fa3; /* texte secondaire : placeholders, hints, outline canvas */
+  --gris-fonce: #12121e; /* fonds secondaires : hover subtil, inputs */
+  --bordure: #1e1e30; /* bordures UI passives (gris-violet foncé) */
+  --bordure-active: #2a2a40; /* bordures hover/contrôles (plus visible) */
+  --fond-panneau: #0d0d16; /* fond sidebar/panneaux (légèrement + clair que --fond) */
+  --fond-controle: #15151f; /* fond boutons/inputs (encore + clair) */
+  /* ===== Accents néon ===== */
+  --accent-violet: #8b5cf6;
+  --accent-orange: #f97316;
+  --accent-magenta: #ec4899;
+  /* Dégradé signature (logo, bordures actives, cadre app par défaut). */
+  --gradient-sig: linear-gradient(135deg, #f97316, #ec4899, #8b5cf6);
+  /* Glows externes (états actifs/sélectionnés). */
+  --glow-violet: 0 0 12px rgba(139, 92, 246, 0.35);
+  --glow-orange: 0 0 8px rgba(249, 115, 22, 0.4);
+  /* ===== Thème DASHBOARD froid — palette assombrie bleu/indigo/vert =====
+     Couleurs froides très atténuées pour le chrome du dashboard : en-têtes de
+     sections, boutons d'action, carte d'édition contextuelle. Indépendant de
+     la palette néon ci-dessus (qui reste la référence des modals, du logo,
+     de la topbar, du gizmo et des guides snap). */
+  --dash-accent: #3730a3;        /* indigo-800 — accent principal dash */
+  --dash-accent-2: #1e40af;      /* bleu-800 — (réservé, ancienne cible fond) */
+  --dash-accent-3: #065f46;      /* émeraude-800 */
+  --dash-danger: #7f1d1d;        /* bordeaux-900 — cible widget + erreur OBS */
+  --dash-success: #047857;       /* émeraude-700 — état connecté */
+  --dash-orange: #9a3412;        /* orange-800 — cible fond (carte édition) */
+  --dash-jaune: #a16207;          /* jaune-700 — cible input-viewer (carte édition) */
+  /* Dégradé froid très sombre (bordures des boutons/sections du dash). */
+  --dash-gradient: linear-gradient(135deg, #172554, #312e81, #064e3b);
+  /* Glows dash (atténués, moins flashy que les néon). */
+  --dash-glow: 0 0 8px rgba(55, 48, 163, 0.3);
+  --dash-glow-bleu: 0 0 8px rgba(30, 64, 175, 0.35);
+  --dash-glow-danger: 0 0 8px rgba(127, 29, 29, 0.45);
+  /* ===== Boutons — recette « verre Aero HUD » (statique, coût nul) =====
+     Surface interne des boutons du chrome dashboard : brillance moitié
+     supérieure (signature Aero) teintée --btn-tint + relief interne (inset
+     lumineux haut / sombre bas = verre bombé). Recette partagée par toute
+     l'UI (sidebar, modales, topbar) — un contexte = surcharger --btn-tint
+     (et --btn-border si besoin), jamais copier le CSS. --btn-tint par défaut
+     = --dash-accent (indigo). Coût : images précalculées, aucun repaint. */
+  --btn-tint: var(--dash-accent);
+  --btn-border: var(--dash-gradient);
+  /* Surface Aero (padding-box) : lumière en haut teintée --btn-tint →
+     profondeur en bas. Effet verre bombé statique. Rehaussé pour que
+     l'identité StreamOS (teinte indigo/orange/bordeaux selon contexte) soit
+     réellement visible tout en restant subtile — pas un gloss générique. */
+  --btn-surface:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--btn-tint) 22%, var(--fond-controle)) 0%,
+      color-mix(in srgb, var(--btn-tint) 12%, var(--fond-controle)) 50%,
+      var(--fond-controle) 100%
+    );
+  --btn-surface-hover:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--btn-tint) 32%, var(--fond-controle)) 0%,
+      color-mix(in srgb, var(--btn-tint) 16%, var(--fond-controle)) 50%,
+      var(--fond-controle) 100%
+    );
+  /* Relief interne : arête lumineuse en haut (capte la lumière) + ombre en
+     bas (profondeur) = verre bombé. Statique, aucun repaint. */
+  --btn-inset:
+    inset 0 1px 0 0 color-mix(in srgb, var(--btn-tint) 35%, transparent),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.45);
+  --btn-inset-hover:
+    inset 0 1px 0 0 color-mix(in srgb, var(--btn-tint) 50%, transparent),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.55);
+  /* ===== Arrondis ===== */
+  --rayon-petit: 5px; /* boutons, inputs, selects */
+  --rayon: 8px; /* blocs, barres, conteneurs */
+  --rayon-grand: 14px; /* modales */
+  /* ===== Messages & états UI — SEULE source de vérité (voir AGENTS.md) =====
+     Interdit de coder #hex pour un message/état dans un composant.
+     Rendu canvas (guides snap) et palettes cadres SVG = exceptions volontaires. */
+  /* Action requise de l'utilisateur (erreurs actionnables, hints d'avertissement). */
+  --message-user-action-color: #f59e0b;
+  /* Surbrillance orange vif — ressort fortement sur fond noir (#08080f).
+     Utilisée pour les pastilles de scène à titre masqué (œil) : le bouton
+     reste visible et identifiable tout en indiquant l'état masqué. Plus
+     saturée/lumineuse que --message-user-action-color (#f59e0b) pour bien
+     détacher l'onglet sur le fond noir du dashboard. */
+  --surbrillance-orange: #f97316;
+  /* Succès / état connecté (texte "OBS OK", points verts bandeau + Toolbar, checks dev).
+     Réservé à OBS / Diffusion / erreurs — PAS aux pastilles plateforme
+     (qui utilisent --plat-* ci-dessous, couleurs de marque décoratives). */
+  --message-ok-color: #22c55e;
+  /* Erreur / danger (points rouges bandeau, boutons destructifs au survol). */
+  --message-error-color: #c0392b;
+  /* ===== Couleurs contrôles topbar + guide snap + gizmo (centralisées) =====
+     Source unique pour : boutons topbar (Arrêter/Redémarrer/Refresh OBS),
+     guide magnétique (AlignmentGuides, lu via getComputedStyle) et gizmo 3D
+     (Gizmo3D, var() dans les attributs SVG). --ctrl-centre = état centré/snap. */
+  --ctrl-arreter: var(--message-error-color);   /* rouge */
+  --ctrl-redemarrer: var(--accent-orange);      /* orange */
+  --ctrl-refresh: var(--message-ok-color);      /* vert */
+  --ctrl-centre: #ffee00;                       /* jaune = centré */
+  /* ===== Couleurs de marque des plateformes (décoratif, PAS sémantique) =====
+     Pastilles de statut du bandeau + modales Modération. Connecté = couleur
+     de marque ; déconnecté = gris (--gris). Exception documentée à la règle
+     Variables CSS UI : --plat-* ne doit JAMAIS servir pour un message/état
+     ok/erreur — uniquement décoratif (pastille plateforme connectée). */
+  --plat-twitch: #a855f7;
+  --plat-kick: #22c55e;
+  --plat-youtube: #f43f5e;
+  --plat-tiktok: #ec4899;
+  --plat-obs: #d1d5db;
+  --plat-diffusion: #22c55e;
   font-family: system-ui, -apple-system, sans-serif;
   color: var(--texte);
   background-color: var(--fond);
@@ -23,4 +135,252 @@ body,
 
 body {
   overflow: hidden;
+}
+
+/* ===== Base UI (chrome dashboard uniquement) =====
+   Arrondis + transitions douces hérités par tous les boutons/inputs/selects.
+   Les composants Svelte surchargent au besoin. EXCLUS volontairement :
+   widgets canvas (Widget.svelte, WYSIWYG diffusion) et diffusion.html
+   (rendu OBS — règle figée cadres). */
+button,
+input,
+select,
+textarea {
+  border-radius: var(--rayon-petit);
+  transition:
+    background-color 0.15s ease,
+    color 0.15s ease,
+    border-color 0.15s ease,
+    box-shadow 0.15s ease;
+}
+
+/* ===== Reflet animé « shine » au survol des boutons (2026-09-15) =====
+   Sweep lumineux diagonal qui traverse le bouton une fois au :hover.
+   One-shot (pas de boucle) → pas énergivore. Teinté --btn-tint (identitaire),
+   assombri + adouci (pas de blanc pur, opacité faible). En complément :
+   reflet miroir statique en bas (effet glossy permanent, subtil). */
+button {
+  position: relative;
+  isolation: isolate;
+  overflow: hidden;
+}
+/* Reflet miroir statique : bande lumineuse subtile en bas du bouton
+   (effet glossy, permanent, très atténué). */
+button::after {
+  content: "";
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 40%;
+  background: linear-gradient(
+    180deg,
+    transparent 0%,
+    color-mix(in srgb, var(--btn-tint, var(--dash-accent)) 6%, transparent) 100%
+  );
+  z-index: -1;
+  pointer-events: none;
+}
+/* Sweep animé au survol : assombri + adouci (teinte seule, pas de blanc pur,
+   opacité faible). */
+button::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(
+    105deg,
+    transparent 0%,
+    color-mix(in srgb, var(--btn-tint, var(--dash-accent)) 12%, transparent) 45%,
+    color-mix(in srgb, var(--btn-tint, var(--dash-accent)) 18%, transparent) 50%,
+    color-mix(in srgb, var(--btn-tint, var(--dash-accent)) 12%, transparent) 55%,
+    transparent 100%
+  );
+  transform: translateX(-180%) skewX(-18deg);
+  opacity: 0;
+  z-index: -1;
+  pointer-events: none;
+}
+button:hover:not(:disabled)::before {
+  animation: btn-shine 0.8s ease-out;
+}
+button:disabled::before,
+button:disabled::after {
+  display: none;
+}
+@keyframes btn-shine {
+  0%   { transform: translateX(-180%) skewX(-18deg); opacity: 0; }
+  25%  { opacity: 1; }
+  100% { transform: translateX(380%) skewX(-18deg); opacity: 0; }
+}
+
+input::placeholder {
+  color: var(--gris);
+  opacity: 1;
+}
+
+/* Sliders / checkboxes / radios : accent violet néon de l'app — JAMAIS le bleu
+   par défaut du navigateur (règle globale : tout input futur est couvert). */
+input[type="range"],
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--accent-violet);
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent-violet);
+  outline-offset: 1px;
+}
+
+::selection {
+  background: color-mix(in srgb, var(--accent-violet) 30%, transparent);
+  color: var(--texte);
+}
+
+/* Scrollbars sombres discrètes (webview Chromium). */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--bordure-active);
+  border-radius: calc(var(--rayon-petit) + 2px);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--accent-violet);
+}
+
+/* ===== Modales — éléments internes partagés =====
+   Source unique pour les classes utilisées à l'intérieur des modales (le
+   wrapper Modal.svelte gère la structure externe : overlay + header + ✕).
+   Préfixées `modal-` pour éviter les collisions avec les classes des
+   composants non-modaux. Les modales utilisent ces classes dans le slot
+   body du wrapper sans redéfinir le CSS. */
+
+/* Bouton d'action standard — recette « verre Aero HUD » (surface teintée
+   violet néon + relief interne). Teinte = --accent-violet (palette néon des
+   modales, cf. AGENTS.md). Bordure solide (les modales ne utilisent pas le
+   dégradé border-box). */
+.modal-action {
+  --btn-tint: var(--accent-violet);
+  background: var(--btn-surface);
+  color: var(--texte);
+  border: 1px solid var(--bordure);
+  box-shadow: var(--btn-inset);
+  padding: 0.4rem 0.8rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: center;
+}
+.modal-action:hover:not(:disabled) {
+  background: var(--btn-surface-hover);
+  border-color: var(--accent-violet);
+  box-shadow: var(--btn-inset-hover), var(--glow-violet);
+}
+.modal-action:active:not(:disabled) {
+  /* Pressed : le verre s'enfonce — brillance inversée (haut plus sombre). */
+  background:
+    linear-gradient(
+      180deg,
+      var(--fond-controle) 0%,
+      color-mix(in srgb, var(--btn-tint) 8%, var(--fond-controle)) 100%
+    );
+  box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+}
+.modal-action:disabled {
+  opacity: 0.4;
+  cursor: default;
+  box-shadow: none;
+}
+.modal-action.primary {
+  --btn-tint: var(--accent-violet);
+  border-color: var(--accent-violet);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
+      color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+    );
+}
+.modal-action.primary:hover {
+  box-shadow: var(--btn-inset-hover), var(--glow-violet);
+}
+.modal-action.danger:hover {
+  --btn-tint: var(--message-error-color);
+  background: var(--message-error-color);
+  color: #fff;
+  border-color: var(--message-error-color);
+  box-shadow: var(--btn-inset-hover);
+}
+
+/* Container de boutons d'action (footer de modale). */
+.modal-actions {
+  display: flex;
+  gap: 0.4rem;
+  justify-content: flex-end;
+  padding-top: 0.6rem;
+  border-top: 1px solid var(--bordure);
+}
+
+/* Carte visuelle (bordure + radius + padding) — structure claire. */
+.modal-bloc {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  border: 1px solid var(--bordure);
+  border-radius: var(--rayon);
+  padding: 0.6rem 0.9rem;
+  background: var(--fond-panneau);
+}
+.modal-bloc-titre {
+  font-size: 0.85rem;
+  font-weight: 600;
+  opacity: 0.85;
+  border-bottom: 1px solid var(--bordure);
+  padding-bottom: 0.2rem;
+}
+
+/* Label de champ (texte secondaire au-dessus d'un input). */
+.modal-field-label {
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+
+/* Slider (range) — accent violet néon de l'app. */
+.modal-range {
+  width: 100%;
+  height: 14px;
+  cursor: pointer;
+  accent-color: var(--accent-violet);
+  background: var(--fond);
+}
+
+/* Checkbox — accent violet néon. */
+.modal-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  cursor: pointer;
+}
+.modal-toggle input[type="checkbox"] {
+  accent-color: var(--accent-violet);
+}
+
+/* Zone scrollable à l'intérieur d'une modale (quand le body entier doit
+   scroller, ex: InputBindingModal). Pour les modales à onglets, c'est le
+   tab-body qui gère son propre scroll. */
+.modal-scroll {
+  flex: 1;
+  overflow-y: auto;
+  min-height: 0;
+  padding: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
 }

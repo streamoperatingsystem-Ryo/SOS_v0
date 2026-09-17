@@ -6,8 +6,13 @@
 #[cfg(windows)]
 mod imp {
     use serde::Serialize;
+    use std::collections::HashMap;
     use std::process::Command;
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
     use windows::Win32::System::Threading::{
         OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT,
         PROCESS_QUERY_LIMITED_INFORMATION,
@@ -77,10 +82,47 @@ mod imp {
         }
     }
 
+    /// Construit une carte PID → nom d'exe via CreateToolhelp32Snapshot.
+    /// Plus permissive que OpenProcess : fonctionne pour les process protégés
+    /// (anti-cheat, DRM, process élevés) où OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) échoue.
+    fn build_pid_exe_map() -> HashMap<u32, String> {
+        let mut map = HashMap::new();
+        unsafe {
+            let Ok(snap) = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) else {
+                log::warn!("[PC] CreateToolhelp32Snapshot échec — fallback OpenProcess");
+                return map;
+            };
+            let mut entry = PROCESSENTRY32W {
+                dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+                ..Default::default()
+            };
+            if Process32FirstW(snap, &mut entry).is_err() {
+                log::warn!("[PC] Process32FirstW échec");
+                let _ = snap;
+                return map;
+            }
+            loop {
+                let exe = String::from_utf16_lossy(&entry.szExeFile);
+                let exe = exe.trim_end_matches('\0').to_string();
+                if !exe.is_empty() {
+                    let name = exe.rsplit('\\').next().unwrap_or(&exe).to_string();
+                    map.insert(entry.th32ProcessID, name);
+                }
+                if Process32NextW(snap, &mut entry).is_err() {
+                    break;
+                }
+            }
+            let _ = snap; // CloseHandle via Drop
+        }
+        log::info!("[PC] toolhelp snapshot → {} process(s)", map.len());
+        map
+    }
+
     /// Callback EnumWindows : collecte les fenêtres visibles avec titre.
-    /// LPARAM = *mut Vec<WindowEntry>.
+    /// LPARAM = *mut (&mut Vec<WindowEntry>, &HashMap<u32, String>).
+    /// Utilise la carte toolhelp pour l'exe (permissif), fallback OpenProcess.
     unsafe extern "system" fn enum_windows_proc(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let list = &mut *(lparam.0 as *mut Vec<WindowEntry>);
+        let (list, pid_map) = &mut *(lparam.0 as *mut (&mut Vec<WindowEntry>, &HashMap<u32, String>));
 
         if !IsWindowVisible(hwnd).as_bool() {
             return BOOL(1);
@@ -104,7 +146,13 @@ mod imp {
 
         let mut pid: u32 = 0;
         GetWindowThreadProcessId(hwnd, Some(&mut pid));
-        let exe = if pid > 0 { exe_name_from_pid(pid) } else { String::new() };
+        // 1) toolhelp snapshot (permissif, marche pour process protégés)
+        // 2) fallback OpenProcess si absent de la carte
+        let exe = if pid > 0 {
+            pid_map.get(&pid).cloned().unwrap_or_else(|| exe_name_from_pid(pid))
+        } else {
+            String::new()
+        };
 
         // Format OBS window property : "title:class:exe"
         let obs_value = format!("{}:{}:{}", title, class, exe);
@@ -115,16 +163,25 @@ mod imp {
 
     /// Énumère les fenêtres visibles du PC (EnumWindows + titre + class + exe).
     pub fn enumerate_windows() -> Vec<WindowEntry> {
+        let pid_map = build_pid_exe_map();
         let mut list: Vec<WindowEntry> = Vec::new();
         unsafe {
+            let mut ctx = (&mut list, &pid_map);
             let _ = EnumWindows(
                 Some(enum_windows_proc),
-                LPARAM(&mut list as *mut Vec<WindowEntry> as isize),
+                LPARAM(&mut ctx as *mut _ as isize),
             );
         }
-        // Filtrer : titre + exe non vides (évite fenêtres système sans exe).
-        list.retain(|w| !w.title.is_empty() && !w.exe.is_empty());
-        log::info!("[PC] fenêtres visibles → {} fenêtre(s)", list.len());
+        // Filtrer : titre non vide seulement. L'exe peut être vide pour les
+        // process protégés (anti-cheat/DRM) — on garde la fenêtre, OBS match
+        // sur title:class même si exe est vide.
+        let before = list.len();
+        list.retain(|w| !w.title.is_empty());
+        let no_exe = list.iter().filter(|w| w.exe.is_empty()).count();
+        log::info!(
+            "[PC] fenêtres visibles → {} fenêtre(s) ({} sans exe, {} avant filtre titre)",
+            list.len(), no_exe, before
+        );
         list
     }
 

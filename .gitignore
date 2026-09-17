@@ -1,5 +1,12 @@
 node_modules/
 dist/
 src-tauri/target/
+src-tauri/binaries/
 .vscode/
 .env
+
+# Artefacts locaux hors-projet
+SETUP/
+Agent Manager/
+ASL_LSS_EXAMPLES*/
+nul

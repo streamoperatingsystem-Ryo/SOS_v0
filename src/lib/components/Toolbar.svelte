@@ -1,23 +1,17 @@
 <script lang="ts">
-  import { createWidget, createChatWidget, createWelcomeClipWidget, importMedia, setMediaFit, selectedIdStore, sceneStore, setMediaZoomLocal, setMediaRotLocal, resetMedia, commitScene, importFond, setBgFit, setBgZoomLocal, setBgRotLocal, resetFond, clearFond, setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime, setWidgetTrou, deleteObsTrouSource, setChatFiltre, setChatTaillePolice, toggleCadreWidgetActif, toggleCadreAppActif } from "../stores/scene";
+  import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "../stores/obs";
-  import { openSection, toggleSection, confirmDeleteWidget, cadreModalOpen } from "../stores/ui";
-  import { videoRegistry } from "../stores/video";
-  import { connexions, connecterTwitch, deconnecterTwitch, reconnecterTwitch, twitchErreur, twitchLogin, type ChatFiltre } from "../stores/chat";
+  import { openSection, toggleSection, cadreModalOpen, interactionModalOpen, moderationModalOpen } from "../stores/ui";
+  import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
   import { connecterKick, deconnecterKick, kickErreur as kickErreurStore, lireSlugSauve } from "../stores/kick";
-  import { connecterYoutube, deconnecterYoutube, demarrerChatYoutube } from "../stores/youtube";
+  import { connecterYoutube, deconnecterYoutube, demarrerChatYoutube, arreterChatYoutube } from "../stores/youtube";
   import { connecterTiktok, deconnecterTiktok, lireUsernameSauve } from "../stores/tiktok";
-  import { youtubeErreur as youtubeErreurStore, youtubeLogin as youtubeLoginStore, tiktokErreur as tiktokErreurStore, youtubeChatActif as youtubeChatActifStore } from "../stores/chat";
-  import { followers, subs, viewers, broadcaster, communauteErreur, chargerCommunaute, chargerFollowers, chargerSubs, chargerViewers, resetCommunaute, chargerCommunauteYoutube, youtubeChannel, youtubeMembers, youtubeViewers } from "../stores/communaute";
+  import { youtubeErreur as youtubeErreurStore, tiktokErreur as tiktokErreurStore, youtubeChatActif as youtubeChatActifStore } from "../stores/chat";
   import { tauri } from "../tauri";
   import { get } from "svelte/store";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import Gizmo3D from "./Gizmo3D.svelte";
-  import PlayerBar from "./PlayerBar.svelte";
-  import ObsSourceDialog from "./ObsSourceDialog.svelte";
 
-  let selectedId = $derived($selectedIdStore);
   let status = $derived($obsStatus);
   let error = $derived($obsError);
   let open = $derived($openSection);
@@ -25,35 +19,11 @@
   let twitchErr = $derived($twitchErreur);
   let kickErr = $derived($kickErreurStore);
   let ytErr = $derived($youtubeErreurStore);
-  let ytLogin = $derived($youtubeLoginStore);
   let ytChatOn = $derived($youtubeChatActifStore);
   let ttErr = $derived($tiktokErreurStore);
-  let login = $derived($twitchLogin);
-  let communauteErr = $derived($communauteErreur);
-  let followersData = $derived($followers);
-  let subsData = $derived($subs);
-  let viewersData = $derived($viewers);
-  let broadcasterData = $derived($broadcaster);
-  let ytChannel = $derived($youtubeChannel);
-  let ytMembers = $derived($youtubeMembers);
-  let ytViewers = $derived($youtubeViewers);
 
-  // id court = 8 premiers caractères
-  let shortId = $derived(selectedId ? selectedId.slice(0, 8) : "");
-
-  // Widget sélectionné (pour lire mediaFit).
-  let selectedWidget = $derived(
-    $sceneStore.widgets.find((w) => w.id === selectedId) ?? null
-  );
-  let currentFit = $derived(selectedWidget?.mediaFit ?? "ajuster");
-  let currentZoom = $derived(selectedWidget?.mediaZoom ?? 1);
-  let currentRot = $derived(selectedWidget?.mediaRot ?? 0);
-
-  // Type du widget sélectionné ("media" | "chat").
-  let selectedType = $derived(selectedWidget?.type ?? "media");
-  let isChatWidget = $derived(selectedType === "chat");
-  let chatFiltreVal = $derived(selectedWidget?.chatFiltre ?? "unifie");
-  let chatTaille = $derived(selectedWidget?.taillePolice ?? 16);
+  // Singleton caméra : désactive le bouton de création si un widget caméra existe.
+  let hasCameraWidget = $derived($sceneStore.widgets.some((w) => w.type === "camera"));
 
   // ===== Cadres SVG (section Personnalisation) =====
   let cadreWidget = $derived($sceneStore.cadreWidget ?? null);
@@ -61,62 +31,35 @@
   let cadreWidgetActif = $derived(!!cadreWidget?.actif);
   let cadreAppActif = $derived(!!cadreApp?.actif);
 
-  const FIT_MODES = ["ajuster", "remplir", "etendre", "etirer", "centrer", "vignette"];
-
-  function onFitClick(fit: string) {
-    if (selectedId) setMediaFit(selectedId, fit);
-  }
-
-  // Zoom média : oninput = maj locale (fluide), onchange (pointerup) = commit.
-  function onZoomInput(e: Event) {
-    if (!selectedId) return;
-    setMediaZoomLocal(selectedId, parseFloat((e.target as HTMLInputElement).value));
-  }
-  async function onZoomChange() {
-    await commitScene();
-  }
-
-  // Rotation média : même pattern.
-  function onRotInput(e: Event) {
-    if (!selectedId) return;
-    setMediaRotLocal(selectedId, parseFloat((e.target as HTMLInputElement).value));
-  }
-  async function onRotChange() {
-    await commitScene();
-  }
-
-  async function onResetMedia() {
-    if (selectedId) await resetMedia(selectedId);
-  }
-
   async function onConnect() {
-    await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
+    try {
+      await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
+    } catch {
+      // obsConnect a mis obsStatus=error + obsError. Skip sync captures.
+      return;
+    }
+    try {
+      await tauri.sceneSyncCaptures(
+        get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
+      );
+    } catch (e) {
+      console.warn("[OBS] sync captures après connexion:", e);
+    }
   }
 
   // ===== Connexions réseau =====
-  async function onTwitchConnect() {
-    await connecterTwitch();
-  }
-  async function onTwitchDisconnect() {
-    await deconnecterTwitch();
-  }
+  async function onTwitchConnect() { await connecterTwitch(); }
+  async function onTwitchDisconnect() { await deconnecterTwitch(); }
   async function onKickConnect() {
     const slug = kickSlug.trim();
     if (!slug) return;
     await connecterKick(slug);
   }
-  async function onKickDisconnect() {
-    await deconnecterKick();
-  }
-  async function onYoutubeConnect() {
-    await connecterYoutube();
-  }
-  async function onYoutubeDisconnect() {
-    await deconnecterYoutube();
-  }
+  async function onKickDisconnect() { await deconnecterKick(); }
+  async function onYoutubeConnect() { await connecterYoutube(); }
+  async function onYoutubeDisconnect() { await deconnecterYoutube(); }
   async function onYoutubeChatToggle() {
     if (ytChatOn) {
-      // OFF : arrêter le chat polling sans déconnecter le compte.
       await arreterChatYoutube();
       youtubeChatActifStore.set(false);
     } else {
@@ -129,245 +72,22 @@
     if (!username) return;
     await connecterTiktok(username);
   }
-  async function onTiktokDisconnect() {
-    await deconnecterTiktok();
-  }
+  async function onTiktokDisconnect() { await deconnecterTiktok(); }
 
-  // ===== Chat widget (filtre + taille police) =====
-  const FILTRES: ChatFiltre[] = ["unifie", "twitch", "youtube", "kick", "tiktok"];
-  function onFiltreClick(f: ChatFiltre) {
-    if (selectedId) setChatFiltre(selectedId, f);
-  }
-  function onTailleInput(e: Event) {
-    if (!selectedId) return;
-    setChatTaillePolice(selectedId, parseFloat((e.target as HTMLInputElement).value));
-  }
-
-  // Pop-out chat : toggle fenêtre Tauri always_on_top.
-  // « Détacher » ouvre, « Réattacher » ferme. IRC inchangé dans les deux cas.
-  // Si l'utilisateur ferme via la croix → Rust emit "popout-closed" → popoutOpen=false.
-  let popoutOpen = $state(false);
   let kickSlug = $state("");
   let tiktokUsername = $state("");
 
   onMount(async () => {
-    await listen("popout-closed", () => {
-      popoutOpen = false;
-    });
-    // Pré-remplir le slug Kick si sauvegardé (au cas où l'auto-resume échoue).
-    if (!kickSlug) {
-      kickSlug = (await lireSlugSauve()) ?? "";
-    }
-    // Pré-remplir le username TikTok si sauvegardé (au cas où l'auto-resume échoue).
-    if (!tiktokUsername) {
-      tiktokUsername = (await lireUsernameSauve()) ?? "";
-    }
+    await listen("popout-closed", () => {});
+    if (!kickSlug) kickSlug = (await lireSlugSauve()) ?? "";
+    if (!tiktokUsername) tiktokUsername = (await lireUsernameSauve()) ?? "";
   });
-
-  // ===== Communauté =====
-  // $effect réactif : charge la communauté quand Twitch passe connecté,
-  // reset quand déconnecté. Plus fiable qu'un listener d'event async
-  // (pas de race condition avec l'enregistrement).
-  $effect(() => {
-    if (cx.twitch) {
-      console.log("[Communauté] twitch connecté → chargement");
-      chargerCommunaute();
-    } else {
-      console.log("[Communauté] twitch déconnecté → reset");
-      resetCommunaute();
-    }
-  });
-
-  // $effect YouTube : charge la communauté YouTube quand connecté.
-  $effect(() => {
-    if (cx.youtube) {
-      console.log("[Communauté] youtube connecté → chargement");
-      chargerCommunauteYoutube();
-    }
-  });
-
-  async function onRafraichirCommunaute() {
-    await chargerCommunaute();
-    if (cx.youtube) {
-      await chargerCommunauteYoutube();
-    }
-  }
-  async function onReconnecterTwitch() {
-    await reconnecterTwitch();
-  }
-
-  async function onDetacher() {
-    try {
-      popoutOpen = await tauri.chatPopoutToggle();
-    } catch (e) {
-      console.warn("onDetacher:", e);
-    }
-  }
-
-  // Suppression widget : ouvre la modale de confirmation (ConfirmDeleteWidgetModal,
-  // montée dans App.svelte). La touche Suppr déclenche le même store.
-  function onSupprimerClick() {
-    confirmDeleteWidget.set(true);
-  }
-
-  // ===== Fond de scène =====
-  let bgMedia = $derived($sceneStore.bgMedia ?? "");
-  let bgKind = $derived($sceneStore.bgKind ?? "image");
-  let bgFit = $derived($sceneStore.bgFit ?? "remplir");
-  let bgZoom = $derived($sceneStore.bgZoom ?? 1);
-  let bgRot = $derived($sceneStore.bgRot ?? 0);
-  let hasFond = $derived(bgMedia.length > 0);
-
-  // ===== Vidéo active (barre lecteur pilote :4321) =====
-  // La barre écrit mediaPaused/mediaTime dans la scène (commitScene → snapshot
-  // WS → :4321 applique play/pause/seek/loop). Le dashboard reste figé.
-  let selectedKind = $derived(selectedWidget?.kind ?? "image");
-  let selectedTrou = $derived(selectedWidget?.trou === true);
-  let selectedObsSource = $derived(selectedWidget?.obsSource ?? null);
-  let widgetMediaPaused = $derived(selectedWidget?.mediaPaused ?? true);
-  let widgetMediaTime = $derived(selectedWidget?.mediaTime ?? 0);
-  let widgetVideoEl = $derived(
-    selectedId ? $videoRegistry.get(selectedId) : undefined
-  );
-  let fondVideoEl = $derived($videoRegistry.get("fond"));
-  let bgPaused = $derived($sceneStore.bgPaused ?? true);
-  let bgTime = $derived($sceneStore.bgTime ?? 0);
-
-  // Callbacks barre widget.
-  function onWidgetTogglePlay() {
-    if (selectedId) setWidgetMediaPaused(selectedId, !widgetMediaPaused);
-  }
-  function onWidgetSeek(t: number) {
-    if (selectedId) setWidgetMediaTime(selectedId, t);
-  }
-
-  // Toggle trou sur le widget sélectionné.
-  function onToggleTrou() {
-    if (selectedId) setWidgetTrou(selectedId, !selectedTrou);
-  }
-
-  // ===== Source OBS sous SOS (Lot 2) =====
-  let obsDialogOpen = $state(false);
-
-  function onOpenObsDialog() {
-    if (!selectedId || !selectedTrou) return;
-    obsDialogOpen = true;
-  }
-  function onCloseObsDialog() {
-    obsDialogOpen = false;
-  }
-  async function onDeleteObsSource() {
-    if (!selectedId) return;
-    await deleteObsTrouSource(selectedId);
-  }
-
-  // Callbacks barre fond.
-  function onBgTogglePlay() {
-    setBgPaused(!bgPaused);
-  }
-  function onBgSeek(t: number) {
-    setBgTime(t);
-  }
-
-  function onBgFitClick(fit: string) {
-    setBgFit(fit);
-  }
-
-  function onBgZoomInput(e: Event) {
-    setBgZoomLocal(parseFloat((e.target as HTMLInputElement).value));
-  }
-  async function onBgZoomChange() {
-    await commitScene();
-  }
-
-  function onBgRotInput(e: Event) {
-    setBgRotLocal(parseFloat((e.target as HTMLInputElement).value));
-  }
-  async function onBgRotChange() {
-    await commitScene();
-  }
-
-  async function onBgReset() {
-    await resetFond();
-  }
-
-  async function onBgSupprimer() {
-    await clearFond();
-  }
 </script>
 
 <aside class="sidebar">
-  <!-- Section Scène -->
-  <div class="section">
-    <button class="header" onclick={() => toggleSection("scene")}>
-      <span class="arrow">{open === "scene" ? "▼" : "▶"}</span>
-      <span>Scène</span>
-    </button>
-    {#if open === "scene"}
-      <div class="content">
-        <button class="action" onclick={importFond}>Importer un fond</button>
-        {#if hasFond}
-          <div class="fit-group">
-            <span class="field-label">Affichage fond</span>
-            <div class="fit-buttons">
-              {#each FIT_MODES as mode}
-                <button
-                  class="fit-btn"
-                  class:active={bgFit === mode}
-                  onclick={() => onBgFitClick(mode)}
-                >{mode}</button>
-              {/each}
-            </div>
-          </div>
-          <div class="media-ctrl">
-            <div class="media-row">
-              <span class="field-label">Zoom fond</span>
-              <span class="media-val">{bgZoom.toFixed(2)}</span>
-            </div>
-            <input
-              class="range"
-              type="range"
-              min="0.2"
-              max="5"
-              step="0.1"
-              value={bgZoom}
-              oninput={onBgZoomInput}
-              onchange={onBgZoomChange}
-            />
-          </div>
-          <div class="media-ctrl">
-            <div class="media-row">
-              <span class="field-label">Rotation fond</span>
-              <span class="media-val">{Math.round(bgRot)}°</span>
-            </div>
-            <input
-              class="range"
-              type="range"
-              min="-180"
-              max="180"
-              step="5"
-              value={bgRot}
-              oninput={onBgRotInput}
-              onchange={onBgRotChange}
-            />
-          </div>
-          <button class="action" onclick={onBgReset}>Reset fond</button>
-          <button class="action" onclick={onBgSupprimer}>Supprimer le fond</button>
-          {#if bgKind === "video"}
-            <PlayerBar
-              videoEl={fondVideoEl}
-              mediaPaused={bgPaused}
-              mediaTime={bgTime}
-              onTogglePlay={onBgTogglePlay}
-              onSeek={onBgSeek}
-            />
-          {/if}
-        {:else}
-          <p class="hint">Aucun fond. Cliquer « Importer un fond ».</p>
-        {/if}
-      </div>
-    {/if}
-  </div>
+  <!-- L'édition du fond de l'application et des widgets se fait maintenant
+       via la carte d'édition contextuelle (CarteEdition.svelte) en bas du
+       panneau latéral — plus de section d'accordéon dédiée. -->
 
   <!-- Section Widgets -->
   <div class="section">
@@ -379,123 +99,14 @@
       <div class="content">
         <button class="action" onclick={createWidget}>Créer un widget</button>
         <button class="action" onclick={createChatWidget}>Créer un widget chat</button>
-        <button class="action" onclick={createWelcomeClipWidget}>Créer un widget clip de bienvenue</button>
-        {#if !selectedId}
-          <p class="hint">Cliquer un widget sur le canvas</p>
-        {:else}
-          <button class="action" onclick={importMedia}>Importer un média</button>
-          {#if shortId}
-            <label class="field">
-              <span class="field-label">id</span>
-              <input value={shortId} readonly spellcheck="false" />
-            </label>
-          {/if}
-          <Gizmo3D />
-          {#if isChatWidget}
-            <!-- Widget chat : filtre + taille police (pas de fit/zoom/rot média, pas de trou) -->
-            <div class="fit-group">
-              <span class="field-label">Filtre chat</span>
-              <div class="fit-buttons">
-                {#each FILTRES as f}
-                  <button
-                    class="fit-btn"
-                    class:active={chatFiltreVal === f}
-                    onclick={() => onFiltreClick(f)}
-                  >{f}</button>
-                {/each}
-              </div>
-            </div>
-            <div class="media-ctrl">
-              <div class="media-row">
-                <span class="field-label">Taille police</span>
-                <span class="media-val">{chatTaille}px</span>
-              </div>
-              <input
-                class="range"
-                type="range"
-                min="8"
-                max="48"
-                step="1"
-                value={chatTaille}
-                oninput={onTailleInput}
-              />
-            </div>
-            <button class="action" onclick={onDetacher}>
-              {popoutOpen ? "Réattacher" : "Détacher"}
-            </button>
-          {:else}
-            <!-- Widget média : trou + fit/zoom/rot -->
-            <button class="action" onclick={onToggleTrou}>
-              {selectedTrou ? "Désactiver le trou" : "Activer le trou"}
-            </button>
-            {#if selectedTrou}
-              {#if selectedObsSource}
-                <button class="action" onclick={onDeleteObsSource}>
-                  Supprimer la source OBS
-                </button>
-              {:else}
-                <button class="action" onclick={onOpenObsDialog}>
-                  Source OBS sous SOS
-                </button>
-              {/if}
-            {/if}
-            <div class="fit-group">
-              <span class="field-label">Affichage</span>
-              <div class="fit-buttons">
-                {#each FIT_MODES as mode}
-                  <button
-                    class="fit-btn"
-                    class:active={currentFit === mode}
-                    onclick={() => onFitClick(mode)}
-                  >{mode}</button>
-                {/each}
-              </div>
-            </div>
-            <div class="media-ctrl">
-              <div class="media-row">
-                <span class="field-label">Zoom média</span>
-                <span class="media-val">{currentZoom.toFixed(2)}</span>
-              </div>
-              <input
-                class="range"
-                type="range"
-                min="0.2"
-                max="5"
-                step="0.1"
-                value={currentZoom}
-                oninput={onZoomInput}
-                onchange={onZoomChange}
-              />
-            </div>
-            <div class="media-ctrl">
-              <div class="media-row">
-                <span class="field-label">Rotation média</span>
-                <span class="media-val">{Math.round(currentRot)}°</span>
-              </div>
-              <input
-                class="range"
-                type="range"
-                min="-180"
-                max="180"
-                step="5"
-                value={currentRot}
-                oninput={onRotInput}
-                onchange={onRotChange}
-              />
-            </div>
-            <button class="action" onclick={onResetMedia}>Reset média</button>
-            {#if selectedKind === "video"}
-              <PlayerBar
-                videoEl={widgetVideoEl}
-                mediaPaused={widgetMediaPaused}
-                mediaTime={widgetMediaTime}
-                onTogglePlay={onWidgetTogglePlay}
-                onSeek={onWidgetSeek}
-              />
-            {/if}
-          {/if}
-          <button class="action" onclick={onSupprimerClick}>Supprimer le widget</button>
-        {/if}
+        <button
+          class="action"
+          onclick={createCameraWidget}
+          disabled={hasCameraWidget}
+        >Créer un widget caméra</button>
+        <button class="action" onclick={createInputViewerWidget}>Créer un widget input viewer</button>
+        <button class="action" onclick={createSpeedrunWidget}>Créer un widget speedrun</button>
+        <p class="hint">Cliquer un widget ou le fond pour l'éditer</p>
       </div>
     {/if}
   </div>
@@ -509,7 +120,7 @@
     {#if open === "connexions"}
       <div class="content">
         <div class="connexion-row">
-          <span class="dot" class:on={cx.twitch} class:off={!cx.twitch}></span>
+          <span class="dot plat-twitch" class:on={cx.twitch} class:off={!cx.twitch}></span>
           <span class="plat-nom">Twitch</span>
           {#if cx.twitch}
             <button class="action small" onclick={onTwitchDisconnect}>Déconnecter</button>
@@ -518,7 +129,7 @@
           {/if}
         </div>
         <div class="connexion-row">
-          <span class="dot" class:on={cx.youtube} class:off={!cx.youtube}></span>
+          <span class="dot plat-youtube" class:on={cx.youtube} class:off={!cx.youtube}></span>
           <span class="plat-nom">YouTube</span>
           {#if cx.youtube}
             <button class="action small" onclick={onYoutubeDisconnect}>Déconnecter</button>
@@ -530,7 +141,7 @@
           {/if}
         </div>
         <div class="connexion-row">
-          <span class="dot" class:on={cx.kick} class:off={!cx.kick}></span>
+          <span class="dot plat-kick" class:on={cx.kick} class:off={!cx.kick}></span>
           <span class="plat-nom">Kick</span>
           {#if cx.kick}
             <button class="action small" onclick={onKickDisconnect}>Déconnecter</button>
@@ -540,7 +151,7 @@
           {/if}
         </div>
         <div class="connexion-row">
-          <span class="dot" class:on={cx.tiktok} class:off={!cx.tiktok}></span>
+          <span class="dot plat-tiktok" class:on={cx.tiktok} class:off={!cx.tiktok}></span>
           <span class="plat-nom">TikTok</span>
           {#if cx.tiktok}
             <button class="action small" onclick={onTiktokDisconnect}>Déconnecter</button>
@@ -565,159 +176,48 @@
     {/if}
   </div>
 
-  <!-- Section Communauté -->
+  <!-- Section Interactions chat : LANCEUR DIRECT (pas un accordéon — le clic
+       ouvre la modale à onglets : Clip de bienvenue / Bandeau / Alertes).
+       Tout est centralisé dans la modale, qui s'explique elle-même. -->
   <div class="section">
-    <button class="header" onclick={() => toggleSection("communaute")}>
-      <span class="arrow">{open === "communaute" ? "▼" : "▶"}</span>
-      <span>Communauté</span>
+    <button
+      class="header lanceur"
+      onclick={() => interactionModalOpen.set(true)}
+      title="Ouvrir les interactions chat (clips de bienvenue, alertes…)"
+    >
+      <span class="arrow">▶</span>
+      <span>Interactions chat</span>
+      <span class="lanceur-fleche">▸</span>
     </button>
-    {#if open === "communaute"}
-      <div class="content">
-        {#if !cx.twitch}
-          <p class="hint">Connecter Twitch pour voir la communauté.</p>
-        {:else if communauteErr === "need_reauth"}
-          <div class="need-reauth">
-            <span class="obs-status">Scopes manquants pour la communauté.</span>
-            <button class="action" onclick={onReconnecterTwitch}>
-              Reconnecter Twitch pour la communauté
-            </button>
-          </div>
-        {:else}
-          <!-- Broadcaster -->
-          {#if broadcasterData}
-            <div class="broadcaster">
-              {#if broadcasterData.profile_image_url}
-                <img
-                  class="avatar"
-                  src={broadcasterData.profile_image_url}
-                  alt={broadcasterData.display_name}
-                />
-              {/if}
-              <div class="bc-info">
-                <span class="bc-name">{broadcasterData.display_name}</span>
-                <span class="bc-type">{broadcasterData.broadcaster_type || "aucun"}</span>
-              </div>
-            </div>
-          {/if}
+  </div>
 
-          <!-- Viewers live -->
-          <div class="communaute-row">
-            <span class="field-label">Viewers live</span>
-            <span class="communaute-val">
-              {#if viewersData !== null}
-                {viewersData}
-              {:else}
-                Hors-ligne
-              {/if}
-            </span>
-          </div>
-
-          <!-- Followers -->
-          <div class="communaute-row">
-            <span class="field-label">Followers ({followersData?.total ?? "…"})</span>
-          </div>
-          {#if followersData}
-            <div class="liste-scroll">
-              {#each followersData.liste as f}
-                <div class="liste-entry">
-                  <span class="liste-login">{f.login}</span>
-                  <span class="liste-date">{f.followed_at.slice(0, 10)}</span>
-                </div>
-              {/each}
-            </div>
-          {/if}
-
-          <!-- Subs -->
-          <div class="communaute-row">
-            <span class="field-label">
-              Subs ({subsData?.total ?? "…"} · {subsData?.points ?? "…"} pts)
-            </span>
-          </div>
-          {#if subsData}
-            <div class="liste-scroll">
-              {#each subsData.liste as s}
-                <div class="liste-entry">
-                  <span class="liste-login">{s.login}</span>
-                  <span class="liste-tier">
-                    {s.tier === "1000" ? "Tier 1" : s.tier === "2000" ? "Tier 2" : s.tier === "3000" ? "Tier 3" : s.tier}
-                    {#if s.is_gift} (gift){/if}
-                  </span>
-                </div>
-              {/each}
-            </div>
-          {/if}
-
-          <button class="action" onclick={onRafraichirCommunaute}>Rafraîchir</button>
-        {/if}
-
-        <!-- ===== YouTube ===== -->
-        {#if cx.youtube}
-          <hr class="sep" />
-          <div class="communaute-row">
-            <span class="field-label" style="font-weight:600">YouTube</span>
-          </div>
-
-          <!-- Channel info -->
-          {#if ytChannel}
-            <div class="broadcaster">
-              {#if ytChannel.profile_image_url}
-                <img
-                  class="avatar"
-                  src={ytChannel.profile_image_url}
-                  alt={ytChannel.display_name}
-                />
-              {/if}
-              <div class="bc-info">
-                <span class="bc-name">{ytChannel.display_name}</span>
-                <span class="bc-type">{ytChannel.subscriber_count} abonnés</span>
-              </div>
-            </div>
-          {/if}
-
-          <!-- Live viewers -->
-          <div class="communaute-row">
-            <span class="field-label">Viewers live</span>
-            <span class="communaute-val">
-              {#if ytViewers !== null && ytViewers !== undefined}
-                {ytViewers}
-              {:else}
-                Hors-ligne
-              {/if}
-            </span>
-          </div>
-
-          <!-- Stats -->
-          <div class="communaute-row">
-            <span class="field-label">Vues totales</span>
-            <span class="communaute-val">{ytChannel?.view_count ?? "…"}</span>
-          </div>
-          <div class="communaute-row">
-            <span class="field-label">Vidéos</span>
-            <span class="communaute-val">{ytChannel?.video_count ?? "…"}</span>
-          </div>
-
-          <!-- Members -->
-          <div class="communaute-row">
-            <span class="field-label">Members ({ytMembers?.total ?? "…"})</span>
-          </div>
-          {#if ytMembers}
-            <div class="liste-scroll">
-              {#each ytMembers.liste as m}
-                <div class="liste-entry">
-                  <span class="liste-login">{m.display_name}</span>
-                  <span class="liste-tier">{m.memberships_level}</span>
-                </div>
-              {/each}
-            </div>
-          {/if}
-        {/if}
-      </div>
-    {/if}
+  <!-- Section Modération & Rôles : LANCEUR DIRECT (pas un accordéon — le clic
+       ouvre la modale à onglets : Twitch / Kick / YouTube / TikTok / Trovo).
+       Gestion des statuts/rôles : ban, timeout, VIP, modérateur, suppression
+       de messages, clear chat. -->
+  <div class="section">
+    <button
+      class="header lanceur"
+      onclick={() => moderationModalOpen.set(true)}
+      title="Ouvrir la modération & rôles (ban, VIP, modérateur…)"
+    >
+      <span class="arrow">▶</span>
+      <span>Modération & Rôles</span>
+      <span class="lanceur-fleche">▸</span>
+    </button>
   </div>
 
   <!-- Section OBS -->
   <div class="section">
-    <button class="header" onclick={() => toggleSection("obs")}>
+    <!-- En-tête coloré par l'état OBS : rouge = non connecté (OBS pas ouvert,
+         WebSocket off ou auth échouée), vert = connecté. L'utilisateur voit le
+         problème d'un coup d'œil et clique pour voir le message actionnable. -->
+    <button
+      class="header"
+      class:etat-erreur={status === "error" || status === "idle"}
+      class:etat-ok={status === "connected"}
+      onclick={() => toggleSection("obs")}
+    >
       <span class="arrow">{open === "obs" ? "▼" : "▶"}</span>
       <span>OBS</span>
     </button>
@@ -738,7 +238,11 @@
         >
           {status === "connecting" ? "Connexion…" : "Connecter"}
         </button>
-        <span class="obs-status">
+        <span
+          class="obs-status"
+          class:erreur={status === "error"}
+          class:ok={status === "connected"}
+        >
           {#if status === "connected"}
             OBS OK
           {:else if status === "error"}
@@ -757,54 +261,54 @@
     </button>
     {#if open === "personnalisation"}
       <div class="content">
-        <!-- Cadre des widgets -->
-        <div class="cadre-bloc">
-          <span class="cadre-bloc-titre">Cadre des widgets</span>
-          <button class="action" onclick={() => toggleCadreWidgetActif()}>
-            {cadreWidgetActif ? "Désactiver" : "Activer"}
-          </button>
-          <button class="action" onclick={() => cadreModalOpen.set("widget")}>
-            Galerie
-          </button>
-        </div>
-        <!-- Cadre de l'application -->
-        <div class="cadre-bloc">
-          <span class="cadre-bloc-titre">Cadre de l'application</span>
-          <button class="action" onclick={() => toggleCadreAppActif()}>
-            {cadreAppActif ? "Désactiver" : "Activer"}
-          </button>
-          <button class="action" onclick={() => cadreModalOpen.set("app")}>
-            Galerie
-          </button>
-        </div>
+        <!-- Galerie unique : le choix widgets / bord de l'application se fait
+             dans la modale (onglets), avec l'activation par onglet. -->
+        <button class="action" onclick={() => cadreModalOpen.set("widget")}>
+          Vos cadres
+        </button>
+        <p class="hint">
+          {#if cadreWidgetActif && cadreAppActif}
+            Cadre des widgets + bord de l'application actifs
+          {:else if cadreWidgetActif}
+            Cadre des widgets actif
+          {:else if cadreAppActif}
+            Bord de l'application actif
+          {:else}
+            Aucun cadre actif
+          {/if}
+        </p>
       </div>
     {/if}
   </div>
 </aside>
 
-{#if obsDialogOpen && selectedId}
-  <ObsSourceDialog widgetId={selectedId} onClose={onCloseObsDialog} />
-{/if}
-
 <style>
   .sidebar {
-    flex-shrink: 0;
-    width: 240px;
-    padding: 0.5rem;
-    border-right: 1px solid var(--texte);
+    width: 100%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
     overflow-y: auto;
+    flex: 1;
+    min-height: 0;
   }
   .section {
     display: flex;
     flex-direction: column;
   }
   .header {
-    background: var(--fond);
+    /* Recette « verre Aero HUD » (cf. app.css → --btn-*). Teinte indigo
+       (--dash-accent) par défaut, bordure dégradée dash (border-box).
+       padding-box = surface Aero teintée, border-box = dégradé dash. */
+    --btn-tint: var(--dash-accent);
+    --btn-border: var(--dash-gradient);
+    background:
+      var(--btn-surface) padding-box,
+      var(--btn-border) border-box;
     color: var(--texte);
-    border: 1px solid var(--texte);
+    border: 1px solid transparent;
+    box-shadow: var(--btn-inset);
     padding: 0.4rem 0.6rem;
     font: inherit;
     cursor: pointer;
@@ -812,11 +316,52 @@
     display: flex;
     align-items: center;
     gap: 0.4rem;
+    transition: box-shadow 0.2s ease, background 0.2s ease;
   }
   .header:hover {
-    background: var(--texte);
-    color: var(--fond);
+    /* Hover : glow indigo atténué + surface qui s'illumine (verre). */
+    background:
+      var(--btn-surface-hover) padding-box,
+      var(--btn-border) border-box;
+    box-shadow: var(--btn-inset-hover), var(--dash-glow), 0 0 0 1px color-mix(in srgb, var(--dash-accent) 30%, transparent);
   }
+  .header:active {
+    /* Pressed : le verre s'enfonce. */
+    background:
+      linear-gradient(180deg, var(--fond-controle) 0%, color-mix(in srgb, var(--btn-tint) 8%, var(--fond-controle)) 100%) padding-box,
+      var(--btn-border) border-box;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+  }
+  /* État OBS sur l'en-tête (variables --dash-*, palette froide assombrie).
+     Bordeaux = non connecté (idle/error) : teinte + bordure bordeaux.
+     Vert foncé = connecté (texte seulement, le dégradé dash reste).
+     Le hover PRÉSERVE la couleur d'état. */
+  .header.etat-erreur {
+    --btn-tint: var(--dash-danger);
+    --btn-border: linear-gradient(var(--dash-danger), var(--dash-danger));
+    color: var(--dash-danger);
+  }
+  .header.etat-erreur:hover {
+    color: var(--dash-danger);
+    box-shadow: var(--btn-inset-hover), var(--dash-glow-danger);
+  }
+  .header.etat-ok {
+    color: var(--dash-success);
+  }
+  .header.etat-ok:hover {
+    color: var(--dash-success);
+  }
+  /* Lanceur Interactions chat : ouvre la modale (pas un accordéon).
+     Espacement IDENTIQUE aux autres sections (gap 0.4rem à gauche) ;
+     seule la flèche de droite est poussée au bord (margin-left:auto). */
+  .header.lanceur .lanceur-fleche {
+    margin-left: auto;
+  }
+  .lanceur-fleche {
+    font-size: 0.75rem;
+    opacity: 0.7;
+  }
+  /* ===== Slider compact une ligne (label + slider + valeur) ===== */
   .arrow {
     font-size: 0.75rem;
     width: 0.85rem;
@@ -827,48 +372,57 @@
     flex-direction: column;
     gap: 0.4rem;
     padding: 0.5rem 0.6rem;
-    border: 1px solid var(--texte);
+    border: 1px solid var(--bordure);
     border-top: none;
   }
   .action {
-    background: var(--fond);
+    /* Recette « verre Aero HUD » — cohérent avec les en-têtes de section. */
+    --btn-tint: var(--dash-accent);
+    --btn-border: var(--dash-gradient);
+    background:
+      var(--btn-surface) padding-box,
+      var(--btn-border) border-box;
     color: var(--texte);
-    border: 1px solid var(--texte);
+    border: 1px solid transparent;
+    box-shadow: var(--btn-inset);
     padding: 0.35rem 0.6rem;
     font: inherit;
     cursor: pointer;
     text-align: left;
+    transition: box-shadow 0.2s ease, background 0.2s ease;
   }
   .action:hover {
-    background: var(--texte);
-    color: var(--fond);
+    background:
+      var(--btn-surface-hover) padding-box,
+      var(--btn-border) border-box;
+    box-shadow: var(--btn-inset-hover), var(--dash-glow), 0 0 0 1px color-mix(in srgb, var(--dash-accent) 30%, transparent);
+  }
+  .action:active {
+    background:
+      linear-gradient(180deg, var(--fond-controle) 0%, color-mix(in srgb, var(--btn-tint) 8%, var(--fond-controle)) 100%) padding-box,
+      var(--btn-border) border-box;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
   }
   .action:disabled {
-    opacity: 0.4;
+    opacity: 0.35;
     cursor: not-allowed;
+    box-shadow: none;
   }
   .action:disabled:hover {
-    background: var(--fond);
-    color: var(--texte);
+    background:
+      var(--btn-surface) padding-box,
+      var(--btn-border) border-box;
+    box-shadow: none;
   }
   .hint {
     font-size: 0.8rem;
     opacity: 0.6;
     line-height: 1.3;
   }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-  .field-label {
-    font-size: 0.7rem;
-    opacity: 0.6;
-  }
   input {
-    background: var(--fond);
+    background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--texte);
+    border: 1px solid var(--bordure);
     padding: 0.35rem 0.5rem;
     font: inherit;
     font-size: 0.85rem;
@@ -876,64 +430,21 @@
   }
   input:focus {
     outline: none;
-    background: rgba(224, 224, 224, 0.05);
-  }
-  input[readonly] {
-    opacity: 0.6;
-    cursor: default;
+    border-color: var(--dash-accent);
   }
   .obs-status {
     font-size: 0.8rem;
     opacity: 0.7;
     word-break: break-word;
   }
-  .fit-group {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .fit-buttons {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.25rem;
-  }
-  .fit-btn {
-    background: var(--fond);
-    color: var(--texte);
-    border: 1px solid var(--texte);
-    opacity: 0.4;
-    padding: 0.3rem 0.4rem;
-    font: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-    text-align: center;
-  }
-  .fit-btn:hover {
-    opacity: 0.7;
-  }
-  .fit-btn.active {
+  .obs-status.erreur {
     opacity: 1;
+    color: var(--message-user-action-color);
+    line-height: 1.4;
   }
-  .media-ctrl {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .media-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-  }
-  .media-val {
-    font-size: 0.75rem;
-    opacity: 0.8;
-    font-variant-numeric: tabular-nums;
-  }
-  .range {
-    width: 100%;
-    accent-color: var(--texte);
-    background: var(--fond);
-    color: var(--texte);
+  .obs-status.ok {
+    opacity: 1;
+    color: var(--message-ok-color);
   }
   .connexion-row {
     display: flex;
@@ -945,15 +456,22 @@
     width: 8px;
     height: 8px;
     border-radius: 50%;
-    border: 1px solid var(--texte);
+    border: 1px solid var(--bordure);
+    background: var(--gris-fonce);
     flex-shrink: 0;
+    transition: background-color 0.15s ease, box-shadow 0.15s ease;
   }
   .dot.on {
-    background: var(--connexion-ok);
+    background: var(--message-ok-color);
   }
   .dot.off {
-    background: #555;
+    background: var(--gris-fonce);
   }
+  /* Couleurs de marque (décoratif) — connectée = couleur plateforme + glow. */
+  .dot.plat-twitch.on { background: var(--plat-twitch); box-shadow: 0 0 6px rgba(168, 85, 247, 0.6); }
+  .dot.plat-youtube.on { background: var(--plat-youtube); box-shadow: 0 0 6px rgba(244, 63, 94, 0.6); }
+  .dot.plat-kick.on { background: var(--plat-kick); box-shadow: 0 0 6px rgba(34, 197, 94, 0.6); }
+  .dot.plat-tiktok.on { background: var(--plat-tiktok); box-shadow: 0 0 6px rgba(236, 72, 153, 0.6); }
   .plat-nom {
     flex: 1;
     font-size: 0.85rem;
@@ -967,91 +485,5 @@
     flex-shrink: 0;
     padding: 0.1rem 0.3rem;
     font-size: 0.78rem;
-  }
-  .need-reauth {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-  }
-  .broadcaster {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.3rem 0;
-  }
-  .avatar {
-    width: 2.2rem;
-    height: 2.2rem;
-    border-radius: 50%;
-    border: 1px solid var(--texte);
-    flex-shrink: 0;
-  }
-  .bc-info {
-    display: flex;
-    flex-direction: column;
-    gap: 0.05rem;
-  }
-  .bc-name {
-    font-weight: 600;
-    font-size: 0.9rem;
-  }
-  .bc-type {
-    font-size: 0.7rem;
-    opacity: 0.6;
-  }
-  .sep {
-    border: none;
-    border-top: 1px solid var(--texte);
-    opacity: 0.2;
-    margin: 0.5rem 0;
-  }
-  .communaute-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 0.2rem 0;
-  }
-  .communaute-val {
-    font-size: 0.85rem;
-    font-variant-numeric: tabular-nums;
-  }
-  .liste-scroll {
-    max-height: 120px;
-    overflow-y: auto;
-    border: 1px solid var(--texte);
-    padding: 0.2rem 0.3rem;
-    font-size: 0.78rem;
-  }
-  .liste-entry {
-    display: flex;
-    justify-content: space-between;
-    padding: 0.1rem 0;
-    border-bottom: 1px solid rgba(224, 224, 224, 0.08);
-  }
-  .liste-entry:last-child {
-    border-bottom: none;
-  }
-  .liste-login {
-    font-weight: 500;
-  }
-  .liste-date, .liste-tier {
-    opacity: 0.6;
-    font-size: 0.72rem;
-  }
-  /* Section Personnalisation — cadres SVG */
-  .cadre-bloc {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-    padding: 0.3rem 0;
-    border-bottom: 1px solid rgba(224, 224, 224, 0.1);
-  }
-  .cadre-bloc:last-child {
-    border-bottom: none;
-  }
-  .cadre-bloc-titre {
-    font-size: 0.8rem;
-    font-weight: 600;
-    opacity: 0.85;
   }
 </style>

@@ -11,6 +11,7 @@
     couleurFin?: string;
     strokeWidth?: number;
     idCadre?: string;
+    gradientAngle?: number;
   }
 
   let {
@@ -22,10 +23,11 @@
     couleurFin = "#000000",
     strokeWidth = 4,
     idCadre = undefined,
+    gradientAngle = 135,
   }: Props = $props();
 
   let svgString = $derived(
-    genererSVG(style, variante, largeur, hauteur, couleur, couleurFin, strokeWidth, idCadre)
+    genererSVG(style, variante, largeur, hauteur, couleur, couleurFin, strokeWidth, idCadre, gradientAngle)
   );
 </script>
 

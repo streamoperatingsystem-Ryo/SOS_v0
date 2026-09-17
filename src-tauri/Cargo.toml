@@ -1,6 +1,6 @@
 [package]
 name = "streamos-v0"
-version = "0.1.1"
+version = "0.1.2"
 description = "StreamOS v0 — dashboard + diffusion"
 edition = "2021"
 rust-version = "1.77"
@@ -20,7 +20,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.7", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs", "cors"] }
 uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 futures-util = { version = "0.3", features = ["sink"] }
@@ -30,13 +30,27 @@ base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 keyring = { version = "3", features = ["windows-native"] }
 tauri-plugin-opener = "2"
+tauri-plugin-shell = "2"
 piratetok-live-rs = { version = "0.2.1", path = "../vendor/piratetok-live-rs", default-features = false }
+gilrs = "0.11"
+# Formatage date ISO 8601 (timestamp unfollows). Déjà dépendance transitive.
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+# Speedrun splitter — moteur de script JavaScript (remplace Roslyn C#).
+# Boa est un moteur JS pur Rust, sans dépendances C/C++ (~5MB vs LiveSplit .NET ~50MB).
+boa_engine = "0.20"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
+    "Win32_System_LibraryLoader",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Input_XboxController",
+    # Speedrun splitter — scan mémoire processus jeu (ReadProcessMemory, etc.)
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_Diagnostics_ToolHelp",
+    "Win32_System_ProcessStatus",
 ] }
 
 [features]

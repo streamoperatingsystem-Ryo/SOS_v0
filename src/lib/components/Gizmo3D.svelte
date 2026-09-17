@@ -8,7 +8,8 @@
   const SIZE = 120;
   const HALF = SIZE / 2;
   const MAX_DEG = 90;
-  const SNAP_DEG = 3;
+  const AXIS_SNAP_DEG = 8; // aimant indépendant par axe (rx=0 ou ry=0)
+  const CENTER_SNAP_DEG = 12; // zone plus large au centre (intersection des deux)
 
   let selectedId = $derived($selectedIdStore);
   let widget = $derived(
@@ -21,12 +22,15 @@
 
   // Croix pleine si au centre (0,0), sinon axes atténués.
   let atCenter = $derived(Math.abs(rx) < 0.5 && Math.abs(ry) < 0.5);
+  // Aimant axe : la boule est verrouillée sur un axe (valeur 0 sur cet axe).
+  let snappedX = $derived(Math.abs(ry) < 0.5); // boule sur l'axe horizontal (ry=0)
+  let snappedY = $derived(Math.abs(rx) < 0.5); // boule sur l'axe vertical (rx=0)
 
   let ballCx = $derived(HALF + (ry / MAX_DEG) * HALF);
   let ballCy = $derived(HALF - (rx / MAX_DEG) * HALF);
 
   let dragging = $state(false);
-  let gizmoEl: HTMLDivElement | undefined;
+  let gizmoEl = $state<HTMLDivElement | undefined>(undefined);
 
   function ptrToDeg(e: PointerEvent): { rx: number; ry: number } {
     if (!gizmoEl) return { rx: 0, ry: 0 };
@@ -37,8 +41,11 @@
     let nrx = ((HALF - y) / HALF) * MAX_DEG;
     nrx = Math.max(-MAX_DEG, Math.min(MAX_DEG, nrx));
     nry = Math.max(-MAX_DEG, Math.min(MAX_DEG, nry));
-    // Aimant centre actif pendant le move.
-    if (Math.abs(nrx) < SNAP_DEG && Math.abs(nry) < SNAP_DEG) {
+    // Aimant axes : chaque axe snap indépendamment à 0.
+    if (Math.abs(nrx) < AXIS_SNAP_DEG) nrx = 0;
+    if (Math.abs(nry) < AXIS_SNAP_DEG) nry = 0;
+    // Aimant centre : zone plus large, force les deux à 0 (intersection).
+    if (Math.abs(nrx) < CENTER_SNAP_DEG && Math.abs(nry) < CENTER_SNAP_DEG) {
       nrx = 0;
       nry = 0;
     }
@@ -91,41 +98,41 @@
       role="presentation"
     >
       <svg width={SIZE} height={SIZE} viewBox="0 0 {SIZE} {SIZE}">
-        <!-- Carré -->
+        <!-- Carré : rouge --ctrl-arreter -->
         <rect
           x="0.5"
           y="0.5"
           width={SIZE - 1}
           height={SIZE - 1}
           fill="none"
-          stroke="var(--texte)"
+          stroke="var(--ctrl-arreter)"
           stroke-width="1"
         />
-        <!-- Croix : axes vertical + horizontal -->
+        <!-- Croix : axes vertical + horizontal, orange --ctrl-redemarrer -->
         <line
           x1={HALF}
           y1="0"
           x2={HALF}
           y2={SIZE}
-          stroke="var(--texte)"
-          stroke-width="1"
-          opacity={atCenter ? 1 : 0.4}
+          stroke="var(--ctrl-redemarrer)"
+          stroke-width={snappedY || atCenter ? 1.5 : 1}
+          opacity={snappedY || atCenter ? 1 : 0.4}
         />
         <line
           x1="0"
           y1={HALF}
           x2={SIZE}
           y2={HALF}
-          stroke="var(--texte)"
-          stroke-width="1"
-          opacity={atCenter ? 1 : 0.4}
+          stroke="var(--ctrl-redemarrer)"
+          stroke-width={snappedX || atCenter ? 1.5 : 1}
+          opacity={snappedX || atCenter ? 1 : 0.4}
         />
-        <!-- Boule -->
+        <!-- Boule : vert --ctrl-refresh, jaune --ctrl-centre quand centrée -->
         <circle
           cx={ballCx}
           cy={ballCy}
-          r="6"
-          fill="var(--texte)"
+          r={atCenter ? 8 : 6}
+          fill={atCenter ? "var(--ctrl-centre)" : "var(--ctrl-refresh)"}
         />
       </svg>
     </div>

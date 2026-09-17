@@ -17,7 +17,7 @@
 use crate::twitch_chat::ChatMessage;
 use crate::youtube_auth::{is_cancelled, Cancel};
 use serde_json::json;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::broadcast;
 
 const YOUTUBE_API: &str = "https://www.googleapis.com/youtube/v3";
@@ -58,6 +58,8 @@ pub fn demarrer(
 }
 
 /// Une session de polling : resolve liveChatId → boucle polling → fin si plus live.
+/// Toutes les branches retournent (pas de retry ici — la reconnexion est gérée
+/// par l'appelant `demarrer`). NB : PAS de boucle externe — clippy never_loop.
 async fn run_polling(
     app: &AppHandle,
     chat_tx: &broadcast::Sender<String>,
@@ -66,67 +68,79 @@ async fn run_polling(
     channel_id: &str,
     cancel: &Cancel,
 ) -> Result<(), String> {
+    if is_cancelled(cancel) {
+        return Ok(());
+    }
+
+    // 1. Résoudre activeLiveChatId via search → videos
+    let live_chat_id = match resolve_live_chat_id(client, token, channel_id).await {
+        Ok(Some(id)) => {
+            eprintln!("[YouTube] live chat résolu: {}", id);
+            id
+        }
+        Ok(None) => {
+            // Pas de live actif → arrêter la tâche (pas de retry automatique).
+            // L'utilisateur relancera manuellement via le bouton "Chat live ON".
+            eprintln!("[YouTube] pas de live actif — arrêt du chat polling");
+            let _ = app.emit("youtube:pas-de-live", ());
+            return Ok(());
+        }
+        Err(e) => {
+            return Err(format!("resolve live chat: {}", e));
+        }
+    };
+
+    // 2. Boucle polling
+    let mut page_token: Option<String> = None;
     loop {
         if is_cancelled(cancel) {
             return Ok(());
         }
 
-        // 1. Résoudre activeLiveChatId via search → videos
-        let live_chat_id = match resolve_live_chat_id(client, token, channel_id).await {
-            Ok(Some(id)) => {
-                eprintln!("[YouTube] live chat résolu: {}", id);
-                id
-            }
-            Ok(None) => {
-                // Pas de live actif → arrêter la tâche (pas de retry automatique).
-                // L'utilisateur relancera manuellement via le bouton "Chat live ON".
-                eprintln!("[YouTube] pas de live actif — arrêt du chat polling");
-                let _ = app.emit("youtube:pas-de-live", ());
-                return Ok(());
-            }
-            Err(e) => {
-                return Err(format!("resolve live chat: {}", e));
-            }
-        };
+        let (messages, next_token, poll_interval) =
+            fetch_messages(client, token, &live_chat_id, page_token.as_deref()).await?;
 
-        // 2. Boucle polling
-        let mut page_token: Option<String> = None;
-        loop {
-            if is_cancelled(cancel) {
-                return Ok(());
+        for msg in messages {
+            let _ = app.emit("chat:message", &msg);
+            let json_msg = json!({
+                "type": "chat",
+                "message": msg,
+            })
+            .to_string();
+            match chat_tx.send(json_msg) {
+                Ok(n) => eprintln!("[YouTube] chat envoyé pseudo={} receivers={}", msg.pseudo, n),
+                Err(_) => eprintln!("[YouTube] chat AUCUN client pseudo={}", msg.pseudo),
             }
-
-            let (messages, next_token, poll_interval) =
-                fetch_messages(client, token, &live_chat_id, page_token.as_deref()).await?;
-
-            for msg in messages {
-                let _ = app.emit("chat:message", &msg);
-                let json_msg = json!({
-                    "type": "chat",
-                    "message": msg,
-                })
-                .to_string();
-                match chat_tx.send(json_msg) {
-                    Ok(n) => eprintln!("[YouTube] chat envoyé pseudo={} receivers={}", msg.pseudo, n),
-                    Err(_) => eprintln!("[YouTube] chat AUCUN client pseudo={}", msg.pseudo),
-                }
+            // Bandeau premier message : détection 1er message (tous viewers).
+            if let Some(bandeau) = app.try_state::<crate::bandeau::BandeauState>() {
+                bandeau.on_message(
+                    "youtube",
+                    &msg.pseudo,
+                    &msg.pseudo,
+                    msg.avatar.clone(),
+                    &msg.texte,
+                );
             }
-
-            page_token = next_token;
-
-            // Respecter pollingIntervalMillis (défaut 5s si absent).
-            let wait = poll_interval.unwrap_or(5000);
-            tokio::select! {
-                _ = tokio::time::sleep(std::time::Duration::from_millis(wait)) => {}
-                _ = await_cancel(cancel) => return Ok(()),
+            // Commandes chat : "!commande" → overlay diffusion.
+            if let Some(commandes) = app.try_state::<crate::commandes::CommandesState>() {
+                commandes.on_message(&msg.pseudo, &msg.pseudo, &msg.texte);
             }
+        }
 
-            // Si plus de pageToken → le live est terminé, arrêter la tâche.
-            if page_token.is_none() {
-                eprintln!("[YouTube] live terminé (plus de pageToken) — arrêt du chat polling");
-                let _ = app.emit("youtube:pas-de-live", ());
-                return Ok(());
-            }
+        page_token = next_token;
+
+        // Respecter pollingIntervalMillis (défaut 5s si absent).
+        let wait = poll_interval.unwrap_or(5000);
+        tokio::select! {
+            _ = tokio::time::sleep(std::time::Duration::from_millis(wait)) => {}
+            _ = await_cancel(cancel) => return Ok(()),
+        }
+
+        // Si plus de pageToken → le live est terminé, arrêter la tâche.
+        if page_token.is_none() {
+            eprintln!("[YouTube] live terminé (plus de pageToken) — arrêt du chat polling");
+            let _ = app.emit("youtube:pas-de-live", ());
+            return Ok(());
         }
     }
 }
@@ -312,6 +326,8 @@ async fn fetch_messages(
             texte,
             badges: badges_str,
             avatar,
+            color: None,
+            message_id: None,
         });
     }
 

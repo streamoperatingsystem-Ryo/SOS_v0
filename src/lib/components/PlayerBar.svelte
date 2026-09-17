@@ -86,11 +86,35 @@
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
+    /* Teinte contextuelle héritée de la carte d'édition (--accent-carte).
+       Si PlayerBar est rendu hors carte (fallback), --btn-tint = indigo dash. */
   }
   .player-row {
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
     gap: 0.25rem;
+  }
+  .action {
+    /* Recette « verre Aero HUD » — teinte héritée du parent (carte d'édition). */
+    background: var(--btn-surface, var(--fond-controle));
+    box-shadow: var(--btn-inset, none);
+    color: var(--texte);
+    border: 1px solid var(--bordure);
+    padding: 0.3rem 0.4rem;
+    font: inherit;
+    font-size: 0.8rem;
+    cursor: pointer;
+    text-align: center;
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .action:hover {
+    background: var(--btn-surface-hover, var(--fond-controle));
+    box-shadow: var(--btn-inset-hover, none);
+    border-color: var(--bordure-active);
+  }
+  .action:active {
+    background: linear-gradient(180deg, var(--fond-controle) 0%, color-mix(in srgb, var(--btn-tint, var(--dash-accent)) 8%, var(--fond-controle)) 100%);
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
   }
   .player-time {
     font-size: 0.75rem;
@@ -100,7 +124,7 @@
   }
   .range {
     width: 100%;
-    accent-color: var(--texte);
+    accent-color: var(--accent-violet);
     background: var(--fond);
     color: var(--texte);
   }

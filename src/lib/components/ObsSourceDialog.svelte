@@ -1,6 +1,7 @@
 <script lang="ts">
   import { tauri } from "../tauri";
   import { createObsTrouFromPc } from "../stores/scene";
+  import Modal from "./Modal.svelte";
 
   let { widgetId, onClose }: { widgetId: string; onClose: () => void } = $props();
 
@@ -37,7 +38,7 @@
       }
       console.log(`[OBS trou] ${k} → ${liste.length} cible(s) PC`);
     } catch (e) {
-      error = String(e?.message ?? e);
+      error = String((e as Error)?.message ?? e);
     } finally {
       loading = false;
     }
@@ -57,7 +58,7 @@
       console.log("[OBS trou] invoke OK, fermeture dialog");
       onClose();
     } catch (e) {
-      const msg = String(e?.message ?? e);
+      const msg = String((e as Error)?.message ?? e);
       console.error("[OBS trou] create_trou_from_pc échec:", msg, e);
       error = msg;
       mode = "liste";
@@ -74,31 +75,34 @@
   }
 </script>
 
-<div class="overlay" onclick={onClose} role="presentation">
-  <div class="dialog" onclick={(e) => e.stopPropagation()} role="dialog" tabindex="-1">
-    <h2>Source OBS sous SOS</h2>
-
+<Modal
+  title="Lier une source OBS"
+  onClose={onClose}
+  maxWidth="460px"
+  hint="La capture (caméra, fenêtre ou jeu) sera placée derrière l'overlay et visible à travers la fenêtre de capture du widget."
+>
+  <div class="dialog-body">
     {#if mode === "type"}
-      <p class="hint">Choisir le type de source :</p>
+      <p class="note">Choisir le type de source :</p>
       <div class="type-buttons">
-        <button class="action" onclick={() => pickType("camera")}>Caméra</button>
-        <button class="action" onclick={() => pickType("window")}>Fenêtre</button>
-        <button class="action" onclick={() => pickType("game")}>Jeu</button>
+        <button class="modal-action" onclick={() => pickType("camera")}>Caméra</button>
+        <button class="modal-action" onclick={() => pickType("window")}>Fenêtre</button>
+        <button class="modal-action" onclick={() => pickType("game")}>Jeu</button>
       </div>
 
     {:else if mode === "liste" || mode === "working"}
       <div class="list-header">
-        <button class="action small" onclick={onBack} disabled={working}>← Retour</button>
+        <button class="modal-action small" onclick={onBack} disabled={working}>← Retour</button>
         <span class="list-title">{kind}</span>
       </div>
 
       {#if loading}
-        <p class="hint">Chargement…</p>
+        <p class="note">Chargement…</p>
       {:else if liste.length === 0}
-        <p class="hint warn">Aucune cible PC de ce type.</p>
+        <p class="note warn">Aucune cible PC de ce type.</p>
       {:else}
         <div class="list">
-          {#each liste as item (item.nom)}
+          {#each liste as item, i (i)}
             <button
               class="row"
               onclick={() => onPick(item)}
@@ -114,48 +118,29 @@
       {/if}
 
       {#if error}
-        <p class="hint warn">{error}</p>
+        <p class="note warn">{error}</p>
       {/if}
     {/if}
 
     <button class="cancel" onclick={onClose}>Annuler</button>
   </div>
-</div>
+</Modal>
 
 <style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 1000;
-  }
-  .dialog {
-    background: var(--fond);
-    color: var(--texte);
-    border: 1px solid var(--texte);
+  .dialog-body {
     padding: 1rem 1.2rem;
-    min-width: 320px;
-    max-width: 460px;
-    max-height: 80vh;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
   }
-  h2 {
-    font-size: 1rem;
-    margin: 0;
-  }
-  .hint {
+  .note {
     font-size: 0.85rem;
     opacity: 0.8;
     margin: 0;
   }
-  .hint.warn {
+  .note.warn {
     opacity: 1;
-    color: #e0a060;
+    color: var(--message-user-action-color);
   }
   .type-buttons {
     display: grid;
@@ -180,19 +165,22 @@
     gap: 0.2rem;
   }
   .row {
-    background: var(--fond);
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--texte);
+    border: 1px solid var(--bordure);
     padding: 0.4rem 0.6rem;
     font: inherit;
     font-size: 0.85rem;
     cursor: pointer;
     text-align: left;
     word-break: break-word;
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   }
   .row:hover:not(:disabled) {
-    background: var(--texte);
-    color: var(--fond);
+    background: var(--btn-surface-hover);
+    box-shadow: var(--btn-inset-hover);
+    border-color: var(--accent-violet);
   }
   .row:disabled {
     opacity: 0.4;
@@ -202,24 +190,7 @@
     opacity: 0.6;
     font-size: 0.8rem;
   }
-  .action {
-    background: var(--fond);
-    color: var(--texte);
-    border: 1px solid var(--texte);
-    padding: 0.4rem 0.6rem;
-    font: inherit;
-    cursor: pointer;
-    text-align: center;
-  }
-  .action:hover:not(:disabled) {
-    background: var(--texte);
-    color: var(--fond);
-  }
-  .action:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-  .action.small {
+  .modal-action.small {
     padding: 0.25rem 0.5rem;
     font-size: 0.8rem;
   }

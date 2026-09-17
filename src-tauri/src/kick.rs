@@ -31,16 +31,15 @@ const PUSHER_WS_URL: &str = "wss://ws-us2.pusher.com/app/32cbd69e4b950bf97679?pr
 /// User-Agent simulant Chrome pour les requêtes HTTP vers kick.com (Cloudflare).
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36";
 
-/// Résout un slug de canal Kick (ex: "xqc") en ID de chatroom (entier).
-/// GET https://kick.com/api/v2/channels/<slug> → data.chatroom.id.
-pub async fn resolve_chatroom(slug: &str) -> Result<u64, String> {
-    eprintln!("[Kick] resolve_chatroom: slug={}", slug);
+/// GET https://kick.com/api/v2/channels/<slug> → body JSON parsé.
+/// Headers anti-Cloudflare (UA Chrome + Referer/Origin kick.com).
+/// Partagé par resolve_chatroom (chatroom.id) et fetch_viewers (livestream).
+async fn get_channel(slug: &str) -> Result<serde_json::Value, String> {
     let client = reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(10))
         .build()
         .map_err(|e| format!("Client build: {}", e))?;
     let url = format!("{}/channels/{}", KICK_API_BASE, slug);
-    eprintln!("[Kick] resolve_chatroom: GET {}", url);
     let resp = client
         .get(&url)
         .header("User-Agent", UA)
@@ -51,7 +50,6 @@ pub async fn resolve_chatroom(slug: &str) -> Result<u64, String> {
         .await
         .map_err(|e| format!("Kick API réseau: {}", e))?;
 
-    eprintln!("[Kick] resolve_chatroom: statut={}", resp.status());
     if !resp.status().is_success() {
         return Err(format!("Kick API: statut HTTP {}", resp.status()));
     }
@@ -66,15 +64,30 @@ pub async fn resolve_chatroom(slug: &str) -> Result<u64, String> {
         return Err("Kick API: bloqué par Cloudflare (réponse HTML)".to_string());
     }
 
-    let body: serde_json::Value = resp
-        .json()
+    resp.json()
         .await
-        .map_err(|e| format!("Kick API parse JSON: {}", e))?;
+        .map_err(|e| format!("Kick API parse JSON: {}", e))
+}
 
+/// Résout un slug de canal Kick (ex: "xqc") en ID de chatroom (entier).
+/// GET https://kick.com/api/v2/channels/<slug> → data.chatroom.id.
+pub async fn resolve_chatroom(slug: &str) -> Result<u64, String> {
+    eprintln!("[Kick] resolve_chatroom: slug={}", slug);
+    let body = get_channel(slug).await?;
     let chatroom_id = body["chatroom"]["id"]
         .as_u64()
         .ok_or("Kick API: chatroom.id non trouvé dans la réponse")?;
     Ok(chatroom_id)
+}
+
+/// Viewers live : même endpoint que resolve_chatroom → livestream.viewer_count.
+/// None = hors-ligne (livestream null) ou champ absent. Appelé par viewers.rs
+/// (rythme géré là-bas : 60s live / 180s off).
+pub async fn fetch_viewers(slug: &str) -> Result<Option<u32>, String> {
+    let body = get_channel(slug).await?;
+    Ok(body["livestream"]["viewer_count"]
+        .as_u64()
+        .map(|n| n as u32))
 }
 
 /// Démarre le client WebSocket Pusher Kick en arrière-plan.
@@ -207,6 +220,8 @@ pub fn run_ws(
                                 texte: texte.to_string(),
                                 badges: None,
                                 avatar: None,
+                                color: None,
+                                message_id: None,
                             };
                             let _ = app.emit("chat:message", &chat_msg);
 
@@ -220,6 +235,22 @@ pub fn run_ws(
                                     Ok(n) => eprintln!("[Kick] WS chat envoyé pseudo={} receivers={}", pseudo, n),
                                     Err(_) => eprintln!("[Kick] WS chat AUCUN client pseudo={}", pseudo),
                                 }
+                            }
+                            // Bandeau premier message : détection 1er message.
+                            if let Some(bandeau) = app.try_state::<crate::bandeau::BandeauState>() {
+                                bandeau.on_message(
+                                    "kick",
+                                    pseudo,
+                                    pseudo,
+                                    None,
+                                    texte,
+                                );
+                            }
+                            // Commandes chat : "!commande" → overlay diffusion.
+                            if let Some(commandes) =
+                                app.try_state::<crate::commandes::CommandesState>()
+                            {
+                                commandes.on_message(pseudo, pseudo, texte);
                             }
                         }
 

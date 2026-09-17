@@ -134,6 +134,8 @@ pub async fn liste_clips(
 /// Dérive l'URL MP4 d'un clip ancien depuis son thumbnail_url.
 /// Format ancien : ...-preview-480x272.jpg → ....mp4
 /// Retourne None si le format ne correspond pas (clip moderne → GQL nécessaire).
+/// (Non appelé pour l'instant — gardé pour la résolution GQL des clips modernes.)
+#[allow(dead_code)]
 pub fn thumbnail_to_mp4(thumbnail_url: &str) -> Option<String> {
     if thumbnail_url.is_empty() {
         return None;

@@ -1,5 +1,9 @@
 mod api_deck;
+mod alertes;
+mod commandes;
 mod config;
+mod pad_numerique;
+mod input_viewer;
 mod kick;
 mod obs;
 mod obs_trou;
@@ -9,6 +13,7 @@ mod scenes;
 mod server;
 mod twitch_auth;
 mod twitch_chat;
+mod viewers;
 mod twitch_helix;
 mod youtube_auth;
 mod youtube_chat;
@@ -16,6 +21,18 @@ mod youtube_data;
 mod tiktok_chat;
 mod twitch_clips;
 mod welcome;
+mod bandeau;
+mod position_overlay;
+mod speedrun;
+// Les commandes speedrun sont définies dans speedrun::commands (réelles sur
+// Windows, stubs sur les autres plateformes). Importées dans le scope pour
+// generate_handler!.
+use speedrun::commands::{
+    speedrun_action_manuelle, speedrun_arreter, speedrun_charger_asl,
+    speedrun_charger_lss, speedrun_demarrer, speedrun_est_actif,
+    speedrun_lire_config, speedrun_maj_settings, speedrun_maj_settings_asl,
+    speedrun_sauver_config,
+};
 
 use scenes::{ScenesState, SceneIndex};
 use std::sync::Arc;
@@ -63,6 +80,18 @@ fn scene_renommer(app: AppHandle, id: String, nom: String) -> Result<(), String>
     scenes::renommer(&app, &id, &nom)
 }
 
+/// Déplace une scène dans l'index (glisser-déposer barre « Vos scènes »).
+#[tauri::command]
+fn scene_deplacer(app: AppHandle, id: String, position: usize) -> Result<(), String> {
+    scenes::deplacer(&app, &id, position)
+}
+
+/// Masque/affiche le titre d'une scène dans sa pastille (œil, onglet orange).
+#[tauri::command]
+fn scene_masquer_nom(app: AppHandle, id: String, masque: bool) -> Result<(), String> {
+    scenes::masquer_nom(&app, &id, masque)
+}
+
 #[tauri::command]
 fn scene_supprimer(app: AppHandle, state: tauri::State<ScenesState>, id: String) -> Result<(), String> {
     scenes::supprimer(&app, &state, &id)
@@ -87,8 +116,10 @@ fn scene_importer(app: AppHandle, state: tauri::State<ScenesState>) -> Result<Op
 
 const MAX_IMG_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_VIDEO_BYTES: u64 = 80 * 1024 * 1024;
+const MAX_AUDIO_BYTES: u64 = 10 * 1024 * 1024;
 const IMG_EXT: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
-const VIDEO_EXT: &[&str] = &["mp4", "webm"];
+const VIDEO_EXT: &[&str] = &["mp4", "webm", "mkv"];
+const AUDIO_EXT: &[&str] = &["mp3", "ogg", "wav"];
 
 /// Vérifie les magic bytes pour PNG/JPEG/GIF/WebP.
 fn check_magic_image(bytes: &[u8]) -> bool {
@@ -98,24 +129,145 @@ fn check_magic_image(bytes: &[u8]) -> bool {
         || p(&[0x47, 0x49, 0x46, 0x38]) // GIF8
         || (bytes.len() >= 12
             && p(&[0x52, 0x49, 0x46, 0x46])
-            && &bytes[8..12] == &[0x57, 0x45, 0x42, 0x50]) // RIFF...WEBP
+            && bytes[8..12] == [0x57, 0x45, 0x42, 0x50]) // RIFF...WEBP
 }
 
-/// Vérifie les magic bytes pour MP4 (boîte `ftyp` à l'offset 4) et WebM (EBML).
+/// Vérifie les magic bytes pour MP4 (boîte `ftyp` à l'offset 4) et WebM/MKV
+/// (EBML). MKV et WebM partagent le format conteneur Matroska (magic EBML
+/// `1A 45 DF A3`) — la distinction se fait par extension, pas par magic bytes.
+/// NB : Chromium ne lit pas le MKV dans un <video> → remux MKV→MP4 à l'import
+/// (validate_and_copy_media) via le sidecar ffmpeg.
 fn check_magic_video(bytes: &[u8]) -> bool {
     bytes.len() >= 12 && &bytes[4..8] == b"ftyp" // MP4 / ISOBMFF
-        || bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) // WebM / EBML
+        || bytes.starts_with(&[0x1A, 0x45, 0xDF, 0xA3]) // WebM / MKV / EBML
+}
+
+/// Vérifie les magic bytes pour MP3 (tag ID3 ou frame sync 0xFFEx), OGG
+/// (OggS) et WAV (RIFF…WAVE).
+fn check_magic_audio(bytes: &[u8]) -> bool {
+    bytes.starts_with(b"ID3") // MP3 + tag ID3
+        || (bytes.len() >= 2 && bytes[0] == 0xFF && (bytes[1] & 0xE0) == 0xE0) // frame MP3
+        || bytes.starts_with(b"OggS") // OGG
+        || (bytes.len() >= 12 && bytes.starts_with(b"RIFF") && &bytes[8..12] == b"WAVE") // WAV
+}
+
+/// (kind, extensions autorisées, taille max, validateur magic bytes) d'un média.
+type MediaSpec = (&'static str, &'static [&'static str], u64, fn(&[u8]) -> bool);
+
+/// Validation + copie d'un média vers AppData/StreamOS/medias/<uuid>.<ext>
+/// (extension + taille + magic bytes). Retourne `(rel, kind)`. Utilisé par
+/// pick_and_copy_media et import_alerte_media — aucune mutation de scène ici.
+///
+/// MKV : Chromium ne lit pas le MKV dans un <video> → remux en MP4 via le
+/// sidecar ffmpeg (`-c copy -sn -movflags +faststart`, sans réencodage). Le
+/// fichier stocké est `medias/<uuid>.mp4` (kind "video"). Échoue si un flux
+/// n'est pas compatible MP4 (ex. HEVC vidéo, audio Opus hors profil) —
+/// l'erreur ffmpeg est retournée telle quelle.
+fn validate_and_copy_media(app: &AppHandle, src: &std::path::Path) -> Result<(String, String, String), String> {
+    use std::fs;
+    use std::io::Read;
+
+    // 0. Nom original du fichier (pour affichage dans la carte d'édition).
+    let nom_original = src
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("média")
+        .to_string();
+
+    // 1. Extension → kind + liste autorisée
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .ok_or_else(|| "Extension manquante".to_string())?;
+
+    let (kind, allowed_ext, max_bytes, magic_ok): MediaSpec =
+        if IMG_EXT.contains(&ext.as_str()) {
+            ("image", IMG_EXT, MAX_IMG_BYTES, check_magic_image)
+        } else if VIDEO_EXT.contains(&ext.as_str()) {
+            ("video", VIDEO_EXT, MAX_VIDEO_BYTES, check_magic_video)
+        } else {
+            return Err(format!("Extension .{} non autorisée", ext));
+        };
+
+    // 2. Taille ≤ limite du kind
+    let meta = fs::metadata(src).map_err(|e| format!("metadata: {}", e))?;
+    if meta.len() > max_bytes {
+        return Err(format!(
+            "Fichier trop volumineux ({} octets > {} Mo)",
+            meta.len(),
+            max_bytes / 1024 / 1024
+        ));
+    }
+
+    // 3. Magic bytes (selon le kind)
+    let mut f = fs::File::open(src).map_err(|e| format!("open: {}", e))?;
+    let mut head = [0u8; 32];
+    let n = f.read(&mut head).map_err(|e| format!("read: {}", e))?;
+    if !magic_ok(&head[..n]) {
+        return Err("Format non supporté (magic bytes invalides)".into());
+    }
+
+    // 4. (re-vérif extension déjà faite au §1 — allowed_ext cohérent avec kind)
+    let _ = allowed_ext;
+
+    // 5. Copie (ou remux MKV→MP4) vers AppData/StreamOS/medias/<uuid>.<dest_ext>
+    let dir = config::data_dir(app)?;
+    let uuid = uuid::Uuid::new_v4().simple().to_string();
+    // MKV → remux en MP4 (lisible navigateur) ; autres extensions → copie brute.
+    let dest_ext: &str = if ext == "mkv" { "mp4" } else { ext.as_str() };
+    let dest_name = format!("{}.{}", uuid, dest_ext);
+    let dest = dir.join("medias").join(&dest_name);
+    if ext == "mkv" {
+        remux_to_mp4(app, src, &dest)?;
+    } else {
+        fs::copy(src, &dest).map_err(|e| format!("copy: {}", e))?;
+    }
+
+    let rel = format!("medias/{}", dest_name);
+    Ok((rel, kind.to_string(), nom_original))
+}
+
+/// Remuxe un MKV en MP4 via le sidecar ffmpeg (`-c copy -sn -movflags
+/// +faststart`). Sans réencodage — rapide, préserve la qualité. Échoue si un
+/// flux n'est pas compatible MP4 (ex. HEVC, Opus hors profil). Blocking sync :
+/// tourne sur un thread worker Tauri (pas le thread UI) → pas de gel.
+fn remux_to_mp4(app: &AppHandle, src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
+    use tauri_plugin_shell::ShellExt;
+
+    let sidecar = app
+        .shell()
+        .sidecar("ffmpeg")
+        .map_err(|e| format!("ffmpeg sidecar indisponible: {}", e))?;
+    let out = std::process::Command::from(sidecar)
+        .arg("-y")
+        .arg("-i")
+        .arg(src)
+        .arg("-c")
+        .arg("copy")
+        .arg("-sn")
+        .arg("-movflags")
+        .arg("+faststart")
+        .arg(dest)
+        .output()
+        .map_err(|e| format!("ffmpeg spawn: {}", e))?;
+    if !out.status.success() {
+        // Nettoyer le fichier partiel éventuel.
+        let _ = std::fs::remove_file(dest);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        return Err(format!("Remux MKV→MP4 échoué: {}", stderr.trim()));
+    }
+    Ok(())
 }
 
 /// Helper commun d'import média (widget OU fond de scène) : dialog fichier
-/// « Médias » → validation (extension + taille + magic bytes) → copie vers
-/// AppData/StreamOS/medias/<uuid>.<ext>. Retourne `Some((rel, kind))` si
-/// importé, `None` si dialog annulé. Image : png/jpg/jpeg/gif/webp ≤ 10 Mo.
-/// Vidéo : mp4/webm ≤ 80 Mo. Aucune mutation de la scène — l'appelant mutera
-/// le widget ciblé ou les champs fond après coup.
-fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String)>, String> {
-    use std::fs;
-    use std::io::Read;
+/// « Médias » → validation (extension + taille + magic bytes) → copie (ou
+/// remux MKV→MP4) vers AppData/StreamOS/medias/<uuid>.<ext>. Retourne
+/// `Some((rel, kind))` si importé, `None` si dialog annulé.
+/// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm/mkv ≤ 80 Mo
+/// (mkv remuxé en mp4 via sidecar ffmpeg). Aucune mutation de la scène —
+/// l'appelant mutera le widget ciblé ou les champs fond après coup.
+fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String, String)>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     // 1. Dialog fichier (un seul filtre « Médias » : images + vidéos)
@@ -133,72 +285,29 @@ fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String)>, Stri
         .into_path()
         .map_err(|e| format!("Chemin invalide: {}", e))?;
 
-    // 2. Extension → kind + liste autorisée
-    let ext = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase())
-        .ok_or_else(|| "Extension manquante".to_string())?;
-
-    let (kind, allowed_ext, max_bytes, magic_ok): (&str, &[&str], u64, fn(&[u8]) -> bool) =
-        if IMG_EXT.contains(&ext.as_str()) {
-            ("image", IMG_EXT, MAX_IMG_BYTES, check_magic_image)
-        } else if VIDEO_EXT.contains(&ext.as_str()) {
-            ("video", VIDEO_EXT, MAX_VIDEO_BYTES, check_magic_video)
-        } else {
-            return Err(format!("Extension .{} non autorisée", ext));
-        };
-
-    // 3. Taille ≤ limite du kind
-    let meta = fs::metadata(&src).map_err(|e| format!("metadata: {}", e))?;
-    if meta.len() > max_bytes {
-        return Err(format!(
-            "Fichier trop volumineux ({} octets > {} Mo)",
-            meta.len(),
-            max_bytes / 1024 / 1024
-        ));
-    }
-
-    // 4. Magic bytes (selon le kind)
-    let mut f = fs::File::open(&src).map_err(|e| format!("open: {}", e))?;
-    let mut head = [0u8; 32];
-    let n = f.read(&mut head).map_err(|e| format!("read: {}", e))?;
-    if !magic_ok(&head[..n]) {
-        return Err("Format non supporté (magic bytes invalides)".into());
-    }
-
-    // 5. (re-vérif extension déjà faite au §2 — allowed_ext cohérent avec kind)
-    let _ = allowed_ext;
-
-    // 6. Copie vers AppData/StreamOS/medias/<uuid>.<ext>
-    let dir = config::data_dir(app)?;
-    let uuid = uuid::Uuid::new_v4().simple().to_string();
-    let dest_name = format!("{}.{}", uuid, ext);
-    let dest = dir.join("medias").join(&dest_name);
-    fs::copy(&src, &dest).map_err(|e| format!("copy: {}", e))?;
-
-    let rel = format!("medias/{}", dest_name);
-    Ok(Some((rel, kind.to_string())))
+    // 2-5. Validation + copie (helper commun).
+    validate_and_copy_media(app, &src).map(Some)
 }
 
 /// Importe un média (image OU vidéo) pour un widget : dialog → validation
-/// (extension + taille + magic bytes) → copie vers
+/// (extension + taille + magic bytes) → copie (ou remux MKV→MP4) vers
 /// AppData/StreamOS/medias/<uuid>.<ext> → mutate scène (media + kind) →
 /// save → snapshot. Retourne `Some(media_rel_path)` si importé, `None` si
 /// dialog annulé.
-/// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm ≤ 80 Mo.
+/// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm/mkv ≤ 80 Mo
+/// (mkv remuxé en mp4 via sidecar ffmpeg).
 #[tauri::command]
 fn import_media(
     app: AppHandle,
     state: tauri::State<ScenesState>,
     widget_id: String,
-) -> Result<Option<String>, String> {
+) -> Result<Option<(String, String)>, String> {
     // 1. Helper commun : dialog + validation + copie (pas de mutation scène).
-    let Some((rel, kind)) = pick_and_copy_media(&app)? else {
+    let Some((rel, kind, nom)) = pick_and_copy_media(&app)? else {
         return Ok(None); // dialog annulé
     };
 
-    // 2. Mutate scène : set media + kind sur le widget ciblé
+    // 2. Mutate scène : set media + kind + mediaNom sur le widget ciblé
     {
         let mut current = state.scene.lock().unwrap();
         let w = current
@@ -208,12 +317,13 @@ fn import_media(
             .ok_or_else(|| format!("Widget {} introuvable", widget_id))?;
         w.media = Some(rel.clone());
         w.kind = kind;
+        w.mediaNom = Some(nom.clone());
     }
 
     // 3. Save <current_id>.json + push snapshot (chaîne unique)
     scenes::save_current(&app, &state)?;
 
-    Ok(Some(rel))
+    Ok(Some((rel, nom)))
 }
 
 /// Importe un média (image OU vidéo) comme fond de scène : dialog → validation
@@ -226,7 +336,7 @@ fn import_fond(
     state: tauri::State<ScenesState>,
 ) -> Result<Option<String>, String> {
     // 1. Helper commun : dialog + validation + copie (pas de mutation scène).
-    let Some((rel, kind)) = pick_and_copy_media(&app)? else {
+    let Some((rel, kind, _nom)) = pick_and_copy_media(&app)? else {
         return Ok(None); // dialog annulé
     };
 
@@ -241,6 +351,112 @@ fn import_fond(
     scenes::save_current(&app, &state)?;
 
     Ok(Some(rel))
+}
+
+/// Importe un média (image OU vidéo) pour une alerte : dialog filtré selon le
+/// kind attendu ("image" → Images, "video" → Vidéos) → validation (extension +
+/// taille + magic bytes) → copie (ou remux MKV→MP4) vers
+/// AppData/StreamOS/medias/<uuid>.<ext>. Retourne `Some(rel)` si importé,
+/// `None` si dialog annulé. Le kind est vérifié contre `kind_attendu`
+/// (l'appelant connaît déjà le kind demandé — pas besoin de le retourner).
+/// Le média est servi par :4321 sur /medias/. Vidéo mkv acceptée (remuxée en
+/// mp4 via sidecar ffmpeg).
+#[tauri::command]
+fn import_alerte_media(
+    app: AppHandle,
+    kind_attendu: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // 1. Dialog fichier filtré selon le kind attendu.
+    let (filtre_nom, exts): (&str, &[&str]) = if kind_attendu == "video" {
+        ("Vidéos", VIDEO_EXT)
+    } else {
+        ("Images", IMG_EXT)
+    };
+    let file = app
+        .dialog()
+        .file()
+        .add_filter(filtre_nom, exts)
+        .blocking_pick_file();
+    let Some(file) = file else {
+        return Ok(None); // dialog annulé
+    };
+    let src: std::path::PathBuf = file
+        .into_path()
+        .map_err(|e| format!("Chemin invalide: {}", e))?;
+
+    // 2. Validation + copie (helper commun) + garde-fou kind.
+    let (rel, kind, _nom) = validate_and_copy_media(&app, &src)?;
+    if kind != kind_attendu {
+        return Err(format!(
+            "Type de fichier inattendu : {} attendu, {} reçu",
+            kind_attendu, kind
+        ));
+    }
+    Ok(Some(rel))
+}
+
+/// Importe un son (mp3/ogg/wav ≤ 10 Mo) pour une alerte : dialog fichier
+/// « Sons » → validation (extension + taille + magic bytes) → copie vers
+/// AppData/StreamOS/medias/<uuid>.<ext>. Retourne `Some(rel)` si importé,
+/// `None` si dialog annulé. Le son est servi par :4321 sur /medias/ (le même
+/// dossier que les médias de scène).
+#[tauri::command]
+fn import_son(app: AppHandle) -> Result<Option<String>, String> {
+    use std::fs;
+    use std::io::Read;
+    use tauri_plugin_dialog::DialogExt;
+
+    // 1. Dialog fichier (filtre « Sons »)
+    let file = app
+        .dialog()
+        .file()
+        .add_filter("Sons", AUDIO_EXT)
+        .blocking_pick_file();
+    let Some(file) = file else {
+        return Ok(None); // dialog annulé
+    };
+    let src: std::path::PathBuf = file
+        .into_path()
+        .map_err(|e| format!("Chemin invalide: {}", e))?;
+
+    // 2. Extension autorisée
+    let ext = src
+        .extension()
+        .and_then(|e| e.to_str())
+        .map(|s| s.to_lowercase())
+        .ok_or_else(|| "Extension manquante".to_string())?;
+    if !AUDIO_EXT.contains(&ext.as_str()) {
+        return Err(format!("Extension .{} non autorisée", ext));
+    }
+
+    // 3. Taille ≤ limite
+    let meta = fs::metadata(&src).map_err(|e| format!("metadata: {}", e))?;
+    if meta.len() > MAX_AUDIO_BYTES {
+        return Err(format!(
+            "Fichier trop volumineux ({} octets > {} Mo)",
+            meta.len(),
+            MAX_AUDIO_BYTES / 1024 / 1024
+        ));
+    }
+
+    // 4. Magic bytes
+    let mut f = fs::File::open(&src).map_err(|e| format!("open: {}", e))?;
+    let mut head = [0u8; 32];
+    let n = f.read(&mut head).map_err(|e| format!("read: {}", e))?;
+    if !check_magic_audio(&head[..n]) {
+        return Err("Format audio non supporté (magic bytes invalides)".into());
+    }
+
+    // 5. Copie vers AppData/StreamOS/medias/<uuid>.<ext>
+    let dir = config::data_dir(&app)?;
+    let uuid = uuid::Uuid::new_v4().simple().to_string();
+    let dest_name = format!("{}.{}", uuid, ext);
+    let dest = dir.join("medias").join(&dest_name);
+    fs::copy(&src, &dest).map_err(|e| format!("copy: {}", e))?;
+
+    Ok(Some(format!("medias/{}", dest_name)))
 }
 
 /// Connecte à OBS WebSocket (host:port, password), authentifie, lit la
@@ -264,10 +480,26 @@ async fn obs_connect(
             dims
         }
         Err(e) => {
-            eprintln!("[OBS] obs_connect ERR {}", e);
+            // Log court : l'erreur Windows complète (os error 10061) se répète
+            // toutes les 20s tant OBS est fermé. On la raccourcit dans le log,
+            // mais on retourne la chaîne complète au frontend (messageClair
+            // vérifie "10061"/"refus" pour afficher le bon message).
+            let court = if e.contains("os error 10061") {
+                "injoignable (OBS fermé ou WebSocket désactivé)".to_string()
+            } else {
+                e.clone()
+            };
+            eprintln!("[OBS] obs_connect ERR {}", court);
             return Err(e);
         }
     };
+
+    // Mémoriser la résolution OBS globalement (obs_canvas.json) : appliquée à
+    // TOUTES les scènes au chargement (boot, création, bascule, import) — pas
+    // seulement à la scène courante. Non-fatal si écriture échoue.
+    if let Err(e) = config::sauver_obs_canvas(&app, w, h) {
+        log::warn!("sauver_obs_canvas: {}", e);
+    }
 
     // Muter canvasW/canvasH si changement → save + snapshot (chaîne unique).
     let changed = {
@@ -382,11 +614,11 @@ fn app_arreter(app: AppHandle) -> Result<(), String> {
 }
 
 /// Redémarre l'application (relance le processus puis quitte).
+/// NB : `app.restart()` ne retourne jamais (`!`) — coercé en Result.
 #[tauri::command]
 fn app_redemarrer(app: AppHandle) -> Result<(), String> {
     eprintln!("[App] redémarrage demandé");
-    app.restart();
-    Ok(())
+    app.restart()
 }
 
 // ===== Captures liées à la sauvegarde (Lot C) =====
@@ -429,6 +661,7 @@ async fn obs_enumerate_targets(
 /// Crée une source OBS de capture sous SOS-Diffusion, calée sur le widget
 /// (x y w h). Retourne le nom de la source créée. One-shot connect/disconnect.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn obs_create_trou_source(
     host: String,
     port: u16,
@@ -487,6 +720,7 @@ async fn obs_enumerate_inputs_by_kind(
 /// Lie une source OBS existante au widget trou (pas de création, juste
 /// transform + reorder sous SOS-Diffusion).
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn obs_link_existing_source(
     host: String,
     port: u16,
@@ -500,6 +734,37 @@ async fn obs_link_existing_source(
     obs_trou::link_existing_source(&host, port, &password, &source_name, x, y, w, h).await
 }
 
+// ===== Widget caméra (source OBS "SOS-Caméra" sous SOS-Diffusion) =====
+
+/// Crée / met à jour la source "SOS-Caméra" (dshow_input) dans la scène « SOS »,
+/// sous SOS-Diffusion, calée sur le widget (transform = sémantique sync_trous :
+/// centre + OBS_BOUNDS_SCALE_OUTER + alignment 0).
+/// device = Some(FriendlyName) → SetInputSettings video_device_id sur l'input
+/// existant (changement de device explicite) ; None → device par défaut d'OBS.
+/// Singleton : 1 widget caméra / scène → 1 input "SOS-Caméra".
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn camera_sync(
+    host: String,
+    port: u16,
+    password: String,
+    device: Option<String>,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    obs_trou::camera_sync(&host, port, &password, device.as_deref(), x, y, w, h).await
+}
+
+/// Cache l'item de scène "SOS-Caméra" (SetSceneItemEnabled false) à la
+/// suppression du widget caméra. L'input OBS est CONSERVÉ (jamais RemoveInput
+/// — la recréation du widget le réutilisera). Non-fatal si l'item est absent.
+#[tauri::command]
+async fn camera_hide(host: String, port: u16, password: String) -> Result<(), String> {
+    obs_trou::camera_hide(&host, port, &password).await
+}
+
 // ===== Connexions réseau (Lot réseau) =====
 
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -508,6 +773,7 @@ use twitch_auth::{Cancel, new_cancel};
 
 /// État Twitch partagé : handle de la tâche IRC + jeton d'annulation (swappable)
 /// + drapeau connecté + login/user_id/access token du compte connecté.
+///
 /// Géré via tauri::State. Le keyring reste le store persistant ; TwitchState
 /// est la référence en mémoire pour la session courante (évite de relire le
 /// keyring à chaque appel Helix).
@@ -519,6 +785,9 @@ pub struct TwitchState {
     pub login: Arc<std::sync::Mutex<Option<String>>>,
     pub user_id: Arc<std::sync::Mutex<Option<String>>>,
     pub access: Arc<std::sync::Mutex<Option<String>>>,
+    /// Canal d'envoi de commandes IRC (ex: "/clear") vers la tâche IRC.
+    /// None si l'IRC n'est pas démarré. Remplacé à chaque démarrage IRC.
+    pub irc_cmd_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
 }
 
 impl TwitchState {
@@ -530,6 +799,7 @@ impl TwitchState {
             login: Arc::new(std::sync::Mutex::new(None)),
             user_id: Arc::new(std::sync::Mutex::new(None)),
             access: Arc::new(std::sync::Mutex::new(None)),
+            irc_cmd_tx: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -557,7 +827,7 @@ impl TwitchState {
     fn access_courant(&self) -> Option<String> {
         self.access.lock().unwrap().clone()
     }
-    /// Arrête l'IRC en cours (si actif) : flag cancel + abort handle.
+    /// Arrête l'IRC en cours (si actif) : flag cancel + abort handle + clear canal cmd.
     fn stop_irc(&self) {
         {
             let c = self.cancel.lock().unwrap();
@@ -567,6 +837,8 @@ impl TwitchState {
         if let Some(handle) = h.take() {
             handle.abort();
         }
+        // Vider le canal de commandes : la tâche IRC qui le consommait est arrêtée.
+        *self.irc_cmd_tx.lock().unwrap() = None;
     }
     /// Prépare un nouveau cancel (fresh) pour un prochain démarrage IRC/flow.
     fn reset_cancel(&self) {
@@ -575,6 +847,18 @@ impl TwitchState {
     /// Récupère un clone du cancel courant.
     fn cancel_clone(&self) -> Cancel {
         self.cancel.lock().unwrap().clone()
+    }
+    /// Envoie une commande IRC (ex: "/clear") vers la tâche IRC.
+    /// Retourne false si l'IRC n'est pas démarré (canal absent).
+    fn envoyer_commande_irc(&self, commande: &str) -> bool {
+        let tx = self.irc_cmd_tx.lock().unwrap();
+        match tx.as_ref() {
+            Some(sender) => {
+                let _ = sender.try_send(commande.to_string());
+                true
+            }
+            None => false,
+        }
     }
 }
 
@@ -767,11 +1051,18 @@ async fn twitch_connecter(
     }
 
     // 1. Token en coffre ? → valider (refresh si 401) + IRC direct.
+    //    Si échec (token/refresh invalide, révoqué, expiré) : le coffre a été
+    //    effacé dans connect_with_tokens, on enchaîne sur le Device Code Flow
+    //    pour que l'utilisateur puisse se ré-authentifier (au lieu de rester
+    //    bloqué sur un token mort).
     if let Ok(Some(tokens)) = twitch_auth::lire_tokens() {
-        return connect_with_tokens(&app, state.inner(), tokens).await;
+        if connect_with_tokens(&app, state.inner(), tokens).await.is_ok() {
+            return Ok(());
+        }
+        eprintln!("[Twitch] token coffre invalide → nouveau Device Code Flow");
     }
 
-    // 2. Pas de token → Device Code Flow.
+    // 2. Pas de token (ou token invalide) → Device Code Flow.
     let flow = match twitch_auth::demarrer_device_flow().await {
         Ok(f) => f,
         Err(e) => {
@@ -830,9 +1121,23 @@ async fn connect_with_tokens(
         }
         Err(e) if e.contains("401") => {
             eprintln!("[Twitch] token expiré, refresh...");
-            tokens = twitch_auth::refresh_token(&tokens.refresh).await?;
-            twitch_auth::sauver_tokens(&tokens)
-                .map_err(|e| format!("coffre save: {}", e))?;
+            match twitch_auth::refresh_token(&tokens.refresh).await {
+                Ok(t) => {
+                    tokens = t;
+                    twitch_auth::sauver_tokens(&tokens)
+                        .map_err(|e| format!("coffre save: {}", e))?;
+                }
+                // Refresh impossible (refresh token révoqué/expiré/tourné) :
+                // on efface le coffre pour ne pas rester bloqué sur un token
+                // mort, et on propage l'erreur. L'appelant (twitch_connecter)
+                // peut alors enchaîner sur un nouveau Device Code Flow.
+                Err(e) => {
+                    eprintln!("[Twitch] refresh échoué, effacement coffre: {}", e);
+                    let _ = twitch_auth::effacer_tokens();
+                    let _ = app.emit("twitch:erreur", &e);
+                    return Err(e);
+                }
+            }
         }
         Err(e) => {
             // Token invalide et refresh impossible → effacer + erreur.
@@ -850,12 +1155,18 @@ async fn connect_with_tokens(
         .ok_or("ScenesState absent")?
         .chat_tx
         .clone();
+    // Créer le canal de commandes IRC (ex: "/clear" depuis la modale de modération).
+    let (irc_cmd_tx, irc_cmd_rx) = tokio::sync::mpsc::channel::<String>(32);
+    {
+        *state.irc_cmd_tx.lock().unwrap() = Some(irc_cmd_tx);
+    }
     let handle = twitch_chat::demarrer(
         app.clone(),
         chat_tx,
         tokens.access.clone(),
         tokens.login.clone(),
         cancel,
+        Some(irc_cmd_rx),
     );
     {
         let mut h = state.irc_handle.lock().unwrap();
@@ -994,15 +1305,114 @@ fn helix_err_to_string(e: twitch_helix::HelixError) -> String {
 }
 
 /// Followers : liste + total (pagination curseur, max 10 pages).
+/// Enrichit avec photos de profil (batch /users) et détecte les unfollows
+/// par comparaison avec le snapshot précédent (sauvé sur disque).
 #[tauri::command]
 async fn twitch_communaute_followers(
+    app: AppHandle,
     state: tauri::State<'_, TwitchState>,
 ) -> Result<twitch_helix::FollowersResp, String> {
     let uid = state.user_id_courant().ok_or("Pas connecté")?;
     let access = state.access_courant().ok_or("Pas connecté")?;
-    twitch_helix::followers(&uid, &access)
+    let mut resp = twitch_helix::followers(&uid, &access)
         .await
-        .map_err(helix_err_to_string)
+        .map_err(helix_err_to_string)?;
+
+    // Enrichir avec photos de profil (batch /users, max 100 par requête).
+    // Non-fatal : si ça échoue, on garde les followers sans avatar.
+    if let Err(e) = twitch_helix::enrichir_avatars(&mut resp.liste, &access).await {
+        eprintln!("[Communauté] enrichir_avatars: {:?} (non-fatal)", e);
+    }
+
+    // Détection des unfollows : comparaison avec le snapshot précédent.
+    let maintenant = chrono::Utc::now().to_rfc3339();
+    let snap_precedent = match config::lire_followers_snapshot(&app) {
+        Ok(Some(s)) => Some(s),
+        Ok(None) => None,
+        Err(e) => {
+            eprintln!("[Communauté] lire_followers_snapshot: {} (non-fatal)", e);
+            None
+        }
+    };
+
+    // Si on a un snapshot précédent (non vide), détecter les manquants.
+    if let Some(ref snap) = snap_precedent {
+        if !snap.liste.is_empty() {
+            let courants: std::collections::HashSet<String> =
+                resp.liste.iter().map(|f| f.user_id.clone()).collect();
+            let unfollows: Vec<config::UnfollowEntry> = snap
+                .liste
+                .iter()
+                .filter(|f| !courants.contains(&f.user_id))
+                .map(|f| config::UnfollowEntry {
+                    user_id: f.user_id.clone(),
+                    login: f.login.clone(),
+                    date_unfollow: maintenant.clone(),
+                    display_name: f.display_name.clone(),
+                    profile_image_url: f.profile_image_url.clone(),
+                })
+                .collect();
+            if !unfollows.is_empty() {
+                eprintln!(
+                    "[Communauté] {} unfollow(s) détecté(s)",
+                    unfollows.len()
+                );
+                for u in &unfollows {
+                    eprintln!("  → {} ({})", u.login, u.date_unfollow);
+                }
+                if let Err(e) = config::ajouter_unfollows(&app, &unfollows) {
+                    eprintln!("[Communauté] ajouter_unfollows: {} (non-fatal)", e);
+                }
+            }
+        }
+    }
+
+    // Sauver le nouveau snapshot (écrase l'ancien).
+    let snap = config::FollowersSnapshot {
+        timestamp: maintenant,
+        liste: resp
+            .liste
+            .iter()
+            .map(|f| config::SnapshotFollower {
+                user_id: f.user_id.clone(),
+                login: f.login.clone(),
+                followed_at: f.followed_at.clone(),
+                display_name: f.display_name.clone(),
+                profile_image_url: f.profile_image_url.clone(),
+            })
+            .collect(),
+    };
+    if let Err(e) = config::sauver_followers_snapshot(&app, &snap) {
+        eprintln!("[Communauté] sauver_followers_snapshot: {} (non-fatal)", e);
+    }
+
+    Ok(resp)
+}
+
+/// Followers allégé (user_id + followed_at uniquement) pour le polling des
+/// alertes (60s). Pas d'enrichissement d'avatars (batch /users), pas de
+/// détection d'unfollows, pas de snapshot disque — la commande lourde
+/// `twitch_communaute_followers` s'en charge au boot et au refresh manuel.
+/// Évite la double pagination + enrichissement quand le poll des alertes
+/// tourne en parallèle du chargement communauté.
+#[tauri::command]
+async fn twitch_followers_light(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<Vec<twitch_helix::FollowerLight>, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    let resp = twitch_helix::followers(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)?;
+    Ok(resp
+        .liste
+        .into_iter()
+        .map(|f| twitch_helix::FollowerLight {
+            user_id: f.user_id,
+            login: f.login,
+            followed_at: f.followed_at,
+        })
+        .collect())
 }
 
 /// Subs : liste + total + points (pagination, max 10 pages).
@@ -1012,9 +1422,22 @@ async fn twitch_communaute_subs(
 ) -> Result<twitch_helix::SubsResp, String> {
     let uid = state.user_id_courant().ok_or("Pas connecté")?;
     let access = state.access_courant().ok_or("Pas connecté")?;
-    twitch_helix::subs(&uid, &access)
+    let mut resp = twitch_helix::subs(&uid, &access)
         .await
-        .map_err(helix_err_to_string)
+        .map_err(helix_err_to_string)?;
+    // Enrichir avec photos de profil (non-fatal).
+    let ids: Vec<String> = resp.liste.iter().map(|s| s.user_id.clone()).collect();
+    if let Ok(map) = twitch_helix::fetch_users_batch(&ids, &access).await {
+        for s in &mut resp.liste {
+            if let Some((dn, url)) = map.get(&s.user_id) {
+                if !dn.is_empty() {
+                    s.display_name = dn.clone();
+                }
+                s.profile_image_url = url.clone();
+            }
+        }
+    }
+    Ok(resp)
 }
 
 /// Viewers live : chiffre si en live, None si hors-ligne.
@@ -1039,6 +1462,202 @@ async fn twitch_broadcaster(
     twitch_helix::broadcaster(&uid, &access)
         .await
         .map_err(helix_err_to_string)
+}
+
+/// Unfollows : historique des unfollows détectés au démarrage (lecture disque).
+#[tauri::command]
+fn twitch_communaute_unfollows(
+    app: AppHandle,
+) -> Result<Vec<config::UnfollowEntry>, String> {
+    let hist = config::lire_unfollows(&app)?;
+    // Tri : plus récent en premier.
+    let mut liste = hist.liste;
+    liste.sort_by(|a, b| b.date_unfollow.cmp(&a.date_unfollow));
+    Ok(liste)
+}
+
+// ===== Modération Twitch (Helix lecture + écriture) =====
+
+/// Liste les VIPs de la chaîne.
+#[tauri::command]
+async fn twitch_lister_vips(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<Vec<twitch_helix::VipEntry>, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    let mut liste = twitch_helix::list_vips(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)?;
+    let ids: Vec<String> = liste.iter().map(|v| v.user_id.clone()).collect();
+    if let Ok(map) = twitch_helix::fetch_users_batch(&ids, &access).await {
+        for v in &mut liste {
+            if let Some((_, url)) = map.get(&v.user_id) {
+                v.profile_image_url = url.clone();
+            }
+        }
+    }
+    Ok(liste)
+}
+
+/// Liste les modérateurs de la chaîne.
+#[tauri::command]
+async fn twitch_lister_moderateurs(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<Vec<twitch_helix::ModEntry>, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    let mut liste = twitch_helix::list_moderators(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)?;
+    let ids: Vec<String> = liste.iter().map(|m| m.user_id.clone()).collect();
+    if let Ok(map) = twitch_helix::fetch_users_batch(&ids, &access).await {
+        for m in &mut liste {
+            if let Some((_, url)) = map.get(&m.user_id) {
+                m.profile_image_url = url.clone();
+            }
+        }
+    }
+    Ok(liste)
+}
+
+/// Liste les utilisateurs bannis/timeout de la chaîne.
+#[tauri::command]
+async fn twitch_lister_bannis(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<Vec<twitch_helix::BannedEntry>, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    let mut liste = twitch_helix::list_banned(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)?;
+    let ids: Vec<String> = liste.iter().map(|b| b.user_id.clone()).collect();
+    if let Ok(map) = twitch_helix::fetch_users_batch(&ids, &access).await {
+        for b in &mut liste {
+            if let Some((dn, url)) = map.get(&b.user_id) {
+                if !dn.is_empty() {
+                    b.display_name = dn.clone();
+                }
+                b.profile_image_url = url.clone();
+            }
+        }
+    }
+    Ok(liste)
+}
+
+/// Résout un login Twitch en user_id (pour la recherche par pseudo).
+#[tauri::command]
+async fn twitch_resoudre_user(
+    state: tauri::State<'_, TwitchState>,
+    login: String,
+) -> Result<Option<twitch_helix::ResolvedUser>, String> {
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::resolve_user_id(&login, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Bannir ou timeout un utilisateur. `duree` = None → ban permanent,
+/// Some(n) → timeout de n secondes.
+#[tauri::command]
+async fn twitch_bannir(
+    state: tauri::State<'_, TwitchState>,
+    user_id: String,
+    raison: String,
+    duree: Option<u32>,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::ban_user(&uid, &access, &user_id, &raison, duree)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Débannir un utilisateur.
+#[tauri::command]
+async fn twitch_debannir(
+    state: tauri::State<'_, TwitchState>,
+    user_id: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::unban_user(&uid, &access, &user_id)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Ajouter un VIP.
+#[tauri::command]
+async fn twitch_ajouter_vip(
+    state: tauri::State<'_, TwitchState>,
+    user_id: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::add_vip(&uid, &access, &user_id)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Retirer un VIP.
+#[tauri::command]
+async fn twitch_retirer_vip(
+    state: tauri::State<'_, TwitchState>,
+    user_id: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::remove_vip(&uid, &access, &user_id)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Ajouter un modérateur.
+#[tauri::command]
+async fn twitch_ajouter_moderateur(
+    state: tauri::State<'_, TwitchState>,
+    user_id: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::add_moderator(&uid, &access, &user_id)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Retirer un modérateur.
+#[tauri::command]
+async fn twitch_retirer_moderateur(
+    state: tauri::State<'_, TwitchState>,
+    user_id: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::remove_moderator(&uid, &access, &user_id)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Supprimer un message de chat (par message_id).
+#[tauri::command]
+async fn twitch_supprimer_message(
+    state: tauri::State<'_, TwitchState>,
+    message_id: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::delete_chat_message(&uid, &access, &message_id)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Envoie une commande IRC au chat Twitch (ex: "/clear", "/ban user").
+/// Non-fatal si l'IRC n'est pas démarré (retourne false).
+#[tauri::command]
+fn twitch_envoyer_commande_chat(
+    state: tauri::State<'_, TwitchState>,
+    commande: String,
+) -> bool {
+    state.envoyer_commande_irc(&commande)
 }
 
 // ===== Kick (lecture seule, WS côté Rust) =====
@@ -1508,6 +2127,60 @@ fn welcome_config_globale_actif(
     state.set_config_globale_actif(actif)
 }
 
+/// Met à jour la config de l'overlay welcome (position/taille côté diffusion).
+#[tauri::command]
+fn welcome_set_overlay_config(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    config: welcome::OverlayConfig,
+) -> Result<(), String> {
+    state.set_overlay_config(config)
+}
+
+/// Test manuel : lance un clip côté diffusion (bypass queue). Résout MP4 +
+/// émet welcome-clip-play. Utilisé par la modale Interaction viewer pour
+/// tester un clip au clic.
+#[tauri::command]
+async fn welcome_tester_clip(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    twitch: tauri::State<'_, TwitchState>,
+    clip_id: String,
+    clip_titre: String,
+    clip_duree_ms: u64,
+    display_name: String,
+) -> Result<(), String> {
+    // Avatar + bio via Helix /users (best-effort : None si Twitch déconnecté
+    // ou fetch échoué — la carte s'affiche alors sans avatar/bio).
+    let access_opt = { twitch.access.lock().unwrap().clone() };
+    let (avatar, bio) = match access_opt {
+        Some(access) => {
+            let client = reqwest::Client::new();
+            match twitch_chat::fetch_user_infos(&client, &access, &display_name.to_lowercase()).await {
+                Ok((av, b)) => (
+                    Some(av).filter(|s| !s.is_empty()),
+                    Some(b).filter(|s| !s.is_empty()),
+                ),
+                Err(e) => {
+                    eprintln!("[Welcome] tester_clip: fetch avatar/bio échoué : {}", e);
+                    (None, None)
+                }
+            }
+        }
+        None => (None, None),
+    };
+    state
+        .tester_clip(&clip_id, &clip_titre, clip_duree_ms, &display_name, avatar, bio)
+        .await
+}
+
+/// Définit la durée d'affichage globale des clips (0 = durée naturelle).
+#[tauri::command]
+fn welcome_set_duree_affichage(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    ms: u64,
+) -> Result<(), String> {
+    state.set_duree_affichage(ms)
+}
+
 /// Stop le clip courant + vide la queue.
 #[tauri::command]
 fn welcome_stop(state: tauri::State<'_, welcome::WelcomeState>) {
@@ -1628,6 +2301,7 @@ async fn welcome_attribuer_auto(
                     message: format!("Bienvenue {} !", display_name),
                     display_name: display_name.clone(),
                     avatar: None,
+                    bio: None,
                 };
                 if let Err(e) = welcome_state.sauver_viewer_twitch(&login, config) {
                     eprintln!("[Welcome] attribuer_auto: erreur save {} : {}", login, e);
@@ -1656,6 +2330,306 @@ async fn welcome_attribuer_auto(
     Ok(serde_json::json!({ "succes": succes, "echecs": echecs }))
 }
 
+// ===== Bandeau premier message =====
+
+/// Retourne l'état courant du bandeau (config : actif, duree, position).
+#[tauri::command]
+fn bandeau_etat(state: tauri::State<'_, bandeau::BandeauState>) -> bandeau::BandeauEtat {
+    state.etat()
+}
+
+/// Met à jour la config du bandeau (merge partiel : actif/duree_ms/position).
+/// Persiste + émet la config vers diffusion.html + l'état vers le dashboard.
+#[tauri::command]
+fn bandeau_set_config(
+    state: tauri::State<'_, bandeau::BandeauState>,
+    actif: Option<bool>,
+    duree_ms: Option<u64>,
+    position: Option<String>,
+) -> Result<(), String> {
+    state.set_config(actif, duree_ms, position)
+}
+
+/// Stop immédiat du bandeau courant (annule timer + émet stop vers diffusion).
+#[tauri::command]
+fn bandeau_stop(state: tauri::State<'_, bandeau::BandeauState>) {
+    state.stop();
+}
+
+/// Reset le seen set (nouveau stream → tous les viewers redeviennent éligibles).
+#[tauri::command]
+fn bandeau_reset_session(state: tauri::State<'_, bandeau::BandeauState>) {
+    state.reset_session();
+}
+
+/// Test manuel : lance un bandeau côté diffusion (bypass détection).
+#[tauri::command]
+fn bandeau_tester(
+    state: tauri::State<'_, bandeau::BandeauState>,
+    display_name: String,
+    message: String,
+) -> Result<(), String> {
+    state.tester(&display_name, &message)
+}
+
+// ===== Commandes chat (!commande → overlay diffusion) =====
+
+/// Liste complète des commandes chat (pour l'UI dashboard).
+#[tauri::command]
+fn commandes_etat(
+    state: tauri::State<'_, commandes::CommandesState>,
+) -> Vec<commandes::CommandeConfig> {
+    state.etat()
+}
+
+/// Ajoute/remplace une commande chat (upsert par id) + persiste + push WS.
+/// Retourne la config stockée (id généré si vide).
+#[tauri::command]
+fn commande_set_config(
+    state: tauri::State<'_, commandes::CommandesState>,
+    config: commandes::CommandeConfig,
+) -> Result<commandes::CommandeConfig, String> {
+    state.set_config(config)
+}
+
+/// Supprime une commande chat + persiste + push WS diffusion.
+#[tauri::command]
+fn commande_supprimer(
+    state: tauri::State<'_, commandes::CommandesState>,
+    id: String,
+) -> Result<(), String> {
+    state.supprimer(&id)
+}
+
+/// Test manuel : déclenche une commande côté diffusion (bypass cooldowns).
+#[tauri::command]
+fn commande_tester(
+    state: tauri::State<'_, commandes::CommandesState>,
+    id: String,
+) -> Result<(), String> {
+    state.tester(&id)
+}
+
+// ===== Input Viewer (capture globale clavier + souris → overlay diffusion) =====
+
+/// Active/désactive la capture globale des entrées (clavier + souris).
+/// ON → thread poll clavier 60Hz + hook souris WH_MOUSE_LL (zéro coût quand
+/// OFF). L'état est émis directement sur le WS :4321 (input-viewer-etat).
+#[tauri::command]
+fn input_viewer_set_actif(
+    state: tauri::State<'_, input_viewer::InputViewerState>,
+    actif: bool,
+) -> Result<(), String> {
+    eprintln!("[InputViewer] commande set_actif({}) appelée", actif);
+    state.set_actif(actif)
+}
+
+/// true si la capture Input Viewer est active (pour l'état du bouton ON/OFF).
+#[tauri::command]
+fn input_viewer_etat_actif(state: tauri::State<'_, input_viewer::InputViewerState>) -> bool {
+    state.est_actif()
+}
+
+// ===== Pad numérique (16 touches Numpad × 3 plages → overlay diffusion) =====
+
+/// Retourne la config complète du pad (actif, plage, touches).
+#[tauri::command]
+fn pad_etat(state: tauri::State<'_, pad_numerique::PadNumeriqueState>) -> pad_numerique::PadConfig {
+    state.etat()
+}
+
+/// Active/désactive le pad + démarre/arrête la capture clavier globale + persiste.
+#[tauri::command]
+fn pad_set_actif(
+    state: tauri::State<'_, pad_numerique::PadNumeriqueState>,
+    actif: bool,
+) -> Result<(), String> {
+    state.set_actif(actif)
+}
+
+/// Remplace la config d'une touche (upsert) + persiste + émet état.
+#[tauri::command]
+fn pad_set_touche(
+    state: tauri::State<'_, pad_numerique::PadNumeriqueState>,
+    code: String,
+    plage: u32,
+    config: pad_numerique::ToucheConfig,
+) -> Result<(), String> {
+    state.set_touche(&code, plage, config)
+}
+
+/// Supprime (reset) la config d'une touche + persiste + émet état.
+#[tauri::command]
+fn pad_supprimer_touche(
+    state: tauri::State<'_, pad_numerique::PadNumeriqueState>,
+    code: String,
+    plage: u32,
+) -> Result<(), String> {
+    state.supprimer_touche(&code, plage)
+}
+
+/// Change la plage courante (0-2) + persiste + émet état.
+#[tauri::command]
+fn pad_set_plage(
+    state: tauri::State<'_, pad_numerique::PadNumeriqueState>,
+    plage: u32,
+) -> Result<(), String> {
+    state.set_plage(plage)
+}
+
+/// Test manuel : déclenche une touche côté diffusion (bypass capture).
+#[tauri::command]
+fn pad_tester_touche(
+    state: tauri::State<'_, pad_numerique::PadNumeriqueState>,
+    code: String,
+    plage: u32,
+) -> Result<(), String> {
+    state.tester_touche(&code, plage)
+}
+
+/// Importe un média (image OU vidéo) pour une touche du pad : dialog filtré
+/// selon le kind attendu → validation + copie (ou remux MKV→MP4) vers
+/// AppData/StreamOS/medias/<uuid>.<ext>. Retourne `Some(rel)` si importé,
+/// `None` si dialog annulé. Même mécanique que `import_alerte_media`.
+#[tauri::command]
+fn pad_importer_media(
+    app: AppHandle,
+    kind_attendu: String,
+) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (filtre_nom, exts): (&str, &[&str]) = if kind_attendu == "video" {
+        ("Vidéos", VIDEO_EXT)
+    } else {
+        ("Images", IMG_EXT)
+    };
+    let file = app
+        .dialog()
+        .file()
+        .add_filter(filtre_nom, exts)
+        .blocking_pick_file();
+    let Some(file) = file else {
+        return Ok(None);
+    };
+    let src: std::path::PathBuf = file
+        .into_path()
+        .map_err(|e| format!("Chemin invalide: {}", e))?;
+
+    let (rel, kind, _nom) = validate_and_copy_media(&app, &src)?;
+    if kind != kind_attendu {
+        return Err(format!(
+            "Type de fichier inattendu : {} attendu, {} reçu",
+            kind_attendu, kind
+        ));
+    }
+    Ok(Some(rel))
+}
+
+/// Importe un son (mp3/ogg/wav ≤ 10 Mo) pour une touche du pad : dialog
+/// « Sons » → validation + copie vers medias/. Retourne `Some(rel)` ou
+/// `None` si dialog annulé. Réutilise `import_son` (même mécanique).
+/// NB : on expose une commande dédiée pour la clarté de l'API frontend,
+/// mais elle délègue à la logique commune de `import_son`.
+#[tauri::command]
+fn pad_importer_son(app: AppHandle) -> Result<Option<String>, String> {
+    // Délègue à import_son (même logique de validation + copie).
+    import_son(app)
+}
+
+// ===== Alertes (follow/raid/sub/resub/subgift/bits) =====
+
+/// Config complète des alertes (pour l'UI dashboard).
+#[tauri::command]
+fn alertes_etat(state: tauri::State<'_, alertes::AlertesState>) -> alertes::AlertesConfig {
+    state.etat()
+}
+
+/// Remplace la config d'un type d'alerte + persiste + push WS diffusion.
+#[tauri::command]
+fn alertes_set_config(
+    state: tauri::State<'_, alertes::AlertesState>,
+    type_alerte: String,
+    config: alertes::AlerteTypeConfig,
+) -> Result<(), String> {
+    state.set_config_type(&type_alerte, config)
+}
+
+/// Test manuel : déclenche une alerte avec données factices (bypass cooldowns).
+#[tauri::command]
+fn alertes_tester(
+    state: tauri::State<'_, alertes::AlertesState>,
+    type_alerte: String,
+) -> Result<(), String> {
+    state.tester(&type_alerte)
+}
+
+/// Remplace la position/taille de l'overlay alerte (même mécanique que
+/// welcome_set_overlay_config) + persiste + push WS diffusion.
+#[tauri::command]
+fn alertes_set_overlay_config(
+    state: tauri::State<'_, alertes::AlertesState>,
+    x: f64,
+    y: f64,
+    largeur: f64,
+    hauteur: f64,
+) -> Result<(), String> {
+    state.set_overlay_config(x, y, largeur, hauteur)
+}
+
+/// Retourne la config du squelette de position unifié (source de vérité
+/// partagée par les overlays "clip de bienvenue" et "alertes").
+#[tauri::command]
+fn position_overlay_etat(
+    state: tauri::State<'_, position_overlay::PositionOverlayState>,
+) -> position_overlay::PositionOverlayConfig {
+    state.etat()
+}
+
+/// Remplace la config du squelette de position unifié + persiste
+/// (position_overlay.json) + push WS `position-overlay-config` vers la
+/// diffusion (applique aux deux overlays en live).
+#[tauri::command]
+fn position_overlay_set(
+    state: tauri::State<'_, position_overlay::PositionOverlayState>,
+    config: position_overlay::PositionOverlayConfig,
+) -> Result<(), String> {
+    state.set(config)
+}
+
+/// Déclenche une alerte depuis le frontend. Utilisé par la diff des follows
+/// (pas d'event IRC pour les follows) — et c'est le point d'extension prévu
+/// pour les futures plateformes (Kick/YouTube/TikTok appelleront la même
+/// commande avec leurs propres événements).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+fn alerte_declencher(
+    state: tauri::State<'_, alertes::AlertesState>,
+    type_alerte: String,
+    pseudo: String,
+    user_id: String,
+    nb_viewers: i64,
+    nb_bits: i64,
+    nb_mois: i64,
+    destinataire: String,
+) -> Result<(), String> {
+    if !alertes::TYPES_ALERTE.contains(&type_alerte.as_str()) {
+        return Err(format!("Type d'alerte inconnu : {}", type_alerte));
+    }
+    state.on_event(alertes::EventTwitch {
+        type_alerte,
+        login: pseudo.to_lowercase(),
+        pseudo,
+        user_id,
+        nb_viewers,
+        nb_bits,
+        nb_mois,
+        destinataire,
+        niveau_sub: String::new(),
+        system_msg: String::new(),
+    });
+    Ok(())
+}
+
 // ===== Énumération PC + création capture depuis SOS (Lot 3) =====
 
 /// Énumère les caméras du PC (PnP/DirectShow, SANS OBS).
@@ -1681,6 +2655,7 @@ fn pc_enumerate_games() -> Vec<pc_enum::WindowEntry> {
 /// SetInputSettings + transform (pas de doublon). Sinon → CreateInput.
 /// Puis SetSceneItemIndex sous SOS + transform = widget.
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 async fn obs_create_trou_from_pc(
     host: String,
     port: u16,
@@ -1712,6 +2687,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_opener::init())
+        // Sidecar ffmpeg : remux MKV→MP4 à l'import média (lecture navigateur).
+        .plugin(tauri_plugin_shell::init())
         // Pop-out chat : custom protocol servant le HTML embarqué (include_str!).
         // Toute URL streamos-chat://localhost/* → CHAT_POPOUT_HTML. Vraie origine
         // (http://streamos-chat.localhost sur Windows) → invoke + WS fiables.
@@ -1746,10 +2723,54 @@ pub fn run() {
             };
             app.manage(state.clone());
 
+            // État Squelette de position unifié (source de vérité unique pour
+            // la position/taille des overlays "clip de bienvenue" et "alertes").
+            // Doit être enregistré AVANT welcome_state et alertes_state car ils
+            // y accèdent via app.state::<PositionOverlayState>() au boot.
+            let position_state =
+                position_overlay::PositionOverlayState::new(handle.clone(), chat_tx.clone());
+            app.manage(position_state.clone());
+
             // État Welcome (clips de bienvenue : registre + seen + queue).
             // Récupère chat_tx depuis ScenesState pour émettre vers :4321.
             let welcome_state = welcome::WelcomeState::new(handle.clone(), chat_tx.clone());
             app.manage(welcome_state.clone());
+
+            // État Bandeau premier message (détection 1er message tous viewers).
+            // Récupère chat_tx pour émettre vers diffusion :4321.
+            let bandeau_state = bandeau::BandeauState::new(handle.clone(), chat_tx.clone());
+            app.manage(bandeau_state.clone());
+
+            // État Commandes chat ("!commande" tapée par un viewer → overlay
+            // diffusion, même moteur que les alertes : file + cooldowns + timer).
+            let commandes_state = commandes::CommandesState::new(handle.clone(), chat_tx.clone());
+            app.manage(commandes_state.clone());
+
+            // État Input Viewer (capture globale clavier + souris → overlay
+            // diffusion). Inactif au boot — démarré par le bouton ON/OFF des
+            // options du widget. Émission WS directe (input-viewer-etat).
+            let input_viewer_state =
+                input_viewer::InputViewerState::new(chat_tx.clone());
+            app.manage(input_viewer_state.clone());
+
+            // État Pad numérique (16 touches Numpad × 3 plages → overlay
+            // diffusion). Capture clavier globale dédiée (GetAsyncKeyState).
+            // Démarré au boot si la config était active au dernier arrêt.
+            let pad_state =
+                pad_numerique::PadNumeriqueState::new(handle.clone(), chat_tx.clone());
+            app.manage(pad_state.clone());
+
+            // Speedrun Splitter — initialise le canal WS pour la diffusion.
+            // Le moteur émet l'état du timer via chat_tx (speedrun-etat) vers
+            // diffusion.html (maj DOM directe, pattern input-viewer).
+            speedrun::commands::set_chat_tx(chat_tx.clone());
+
+            // État Alertes (follow/raid/sub/resub/subgift/bits → overlay diffusion).
+            // Récupère chat_tx pour émettre vers diffusion :4321. Les événements
+            // arrivent de twitch_chat.rs (USERNOTICE + bits) et de la commande
+            // alerte_declencher (diff follows frontend + futures plateformes).
+            let alertes_state = alertes::AlertesState::new(handle.clone(), chat_tx.clone());
+            app.manage(alertes_state.clone());
 
             // État Twitch (handle IRC + cancel + drapeau connecté).
             let twitch_state = TwitchState::new();
@@ -1766,6 +2787,10 @@ pub fn run() {
             // État TikTok (handle chat + cancel + drapeau connecté + username).
             let tiktok_state = TiktokState::new();
             app.manage(tiktok_state.clone());
+
+            // Compteur viewers — UNE tâche pour toutes les plateformes
+            // (tick 15s, fetch 60s live / 180s off, dedup, push via chat_tx).
+            viewers::demarrer(handle.clone(), chat_tx.clone());
 
             // Auto-resume : si token valide en coffre → IRC + point vert.
             // Pas de modal. Si token absent/invalide → reste déconnecté.
@@ -1909,6 +2934,8 @@ pub fn run() {
             update_scene,
             import_media,
             import_fond,
+            import_son,
+            import_alerte_media,
             obs_connect,
             obs_refresh_diffusion,
             chat_popout_toggle,
@@ -1920,6 +2947,8 @@ pub fn run() {
             scene_creer,
             scene_ouvrir,
             scene_renommer,
+            scene_deplacer,
+            scene_masquer_nom,
             scene_supprimer,
             scene_courante,
             scene_exporter,
@@ -1930,6 +2959,8 @@ pub fn run() {
             obs_delete_trou_source,
             obs_enumerate_inputs_by_kind,
             obs_link_existing_source,
+            camera_sync,
+            camera_hide,
             pc_enumerate_cameras,
             pc_enumerate_windows,
             pc_enumerate_games,
@@ -1941,9 +2972,23 @@ pub fn run() {
             twitch_login_courant,
             twitch_reconnecter,
             twitch_communaute_followers,
+            twitch_followers_light,
             twitch_communaute_subs,
             twitch_communaute_viewers,
+            twitch_communaute_unfollows,
             twitch_broadcaster,
+            twitch_lister_vips,
+            twitch_lister_moderateurs,
+            twitch_lister_bannis,
+            twitch_resoudre_user,
+            twitch_bannir,
+            twitch_debannir,
+            twitch_ajouter_vip,
+            twitch_retirer_vip,
+            twitch_ajouter_moderateur,
+            twitch_retirer_moderateur,
+            twitch_supprimer_message,
+            twitch_envoyer_commande_chat,
             kick_connecter,
             kick_deconnecter,
             kick_etat,
@@ -1967,6 +3012,9 @@ pub fn run() {
             welcome_sauver_viewer_twitch,
             welcome_supprimer_viewer_twitch,
             welcome_config_globale_actif,
+            welcome_set_overlay_config,
+            welcome_tester_clip,
+            welcome_set_duree_affichage,
             welcome_stop,
             welcome_skip,
             welcome_retirer,
@@ -1976,7 +3024,43 @@ pub fn run() {
             welcome_reset_session,
             welcome_lister_clips_streamer,
             welcome_resoudre_mp4,
-            welcome_attribuer_auto
+            welcome_attribuer_auto,
+            bandeau_etat,
+            bandeau_set_config,
+            bandeau_stop,
+            bandeau_reset_session,
+            bandeau_tester,
+            commandes_etat,
+            commande_set_config,
+            commande_supprimer,
+            commande_tester,
+            input_viewer_set_actif,
+            input_viewer_etat_actif,
+            pad_etat,
+            pad_set_actif,
+            pad_set_touche,
+            pad_supprimer_touche,
+            pad_set_plage,
+            pad_tester_touche,
+            pad_importer_media,
+            pad_importer_son,
+            alertes_etat,
+            alertes_set_config,
+            alertes_set_overlay_config,
+            alertes_tester,
+            alerte_declencher,
+            position_overlay_etat,
+            position_overlay_set,
+            speedrun_charger_asl,
+            speedrun_charger_lss,
+            speedrun_demarrer,
+            speedrun_arreter,
+            speedrun_maj_settings,
+            speedrun_est_actif,
+            speedrun_action_manuelle,
+            speedrun_lire_config,
+            speedrun_sauver_config,
+            speedrun_maj_settings_asl
         ])
         .run(tauri::generate_context!())
         .expect("erreur lors du lancement de StreamOS v0");

@@ -54,6 +54,9 @@ pub fn demarrer(
         let _ = app.emit("tiktok:connecte", &username);
 
         let mut stream = stream;
+        // Dedup viewers : RoomUserSeq arrive en rafale — on ne publie vers
+        // :4321 que quand le chiffre change.
+        let mut dernier_viewers: Option<i64> = None;
         loop {
             if cancel.load(Ordering::SeqCst) {
                 eprintln!("[TikTok] arrêt demandé");
@@ -95,6 +98,8 @@ pub fn demarrer(
                         texte: texte.clone(),
                         badges: None,
                         avatar,
+                        color: None,
+                        message_id: None,
                     };
                     let _ = app.emit("chat:message", &chat_msg);
 
@@ -109,12 +114,45 @@ pub fn demarrer(
                             Err(_) => eprintln!("[TikTok] chat AUCUN client pseudo={}", pseudo),
                         }
                     }
+                    // Bandeau premier message : détection 1er message.
+                    if let Some(bandeau) = app.try_state::<crate::bandeau::BandeauState>() {
+                        bandeau.on_message(
+                            "tiktok",
+                            &pseudo,
+                            &pseudo,
+                            chat_msg.avatar.clone(),
+                            &texte,
+                        );
+                    }
+                    // Commandes chat : "!commande" → overlay diffusion.
+                    if let Some(commandes) = app.try_state::<crate::commandes::CommandesState>() {
+                        commandes.on_message(&pseudo, &pseudo, &texte);
+                    }
                 }
 
                 TikTokLiveEvent::RoomUserSeq(msg) => {
                     let viewers = msg.viewer_count;
-                    eprintln!("[TikTok] viewers={}", viewers);
-                    let _ = app.emit("tiktok:viewers", &viewers);
+                    // Push natif (zéro polling) — forward vers :4321 pour la
+                    // pastille viewers du widget chat, seulement si ça change.
+                    if Some(viewers) != dernier_viewers {
+                        dernier_viewers = Some(viewers);
+                        eprintln!("[TikTok] viewers={}", viewers);
+                        let _ = app.emit("tiktok:viewers", &viewers);
+                        if let Some(state) = app.try_state::<ScenesState>() {
+                            let _ = state.chat_tx.send(
+                                serde_json::json!({
+                                    "type": "viewers",
+                                    "plateforme": "tiktok",
+                                    "count": viewers,
+                                })
+                                .to_string(),
+                            );
+                        }
+                        let _ = app.emit(
+                            "viewers:update",
+                            serde_json::json!({"plateforme": "tiktok", "count": viewers}),
+                        );
+                    }
                 }
 
                 TikTokLiveEvent::Gift(msg) => {

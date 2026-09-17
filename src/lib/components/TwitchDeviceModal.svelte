@@ -4,8 +4,9 @@
   // twitchDevice/youtubeDevice) ou sur Annuler (annulerDeviceFlow/annulerYoutubeDeviceFlow).
   import { openUrl } from "@tauri-apps/plugin-opener";
   import { twitchDevice, annulerDeviceFlow } from "../stores/chat";
-  import { youtubeDevice, youtubeErreur } from "../stores/chat";
+  import { youtubeDevice } from "../stores/chat";
   import { annulerYoutubeDeviceFlow } from "../stores/youtube";
+  import Modal from "./Modal.svelte";
 
   let device = $derived($twitchDevice);
   let ytDevice = $derived($youtubeDevice);
@@ -30,53 +31,31 @@
 </script>
 
 {#if device || ytDevice}
-  <div class="overlay" role="dialog" aria-modal="true">
-    <div class="modal">
-      <h2>Connexion {device ? "Twitch" : "YouTube"}</h2>
-      <p class="hint">
-        Ouvre le lien, entre ce code, puis autorise l'accès.
-      </p>
+  <Modal
+    title="Connexion {device ? "Twitch" : "YouTube"}"
+    onClose={onAnnuler}
+    maxWidth="24rem"
+    hint="Ouvre le lien, entre ce code, puis autorise l'accès."
+  >
+    <div class="device-body">
       <div class="code-box">
         <span class="code">{device?.user_code || ytDevice?.user_code}</span>
       </div>
-      <button class="action" onclick={onOuvrirLien}>Ouvrir le lien</button>
-      <button class="action" onclick={onAnnuler}>Annuler</button>
+      <button class="modal-action" onclick={onOuvrirLien}>Ouvrir le lien</button>
+      <button class="modal-action" onclick={onAnnuler}>Annuler</button>
     </div>
-  </div>
+  </Modal>
 {/if}
 
 <style>
-  .overlay {
-    position: fixed;
-    inset: 0;
-    background: rgba(0, 0, 0, 0.6);
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    z-index: 10000;
-  }
-  .modal {
-    background: var(--fond);
-    color: var(--texte);
-    border: 1px solid var(--texte);
-    padding: 1.2rem;
+  .device-body {
+    padding: 1rem;
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
-    min-width: 18rem;
-    max-width: 24rem;
-  }
-  h2 {
-    font-size: 1rem;
-    margin: 0;
-  }
-  .hint {
-    font-size: 0.8rem;
-    opacity: 0.7;
-    line-height: 1.3;
   }
   .code-box {
-    border: 1px solid var(--texte);
+    border: 1px solid var(--bordure);
     padding: 0.6rem;
     text-align: center;
   }
@@ -85,18 +64,5 @@
     font-weight: 600;
     letter-spacing: 0.15em;
     font-variant-numeric: tabular-nums;
-  }
-  .action {
-    background: var(--fond);
-    color: var(--texte);
-    border: 1px solid var(--texte);
-    padding: 0.4rem 0.6rem;
-    font: inherit;
-    cursor: pointer;
-    text-align: center;
-  }
-  .action:hover {
-    background: var(--texte);
-    color: var(--fond);
   }
 </style>

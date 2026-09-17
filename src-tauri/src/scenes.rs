@@ -20,10 +20,18 @@ use tauri::AppHandle;
 use tokio::sync::broadcast;
 
 /// Entrée de l'index des scènes (id + nom seulement, jamais le contenu).
+/// `nomMasque` : titre masqué dans la pastille de la barre « Vos scènes »
+/// (œil) — l'onglet devient orange. Rétro-compat : ancien index.json sans
+/// le champ → false.
+/// NB : champ camelCase VOLONTAIRE — contrat JSON direct avec le frontend
+/// (même convention que scene.rs). D'où le allow(non_snake_case).
+#[allow(non_snake_case)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SceneIndex {
     pub id: String,
     pub nom: String,
+    #[serde(default)]
+    pub nomMasque: bool,
 }
 
 /// État partagé scènes : scène unique en RAM + id courant + canal snapshot.
@@ -38,10 +46,13 @@ pub struct ScenesState {
     pub chat_tx: broadcast::Sender<String>,
 }
 
-/// Sérialise la scène en message snapshot WS.
-fn snapshot_json(scene: &Scene) -> String {
+/// Sérialise la scène en message snapshot WS. `sceneId` permet à la
+/// diffusion :4321 de distinguer un CHANGEMENT de scène (fondu au noir)
+/// d'une simple édition de widgets (même scène, rendu direct).
+fn snapshot_json(id: &str, scene: &Scene) -> String {
     serde_json::json!({
         "type": "snapshot",
+        "sceneId": id,
         "scene": scene
     })
     .to_string()
@@ -49,8 +60,12 @@ fn snapshot_json(scene: &Scene) -> String {
 
 /// Pousse le snapshot courant vers tous les clients WS connectés.
 pub fn push_snapshot(state: &ScenesState) {
+    // ⚠️ Ordre des locks : scene PUIS current_id — même convention que
+    // ouvrir/creer/supprimer/save_current (push_snapshot est appelé depuis
+    // plusieurs threads UI + serveur :4321, l'ordre inverse = deadlock).
     let scene = state.scene.lock().unwrap();
-    let json = snapshot_json(&scene);
+    let id = state.current_id.lock().unwrap();
+    let json = snapshot_json(&id, &scene);
     // send_err = aucun client connecté, c'est OK
     let _ = state.snapshot_tx.send(json);
 }
@@ -118,8 +133,22 @@ fn load_scene_file(app: &AppHandle, id: &str) -> Result<Scene, String> {
     }
     let content = fs::read_to_string(&path)
         .map_err(|e| format!("Erreur lecture {}.json: {}", id, e))?;
-    let scene: Scene =
+    let mut scene: Scene =
         serde_json::from_str(&content).map_err(|e| format!("Erreur parse {}.json: {}", id, e))?;
+    // Nettoyage : retirer les anciens widgets "welcome-clip" (devenus overlay
+    // autonome côté diffusion, plus gérés comme widgets de scène). Le filtre
+    // à la lecture suffit : à la prochaine sauvegarde (update_scene/save_current),
+    // le widget est naturellement éliminé du fichier sur disque.
+    let before = scene.widgets.len();
+    scene.widgets.retain(|w| w.widget_type != "welcome-clip");
+    let removed = before - scene.widgets.len();
+    if removed > 0 {
+        log::info!(
+            "Scène {} : {} widget(s) welcome-clip retiré(s) (overlay autonome)",
+            id,
+            removed
+        );
+    }
     Ok(scene)
 }
 
@@ -148,6 +177,31 @@ fn load_current_id_config(app: &AppHandle) -> Result<Option<String>, String> {
     Ok(None)
 }
 
+// ===== Canvas OBS global =====
+
+/// Applique la dernière résolution canvas OBS connue (obs_canvas.json) à une
+/// scène. canvasW/canvasH sont un miroir de la résolution OBS — PAS une
+/// propriété par scène. Sans ça, une scène créée/importée avec le défaut
+/// 1920×1080 alors qu'OBS est en (ex.) 1842×1036 rend une page :4321 plus
+/// large que la source navigateur → bords droit/bas coupés dans OBS.
+/// Les widgets ne sont jamais rescalés.
+fn appliquer_canvas_obs(app: &AppHandle, scene: &mut Scene) {
+    match crate::config::lire_obs_canvas(app) {
+        Ok(Some((w, h))) => {
+            if scene.canvasW != w || scene.canvasH != h {
+                log::info!(
+                    "Canvas scène {}×{} → {}×{} (résolution OBS connue)",
+                    scene.canvasW, scene.canvasH, w, h
+                );
+                scene.canvasW = w;
+                scene.canvasH = h;
+            }
+        }
+        Ok(None) => {} // jamais connecté à OBS → dims de la scène inchangées
+        Err(e) => log::warn!("lire_obs_canvas: {} (dims scène inchangées)", e),
+    }
+}
+
 // ===== Boot + migration =====
 
 /// Génère un id court (8 chars hex).
@@ -170,20 +224,22 @@ pub fn boot_scenes(app: &AppHandle) -> Result<(Scene, String), String> {
         let current_id = load_current_id_config(app)?
             .filter(|id| index.iter().any(|s| s.id == *id))
             .unwrap_or_else(|| index[0].id.clone());
-        let scene = load_scene_file(app, &current_id).unwrap_or_else(|e| {
+        let mut scene = load_scene_file(app, &current_id).unwrap_or_else(|e| {
             log::warn!("Scène {} illisible ({}): scène vide", current_id, e);
             Scene::new()
         });
+        appliquer_canvas_obs(app, &mut scene);
         // Re-sauver config.json au cas où sceneId était absent/invalide
         let _ = save_current_id_config(app, &current_id);
         return Ok((scene, current_id));
     }
 
     // Pas d'index → migration depuis ancien config.json (full Scene) ou scène vide
-    let (scene, nom) = migrer_ancien_config(app)?;
+    let (mut scene, nom) = migrer_ancien_config(app)?;
+    appliquer_canvas_obs(app, &mut scene);
     let id = nouvel_id();
     save_scene_file(app, &id, &scene)?;
-    save_index(app, &[SceneIndex { id: id.clone(), nom: nom.clone() }])?;
+    save_index(app, &[SceneIndex { id: id.clone(), nom: nom.clone(), nomMasque: false }])?;
     save_current_id_config(app, &id)?;
     log::info!("Migration scènes : scène « {} » créée (id={})", nom, id);
     Ok((scene, id))
@@ -201,11 +257,7 @@ fn migrer_ancien_config(app: &AppHandle) -> Result<(Scene, String), String> {
     // Tente de parser comme Scene (ancien format)
     match serde_json::from_str::<Scene>(&content) {
         Ok(scene) => {
-            let nom = if scene.widgets.is_empty() && scene.bgMedia.is_empty() {
-                "Défaut".to_string()
-            } else {
-                "Défaut".to_string()
-            };
+            let nom = "Défaut".to_string();
             Ok((scene, nom))
         }
         Err(_) => {
@@ -247,10 +299,11 @@ pub fn creer(app: &AppHandle, state: &ScenesState, nom: &str) -> Result<SceneInd
     // 1. Sauver la courante
     save_current(app, state)?;
 
-    // 2. Nouvelle scène vide + id unique
+    // 2. Nouvelle scène vide + id unique (canvas = résolution OBS connue)
     let id = nouvel_id();
-    let scene = Scene::new();
-    let entry = SceneIndex { id: id.clone(), nom: nom.to_string() };
+    let mut scene = Scene::new();
+    appliquer_canvas_obs(app, &mut scene);
+    let entry = SceneIndex { id: id.clone(), nom: nom.to_string(), nomMasque: false };
 
     // 3. Écriture disque : <id>.json + index += + config.json
     save_scene_file(app, &id, &scene)?;
@@ -285,8 +338,9 @@ pub fn ouvrir(app: &AppHandle, state: &ScenesState, id: &str) -> Result<SceneInd
         save_current(app, state)?;
     }
 
-    // 2. Charger la nouvelle scène
-    let scene = load_scene_file(app, id)?;
+    // 2. Charger la nouvelle scène (canvas = résolution OBS connue)
+    let mut scene = load_scene_file(app, id)?;
+    appliquer_canvas_obs(app, &mut scene);
 
     // 3. Bascule RAM + config + snapshot
     {
@@ -310,6 +364,32 @@ pub fn renommer(app: &AppHandle, id: &str, nom: &str) -> Result<(), String> {
     entry.nom = nom.to_string();
     save_index(app, &idx)?;
     log::info!("Scène {} renommée : « {} »", id, nom);
+    Ok(())
+}
+
+/// Déplace une scène dans l'index (glisser-déposer de la barre « Vos scènes »).
+/// `position` = index cible APRÈS retrait de l'entrée (borné à la fin).
+pub fn deplacer(app: &AppHandle, id: &str, position: usize) -> Result<(), String> {
+    let mut idx = load_index(app)?;
+    let pos = idx.iter().position(|s| s.id == id)
+        .ok_or_else(|| format!("Scène {} introuvable dans l'index", id))?;
+    let entry = idx.remove(pos);
+    let insert_at = position.min(idx.len());
+    idx.insert(insert_at, entry);
+    save_index(app, &idx)?;
+    log::info!("Scène {} déplacée à la position {}", id, insert_at);
+    Ok(())
+}
+
+/// Masque/affiche le titre d'une scène dans sa pastille de la barre
+/// « Vos scènes » (œil). L'onglet devient orange quand le titre est masqué.
+pub fn masquer_nom(app: &AppHandle, id: &str, masque: bool) -> Result<(), String> {
+    let mut idx = load_index(app)?;
+    let entry = idx.iter_mut().find(|s| s.id == id)
+        .ok_or_else(|| format!("Scène {} introuvable dans l'index", id))?;
+    entry.nomMasque = masque;
+    save_index(app, &idx)?;
+    log::info!("Scène {} : titre {} dans la barre", id, if masque { "masqué" } else { "affiché" });
     Ok(())
 }
 
@@ -339,7 +419,8 @@ pub fn supprimer(app: &AppHandle, state: &ScenesState, id: &str) -> Result<(), S
     let current_id = state.current_id.lock().unwrap().clone();
     if current_id == id {
         let new_id = idx[0].id.clone();
-        let scene = load_scene_file(app, &new_id).unwrap_or_else(|_| Scene::new());
+        let mut scene = load_scene_file(app, &new_id).unwrap_or_else(|_| Scene::new());
+        appliquer_canvas_obs(app, &mut scene);
         {
             let mut s = state.scene.lock().unwrap();
             *s = scene;
@@ -358,9 +439,8 @@ pub fn supprimer(app: &AppHandle, state: &ScenesState, id: &str) -> Result<(), S
 pub fn courante(app: &AppHandle, state: &ScenesState) -> Result<SceneIndex, String> {
     let id = state.current_id.lock().unwrap().clone();
     let idx = load_index(app)?;
-    let entry = trouver_entree(&idx, &id)
-        .map(|e| e.clone())
-        .unwrap_or_else(|| SceneIndex { id: id.clone(), nom: "Défaut".to_string() });
+    let entry = trouver_entree(&idx, &id).cloned()
+        .unwrap_or_else(|| SceneIndex { id: id.clone(), nom: "Défaut".to_string(), nomMasque: false });
     Ok(entry)
 }
 
@@ -468,6 +548,7 @@ pub fn exporter(app: &AppHandle, state: &ScenesState, nom_pack: &str) -> Result<
 ///   vers data/medias/<new-uuid>.<ext> (anti-collision) → réécrire le chemin.
 ///   Si manque → garde le chemin original (case vide au rendu, 404 sur :4321).
 /// - Nouvel id, index +=, bascule, snapshot.
+///
 /// Retourne Some(entry) si importé, None si dialog annulé.
 pub fn importer(app: &AppHandle, state: &ScenesState) -> Result<Option<SceneIndex>, String> {
     use tauri_plugin_dialog::DialogExt;
@@ -567,13 +648,17 @@ pub fn importer(app: &AppHandle, state: &ScenesState) -> Result<Option<SceneInde
         }
     }
 
+    // 5bis. Canvas = résolution OBS connue (le pack peut venir d'une machine
+    //       avec une autre résolution — les widgets ne sont pas rescalés).
+    appliquer_canvas_obs(app, &mut scene);
+
     // 6. Sauver la courante d'abord
     save_current(app, state)?;
 
     // 7. Nouvel id + écriture <id>.json + index += + config
     let id = nouvel_id();
     save_scene_file(app, &id, &scene)?;
-    let entry = SceneIndex { id: id.clone(), nom: nom.clone() };
+    let entry = SceneIndex { id: id.clone(), nom: nom.clone(), nomMasque: false };
     let mut idx = load_index(app)?;
     idx.push(entry.clone());
     save_index(app, &idx)?;

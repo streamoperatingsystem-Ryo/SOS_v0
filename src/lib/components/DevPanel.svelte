@@ -20,9 +20,10 @@
     top: 100%;
     right: 0;
     z-index: 50;
-    background: var(--fond);
-    border: 1px solid var(--texte);
+    background: var(--fond-panneau);
+    border: 1px solid var(--bordure-active);
     border-top: none;
+    box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
     padding: 0.5rem 0.6rem;
     display: flex;
     flex-direction: column;
@@ -41,14 +42,14 @@
     row-gap: 0.05rem;
     align-items: baseline;
     padding: 0.2rem 0;
-    border-bottom: 1px solid rgba(224, 224, 224, 0.12);
+    border-bottom: 1px solid var(--bordure);
   }
   .dev-row:last-child {
     border-bottom: none;
   }
   .check {
     grid-row: 1 / 3;
-    color: var(--ok);
+    color: var(--message-ok-color);
     font-weight: 600;
     text-align: center;
   }

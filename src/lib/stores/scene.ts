@@ -1,7 +1,7 @@
 // Store scène côté dashboard. Source UI live pendant le drag.
 // invoke update_scene (save + snapshot :4321) seulement au create + pointerup.
 import { writable, get } from "svelte/store";
-import { tauri, type Scene, type Widget, type CadreConfig } from "../tauri";
+import { tauri, type Scene, type Widget, type CadreConfig, type MorphPoint } from "../tauri";
 import { obsHost, obsPort, obsPassword } from "./obs";
 
 export const sceneStore = writable<Scene>({
@@ -13,6 +13,8 @@ export const sceneStore = writable<Scene>({
   bgFit: "remplir",
   bgZoom: 1,
   bgRot: 0,
+  bgOffsetX: 0,
+  bgOffsetY: 0,
   bgPaused: true,
   bgTime: 0,
 });
@@ -32,10 +34,11 @@ export async function loadScene(): Promise<void> {
 }
 
 /// Ajoute un widget par défaut (200×150, type media, z auto, id unique).
+/// z calculé SANS les widgets caméra (plage réservée 5000+) → reste 0..N.
 /// Commit immédiat → save config.json + snapshot WS.
 export async function createWidget(): Promise<void> {
   const current = get(sceneStore);
-  const z = current.widgets.reduce((m, w) => Math.max(m, w.z), -1) + 1;
+  const z = current.widgets.filter((w) => w.type !== "camera").reduce((m, w) => Math.max(m, w.z), -1) + 1;
   const w: Widget = {
     id: crypto.randomUUID(),
     type: "media",
@@ -49,6 +52,8 @@ export async function createWidget(): Promise<void> {
     mediaFit: "ajuster",
     mediaZoom: 1,
     mediaRot: 0,
+    mediaOffsetX: 0,
+    mediaOffsetY: 0,
     mediaPaused: true,
     mediaTime: 0,
   };
@@ -57,10 +62,11 @@ export async function createWidget(): Promise<void> {
 }
 
 /// Ajoute un widget chat (300×400, type chat, z auto, filtre unifié, police 16).
+/// z calculé SANS les widgets caméra (plage réservée 5000+) → reste 0..N.
 /// Pas de média, pas de trou. Commit immédiat → save + snapshot WS.
 export async function createChatWidget(): Promise<void> {
   const current = get(sceneStore);
-  const z = current.widgets.reduce((m, w) => Math.max(m, w.z), -1) + 1;
+  const z = current.widgets.filter((w) => w.type !== "camera").reduce((m, w) => Math.max(m, w.z), -1) + 1;
   const w: Widget = {
     id: crypto.randomUUID(),
     type: "chat",
@@ -78,28 +84,122 @@ export async function createChatWidget(): Promise<void> {
   await commitScene();
 }
 
-/// Ajoute un widget clip de bienvenue (480×270, type welcome-clip, z auto).
-/// Préréglage : coin bas-droit (1440×810 sur canvas 1920×1080). Le clip se
-/// joue dans diffusion.html via WS {"type":"welcome-clip-play"}. La position/
-/// taille/z sont pilotées par le drag/resize existant. Commit immédiat.
-export async function createWelcomeClipWidget(): Promise<void> {
+/// Ajoute un widget input viewer (500×220, type input-viewer, z auto).
+/// Affiche les entrées clavier/souris en temps réel côté diffusion (capture
+/// globale démarrée/arrêtée par le bouton ON/OFF dans les options du widget).
+/// Défaut : mode clavier AZERTY, couleur presse #8b5cf6.
+/// Commit immédiat → save + snapshot WS.
+export async function createInputViewerWidget(): Promise<void> {
   const current = get(sceneStore);
-  const z = current.widgets.reduce((m, w) => Math.max(m, w.z), -1) + 1;
-  const canvasW = current.canvasW ?? 1920;
-  const canvasH = current.canvasH ?? 1080;
+  const z = current.widgets.filter((w) => w.type !== "camera").reduce((m, w) => Math.max(m, w.z), -1) + 1;
   const w: Widget = {
     id: crypto.randomUUID(),
-    type: "welcome-clip",
-    x: canvasW - 480 - 20,
-    y: canvasH - 270 - 20,
-    largeur: 480,
-    hauteur: 270,
+    type: "input-viewer",
+    x: 100,
+    y: 100,
+    largeur: 500,
+    hauteur: 220,
     z,
     rotateX: 0,
     rotateY: 0,
+    inputMode: "clavier",
+    inputLayout: "azerty",
+    inputSkin: "xbox",
+    inputCouleur: "#8b5cf6",
   };
   sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
   await commitScene();
+}
+
+/// Ajoute un widget speedrun splitter (300×400, type speedrun). Le timer
+/// et les splits sont rendus dans diffusion.html via WS (speedrun-etat).
+/// Les contrôles manuels + chargement .asl/.lss + settings ASL sont dans
+/// le widget dashboard (WidgetSpeedrun.svelte).
+export async function createSpeedrunWidget(): Promise<void> {
+  const current = get(sceneStore);
+  const z = current.widgets.filter((w) => w.type !== "camera").reduce((m, w) => Math.max(m, w.z), -1) + 1;
+  const w: Widget = {
+    id: crypto.randomUUID(),
+    type: "speedrun",
+    x: 100,
+    y: 100,
+    largeur: 300,
+    hauteur: 400,
+    z,
+    rotateX: 0,
+    rotateY: 0,
+    speedrunSettings: { start: true, split: true, reset: true },
+    srPolice: "Rajdhani",
+    srTaillePolice: 27,
+  };
+  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  await commitScene();
+}
+
+/// Ajoute un widget caméra (320×240, type camera, z=5000 plage réservée).
+/// SINGLETON : refuse si un widget caméra existe déjà. La caméra est rendue
+/// par OBS : source dshow_input "SOS-Caméra" sous SOS-Diffusion, calée sur
+/// le widget ; côté diffusion le widget est un TROU dans le canvas de fond.
+/// Pas de média, pas de trou (le trou est implicite au rendu).
+/// z=5000 → au-dessus des widgets normaux (0..N), sous les clips (9998/9999).
+/// Commit immédiat → save + snapshot WS, puis camera_sync (non-fatal si OBS
+/// offline : la source sera créée par scene_sync_captures au boot / openScene
+/// / connexion OBS).
+export async function createCameraWidget(): Promise<void> {
+  const current = get(sceneStore);
+  if (current.widgets.some((w) => w.type === "camera")) {
+    console.warn("createCameraWidget: un widget caméra existe déjà (singleton)");
+    return;
+  }
+  const w: Widget = {
+    id: crypto.randomUUID(),
+    type: "camera",
+    x: 100,
+    y: 100,
+    largeur: 320,
+    hauteur: 240,
+    z: 5000,
+    rotateX: 0,
+    rotateY: 0,
+    obsSource: "SOS-Caméra",
+  };
+  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  await commitScene();
+  // Création de la source OBS "SOS-Caméra" (device par défaut d'OBS).
+  // Non-fatal : OBS offline → sync différé (auto-guérison au connect).
+  try {
+    await tauri.cameraSync(
+      get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+      null, w.x, w.y, w.largeur, w.hauteur
+    );
+  } catch (e) {
+    console.warn("[camera] OBS offline, sync différé:", e);
+  }
+}
+
+/// Change le device caméra d'un widget camera. Maj locale + commit, puis
+/// camera_sync avec le device (SetInputSettings video_device_id sur l'input
+/// "SOS-Caméra" existant — un seul input, jamais de doublon).
+/// deviceId = FriendlyName PnP (= video_device_id dshow). null = device par
+/// défaut du système.
+export async function setCameraDevice(id: string, deviceId: string | null): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, cameraDeviceId: deviceId ?? undefined } : w
+    ),
+  }));
+  await commitScene();
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  if (!w) return;
+  try {
+    await tauri.cameraSync(
+      get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+      deviceId, w.x, w.y, w.largeur, w.hauteur
+    );
+  } catch (e) {
+    console.warn("[camera] setDevice OBS offline, sync différé:", e);
+  }
 }
 
 /// Change le filtre chat d'un widget. Maj locale + commit.
@@ -121,6 +221,73 @@ export async function setChatTaillePolice(id: string, px: number): Promise<void>
     widgets: s.widgets.map((w) =>
       w.id === id ? { ...w, taillePolice: p } : w
     ),
+  }));
+  await commitScene();
+}
+
+/// Change la police Google Font + taille de base d'un widget speedrun.
+/// police = id de police (voir POLICES_TITRE dans fonts.ts). taille = px (8-48).
+/// Maj locale + commit. Toutes les tailles internes du splitter sont en em →
+/// suit cette base (comme la taille de police du chat).
+export async function setSpeedrunPolice(
+  id: string,
+  police: string,
+  taille: number
+): Promise<void> {
+  const t = Math.max(8, Math.min(48, Math.round(taille)));
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, srPolice: police, srTaillePolice: t } : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Change la config du titre d'un widget (merge partiel + commit).
+/// Passer titre = "" ou undefined pour supprimer le titre.
+export async function setWidgetTitre(
+  id: string,
+  patch: Partial<Pick<Widget, "titre" | "titrePosition" | "titrePolice" | "titreTaille" | "titreGras" | "titreItalique" | "titreSouligne" | "titreEspacement">>
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, ...patch } : w)),
+  }));
+  await commitScene();
+}
+
+/// Change la config du titre du fond de l'application (merge partiel + commit).
+/// Passer bgTitre = "" ou undefined pour supprimer le titre du fond.
+export async function setBgTitre(
+  patch: Partial<Pick<Scene, "bgTitre" | "bgTitrePosition" | "bgTitrePolice" | "bgTitreTaille" | "bgTitreGras" | "bgTitreItalique" | "bgTitreSouligne" | "bgTitreEspacement">>
+): Promise<void> {
+  sceneStore.update((s) => ({ ...s, ...patch }));
+  await commitScene();
+}
+
+/// Change la config d'un widget input viewer (merge partiel + commit).
+export async function setInputViewerConfig(
+  id: string,
+  patch: Partial<Pick<Widget, "inputMode" | "inputLayout" | "inputSkin" | "inputCouleur" | "inputMapping">>
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, ...patch } : w)),
+  }));
+  await commitScene();
+}
+
+/// Change la config d'un widget speedrun (chemins ASL/LSS + settings ASL).
+/// Merge partiel + commit. Les chemins permettent le rechargement auto au
+/// montage du widget ; les settings sont aussi globaux (moteur unique).
+export async function setSpeedrunConfig(
+  id: string,
+  patch: Partial<Pick<Widget, "speedrunCheminAsl" | "speedrunCheminLss" | "speedrunSettings">>
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, ...patch } : w)),
   }));
   await commitScene();
 }
@@ -252,12 +419,48 @@ export function setMediaRotLocal(id: string, rotDeg: number): void {
   }));
 }
 
-/// Reset média : zoom 1, rotation 0. Maj locale + commit immédiat.
+/// Maj locale de l'offset X média (pendant le geste range). PAS d'invoke.
+/// Clamp -2000 … 2000 (px).
+export function setMediaOffsetXLocal(id: string, ox: number): void {
+  const v = Math.max(-2000, Math.min(2000, ox));
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, mediaOffsetX: v } : w)),
+  }));
+}
+
+/// Maj locale de l'offset Y média (pendant le geste range). PAS d'invoke.
+/// Clamp -2000 … 2000 (px).
+export function setMediaOffsetYLocal(id: string, oy: number): void {
+  const v = Math.max(-2000, Math.min(2000, oy));
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, mediaOffsetY: v } : w)),
+  }));
+}
+
+// ===== Effets visuels du média (luminosité/contraste/teinte/flou/pixel) =====
+// Maj locale seule (pendant le geste range). PAS d'invoke — UI fluide.
+// Clamp selon le type d'effet. Le commit se fait au pointerup (onchange).
+function setMediaEffetLocal(id: string, champ: string, val: number, min: number, max: number): void {
+  const v = Math.max(min, Math.min(max, val));
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, [champ]: v } : w)),
+  }));
+}
+export function setMediaLumLocal(id: string, v: number): void { setMediaEffetLocal(id, "mediaLum", v, -100, 100); }
+export function setMediaContrasteLocal(id: string, v: number): void { setMediaEffetLocal(id, "mediaContraste", v, -100, 100); }
+export function setMediaTeinteLocal(id: string, v: number): void { setMediaEffetLocal(id, "mediaTeinte", v, 0, 360); }
+export function setMediaFlouLocal(id: string, v: number): void { setMediaEffetLocal(id, "mediaFlou", v, 0, 20); }
+export function setMediaPixelLocal(id: string, v: number): void { setMediaEffetLocal(id, "mediaPixel", v, 0, 50); }
+
+/// Reset média : zoom 1, rotation 0, offsets 0, effets 0. Maj locale + commit immédiat.
 export async function resetMedia(id: string): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
     widgets: s.widgets.map((w) =>
-      w.id === id ? { ...w, mediaZoom: 1, mediaRot: 0 } : w
+      w.id === id ? { ...w, mediaZoom: 1, mediaRot: 0, mediaOffsetX: 0, mediaOffsetY: 0, mediaLum: 0, mediaContraste: 0, mediaTeinte: 0, mediaFlou: 0, mediaPixel: 0 } : w
     ),
   }));
   await commitScene();
@@ -281,20 +484,41 @@ export async function commitScene(): Promise<void> {
     console.error("commitScene:", e);
     return;
   }
-  // Sync OBS : sources trou liées aux widgets. One-shot reconnect par commit.
+  // Sync OBS : sources trou + widget caméra liés aux widgets. One-shot
+  // reconnect par commit. La caméra suit le widget (move/resize).
   const scene = get(sceneStore);
   const items = scene.widgets
-    .filter((w) => w.trou && w.obsSource)
-    .map((w) => ({
-      sourceName: w.obsSource!,
-      x: w.x,
-      y: w.y,
-      w: w.largeur,
-      h: w.hauteur,
-      fit: w.mediaFit ?? "ajuster",
-      zoom: w.mediaZoom ?? 1,
-      rot: w.mediaRot ?? 0,
-    }));
+    .filter((w) => (w.trou && w.obsSource) || w.type === "camera")
+    .map((w) => {
+      if (w.type === "camera") {
+        // Caméra : source fixe "SOS-Caméra", fit remplir (cover OBS),
+        // pas de zoom/rot/offset (pas de crop caméra en v1).
+        return {
+          sourceName: "SOS-Caméra",
+          x: w.x,
+          y: w.y,
+          w: w.largeur,
+          h: w.hauteur,
+          fit: "remplir",
+          zoom: 1,
+          rot: 0,
+          offsetX: 0,
+          offsetY: 0,
+        };
+      }
+      return {
+        sourceName: w.obsSource!,
+        x: w.x,
+        y: w.y,
+        w: w.largeur,
+        h: w.hauteur,
+        fit: w.mediaFit ?? "ajuster",
+        zoom: w.mediaZoom ?? 1,
+        rot: w.mediaRot ?? 0,
+        offsetX: w.mediaOffsetX ?? 0,
+        offsetY: w.mediaOffsetY ?? 0,
+      };
+    });
   if (items.length > 0) {
     try {
       await tauri.obsSyncTrous(
@@ -307,18 +531,89 @@ export async function commitScene(): Promise<void> {
   }
 }
 
+/// ===== Morphing (bulge/pinch — widgets média + fond de scène) =====
+
+/// Ajoute un morph au widget média sélectionné au point cliqué (coordonnées
+/// normalisées du widget). Params (intensité/rayon/mode) viennent de la
+/// sidebar (stores/morph). Commit → save + snapshot WS.
+export async function ajouterMorphWidget(
+  id: string,
+  x: number,
+  y: number,
+  rayon: number,
+  intensite: number,
+  mode: "agrandir" | "retrecir"
+): Promise<void> {
+  const morph: MorphPoint = { x, y, rayon, intensite, mode };
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id
+        ? { ...w, morphs: [...(w.morphs ?? []), morph].slice(-20) }
+        : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Vide les morphs d'un widget (retour aux défauts = aucun morph).
+export async function resetMorphsWidget(id: string): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, morphs: undefined } : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Ajoute un morph au FOND de scène (coordonnées normalisées du canvas).
+export async function ajouterMorphFond(
+  x: number,
+  y: number,
+  rayon: number,
+  intensite: number,
+  mode: "agrandir" | "retrecir"
+): Promise<void> {
+  const morph: MorphPoint = { x, y, rayon, intensite, mode };
+  sceneStore.update((s) => ({
+    ...s,
+    bgMorphs: [...(s.bgMorphs ?? []), morph].slice(-20),
+  }));
+  await commitScene();
+}
+
+/// Vide les morphs du fond de scène.
+export async function resetMorphsFond(): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgMorphs: undefined }));
+  await commitScene();
+}
+
 /// Sélectionne (ou désélectionne si null) un widget.
 export function selectWidget(id: string | null): void {
   selectedIdStore.set(id);
 }
 
 /// Supprime le widget sélectionné de la scène + commit (save + snapshot :4321).
+/// Widget caméra → cache l'item OBS "SOS-Caméra" AVANT le remove (l'input est
+/// conservé — la recréation le réutilisera). Non-fatal si OBS offline
+/// (l'orphelin sera caché au prochain scene_sync_captures).
 /// Le fichier média dans medias/ n'est PAS supprimé (un autre widget peut
 /// le référencer ; nettoyage = plus tard). Désélectionne après suppression.
 export async function deleteWidget(id: string): Promise<void> {
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  if (w?.type === "camera") {
+    try {
+      await tauri.cameraHide(
+        get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
+      );
+    } catch (e) {
+      console.warn("[camera] hide différé (OBS offline):", e);
+    }
+  }
   sceneStore.update((s) => ({
     ...s,
-    widgets: s.widgets.filter((w) => w.id !== id),
+    widgets: s.widgets.filter((x) => x.id !== id),
   }));
   selectedIdStore.set(null);
   await commitScene();
@@ -338,13 +633,14 @@ export async function importMedia(): Promise<void> {
   const id = get(selectedIdStore);
   if (!id) return;
   try {
-    const rel = await tauri.importMedia(id);
-    if (rel) {
+    const result = await tauri.importMedia(id);
+    if (result) {
+      const [rel, nom] = result;
       const kind = kindFromMedia(rel);
       sceneStore.update((s) => ({
         ...s,
         widgets: s.widgets.map((w) =>
-          w.id === id ? { ...w, media: rel, kind } : w
+          w.id === id ? { ...w, media: rel, kind, mediaNom: nom } : w
         ),
       }));
     }
@@ -352,6 +648,20 @@ export async function importMedia(): Promise<void> {
     console.error("importMedia:", e);
     alert("Import refusé : " + e);
   }
+}
+
+/// Retire le média d'un widget (widgets chat / input viewer / speedrun :
+/// média de fond ; widgets média : retour au fond par défaut). Maj locale +
+/// commit. Ne supprime PAS le fichier dans medias/ (un autre widget peut le
+/// référencer — même règle que clearFond).
+export async function clearWidgetMedia(id: string): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, media: undefined, kind: undefined, mediaNom: undefined } : w
+    ),
+  }));
+  await commitScene();
 }
 
 /// Importe un média (image OU vidéo) comme fond de scène. Met à jour le store
@@ -391,9 +701,36 @@ export function setBgRotLocal(rotDeg: number): void {
   sceneStore.update((s) => ({ ...s, bgRot: r }));
 }
 
-/// Reset fond : zoom 1, rotation 0. Maj locale + commit immédiat.
+/// Maj locale de l'offset X fond (pendant le geste range). PAS d'invoke.
+/// Clamp -2000 … 2000 (px).
+export function setBgOffsetXLocal(ox: number): void {
+  const v = Math.max(-2000, Math.min(2000, ox));
+  sceneStore.update((s) => ({ ...s, bgOffsetX: v }));
+}
+
+/// Maj locale de l'offset Y fond (pendant le geste range). PAS d'invoke.
+/// Clamp -2000 … 2000 (px).
+export function setBgOffsetYLocal(oy: number): void {
+  const v = Math.max(-2000, Math.min(2000, oy));
+  sceneStore.update((s) => ({ ...s, bgOffsetY: v }));
+}
+
+// ===== Effets visuels du fond (luminosité/contraste/teinte/flou/pixel) =====
+// Maj locale seule (pendant le geste range). PAS d'invoke — UI fluide.
+// Clamp selon le type d'effet. Le commit se fait au pointerup (onchange).
+function setBgEffetLocal(champ: string, val: number, min: number, max: number): void {
+  const v = Math.max(min, Math.min(max, val));
+  sceneStore.update((s) => ({ ...s, [champ]: v }));
+}
+export function setBgLumLocal(v: number): void { setBgEffetLocal("bgLum", v, -100, 100); }
+export function setBgContrasteLocal(v: number): void { setBgEffetLocal("bgContraste", v, -100, 100); }
+export function setBgTeinteLocal(v: number): void { setBgEffetLocal("bgTeinte", v, 0, 360); }
+export function setBgFlouLocal(v: number): void { setBgEffetLocal("bgFlou", v, 0, 20); }
+export function setBgPixelLocal(v: number): void { setBgEffetLocal("bgPixel", v, 0, 50); }
+
+/// Reset fond : zoom 1, rotation 0, offsets 0, effets 0. Maj locale + commit immédiat.
 export async function resetFond(): Promise<void> {
-  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0 }));
+  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0, bgOffsetX: 0, bgOffsetY: 0, bgLum: 0, bgContraste: 0, bgTeinte: 0, bgFlou: 0, bgPixel: 0 }));
   await commitScene();
 }
 
@@ -642,6 +979,7 @@ const CADRE_DEFAUT: CadreConfig = {
   strokeWidth: 4,
   couleur: "#ffffff",
   couleurFin: "#000000",
+  gradientAngle: 135,
   actif: false,
 };
 
@@ -661,18 +999,4 @@ export async function mettreAJourCadreApp(patch: Partial<CadreConfig>): Promise<
     return { ...s, cadreApp: { ...cadreActuel, ...patch } };
   });
   await commitScene();
-}
-
-/// Bascule l'état actif du cadre des widgets.
-export async function toggleCadreWidgetActif(): Promise<void> {
-  const s = get(sceneStore);
-  const cadre = s.cadreWidget ?? { ...CADRE_DEFAUT };
-  await mettreAJourCadreScene({ actif: !cadre.actif });
-}
-
-/// Bascule l'état actif du cadre de l'application.
-export async function toggleCadreAppActif(): Promise<void> {
-  const s = get(sceneStore);
-  const cadre = s.cadreApp ?? { ...CADRE_DEFAUT };
-  await mettreAJourCadreApp({ actif: !cadre.actif });
 }

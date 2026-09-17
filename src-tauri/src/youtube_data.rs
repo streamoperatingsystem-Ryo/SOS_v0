@@ -257,10 +257,9 @@ pub async fn live_viewers(access: &str, channel_id: &str) -> Result<Option<u32>,
         .as_str()
         .and_then(|s| s.parse::<u32>().ok());
 
-    if viewers.is_some() {
-        eprintln!("[YouTube] live: viewers={}", viewers.unwrap());
-    } else {
-        eprintln!("[YouTube] live: pas de concurrentViewers (hors-ligne ou pas live)");
+    match viewers {
+        Some(v) => eprintln!("[YouTube] live: viewers={}", v),
+        None => eprintln!("[YouTube] live: pas de concurrentViewers (hors-ligne ou pas live)"),
     }
 
     Ok(viewers)

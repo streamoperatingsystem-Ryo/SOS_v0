@@ -290,6 +290,67 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
         );
     }
 
+    // 7bis. Reset du transform du scene item "SOS-Diffusion" : position (0,0),
+    //    scale 1, rotation 0, crop 0, alignement haut-gauche, sans bounds.
+    //    Garantit un alignement pixel-perfect avec le canvas OBS même si la
+    //    source a été déplacée/redimensionnée à la main dans OBS, ou si la
+    //    résolution du canvas OBS a changé depuis la création de la source.
+    //    Non-fatal : si échec, on log et on continue.
+    let transform_result = async {
+        let id_resp = rpc(
+            &mut write,
+            &mut read,
+            "GetSceneItemId",
+            "get_item_id",
+            json!({
+                "sceneName": SCENE_NAME,
+                "sceneUuid": scene_uuid,
+                "sourceName": SOURCE_NAME
+            }),
+        )
+        .await?;
+        let item_id = id_resp["sceneItemId"]
+            .as_i64()
+            .ok_or_else(|| "OBS: sceneItemId manquant".to_string())?;
+        rpc(
+            &mut write,
+            &mut read,
+            "SetSceneItemTransform",
+            "set_item_transform",
+            json!({
+                "sceneName": SCENE_NAME,
+                "sceneUuid": scene_uuid,
+                "sceneItemId": item_id,
+                "sceneItemTransform": {
+                    "positionX": 0.0,
+                    "positionY": 0.0,
+                    "scaleX": 1.0,
+                    "scaleY": 1.0,
+                    "rotation": 0.0,
+                    "alignment": 5,
+                    "cropLeft": 0,
+                    "cropRight": 0,
+                    "cropTop": 0,
+                    "cropBottom": 0,
+                    "boundsType": "OBS_BOUNDS_NONE"
+                }
+            }),
+        )
+        .await
+    }
+    .await;
+
+    match &transform_result {
+        Ok(_) => log::info!(
+            "OBS: transform de \"{}\" resynchronisé (0,0 / scale 1 / crop 0)",
+            SOURCE_NAME
+        ),
+        Err(e) => log::warn!(
+            "OBS: reset transform \"{}\" échoué (non-fatal): {}",
+            SOURCE_NAME, e
+        ),
+    }
+
     // 8. Refresh de la source navigateur (PressInputPropertiesButton)
     //    Non-fatal : si échec, on log mais on ne faille pas la connexion.
     let refresh_result = rpc(
@@ -377,8 +438,22 @@ where
                     serde_json::from_str(&t).map_err(|e| format!("OBS parse: {}", e))?;
                 return Ok(v);
             }
-            Message::Close(_) => {
-                return Err("OBS: connexion fermée par le serveur".into());
+            Message::Close(frame) => {
+                // 4009 = auth échouée (obs-websocket v5) → message actionnable
+                // (le champ mot de passe de la Toolbar est vide/invalide).
+                if let Some(f) = frame.as_ref() {
+                    if u16::from(f.code) == 4009 {
+                        return Err(
+                            "OBS: authentification échouée — mot de passe WebSocket invalide \
+                             (Toolbar → section OBS → champ mot de passe)"
+                                .into(),
+                        );
+                    }
+                }
+                let detail = frame
+                    .map(|f| format!("code={} raison=\"{}\"", f.code, f.reason))
+                    .unwrap_or_else(|| "sans détail".to_string());
+                return Err(format!("OBS: connexion fermée par le serveur ({})", detail));
             }
             _ => {} // ping, pong, binary — ignorés
         }
