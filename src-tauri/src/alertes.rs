@@ -257,21 +257,6 @@ impl AlertesState {
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
             dernier_global: Arc::new(Mutex::new(HashMap::new())),
         };
-        let n = {
-            let c = state.config.lock().unwrap();
-            (
-                c.follow.as_ref().map(|x| x.actif).unwrap_or(true),
-                c.raid.as_ref().map(|x| x.actif).unwrap_or(true),
-                c.sub.as_ref().map(|x| x.actif).unwrap_or(true),
-                c.resub.as_ref().map(|x| x.actif).unwrap_or(true),
-                c.subgift.as_ref().map(|x| x.actif).unwrap_or(true),
-                c.bits.as_ref().map(|x| x.actif).unwrap_or(true),
-            )
-        };
-        eprintln!(
-            "[Alertes] init : follow={} raid={} sub={} resub={} subgift={} bits={}",
-            n.0, n.1, n.2, n.3, n.4, n.5
-        );
         state
     }
 
@@ -324,11 +309,6 @@ impl AlertesState {
             duree_ms: cfg.duree_ms.max(1000),
         };
 
-        eprintln!(
-            "[Alertes] event {} pseudo={} → file/affichage",
-            evt.type_alerte, evt.pseudo
-        );
-
         // Une seule alerte à la fois : direct si libre, sinon file (max 5).
         {
             let mut en_cours = self.en_cours.lock().unwrap();
@@ -380,9 +360,7 @@ impl AlertesState {
                         state.avancer();
                     }
                 }
-                _ = await_timer_cancel(&new_cancel) => {
-                    eprintln!("[Alertes] timer annulé");
-                }
+                _ = await_timer_cancel(&new_cancel) => {}
             }
         });
     }

@@ -58,10 +58,8 @@
   // Modération & Rôles n'est pas ouverte (la section Viewers en dépend).
   $effect(() => {
     if (cx.twitch) {
-      console.log("[Communauté] twitch connecté → chargement");
       chargerCommunaute();
     } else {
-      console.log("[Communauté] twitch déconnecté → reset");
       resetCommunaute();
     }
   });
@@ -69,7 +67,6 @@
   // $effect YouTube : charge la communauté YouTube quand connecté.
   $effect(() => {
     if (cx.youtube) {
-      console.log("[Communauté] youtube connecté → chargement");
       chargerCommunauteYoutube();
     }
   });
@@ -104,13 +101,10 @@
   // Appelé après obsConnect OK quand serveur :4321 est prêt.
   async function refreshDiffusion() {
     try {
-      console.log("[Refresh] appel obsRefreshDiffusion…");
       await tauri.obsRefreshDiffusion(
         get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
       );
-      console.log("[Refresh] obsRefreshDiffusion OK");
-    } catch (e) {
-      console.warn("[Refresh] obsRefreshDiffusion échoué:", e);
+    } catch {
     }
   }
 
@@ -121,7 +115,6 @@
   // aussi la race boot : le sync du onMount (step 6) peut s'exécuter avant la
   // fin de obsConnect → ici on est sûr que OBS est connecté.
   async function bootObs() {
-    console.log("[Boot] bootObs → obsConnect");
     try {
       await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
       // obsConnect a mis obsStatus=connected. Refresh direct (pas de race).
@@ -131,11 +124,9 @@
         await tauri.sceneSyncCaptures(
           get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
         );
-      } catch (e) {
-        console.warn("[Boot] sync captures:", e);
+      } catch {
       }
-    } catch (e) {
-      console.warn("[Boot] bootObs obsConnect échoué:", e);
+    } catch {
     }
   }
 
@@ -166,7 +157,6 @@
     await listen<string>("server_ready", () => {
       serverOk = true;
       serverError = null;
-      console.log("[Boot] server_ready event → bootObs");
       bootObs();
     });
 
@@ -210,7 +200,6 @@
     if (up && !serverOk) {
       serverOk = true;
       serverError = null;
-      console.log("[Boot] fetch fallback :4321 up → bootObs");
       bootObs();
     }
 
@@ -223,7 +212,6 @@
     obsReconnectTimer = setInterval(() => {
       const s = get(obsStatus);
       if (s !== "connected" && s !== "connecting") {
-        console.log("[Boot] auto-reconnect OBS (non connecté)…");
         void bootObs();
       }
     }, 20_000);

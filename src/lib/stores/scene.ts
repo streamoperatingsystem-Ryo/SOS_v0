@@ -148,7 +148,6 @@ export async function createSpeedrunWidget(): Promise<void> {
 export async function createCameraWidget(): Promise<void> {
   const current = get(sceneStore);
   if (current.widgets.some((w) => w.type === "camera")) {
-    console.warn("createCameraWidget: un widget caméra existe déjà (singleton)");
     return;
   }
   const w: Widget = {
@@ -172,8 +171,7 @@ export async function createCameraWidget(): Promise<void> {
       get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
       null, w.x, w.y, w.largeur, w.hauteur
     );
-  } catch (e) {
-    console.warn("[camera] OBS offline, sync différé:", e);
+  } catch {
   }
 }
 
@@ -197,8 +195,7 @@ export async function setCameraDevice(id: string, deviceId: string | null): Prom
       get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
       deviceId, w.x, w.y, w.largeur, w.hauteur
     );
-  } catch (e) {
-    console.warn("[camera] setDevice OBS offline, sync différé:", e);
+  } catch {
   }
 }
 
@@ -305,9 +302,8 @@ export async function setWidgetTrou(id: string, trou: boolean): Promise<void> {
           get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
           w.obsSource
         );
-      } catch (e) {
+      } catch {
         // OBS offline → on clear quand même côté scène (pas de crash).
-        console.warn("setWidgetTrou: suppression OBS échouée:", e);
       }
     }
     sceneStore.update((s) => ({
@@ -475,7 +471,6 @@ export async function commitScene(): Promise<void> {
   // Sinon on risque d'écraser la scène RAM (vraie scène chargée par boot_scenes)
   // avec la scène vide initiale du sceneStore → perte de données sur disque.
   if (!get(loadedStore)) {
-    console.warn("commitScene: ignoré (scène pas encore chargée)");
     return;
   }
   try {
@@ -524,9 +519,8 @@ export async function commitScene(): Promise<void> {
       await tauri.obsSyncTrous(
         get(obsHost), parseInt(get(obsPort), 10), get(obsPassword), items
       );
-    } catch (e) {
+    } catch {
       // OBS offline → message discret, pas de crash. La scène reste OK.
-      console.warn("commitScene: sync OBS échouée:", e);
     }
   }
 }
@@ -607,8 +601,7 @@ export async function deleteWidget(id: string): Promise<void> {
       await tauri.cameraHide(
         get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
       );
-    } catch (e) {
-      console.warn("[camera] hide différé (OBS offline):", e);
+    } catch {
     }
   }
   sceneStore.update((s) => ({
@@ -645,7 +638,6 @@ export async function importMedia(): Promise<void> {
       }));
     }
   } catch (e) {
-    console.error("importMedia:", e);
     alert("Import refusé : " + e);
   }
 }
@@ -675,7 +667,6 @@ export async function importFond(): Promise<void> {
       sceneStore.update((s) => ({ ...s, bgMedia: rel, bgKind: kind }));
     }
   } catch (e) {
-    console.error("importFond:", e);
     alert("Import refusé : " + e);
   }
 }
@@ -816,8 +807,7 @@ export async function deleteObsTrouSource(id: string): Promise<void> {
       get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
       w.obsSource
     );
-  } catch (e) {
-    console.warn("deleteObsTrouSource: suppression OBS échouée:", e);
+  } catch {
   }
   sceneStore.update((s) => ({
     ...s,

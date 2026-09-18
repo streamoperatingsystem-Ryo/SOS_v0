@@ -198,10 +198,7 @@
   /// Vider le chat (commande IRC /clear).
   async function onClearChat(): Promise<void> {
     await executerAction("clear", async () => {
-      const ok = await clearChat();
-      if (!ok) {
-        console.warn("[Modération] IRC non démarré — /clear ignoré");
-      }
+      await clearChat();
     });
   }
 

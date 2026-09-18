@@ -47,7 +47,6 @@ impl Plat {
 /// plateforme n'est connectée : la boucle dort 15s et ne fait aucun fetch.
 pub fn demarrer(app: AppHandle, chat_tx: broadcast::Sender<String>) -> tauri::async_runtime::JoinHandle<()> {
     tauri::async_runtime::spawn(async move {
-        eprintln!("[Viewers] tâche démarrée (tick 15s, live 60s, off 180s)");
         let mut plats: HashMap<&'static str, Plat> = HashMap::new();
         let mut interval = tokio::time::interval(TICK);
         loop {
@@ -130,10 +129,6 @@ fn publier(
     let msg = json!({"type": "viewers", "plateforme": plat, "count": count}).to_string();
     let _ = chat_tx.send(msg);
     let _ = app.emit("viewers:update", json!({"plateforme": plat, "count": count}));
-    match count {
-        Some(n) => eprintln!("[Viewers] {}={}", plat, n),
-        None => eprintln!("[Viewers] {}=off", plat),
-    }
 }
 
 /// Plateforme déconnectée : publie None une fois (efface la pastille) puis
@@ -149,7 +144,6 @@ fn deconnecte(
             let msg = json!({"type": "viewers", "plateforme": nom, "count": null}).to_string();
             let _ = chat_tx.send(msg);
             let _ = app.emit("viewers:update", json!({"plateforme": nom, "count": null}));
-            eprintln!("[Viewers] {}=déconnecté", nom);
         }
     }
 }

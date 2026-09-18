@@ -181,10 +181,6 @@ impl PadNumeriqueState {
             timer_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
         };
         let c = state.config.lock().unwrap().clone();
-        eprintln!(
-            "[PadNumérique] init : actif={} plage={} {} touche(s)",
-            c.actif, c.plage_actuelle, c.touches.len()
-        );
         // Si la config était active au dernier arrêt, démarrer la capture.
         if c.actif {
             let _ = state.demarrer_capture();
@@ -210,7 +206,6 @@ impl PadNumeriqueState {
         }
         self.save_to_disk()?;
         self.emit_etat();
-        eprintln!("[PadNumérique] actif={}", actif);
         Ok(())
     }
 
@@ -255,7 +250,6 @@ impl PadNumeriqueState {
         }
         self.save_to_disk()?;
         self.emit_etat();
-        eprintln!("[PadNumérique] plage={}", plage);
         Ok(())
     }
 
@@ -276,11 +270,6 @@ impl PadNumeriqueState {
         };
         let Some(touche) = touche else { return };
         let Some(media_type) = &touche.media_type else { return };
-
-        eprintln!(
-            "[PadNumérique] déclenchement {} plage={} type={}",
-            code, plage, media_type
-        );
 
         // Annuler le timer courant (si une touche était en cours).
         {
@@ -373,13 +362,10 @@ impl PadNumeriqueState {
         // Nouvelle génération → invalide l'ancien thread s'il tourne encore.
         let ma_generation = self.generation.fetch_add(1, Ordering::Relaxed) + 1;
         self.actif_flag.store(true, Ordering::Relaxed);
-        eprintln!("[PadNumérique] capture clavier ON (gen={})", ma_generation);
 
         let state = self.clone();
         thread::spawn(move || {
-            eprintln!("[PadNumérique] thread poll démarré (gen={})", ma_generation);
             let mut etat_precedent = [false; 256];
-            let mut heartbeat = 0u32;
             let mut numlock_precedent: Option<bool> = None;
             while state.actif_flag.load(Ordering::Relaxed)
                 && state.generation.load(Ordering::Relaxed) == ma_generation
@@ -408,21 +394,7 @@ impl PadNumeriqueState {
                     }
                 }
                 thread::sleep(Duration::from_millis(PERIODE_POLL_MS));
-                heartbeat += 1;
-                if heartbeat % 300 == 0 {
-                    // Heartbeat toutes les ~5s (300 × 16ms) — discret en prod.
-                    #[cfg(windows)]
-                    {
-                        use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
-                        let numlock = unsafe { GetAsyncKeyState(0x90) as u16 & 0x0001 != 0 };
-                        eprintln!(
-                            "[PadNumérique] heartbeat gen={} tick={} NumLock={}",
-                            ma_generation, heartbeat, numlock
-                        );
-                    }
-                }
             }
-            eprintln!("[PadNumérique] thread poll terminé (gen={})", ma_generation);
         });
         Ok(())
     }
@@ -433,7 +405,6 @@ impl PadNumeriqueState {
             return;
         }
         self.actif_flag.store(false, Ordering::Relaxed);
-        eprintln!("[PadNumérique] capture clavier OFF");
     }
 
     // ===== Émission =====

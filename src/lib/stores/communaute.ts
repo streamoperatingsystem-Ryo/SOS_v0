@@ -91,27 +91,21 @@ export const unfollows = writable<UnfollowEntry[] | null>(null);
 
 /// Charge l'historique des unfollows depuis le disque.
 export async function chargerUnfollows(): Promise<void> {
-  console.log("[Communauté] chargerUnfollows()...");
   try {
     const resp = await tauri.twitchCommunauteUnfollows();
     unfollows.set(resp);
-    console.log("[Communauté] unfollows OK:", resp.length);
-  } catch (e) {
-    console.error("[Communauté] unfollows ERR:", String(e));
+  } catch {
   }
 }
 
 /// Charge les followers. Sur "need_reauth" → communauteErreur = "need_reauth".
 export async function chargerFollowers(): Promise<void> {
-  console.log("[Communauté] chargerFollowers()...");
   try {
     const resp = await tauri.twitchCommunauteFollowers();
     followers.set(resp);
     communauteErreur.set(null);
-    console.log("[Communauté] followers OK:", resp.total, resp.liste.length);
   } catch (e) {
     const msg = String(e);
-    console.error("[Communauté] followers ERR:", msg);
     if (msg === "need_reauth") {
       communauteErreur.set("need_reauth");
     } else {
@@ -122,15 +116,12 @@ export async function chargerFollowers(): Promise<void> {
 
 /// Charge les subs. Même gestion d'erreur.
 export async function chargerSubs(): Promise<void> {
-  console.log("[Communauté] chargerSubs()...");
   try {
     const resp = await tauri.twitchCommunauteSubs();
     subs.set(resp);
     communauteErreur.set(null);
-    console.log("[Communauté] subs OK:", resp.total, resp.liste.length);
   } catch (e) {
     const msg = String(e);
-    console.error("[Communauté] subs ERR:", msg);
     if (msg === "need_reauth") {
       communauteErreur.set("need_reauth");
     } else {
@@ -141,14 +132,11 @@ export async function chargerSubs(): Promise<void> {
 
 /// Charge les viewers live. None si hors-ligne.
 export async function chargerViewers(): Promise<void> {
-  console.log("[Communauté] chargerViewers()...");
   try {
     const resp = await tauri.twitchCommunauteViewers();
     viewers.set(resp);
-    console.log("[Communauté] viewers OK:", resp);
   } catch (e) {
     const msg = String(e);
-    console.error("[Communauté] viewers ERR:", msg);
     if (msg !== "need_reauth") {
       communauteErreur.set(msg);
     }
@@ -157,14 +145,11 @@ export async function chargerViewers(): Promise<void> {
 
 /// Charge le broadcaster (display_name, avatar, type).
 export async function chargerBroadcaster(): Promise<void> {
-  console.log("[Communauté] chargerBroadcaster()...");
   try {
     const resp = await tauri.twitchBroadcaster();
     broadcaster.set(resp);
-    console.log("[Communauté] broadcaster OK:", resp.display_name);
   } catch (e) {
     const msg = String(e);
-    console.error("[Communauté] broadcaster ERR:", msg);
     if (msg === "need_reauth") {
       communauteErreur.set("need_reauth");
     }
@@ -174,7 +159,6 @@ export async function chargerBroadcaster(): Promise<void> {
 /// Charge tout en parallèle (Promise.allSettled). Agrège les erreurs.
 /// Charge Twitch ET YouTube si connectés. Inclut les unfollows (lecture disque).
 export async function chargerCommunaute(): Promise<void> {
-  console.log("[Communauté] chargerCommunaute() appelé");
   await Promise.allSettled([
     chargerBroadcaster(),
     chargerFollowers(),
@@ -182,44 +166,34 @@ export async function chargerCommunaute(): Promise<void> {
     chargerViewers(),
     chargerUnfollows(),
   ]);
-  console.log("[Communauté] chargerCommunaute() terminé");
 }
 
 // ===== YouTube =====
 
 /// Charge les infos chaîne YouTube (display_name, avatar, stats).
 export async function chargerYoutubeChannel(): Promise<void> {
-  console.log("[Communauté] chargerYoutubeChannel()...");
   try {
     const resp = await tauri.youtubeCommunauteChannel();
     youtubeChannel.set(resp);
-    console.log("[Communauté] YouTube channel OK:", resp.display_name);
-  } catch (e) {
-    console.error("[Communauté] YouTube channel ERR:", String(e));
+  } catch {
   }
 }
 
 /// Charge les members YouTube.
 export async function chargerYoutubeMembers(): Promise<void> {
-  console.log("[Communauté] chargerYoutubeMembers()...");
   try {
     const resp = await tauri.youtubeCommunauteMembers();
     youtubeMembers.set(resp);
-    console.log("[Communauté] YouTube members OK:", resp.total);
-  } catch (e) {
-    console.error("[Communauté] YouTube members ERR:", String(e));
+  } catch {
   }
 }
 
 /// Charge les live viewers YouTube (null si pas live).
 export async function chargerYoutubeViewers(): Promise<void> {
-  console.log("[Communauté] chargerYoutubeViewers()...");
   try {
     const resp = await tauri.youtubeCommunauteViewers();
     youtubeViewers.set(resp);
-    console.log("[Communauté] YouTube viewers OK:", resp);
-  } catch (e) {
-    console.error("[Communauté] YouTube viewers ERR:", String(e));
+  } catch {
   }
 }
 

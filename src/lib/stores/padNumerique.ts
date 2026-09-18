@@ -120,7 +120,6 @@ export async function initPad(): Promise<void> {
     padErreur.set(e.payload);
   });
 
-  console.log("[PadNumérique] listeners bound");
 }
 
 /// Charge l'état initial du pad. À appeler après initPad.
@@ -128,8 +127,7 @@ export async function chargerPad(): Promise<void> {
   try {
     const etat = await tauri.padEtat();
     padStore.set(etat);
-  } catch (e) {
-    console.error("[PadNumérique] chargerPad ERR:", String(e));
+  } catch {
   }
 }
 
@@ -141,8 +139,7 @@ async function refresh(): Promise<void> {
   try {
     const etat = await tauri.padEtat();
     padStore.set(etat);
-  } catch (e) {
-    console.error("[PadNumérique] refresh ERR:", String(e));
+  } catch {
   }
 }
 
@@ -197,7 +194,6 @@ export async function padImporterMedia(
     }
     return rel;
   } catch (e) {
-    console.error("[PadNumérique] padImporterMedia ERR:", String(e));
     throw e;
   }
 }
@@ -225,7 +221,6 @@ export async function padImporterSon(
     }
     return rel;
   } catch (e) {
-    console.error("[PadNumérique] padImporterSon ERR:", String(e));
     throw e;
   }
 }
@@ -259,9 +254,7 @@ function jouerAudioLocal(payload: {
   const url = src.startsWith("/") ? src : `/${src}`;
   const audio = new Audio(url);
   audio.volume = Math.max(0, Math.min(1, payload.volume));
-  audio.play().catch((e) => {
-    console.warn("[PadNumérique] audio local play échoué:", String(e));
-  });
+  audio.play().catch(() => {});
   audioLocal = audio;
 }
 

@@ -29,8 +29,6 @@ pub fn demarrer(
     cancel: Arc<AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        eprintln!("[TikTok] connecting to @{}", username);
-
         // Construire la connexion PirateTok. max_retries élevé pour résilience.
         let stream = match TikTokLive::builder(&username)
             .max_retries(50)
@@ -40,14 +38,12 @@ pub fn demarrer(
         {
             Ok(s) => s,
             Err(e) => {
-                eprintln!("[TikTok] ERR connect: {}", e);
                 let _ = app.emit("tiktok:erreur", &format!("{}", e));
                 let _ = app.emit("tiktok:deconnecte", ());
                 return;
             }
         };
 
-        eprintln!("[TikTok] connecté à @{}", username);
         if let Some(ts) = app.try_state::<TiktokState>() {
             ts.set_connected(true);
         }
@@ -59,26 +55,20 @@ pub fn demarrer(
         let mut dernier_viewers: Option<i64> = None;
         loop {
             if cancel.load(Ordering::SeqCst) {
-                eprintln!("[TikTok] arrêt demandé");
                 break;
             }
 
             let event = match stream.next_event().await {
                 Some(e) => e,
                 None => {
-                    eprintln!("[TikTok] stream ended (None)");
                     break;
                 }
             };
 
             match event {
-                TikTokLiveEvent::Connected { room_id } => {
-                    eprintln!("[TikTok] Connected room_id={}", room_id);
-                }
+                TikTokLiveEvent::Connected { .. } => {}
 
-                TikTokLiveEvent::Reconnecting { attempt, max_retries, delay_secs } => {
-                    eprintln!("[TikTok] reconnecting {}/{} in {}s", attempt, max_retries, delay_secs);
-                }
+                TikTokLiveEvent::Reconnecting { .. } => {}
 
                 TikTokLiveEvent::Chat(msg) => {
                     let pseudo = msg.user.as_ref()
@@ -109,10 +99,7 @@ pub fn demarrer(
                             "type": "chat",
                             "message": chat_msg,
                         }).to_string();
-                        match state.chat_tx.send(json_msg) {
-                            Ok(n) => eprintln!("[TikTok] chat envoyé pseudo={} receivers={}", pseudo, n),
-                            Err(_) => eprintln!("[TikTok] chat AUCUN client pseudo={}", pseudo),
-                        }
+                        let _ = state.chat_tx.send(json_msg);
                     }
                     // Bandeau premier message : détection 1er message.
                     if let Some(bandeau) = app.try_state::<crate::bandeau::BandeauState>() {
@@ -136,7 +123,6 @@ pub fn demarrer(
                     // pastille viewers du widget chat, seulement si ça change.
                     if Some(viewers) != dernier_viewers {
                         dernier_viewers = Some(viewers);
-                        eprintln!("[TikTok] viewers={}", viewers);
                         let _ = app.emit("tiktok:viewers", &viewers);
                         if let Some(state) = app.try_state::<ScenesState>() {
                             let _ = state.chat_tx.send(
@@ -155,28 +141,16 @@ pub fn demarrer(
                     }
                 }
 
-                TikTokLiveEvent::Gift(msg) => {
-                    let pseudo = msg.user.as_ref()
-                        .map(|u| u.nickname.clone())
-                        .unwrap_or_else(|| "unknown".to_string());
-                    let gift_name = msg.gift_details.as_ref()
-                        .map(|g| g.gift_name.clone())
-                        .unwrap_or_else(|| "gift".to_string());
-                    let diamonds = msg.gift_details.as_ref()
-                        .map(|g| g.diamond_count)
-                        .unwrap_or(0);
-                    eprintln!("[TikTok] gift {} de {} ({} diamants)", gift_name, pseudo, diamonds);
+                TikTokLiveEvent::Gift(_) => {
                     // Pour l'instant on ne forward pas les gifts dans le chat.
                     // Pour plus tard : event dédié "tiktok:gift" + UI alerte.
                 }
 
-                TikTokLiveEvent::Like(msg) => {
-                    // Likes : pas de forward (trop bruyant). Log discret.
-                    let _ = msg.total_like_count;
+                TikTokLiveEvent::Like(_) => {
+                    // Likes : pas de forward (trop bruyant).
                 }
 
                 TikTokLiveEvent::Disconnected => {
-                    eprintln!("[TikTok] Disconnected");
                     break;
                 }
 
@@ -190,6 +164,5 @@ pub fn demarrer(
             ts.set_connected(false);
         }
         let _ = app.emit("tiktok:deconnecte", ());
-        eprintln!("[TikTok] task terminée");
     })
 }

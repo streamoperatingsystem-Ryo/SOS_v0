@@ -183,11 +183,6 @@ impl WelcomeState {
             timer_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
         };
 
-        eprintln!(
-            "[Welcome] init : {} viewer(s) Twitch, actif={}",
-            file.twitch.len(),
-            file.config_globale.actif
-        );
         state
     }
 
@@ -205,7 +200,6 @@ impl WelcomeState {
     ) {
         // 1. Config globale active ?
         if !self.config_globale.lock().unwrap().actif {
-            eprintln!("[Welcome] on_message {} ({}) → config globale inactive", display_name, plateforme);
             return;
         }
 
@@ -219,19 +213,6 @@ impl WelcomeState {
                 .cloned()
         };
         let Some(config) = config else {
-            // Diagnostic : pourquoi pas de config ?
-            let registry = self.registry.lock().unwrap();
-            let has_plateforme = registry.contains_key(plateforme);
-            let has_cle = has_plateforme && registry[plateforme].contains_key(cle);
-            let nb_viewers: usize = registry.values().map(|m| m.len()).sum();
-            if !has_plateforme {
-                eprintln!("[Welcome] on_message {} ({}) → plateforme absente du registre ({} viewer(s) total)", display_name, plateforme, nb_viewers);
-            } else if !has_cle {
-                eprintln!("[Welcome] on_message {} ({}) → clé absente du registre ({} viewer(s) total)", display_name, plateforme, nb_viewers);
-            } else {
-                let c = &registry[plateforme][cle];
-                eprintln!("[Welcome] on_message {} ({}) → config inactive ou clip_id vide (actif={}, clip_id='{}')", display_name, plateforme, c.actif, c.clip_id);
-            }
             return;
         };
 
@@ -240,16 +221,10 @@ impl WelcomeState {
         {
             let mut seen = self.seen.lock().unwrap();
             if seen.contains(&seen_key) {
-                eprintln!("[Welcome] on_message {} ({}) → déjà vu cette session", display_name, plateforme);
                 return;
             }
             seen.insert(seen_key);
         }
-
-        eprintln!(
-            "[Welcome] 1er message de {} ({}) → enfile clip {}",
-            display_name, plateforme, config.clip_id
-        );
 
         // 4. Enfiler.
         let item = QueueItem {
@@ -336,7 +311,6 @@ impl WelcomeState {
 
         let Some(item) = next else {
             // Queue vide → stop.
-            eprintln!("[Welcome] queue vide → stop");
             *self.current.lock().unwrap() = None;
             let msg = serde_json::json!({ "type": "welcome-clip-stop" });
             let _ = self.chat_tx.send(msg.to_string());
@@ -356,10 +330,6 @@ impl WelcomeState {
         // Si l'URL vient du registre persistant (sauvé lors d'une session
         // précédente), elle peut être expirée côté CDN Twitch → re-résoudre.
         // Cache hit = instantané (HashMap lookup), cache miss = réseau GQL.
-        eprintln!(
-            "[Welcome] résolution MP4 (cache-checked) pour slug={} login={}",
-            item.clip_id, item.login
-        );
         let state = self.clone();
         tauri::async_runtime::spawn(async move {
             state.jouer_item_async(item).await;
@@ -428,7 +398,6 @@ impl WelcomeState {
                         }
                     }
                     let _ = self.save_to_disk();
-                    eprintln!("[Welcome] pré-résolution MP4 OK pour {} (queue)", login);
                 } else {
                     // Item déjà poppé par avancer() → jouer_item_async gère.
                 }
@@ -441,11 +410,6 @@ impl WelcomeState {
 
     /// Émet welcome-clip-play pour un item dont l'URL MP4 est résolue + démarre timer.
     fn jouer_item(&self, mut item: QueueItem) {
-        eprintln!(
-            "[Welcome] lecture clip {} ({}) duree={}ms",
-            item.display_name, item.clip_id, item.clip_duree_ms
-        );
-
         // Fallback avatar/bio depuis le registre (cache) si absents de l'item.
         if item.avatar.is_none() || item.bio.is_none() {
             let registry = self.registry.lock().unwrap();
@@ -503,13 +467,10 @@ impl WelcomeState {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(timer_ms)) => {
                     if !cancel.load(Ordering::SeqCst) {
-                        eprintln!("[Welcome] timer écoulé → avancer");
                         state.avancer();
                     }
                 }
-                _ = await_timer_cancel(&cancel) => {
-                    eprintln!("[Welcome] timer annulé (stop/skip)");
-                }
+                _ = await_timer_cancel(&cancel) => {}
             }
         });
 
@@ -532,8 +493,6 @@ impl WelcomeState {
         avatar: Option<String>,
         bio: Option<String>,
     ) -> Result<(), String> {
-        eprintln!("[Welcome] test manuel clip {} ({})", display_name, clip_id);
-
         // Résoudre l'URL MP4.
         let mp4_url = crate::twitch_clips::resoudre_mp4(clip_id).await?;
 
@@ -612,16 +571,13 @@ impl WelcomeState {
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(timer_ms)) => {
                     if !cancel.load(Ordering::SeqCst) {
-                        eprintln!("[Welcome] test timer écoulé → stop");
                         let msg = serde_json::json!({ "type": "welcome-clip-stop" });
                         let _ = state.chat_tx.send(msg.to_string());
                         *state.current.lock().unwrap() = None;
                         state.emit_etat();
                     }
                 }
-                _ = await_timer_cancel(&cancel) => {
-                    eprintln!("[Welcome] test timer annulé (stop/skip)");
-                }
+                _ = await_timer_cancel(&cancel) => {}
             }
         });
 
@@ -636,7 +592,6 @@ impl WelcomeState {
         self.config_globale.lock().unwrap().duree_affichage_ms = ms;
         self.save_to_disk()?;
         self.emit_etat();
-        eprintln!("[Welcome] durée d'affichage = {} ms (0 = naturel)", ms);
         Ok(())
     }
 
@@ -653,13 +608,11 @@ impl WelcomeState {
         // Émettre stop.
         let msg = serde_json::json!({ "type": "welcome-clip-stop" });
         let _ = self.chat_tx.send(msg.to_string());
-        eprintln!("[Welcome] stop + queue vidée");
         self.emit_etat();
     }
 
     /// Skip le clip courant → passe au suivant.
     pub fn skip(&self) {
-        eprintln!("[Welcome] skip clip courant");
         self.avancer();
     }
 
@@ -670,7 +623,6 @@ impl WelcomeState {
         queue.retain(|item| item.id != id);
         let after = queue.len();
         if before != after {
-            eprintln!("[Welcome] retiré item {} (queue {}→{})", id, before, after);
             self.emit_etat();
         }
     }
@@ -702,14 +654,12 @@ impl WelcomeState {
     /// Vide la queue (sans stopper le clip courant).
     pub fn vider(&self) {
         self.queue.lock().unwrap().clear();
-        eprintln!("[Welcome] queue vidée");
         self.emit_etat();
     }
 
     /// Reset le seen set (nouveau stream → tous les streamers redeviennent éligibles).
     pub fn reset_session(&self) {
         self.seen.lock().unwrap().clear();
-        eprintln!("[Welcome] session reset (seen cleared)");
     }
 
     // ===== État (pour l'UI dashboard) =====
@@ -776,7 +726,6 @@ impl WelcomeState {
             twitch.insert(login.to_lowercase(), config);
         }
         self.save_to_disk()?;
-        eprintln!("[Welcome] viewer Twitch sauvé : {}", login);
         Ok(())
     }
 
@@ -789,7 +738,6 @@ impl WelcomeState {
             }
         }
         self.save_to_disk()?;
-        eprintln!("[Welcome] viewer Twitch supprimé : {}", login);
         Ok(())
     }
 
@@ -798,7 +746,6 @@ impl WelcomeState {
         self.config_globale.lock().unwrap().actif = actif;
         self.save_to_disk()?;
         self.emit_etat();
-        eprintln!("[Welcome] config globale actif={}", actif);
         Ok(())
     }
 
@@ -822,10 +769,6 @@ impl WelcomeState {
         }
         // Aussi émettre welcome-clip-config (rétro-compat diffusion.html).
         self.emit_overlay_config();
-        eprintln!(
-            "[Welcome] overlay config x={} y={} {}x{} (délégué à PositionOverlayState)",
-            cfg.x, cfg.y, cfg.largeur, cfg.hauteur
-        );
         Ok(())
     }
 
@@ -900,10 +843,6 @@ fn load_file(app: &AppHandle) -> Result<WelcomeFile, String> {
     if file.config_globale.overlay.hauteur < file.config_globale.overlay.largeur {
         let w = file.config_globale.overlay.largeur;
         let new_h = (w * wc_ratio).round();
-        eprintln!(
-            "[Welcome] migration overlay → ratio carte : {}x{} → {}x{}",
-            w, file.config_globale.overlay.hauteur, w, new_h
-        );
         file.config_globale.overlay.hauteur = new_h;
     }
 

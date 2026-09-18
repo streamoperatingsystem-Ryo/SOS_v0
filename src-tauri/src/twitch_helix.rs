@@ -52,14 +52,12 @@ async fn helix_get(path: &str, query: &[(&str, &str)], access: &str) -> Result<s
     let status = resp.status();
     // 401 → refresh + 1 retry. On lit le refresh token depuis le keyring.
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        eprintln!("[Twitch] Helix 401 → refresh...");
         let tokens = twitch_auth::lire_tokens()
             .map_err(|e| HelixError::Autre(format!("Coffre: {}", e)))?
             .ok_or(HelixError::Deconnecte)?;
         let new_tokens = twitch_auth::refresh_token(&tokens.refresh)
             .await
-            .map_err(|e| {
-                eprintln!("[Twitch] Helix refresh échoué: {}", e);
+            .map_err(|_| {
                 let _ = twitch_auth::effacer_tokens();
                 HelixError::Deconnecte
             })?;
@@ -81,7 +79,6 @@ async fn helix_get(path: &str, query: &[(&str, &str)], access: &str) -> Result<s
 
     // 403 → NeedReauth (scopes manquants). JAMAIS de Device Code auto.
     if status == reqwest::StatusCode::FORBIDDEN {
-        eprintln!("[Twitch] Helix 403 → need_reauth (scopes manquants)");
         return Err(HelixError::NeedReauth);
     }
 
@@ -154,14 +151,12 @@ async fn helix_write(
     let status = resp.status();
     // 401 → refresh + 1 retry (même logique que helix_get).
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        eprintln!("[Twitch] Helix {} 401 → refresh...", method);
         let tokens = twitch_auth::lire_tokens()
             .map_err(|e| HelixError::Autre(format!("Coffre: {}", e)))?
             .ok_or(HelixError::Deconnecte)?;
         let new_tokens = twitch_auth::refresh_token(&tokens.refresh)
             .await
-            .map_err(|e| {
-                eprintln!("[Twitch] Helix refresh échoué: {}", e);
+            .map_err(|_| {
                 let _ = twitch_auth::effacer_tokens();
                 HelixError::Deconnecte
             })?;
@@ -187,7 +182,6 @@ async fn helix_write(
 
     // 403 → NeedReauth (scopes manquants).
     if status == reqwest::StatusCode::FORBIDDEN {
-        eprintln!("[Twitch] Helix {} 403 → need_reauth (scopes manquants)", method);
         return Err(HelixError::NeedReauth);
     }
 
@@ -265,7 +259,7 @@ pub async fn followers(broadcaster_id: &str, access: &str) -> Result<FollowersRe
     let mut after: Option<String> = None;
     let first = PAGE_SIZE.to_string();
 
-    for page in 0..MAX_PAGES {
+    for _ in 0..MAX_PAGES {
         let mut query: Vec<(&str, &str)> = vec![
             ("broadcaster_id", broadcaster_id),
             ("first", &first),
@@ -316,14 +310,8 @@ pub async fn followers(broadcaster_id: &str, access: &str) -> Result<FollowersRe
         if after.is_none() || data.is_empty() {
             break;
         }
-        eprintln!("[Twitch] Helix followers page {} ({} entrées)", page + 1, data.len());
     }
 
-    eprintln!(
-        "[Twitch] Helix followers: total={} liste={}",
-        total,
-        liste.len()
-    );
     Ok(FollowersResp { total, liste })
 }
 
@@ -339,10 +327,6 @@ pub async fn fetch_users_batch(
     if user_ids.is_empty() {
         return Ok(map);
     }
-    eprintln!(
-        "[Twitch] Helix batch /users : {} utilisateur(s) à enrichir",
-        user_ids.len()
-    );
     for chunk in user_ids.chunks(PAGE_SIZE) {
         let query: Vec<(&str, &str)> = chunk
             .iter()
@@ -366,7 +350,6 @@ pub async fn fetch_users_batch(
             );
         }
     }
-    eprintln!("[Twitch] Helix batch /users : {} enrichi(s)", map.len());
     Ok(map)
 }
 
@@ -398,7 +381,7 @@ pub async fn subs(broadcaster_id: &str, access: &str) -> Result<SubsResp, HelixE
     let mut after: Option<String> = None;
     let first = PAGE_SIZE.to_string();
 
-    for page in 0..MAX_PAGES {
+    for _ in 0..MAX_PAGES {
         let mut query: Vec<(&str, &str)> = vec![
             ("broadcaster_id", broadcaster_id),
             ("first", &first),
@@ -453,15 +436,8 @@ pub async fn subs(broadcaster_id: &str, access: &str) -> Result<SubsResp, HelixE
         if after.is_none() || data.is_empty() {
             break;
         }
-        eprintln!("[Twitch] Helix subs page {} ({} entrées)", page + 1, data.len());
     }
 
-    eprintln!(
-        "[Twitch] Helix subs: total={} points={} liste={}",
-        total,
-        points,
-        liste.len()
-    );
     Ok(SubsResp {
         total,
         points,
@@ -479,7 +455,6 @@ pub async fn stream_viewers(broadcaster_id: &str, access: &str) -> Result<Option
         .ok_or_else(|| HelixError::Autre("streams: data absent".into()))?;
 
     if data.is_empty() {
-        eprintln!("[Twitch] Helix streams: hors-ligne");
         return Ok(None);
     }
 
@@ -488,7 +463,6 @@ pub async fn stream_viewers(broadcaster_id: &str, access: &str) -> Result<Option
         .map(|v| v as u32)
         .ok_or_else(|| HelixError::Autre("streams: viewer_count absent".into()))?;
 
-    eprintln!("[Twitch] Helix streams: viewers={}", viewers);
     Ok(Some(viewers))
 }
 
@@ -529,10 +503,6 @@ pub async fn broadcaster(user_id: &str, access: &str) -> Result<BroadcasterInfo,
             .to_string(),
     };
 
-    eprintln!(
-        "[Twitch] Helix broadcaster: {} ({})",
-        info.display_name, info.broadcaster_type
-    );
     Ok(info)
 }
 
@@ -607,7 +577,6 @@ pub async fn list_vips(broadcaster_id: &str, access: &str) -> Result<Vec<VipEntr
             break;
         }
     }
-    eprintln!("[Twitch] Helix vips: {} entrées", liste.len());
     Ok(liste)
 }
 
@@ -645,7 +614,6 @@ pub async fn list_moderators(
             break;
         }
     }
-    eprintln!("[Twitch] Helix moderators: {} entrées", liste.len());
     Ok(liste)
 }
 
@@ -688,7 +656,6 @@ pub async fn list_banned(
             break;
         }
     }
-    eprintln!("[Twitch] Helix bans: {} entrées", liste.len());
     Ok(liste)
 }
 
@@ -734,10 +701,6 @@ pub async fn ban_user(
     });
     let query = [("broadcaster_id", broadcaster_id), ("moderator_id", broadcaster_id)];
     helix_post("/moderation/bans", &query, &body, access).await?;
-    eprintln!(
-        "[Twitch] Helix ban: user_id={} duration={:?}",
-        user_id, duration
-    );
     Ok(())
 }
 
@@ -749,7 +712,6 @@ pub async fn unban_user(broadcaster_id: &str, access: &str, user_id: &str) -> Re
         ("user_id", user_id),
     ];
     helix_delete("/moderation/bans", &query, access).await?;
-    eprintln!("[Twitch] Helix unban: user_id={}", user_id);
     Ok(())
 }
 
@@ -760,7 +722,6 @@ pub async fn add_vip(broadcaster_id: &str, access: &str, user_id: &str) -> Resul
     });
     let query = [("broadcaster_id", broadcaster_id)];
     helix_post("/channels/vips", &query, &body, access).await?;
-    eprintln!("[Twitch] Helix add_vip: user_id={}", user_id);
     Ok(())
 }
 
@@ -768,7 +729,6 @@ pub async fn add_vip(broadcaster_id: &str, access: &str, user_id: &str) -> Resul
 pub async fn remove_vip(broadcaster_id: &str, access: &str, user_id: &str) -> Result<(), HelixError> {
     let query = [("broadcaster_id", broadcaster_id), ("user_id", user_id)];
     helix_delete("/channels/vips", &query, access).await?;
-    eprintln!("[Twitch] Helix remove_vip: user_id={}", user_id);
     Ok(())
 }
 
@@ -783,7 +743,6 @@ pub async fn add_moderator(
     });
     let query = [("broadcaster_id", broadcaster_id)];
     helix_post("/moderation/moderators", &query, &body, access).await?;
-    eprintln!("[Twitch] Helix add_moderator: user_id={}", user_id);
     Ok(())
 }
 
@@ -795,7 +754,6 @@ pub async fn remove_moderator(
 ) -> Result<(), HelixError> {
     let query = [("broadcaster_id", broadcaster_id), ("user_id", user_id)];
     helix_delete("/moderation/moderators", &query, access).await?;
-    eprintln!("[Twitch] Helix remove_moderator: user_id={}", user_id);
     Ok(())
 }
 
@@ -811,6 +769,5 @@ pub async fn delete_chat_message(
         ("message_id", message_id),
     ];
     helix_delete("/moderation/chat_messages", &query, access).await?;
-    eprintln!("[Twitch] Helix delete_message: id={}", message_id);
     Ok(())
 }

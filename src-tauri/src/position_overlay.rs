@@ -70,11 +70,6 @@ impl PositionOverlayState {
         // Mutex dans une même expression (ex. args d'un eprintln!) gardent le
         // 1er MutexGuard vivant jusqu'à la fin du statement → auto-deadlock
         // du thread principal (setup Tauri) = écran noir figé au boot.
-        let c = state.config.lock().unwrap().clone();
-        eprintln!(
-            "[PositionOverlay] init : x={} y={} {}x{}",
-            c.x, c.y, c.largeur, c.hauteur
-        );
         state
     }
 
@@ -92,10 +87,6 @@ impl PositionOverlayState {
         self.save_to_disk()?;
         self.emit_ws();
         self.emit_etat();
-        eprintln!(
-            "[PositionOverlay] set x={} y={} {}x{}",
-            cfg.x, cfg.y, cfg.largeur, cfg.hauteur
-        );
         Ok(())
     }
 

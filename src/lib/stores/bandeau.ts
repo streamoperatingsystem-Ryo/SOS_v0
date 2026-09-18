@@ -19,7 +19,6 @@ export async function initBandeau(): Promise<void> {
     bandeauEtat.set(e.payload);
   });
 
-  console.log("[Bandeau] listeners bound");
 }
 
 /// Charge l'état initial du bandeau. À appeler après initBandeau.
@@ -27,8 +26,7 @@ export async function chargerBandeau(): Promise<void> {
   try {
     const etat = await tauri.bandeauEtat();
     bandeauEtat.set(etat);
-  } catch (e) {
-    console.error("[Bandeau] chargerBandeau ERR:", String(e));
+  } catch {
   }
 }
 
@@ -38,8 +36,7 @@ async function refresh(): Promise<void> {
   try {
     const etat = await tauri.bandeauEtat();
     bandeauEtat.set(etat);
-  } catch (e) {
-    console.error("[Bandeau] refresh ERR:", String(e));
+  } catch {
   }
 }
 

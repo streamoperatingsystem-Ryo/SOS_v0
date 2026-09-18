@@ -36,12 +36,10 @@ pub fn demarrer(
         let mut backoff = 1u64;
         loop {
             if is_cancelled(&cancel) {
-                eprintln!("[YouTube] chat arrêt demandé");
                 return;
             }
             match run_polling(&app, &chat_tx, &client, &token, &channel_id, &cancel).await {
                 Ok(()) => {
-                    eprintln!("[YouTube] chat polling terminé normalement");
                     return;
                 }
                 Err(e) => {
@@ -75,13 +73,11 @@ async fn run_polling(
     // 1. Résoudre activeLiveChatId via search → videos
     let live_chat_id = match resolve_live_chat_id(client, token, channel_id).await {
         Ok(Some(id)) => {
-            eprintln!("[YouTube] live chat résolu: {}", id);
             id
         }
         Ok(None) => {
             // Pas de live actif → arrêter la tâche (pas de retry automatique).
             // L'utilisateur relancera manuellement via le bouton "Chat live ON".
-            eprintln!("[YouTube] pas de live actif — arrêt du chat polling");
             let _ = app.emit("youtube:pas-de-live", ());
             return Ok(());
         }
@@ -107,10 +103,7 @@ async fn run_polling(
                 "message": msg,
             })
             .to_string();
-            match chat_tx.send(json_msg) {
-                Ok(n) => eprintln!("[YouTube] chat envoyé pseudo={} receivers={}", msg.pseudo, n),
-                Err(_) => eprintln!("[YouTube] chat AUCUN client pseudo={}", msg.pseudo),
-            }
+            let _ = chat_tx.send(json_msg);
             // Bandeau premier message : détection 1er message (tous viewers).
             if let Some(bandeau) = app.try_state::<crate::bandeau::BandeauState>() {
                 bandeau.on_message(
@@ -138,7 +131,6 @@ async fn run_polling(
 
         // Si plus de pageToken → le live est terminé, arrêter la tâche.
         if page_token.is_none() {
-            eprintln!("[YouTube] live terminé (plus de pageToken) — arrêt du chat polling");
             let _ = app.emit("youtube:pas-de-live", ());
             return Ok(());
         }

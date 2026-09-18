@@ -40,7 +40,6 @@ export async function createScene(nom: string): Promise<void> {
     await loadScene();
     selectWidget(null);
   } catch (e) {
-    console.error("createScene:", e);
     alert("Création scène refusée : " + e);
   }
 }
@@ -59,11 +58,9 @@ export async function openScene(id: string): Promise<void> {
       await tauri.sceneSyncCaptures(
         get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
       );
-    } catch (e) {
-      console.warn("openScene: sync captures OBS échoué (OBS offline ?):", e);
+    } catch {
     }
   } catch (e) {
-    console.error("openScene:", e);
     alert("Ouverture scène refusée : " + e);
   }
 }
@@ -75,7 +72,6 @@ export async function renameScene(id: string, nom: string): Promise<void> {
     await loadScenesIndex();
     currentSceneNomStore.update((cur) => (cur ? nom : cur));
   } catch (e) {
-    console.error("renameScene:", e);
     alert("Renommage refusé : " + e);
   }
 }
@@ -87,7 +83,6 @@ export async function deplacerScene(id: string, position: number): Promise<void>
   try {
     await tauri.sceneDeplacer(id, position);
   } catch (e) {
-    console.error("deplacerScene:", e);
     alert("Réordonnancement refusé : " + e);
     await loadScenesIndex();
   }
@@ -102,7 +97,6 @@ export async function masquerNomScene(id: string, masque: boolean): Promise<void
       idx.map((s) => (s.id === id ? { ...s, nomMasque: masque } : s))
     );
   } catch (e) {
-    console.error("masquerNomScene:", e);
     alert("Masquage refusé : " + e);
   }
 }
@@ -120,7 +114,6 @@ export async function deleteScene(id: string): Promise<void> {
       selectWidget(null);
     }
   } catch (e) {
-    console.error("deleteScene:", e);
     alert("Suppression refusée : " + e);
   }
 }
@@ -139,7 +132,6 @@ export async function exportScene(): Promise<void> {
   try {
     await tauri.sceneExporter(nomPack.trim());
   } catch (e) {
-    console.error("exportScene:", e);
     alert("Export refusé : " + e);
   }
 }
@@ -155,7 +147,6 @@ export async function importScene(): Promise<void> {
       selectWidget(null);
     }
   } catch (e) {
-    console.error("importScene:", e);
     alert("Import refusé : " + e);
   }
 }

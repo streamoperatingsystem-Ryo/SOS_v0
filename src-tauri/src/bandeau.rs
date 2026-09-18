@@ -93,7 +93,6 @@ impl BandeauState {
     /// Crée l'état + charge la config depuis le disque.
     pub fn new(app: AppHandle, chat_tx: broadcast::Sender<String>) -> Self {
         let file = load_file(&app).unwrap_or_default();
-        let config = file.config.clone();
         let state = Self {
             app,
             chat_tx,
@@ -101,10 +100,6 @@ impl BandeauState {
             seen: Arc::new(Mutex::new(HashSet::new())),
             timer_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
         };
-        eprintln!(
-            "[Bandeau] init : actif={} duree={}ms position={}",
-            config.actif, config.duree_ms, config.position
-        );
         state
     }
 
@@ -134,11 +129,6 @@ impl BandeauState {
             }
             seen.insert(seen_key);
         }
-
-        eprintln!(
-            "[Bandeau] 1er message de {} ({}) → affichage bandeau",
-            display_name, plateforme
-        );
 
         self.jouer(display_name, texte, avatar, plateforme);
     }
@@ -181,9 +171,7 @@ impl BandeauState {
                         let _ = state.chat_tx.send(msg.to_string());
                     }
                 }
-                _ = await_timer_cancel(&cancel) => {
-                    eprintln!("[Bandeau] timer annulé");
-                }
+                _ = await_timer_cancel(&cancel) => {}
             }
         });
 
@@ -194,7 +182,6 @@ impl BandeauState {
 
     /// Lance un bandeau côté diffusion SANS passer par la détection (test manuel).
     pub fn tester(&self, display_name: &str, message: &str) -> Result<(), String> {
-        eprintln!("[Bandeau] test manuel : {} → « {} »", display_name, message);
         self.jouer(display_name, message, None, "twitch");
         Ok(())
     }
@@ -218,11 +205,6 @@ impl BandeauState {
         self.emit_etat();
         // Une SEULE lecture lock() → clone (plusieurs .lock() du même Mutex
         // dans une même expression = auto-deadlock, cf. position_overlay.rs).
-        let c = self.config.lock().unwrap().clone();
-        eprintln!(
-            "[Bandeau] config MAJ actif={} duree={}ms position={}",
-            c.actif, c.duree_ms, c.position
-        );
         Ok(())
     }
 
@@ -236,7 +218,6 @@ impl BandeauState {
     /// Reset le seen set (nouveau stream → tous les viewers redeviennent éligibles).
     pub fn reset_session(&self) {
         self.seen.lock().unwrap().clear();
-        eprintln!("[Bandeau] session reset (seen cleared)");
     }
 
     // ===== État (pour l'UI dashboard) =====

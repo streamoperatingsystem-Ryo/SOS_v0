@@ -47,7 +47,6 @@ async fn scene_sos(write: &mut WsSink, read: &mut WsStreamHalf) -> Result<Option
 
     let sos_scene = scenes.iter().find(|s| s["sceneName"].as_str() == Some(SOS_SCENE_NAME));
     let Some(sos_scene) = sos_scene else {
-        eprintln!("[OBS] scène « {} » introuvable dans GetSceneList (AUCUNE)", SOS_SCENE_NAME);
         return Ok(None);
     };
 
@@ -55,7 +54,6 @@ async fn scene_sos(write: &mut WsSink, read: &mut WsStreamHalf) -> Result<Option
         .as_str()
         .ok_or(format!("OBS: scène « {} » sans sceneUuid", SOS_SCENE_NAME))?
         .to_string();
-    eprintln!("[OBS] scène SOS uuid={} nom=\"{}\"", scene_uuid, SOS_SCENE_NAME);
 
     // 2. GetSceneItemList avec sceneUuid (PAS sceneName).
     let items_res = rpc(
@@ -69,8 +67,7 @@ async fn scene_sos(write: &mut WsSink, read: &mut WsStreamHalf) -> Result<Option
 
     let items = match items_res {
         Ok(v) => v,
-        Err(e) => {
-            eprintln!("[OBS] GetSceneItemList uuid={} → {} (AUCUNE)", scene_uuid, e);
+        Err(_) => {
             return Ok(None);
         }
     };
@@ -78,11 +75,9 @@ async fn scene_sos(write: &mut WsSink, read: &mut WsStreamHalf) -> Result<Option
     let arr = match items["sceneItems"].as_array() {
         Some(a) => a,
         None => {
-            eprintln!("[OBS] uuid={} → réponse sans sceneItems (AUCUNE)", scene_uuid);
             return Ok(None);
         }
     };
-    eprintln!("[OBS] items={} (scène « {} » uuid={})", arr.len(), SOS_SCENE_NAME, scene_uuid);
 
     // 3. Index de SOS-Diffusion : priorité SOURCE_NAME exact, sinon contains SOS
     //    && !starts_with("SOS-Trou-").
@@ -99,7 +94,6 @@ async fn scene_sos(write: &mut WsSink, read: &mut WsStreamHalf) -> Result<Option
 
     match sos_idx {
         Some(idx) => {
-            eprintln!("[OBS] scène retenue=« {} » uuid={}", SOS_SCENE_NAME, scene_uuid);
             Ok(Some(SceneSos {
                 scene_uuid,
                 scene_name: SOS_SCENE_NAME.to_string(),
@@ -108,7 +102,6 @@ async fn scene_sos(write: &mut WsSink, read: &mut WsStreamHalf) -> Result<Option
             }))
         }
         None => {
-            eprintln!("[OBS] scène retenue=(AUCUNE) — « {} » sans « {} »", SOS_SCENE_NAME, SOURCE_NAME);
             Ok(None)
         }
     }
@@ -300,12 +293,7 @@ pub async fn create_trou_source(
         }),
     )
     .await;
-    match &create_res {
-        Ok(_) => eprintln!("[OBS] CreateInput ok nom=\"{}\"", source_name),
-        Err(e) => eprintln!("[OBS] CreateInput err=\"{}\"", e),
-    }
     create_res?;
-    eprintln!("OBS trou: input \"{}\" créé ({:?})", source_name, kind);
 
     // 4. GetSceneItemList via sceneUuid → trouver itemId de la nouvelle source.
     let items = rpc(
@@ -357,10 +345,6 @@ pub async fn create_trou_source(
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 
     let _ = write.close().await;
-    eprintln!(
-        "OBS trou: source \"{}\" placée sous \"{}\" à ({},{}) {}x{}",
-        source_name, SOURCE_NAME, x, y, w, h
-    );
     Ok(source_name.to_string())
 }
 
@@ -495,10 +479,6 @@ pub async fn link_existing_source(
     let item_id = match existing_item_id {
         Some(id) => id,
         None => {
-            eprintln!(
-                "OBS trou link: \"{}\" pas dans « SOS » → CreateSceneItem",
-                source_name
-            );
             let create_res = rpc(
                 &mut write,
                 &mut read,
@@ -511,10 +491,6 @@ pub async fn link_existing_source(
                 }),
             )
             .await;
-            match &create_res {
-                Ok(_) => eprintln!("[OBS] CreateSceneItem ok nom=\"{}\"", source_name),
-                Err(e) => eprintln!("[OBS] CreateSceneItem err=\"{}\"", e),
-            }
             let created = create_res?;
             created["sceneItemId"]
                 .as_i64()
@@ -548,10 +524,6 @@ pub async fn link_existing_source(
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 
     let _ = write.close().await;
-    eprintln!(
-        "OBS trou: source \"{}\" liée dans « SOS » à ({},{}) {}x{}",
-        source_name, x, y, w, h
-    );
     Ok(source_name.to_string())
 }
 
@@ -622,15 +594,12 @@ pub async fn sync_trous(
 
     // scene_sos() : si scène « SOS » introuvable → skip silencieux.
     let Some(sos) = scene_sos(&mut write, &mut read).await? else {
-        eprintln!("OBS trou sync: pas de scène « SOS » → skip (silencieux)");
         let _ = write.close().await;
         return Ok(());
     };
     let scene_uuid = &sos.scene_uuid;
     let scene_items = &sos.items;
 
-    let mut synced = 0u32;
-    let mut missing = 0u32;
     for it in &items {
         let item_id = scene_items
             .iter()
@@ -638,8 +607,6 @@ pub async fn sync_trous(
             .and_then(|s| s["sceneItemId"].as_i64());
 
         let Some(item_id) = item_id else {
-            eprintln!("OBS trou sync: source \"{}\" absente de « SOS » — ignorée", it.source_name);
-            missing += 1;
             continue;
         };
 
@@ -705,15 +672,9 @@ pub async fn sync_trous(
             }),
         )
         .await?;
-        synced += 1;
     }
 
     let _ = write.close().await;
-    eprintln!(
-        "OBS trou sync: {} transform(s) MAJ, {} absente(s)",
-        synced,
-        missing
-    );
     Ok(())
 }
 
@@ -778,7 +739,6 @@ async fn ensure_camera(
             }),
         )
         .await?;
-        eprintln!("[OBS] caméra: input \"{}\" créé (dshow)", SOS_CAMERA);
         create_res["sceneItemId"]
             .as_i64()
             .ok_or("OBS: CreateInput caméra sans sceneItemId")?
@@ -819,10 +779,6 @@ async fn ensure_camera(
                 }),
             )
             .await?;
-            eprintln!(
-                "[OBS] caméra: input \"{}\" réutilisé (existant), item recréé",
-                SOS_CAMERA
-            );
             cs_res["sceneItemId"]
                 .as_i64()
                 .ok_or("OBS: CreateSceneItem caméra sans sceneItemId")?
@@ -844,7 +800,6 @@ async fn ensure_camera(
                 }),
             )
             .await?;
-            eprintln!("[OBS] caméra: device changé → \"{}\"", d);
         }
     }
 
@@ -875,10 +830,6 @@ async fn ensure_camera(
     //    sync_scene_captures). ensure_camera ne touche PLUS à l'index pour
     //    éviter les races avec reorder quand sync_scene_captures est appelé
     //    deux fois en concurrent au boot.
-    eprintln!(
-        "[OBS] caméra: \"{}\" transform OK à ({},{}) {}x{} (index géré par reorder)",
-        SOS_CAMERA, x, y, w, h
-    );
     Ok(())
 }
 
@@ -933,7 +884,6 @@ pub async fn camera_hide(host: &str, port: u16, password: &str) -> Result<(), St
             }),
         )
         .await;
-        eprintln!("[OBS] caméra: item \"{}\" caché (input conservé)", SOS_CAMERA);
     }
     let _ = write.close().await;
     Ok(())
@@ -958,15 +908,10 @@ pub async fn sync_scene_captures(
     let (mut write, mut read) = connect(host, port, password).await?;
 
     let Some(sos) = scene_sos(&mut write, &mut read).await? else {
-        eprintln!("[OBS] sync_captures: pas de scène « SOS » → skip");
         let _ = write.close().await;
         return Ok(());
     };
     let scene_uuid = &sos.scene_uuid;
-
-    let mut enabled = 0u32;
-    let mut disabled = 0u32;
-    let mut synced = 0u32;
 
     // Index des widgets par obsSource pour lookup rapide.
     use std::collections::HashMap;
@@ -994,7 +939,6 @@ pub async fn sync_scene_captures(
             false,
         )
         .await;
-        enabled += 1;
     } else if let Some(item_id) = sos
         .items
         .iter()
@@ -1013,7 +957,6 @@ pub async fn sync_scene_captures(
             }),
         )
         .await;
-        disabled += 1;
     }
 
     for item in &sos.items {
@@ -1039,7 +982,6 @@ pub async fn sync_scene_captures(
                 }),
             )
             .await;
-            enabled += 1;
 
             // Sync transform : position + taille = widget (bounds STRETCH).
             let _ = rpc(
@@ -1061,7 +1003,6 @@ pub async fn sync_scene_captures(
                 }),
             )
             .await;
-            synced += 1;
         } else {
             // Item SOS-Trou-* sans widget dans cette scène → cacher (pas delete).
             let _ = rpc(
@@ -1076,7 +1017,6 @@ pub async fn sync_scene_captures(
                 }),
             )
             .await;
-            disabled += 1;
         }
     }
 
@@ -1086,10 +1026,6 @@ pub async fn sync_scene_captures(
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 
     let _ = write.close().await;
-    eprintln!(
-        "[OBS] sync_captures: {} activé(s), {} transform(s) MAJ, {} caché(s)",
-        enabled, synced, disabled
-    );
     Ok(())
 }
 
@@ -1154,7 +1090,6 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
             "sceneItemId": diff_id,
             "sceneItemIndex": top_index
         })).await;
-        eprintln!("[OBS] reorder: diffusion → index {} (top)", top_index);
     }
 
     // 2. Trous du premier au dernier : indices décroissants (du haut vers le bas
@@ -1167,10 +1102,6 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
             "sceneItemIndex": idx
         })).await;
     }
-    if !trou_ids.is_empty() {
-        eprintln!("[OBS] reorder: {} trou(s) → indices 1..{}", trou_ids.len(), trou_count);
-    }
-
     // 3. Caméra → index 0 (BAS visuel)
     if let Some(cam_id) = camera_id {
         let _ = rpc(write, read, "SetSceneItemIndex", "reorder_cam", json!({
@@ -1178,19 +1109,6 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
             "sceneItemId": cam_id,
             "sceneItemIndex": 0
         })).await;
-        eprintln!("[OBS] reorder: caméra → index 0 (bas)");
-    }
-
-    // Vérification : relire l'ordre final pour confirmer.
-    if let Ok(final_items) = rpc(write, read, "GetSceneItemList", "reorder_verify", json!({
-        "sceneUuid": scene_uuid
-    })).await {
-        if let Some(arr) = final_items["sceneItems"].as_array() {
-            let order: Vec<String> = arr.iter().filter_map(|it| {
-                it["sourceName"].as_str().map(|s| s.to_string())
-            }).collect();
-            eprintln!("[OBS] reorder: ordre final = {:?}", order);
-        }
     }
 }
 
@@ -1262,7 +1180,6 @@ pub async fn create_trou_from_pc(
     let sos = scene_sos(&mut write, &mut read).await?
         .ok_or("SOS-Diffusion introuvable: scène « SOS » introuvable ou sans SOS-Diffusion")?;
     let scene_uuid = &sos.scene_uuid;
-    eprintln!("[OBS] scène SOS uuid={} (confirmée dans create_trou_from_pc)", scene_uuid);
 
     // 2. Settings selon le kind + cible.
     let mut settings = serde_json::Map::new();
@@ -1274,19 +1191,16 @@ pub async fn create_trou_from_pc(
         }
         CaptureKind::Window => {
             if let Some(win) = &target {
-                eprintln!("[OBS] window=\"{}\" (format OBS title:class:exe)", win);
                 settings.insert("window".to_string(), Value::String(win.clone()));
             }
         }
         CaptureKind::Game => {
             settings.insert("capture_mode".to_string(), Value::String("capture_specific_window".to_string()));
             if let Some(win) = &target {
-                eprintln!("[OBS] game window=\"{}\"", win);
                 settings.insert("window".to_string(), Value::String(win.clone()));
             }
         }
     }
-    eprintln!("[OBS] inputSettings={}", Value::Object(settings.clone()));
 
     // 3. GetInputList → la source SOS-Trou-<id> existe déjà GLOBALEMENT ?
     //    Si oui et qu'elle n'est pas dans la scène « SOS » → on crée un NOUVEL
@@ -1312,7 +1226,6 @@ pub async fn create_trou_from_pc(
         let already_in_sos = sos.items.iter().any(|it| it["sourceName"].as_str() == Some(source_name));
         if already_in_sos {
             // Input existe et est dans la scène → SetInputSettings (update).
-            eprintln!("[OBS] input \"{}\" existe et est dans « SOS » → SetInputSettings", source_name);
             let set_res = rpc(
                 &mut write,
                 &mut read,
@@ -1324,18 +1237,12 @@ pub async fn create_trou_from_pc(
                 }),
             )
             .await;
-            match &set_res {
-                Ok(resp) => eprintln!("[OBS] SetInputSettings ok nom=\"{}\" resp={}", source_name, resp),
-                Err(e) => eprintln!("[OBS] SetInputSettings err=\"{}\"", e),
-            }
             set_res?;
         } else {
             // Input existe ailleurs (SOS Web) → nouveau nom avec suffixe.
             effective_name = format!("{}-sos", source_name);
-            eprintln!("[OBS] input \"{}\" existe ailleurs → nouveau nom=\"{}\"", source_name, effective_name);
             // Si effective_name existe déjà aussi → SetInputSettings, sinon CreateInput.
             if global_inputs.iter().any(|n| n == &effective_name) {
-                eprintln!("[OBS] input \"{}\" existe déjà → SetInputSettings", effective_name);
                 let set_res = rpc(
                     &mut write,
                     &mut read,
@@ -1347,10 +1254,6 @@ pub async fn create_trou_from_pc(
                     }),
                 )
                 .await;
-                match &set_res {
-                    Ok(resp) => eprintln!("[OBS] SetInputSettings ok nom=\"{}\" resp={}", effective_name, resp),
-                    Err(e) => eprintln!("[OBS] SetInputSettings err=\"{}\"", e),
-                }
                 set_res?;
             } else {
                 let create_json = json!({
@@ -1360,7 +1263,6 @@ pub async fn create_trou_from_pc(
                     "inputSettings": Value::Object(settings.clone()),
                     "sceneItemEnabled": true
                 });
-                eprintln!("[OBS] OBS → CreateInput JSON={}", create_json);
                 let create_res = rpc(
                     &mut write,
                     &mut read,
@@ -1369,10 +1271,6 @@ pub async fn create_trou_from_pc(
                     create_json,
                 )
                 .await;
-                match &create_res {
-                    Ok(resp) => eprintln!("[OBS] OBS ← CreateInput result=ok nom=\"{}\" resp={}", effective_name, resp),
-                    Err(e) => eprintln!("[OBS] OBS ← CreateInput result=ERR comment=\"{}\"", e),
-                }
                 create_res?;
             }
         }
@@ -1385,7 +1283,6 @@ pub async fn create_trou_from_pc(
             "inputSettings": Value::Object(settings.clone()),
             "sceneItemEnabled": true
         });
-        eprintln!("[OBS] OBS → CreateInput JSON={}", create_json);
         let create_res = rpc(
             &mut write,
             &mut read,
@@ -1394,10 +1291,6 @@ pub async fn create_trou_from_pc(
             create_json,
         )
         .await;
-        match &create_res {
-            Ok(resp) => eprintln!("[OBS] OBS ← CreateInput result=ok nom=\"{}\" resp={}", effective_name, resp),
-            Err(e) => eprintln!("[OBS] OBS ← CreateInput result=ERR comment=\"{}\"", e),
-        }
         create_res?;
     }
 
@@ -1427,10 +1320,6 @@ pub async fn create_trou_from_pc(
         Some(id) => id,
         None => {
             // Input existe globalement mais pas dans la scène SOS → CreateSceneItem.
-            eprintln!(
-                "[OBS] input \"{}\" absent de « SOS » → CreateSceneItem",
-                effective_name
-            );
             let cs_res = rpc(
                 &mut write,
                 &mut read,
@@ -1443,10 +1332,6 @@ pub async fn create_trou_from_pc(
                 }),
             )
             .await;
-            match &cs_res {
-                Ok(resp) => eprintln!("[OBS] CreateSceneItem ok nom=\"{}\" resp={}", effective_name, resp),
-                Err(e) => eprintln!("[OBS] CreateSceneItem err=\"{}\"", e),
-            }
 
             match cs_res {
                 Ok(created) => {
@@ -1454,17 +1339,13 @@ pub async fn create_trou_from_pc(
                         .as_i64()
                         .ok_or("OBS: CreateSceneItem réponse sans sceneItemId")?
                 }
-                Err(e) => {
+                Err(_) => {
                     // CreateSceneItem échoué → CreateInput avec nom unique timestamp.
                     let ts = std::time::SystemTime::now()
                         .duration_since(std::time::UNIX_EPOCH)
                         .map(|d| d.as_millis())
                         .unwrap_or(0);
                     let unique_name = format!("{}-{}", source_name, ts);
-                    eprintln!(
-                        "[OBS] CreateSceneItem échoué (\"{}\") → CreateInput unique=\"{}\"",
-                        e, unique_name
-                    );
                     effective_name = unique_name.clone();
                     let create_json = json!({
                         "sceneUuid": scene_uuid,
@@ -1473,7 +1354,6 @@ pub async fn create_trou_from_pc(
                         "inputSettings": Value::Object(settings.clone()),
                         "sceneItemEnabled": true
                     });
-                    eprintln!("[OBS] OBS → CreateInput JSON={}", create_json);
                     let create_res = rpc(
                         &mut write,
                         &mut read,
@@ -1482,10 +1362,6 @@ pub async fn create_trou_from_pc(
                         create_json,
                     )
                     .await;
-                    match &create_res {
-                        Ok(resp) => eprintln!("[OBS] OBS ← CreateInput result=ok nom=\"{}\" resp={}", unique_name, resp),
-                        Err(e2) => eprintln!("[OBS] OBS ← CreateInput result=ERR comment=\"{}\"", e2),
-                    }
                     let created = create_res?;
                     // CreateInput crée directement l'item → sceneItemId dans la réponse.
                     created["sceneItemId"]
@@ -1522,9 +1398,5 @@ pub async fn create_trou_from_pc(
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 
     let _ = write.close().await;
-    eprintln!(
-        "[OBS] source \"{}\" créée/liée dans « SOS » (uuid={}) à ({},{}) {}x{}",
-        effective_name, scene_uuid, x, y, w, h
-    );
     Ok(effective_name)
 }

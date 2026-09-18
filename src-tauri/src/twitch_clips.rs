@@ -125,7 +125,6 @@ pub async fn liste_clips(
         });
     }
 
-    eprintln!("[TwitchClips] liste_clips: {} clips pour {}", clips.len(), broadcaster_id);
     Ok(clips)
 }
 
@@ -169,7 +168,6 @@ pub async fn resoudre_mp4(slug: &str) -> Result<String, String> {
         let cache = url_cache().lock().unwrap();
         if let Some(entry) = cache.get(slug) {
             if entry.expires > Instant::now() {
-                eprintln!("[TwitchClips] cache hit slug={}", slug);
                 return Ok(entry.url.clone());
             }
         }
@@ -190,11 +188,9 @@ pub async fn resoudre_mp4(slug: &str) -> Result<String, String> {
                     },
                 );
             }
-            eprintln!("[TwitchClips] GQL résolu slug={} url={}...", slug, &url[..url.len().min(60)]);
             Ok(url)
         }
         Err(e) => {
-            eprintln!("[TwitchClips] GQL échec slug={} : {}", slug, e);
             Err(format!("Résolution MP4 échouée pour {}: {}", slug, e))
         }
     }
@@ -270,7 +266,6 @@ async fn gql_clip_mp4(slug: &str) -> Result<String, String> {
         .unwrap_or(false);
 
     let clip_data = if needs_inline {
-        eprintln!("[TwitchClips] GQL PersistedQueryNotFound → retry inline");
         gql_clip_mp4_inline(slug).await?
     } else {
         json[0]["data"]["clip"]

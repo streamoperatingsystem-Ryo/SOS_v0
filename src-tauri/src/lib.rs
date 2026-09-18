@@ -473,26 +473,7 @@ async fn obs_connect(
     port: u16,
     password: String,
 ) -> Result<(), String> {
-    eprintln!("[OBS] obs_connect host={} port={} …", host, port);
-    let (w, h) = match obs::connect_and_setup(&host, port, &password).await {
-        Ok(dims) => {
-            eprintln!("[OBS] obs_connect OK {}×{}", dims.0, dims.1);
-            dims
-        }
-        Err(e) => {
-            // Log court : l'erreur Windows complète (os error 10061) se répète
-            // toutes les 20s tant OBS est fermé. On la raccourcit dans le log,
-            // mais on retourne la chaîne complète au frontend (messageClair
-            // vérifie "10061"/"refus" pour afficher le bon message).
-            let court = if e.contains("os error 10061") {
-                "injoignable (OBS fermé ou WebSocket désactivé)".to_string()
-            } else {
-                e.clone()
-            };
-            eprintln!("[OBS] obs_connect ERR {}", court);
-            return Err(e);
-        }
-    };
+    let (w, h) = obs::connect_and_setup(&host, port, &password).await?;
 
     // Mémoriser la résolution OBS globalement (obs_canvas.json) : appliquée à
     // TOUTES les scènes au chargement (boot, création, bascule, import) — pas
@@ -566,7 +547,6 @@ async fn chat_popout_toggle(app: AppHandle) -> Result<bool, String> {
     // ASYNC obligatoire : sur Windows, créer une webview dans une commande sync
     // deadlock (Webview2) → fenêtre blanche, navigation/protocol jamais déclenché.
     // always_on_top, 360×520, décorations simples (croix native), resizable.
-    eprintln!("[Chat] pop-out création fenêtre (streamos-chat://)");
     let url = tauri::Url::parse("streamos-chat://localhost/chat")
         .map_err(|e| format!("URL invalide: {}", e))?;
     let win = WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::CustomProtocol(url))
@@ -585,7 +565,6 @@ async fn chat_popout_toggle(app: AppHandle) -> Result<bool, String> {
     win.on_window_event(move |event| {
         if let tauri::WindowEvent::CloseRequested { .. } = event {
             let _ = app_clone.emit("popout-closed", ());
-            eprintln!("[Chat] pop-out fermé (croix)");
         }
     });
 
@@ -608,7 +587,6 @@ fn chat_popout_fermer(app: AppHandle) -> Result<(), String> {
 /// Arrête l'application (quitte proprement).
 #[tauri::command]
 fn app_arreter(app: AppHandle) -> Result<(), String> {
-    eprintln!("[App] arrêt demandé");
     app.exit(0);
     Ok(())
 }
@@ -617,7 +595,6 @@ fn app_arreter(app: AppHandle) -> Result<(), String> {
 /// NB : `app.restart()` ne retourne jamais (`!`) — coercé en Result.
 #[tauri::command]
 fn app_redemarrer(app: AppHandle) -> Result<(), String> {
-    eprintln!("[App] redémarrage demandé");
     app.restart()
 }
 
@@ -638,7 +615,6 @@ async fn scene_sync_captures(
         let s = state.scene.lock().unwrap();
         s.widgets.clone()
     };
-    eprintln!("[OBS] scene_sync_captures: {} widget(s)", widgets.len());
     obs_trou::sync_scene_captures(&host, port, &password, &widgets).await
 }
 
@@ -1059,7 +1035,6 @@ async fn twitch_connecter(
         if connect_with_tokens(&app, state.inner(), tokens).await.is_ok() {
             return Ok(());
         }
-        eprintln!("[Twitch] token coffre invalide → nouveau Device Code Flow");
     }
 
     // 2. Pas de token (ou token invalide) → Device Code Flow.
@@ -1098,7 +1073,6 @@ async fn twitch_connecter(
                 let _ = connect_with_tokens(&app2, &state2, tokens).await;
             }
             Err(e) => {
-                eprintln!("[Twitch] ERR poll token: {}", e);
                 let _ = app2.emit("twitch:erreur", &e);
             }
         }
@@ -1120,7 +1094,6 @@ async fn connect_with_tokens(
             tokens.user_id = v.user_id;
         }
         Err(e) if e.contains("401") => {
-            eprintln!("[Twitch] token expiré, refresh...");
             match twitch_auth::refresh_token(&tokens.refresh).await {
                 Ok(t) => {
                     tokens = t;
@@ -1132,7 +1105,6 @@ async fn connect_with_tokens(
                 // mort, et on propage l'erreur. L'appelant (twitch_connecter)
                 // peut alors enchaîner sur un nouveau Device Code Flow.
                 Err(e) => {
-                    eprintln!("[Twitch] refresh échoué, effacement coffre: {}", e);
                     let _ = twitch_auth::effacer_tokens();
                     let _ = app.emit("twitch:erreur", &e);
                     return Err(e);
@@ -1177,7 +1149,6 @@ async fn connect_with_tokens(
     state.set_user_id(Some(tokens.user_id.clone()));
     state.set_access(Some(tokens.access.clone()));
     let _ = app.emit("twitch:connecte", &tokens.login);
-    eprintln!("[Twitch] connecté en tant que {}", tokens.login);
     Ok(())
 }
 
@@ -1210,7 +1181,6 @@ async fn twitch_deconnecter(
     }
     let _ = twitch_auth::effacer_tokens();
     let _ = app.emit("twitch:deconnecte", ());
-    eprintln!("[Twitch] déconnecté");
     Ok(())
 }
 
@@ -1248,7 +1218,6 @@ async fn twitch_reconnecter(
     }
     let _ = twitch_auth::effacer_tokens();
     let _ = app.emit("twitch:deconnecte", ());
-    eprintln!("[Twitch] reconnect: ancien token révoqué+effacé, lancement Device Code");
 
     // 2. Device Code Flow avec les scopes étendus (même logique que twitch_connecter).
     let flow = match twitch_auth::demarrer_device_flow().await {
@@ -1283,7 +1252,6 @@ async fn twitch_reconnecter(
                 let _ = connect_with_tokens(&app2, &state2, tokens).await;
             }
             Err(e) => {
-                eprintln!("[Twitch] ERR poll token (reconnect): {}", e);
                 let _ = app2.emit("twitch:erreur", &e);
             }
         }
@@ -1353,13 +1321,6 @@ async fn twitch_communaute_followers(
                 })
                 .collect();
             if !unfollows.is_empty() {
-                eprintln!(
-                    "[Communauté] {} unfollow(s) détecté(s)",
-                    unfollows.len()
-                );
-                for u in &unfollows {
-                    eprintln!("  → {} ({})", u.login, u.date_unfollow);
-                }
                 if let Err(e) = config::ajouter_unfollows(&app, &unfollows) {
                     eprintln!("[Communauté] ajouter_unfollows: {} (non-fatal)", e);
                 }
@@ -1681,7 +1642,6 @@ async fn kick_connecter(
     state.reset_cancel();
 
     // 1. Résoudre slug → chatroom ID
-    eprintln!("[Kick] connecter: resolve slug={}", slug);
     let chatroom_id = kick::resolve_chatroom(&slug).await?;
 
     // 2. Démarrer le WS Pusher cloud en arrière-plan
@@ -1717,7 +1677,6 @@ fn kick_deconnecter(
         eprintln!("[Kick] WARN effacer slug: {}", e);
     }
     let _ = app.emit("kick:deconnecte", ());
-    eprintln!("[Kick] déconnecté");
     Ok(())
 }
 
@@ -1801,7 +1760,6 @@ async fn youtube_connecter(
                 let _ = connect_with_tokens_youtube(&app2, &state2, tokens).await;
             }
             Err(e) => {
-                eprintln!("[YouTube] ERR poll token: {}", e);
                 let _ = app2.emit("youtube:erreur", &e);
             }
         }
@@ -1851,7 +1809,6 @@ async fn connect_with_tokens_youtube(
     state.set_channel_id(Some(tokens.channel_id.clone()));
     state.set_access(Some(tokens.access.clone()));
     let _ = app.emit("youtube:connecte", &tokens.login);
-    eprintln!("[YouTube] connecté en tant que {} (chat OFF par défaut)", tokens.login);
     Ok(())
 }
 
@@ -1894,7 +1851,6 @@ fn youtube_demarrer_chat(
         let mut h = state.chat_handle.lock().unwrap();
         *h = Some(handle);
     }
-    eprintln!("[YouTube] chat polling démarré manuellement");
     Ok(())
 }
 
@@ -1908,7 +1864,6 @@ fn youtube_arreter_chat(
     state.stop_chat();
     state.reset_cancel();
     let _ = app.emit("youtube:pas-de-live", ());
-    eprintln!("[YouTube] chat polling arrêté manuellement");
     Ok(())
 }
 
@@ -1940,7 +1895,6 @@ async fn youtube_deconnecter(
     }
     let _ = youtube_auth::effacer_tokens();
     let _ = app.emit("youtube:deconnecte", ());
-    eprintln!("[YouTube] déconnecté");
     Ok(())
 }
 
@@ -2066,7 +2020,6 @@ fn tiktok_deconnecter(
         eprintln!("[TikTok] WARN effacer username: {}", e);
     }
     let _ = app.emit("tiktok:deconnecte", ());
-    eprintln!("[TikTok] déconnecté");
     Ok(())
 }
 
@@ -2303,19 +2256,16 @@ async fn welcome_attribuer_auto(
                     avatar: None,
                     bio: None,
                 };
-                if let Err(e) = welcome_state.sauver_viewer_twitch(&login, config) {
-                    eprintln!("[Welcome] attribuer_auto: erreur save {} : {}", login, e);
+                if welcome_state.sauver_viewer_twitch(&login, config).is_err() {
                     echecs += 1;
                 } else {
                     succes += 1;
                 }
             }
             Ok(None) => {
-                eprintln!("[Welcome] attribuer_auto: aucun clip pour {}", login);
                 echecs += 1;
             }
-            Err(e) => {
-                eprintln!("[Welcome] attribuer_auto: erreur {} : {}", login, e);
+            Err(_) => {
                 echecs += 1;
             }
         }
@@ -2326,7 +2276,6 @@ async fn welcome_attribuer_auto(
         );
     }
 
-    eprintln!("[Welcome] attribuer_auto terminé : {} succes, {} echecs", succes, echecs);
     Ok(serde_json::json!({ "succes": succes, "echecs": echecs }))
 }
 
@@ -2420,7 +2369,6 @@ fn input_viewer_set_actif(
     state: tauri::State<'_, input_viewer::InputViewerState>,
     actif: bool,
 ) -> Result<(), String> {
-    eprintln!("[InputViewer] commande set_actif({}) appelée", actif);
     state.set_actif(actif)
 }
 
@@ -2668,17 +2616,10 @@ async fn obs_create_trou_from_pc(
     w: f64,
     h: f64,
 ) -> Result<String, String> {
-    eprintln!("[OBS] COMMANDE APPELÉE kind={:?} source=\"{}\" target={:?} x={} y={} w={} h={}",
-        kind, source_name, target, x, y, w, h);
-    let res = obs_trou::create_trou_from_pc(
+    obs_trou::create_trou_from_pc(
         &host, port, &password, &source_name, kind, target, x, y, w, h,
     )
-    .await;
-    match &res {
-        Ok(s) => eprintln!("[OBS] COMMANDE OK source=\"{}\"", s),
-        Err(e) => eprintln!("[OBS] COMMANDE ERR=\"{}\"", e),
-    }
-    res
+    .await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -2799,16 +2740,13 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 match twitch_auth::lire_tokens() {
                     Ok(Some(tokens)) => {
-                        eprintln!("[Twitch] auto-resume: token trouvé en coffre...");
                         if let Err(e) =
                             connect_with_tokens(&resume_app, &resume_state, tokens).await
                         {
                             eprintln!("[Twitch] ERR auto-resume échoué: {}", e);
                         }
                     }
-                    Ok(None) => {
-                        eprintln!("[Twitch] aucun token en coffre (déconnecté)");
-                    }
+                    Ok(None) => {}
                     Err(e) => {
                         eprintln!("[Twitch] ERR lecture coffre: {}", e);
                     }
@@ -2822,7 +2760,6 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 match crate::config::lire_kick_slug(&kick_app) {
                     Ok(Some(slug)) => {
-                        eprintln!("[Kick] auto-resume: slug trouvé ({})", slug);
                         match kick::resolve_chatroom(&slug).await {
                             Ok(chatroom_id) => {
                                 kick_state_clone.reset_cancel();
@@ -2840,9 +2777,7 @@ pub fn run() {
                             }
                         }
                     }
-                    Ok(None) => {
-                        eprintln!("[Kick] aucun slug sauvegardé (déconnecté)");
-                    }
+                    Ok(None) => {}
                     Err(e) => {
                         eprintln!("[Kick] ERR lecture slug: {}", e);
                     }
@@ -2856,16 +2791,13 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 match youtube_auth::lire_tokens() {
                     Ok(Some(tokens)) => {
-                        eprintln!("[YouTube] auto-resume: token trouvé en coffre...");
                         if let Err(e) =
                             connect_with_tokens_youtube(&yt_app, &yt_state, tokens).await
                         {
                             eprintln!("[YouTube] ERR auto-resume échoué: {}", e);
                         }
                     }
-                    Ok(None) => {
-                        eprintln!("[YouTube] aucun token en coffre (déconnecté)");
-                    }
+                    Ok(None) => {}
                     Err(e) => {
                         eprintln!("[YouTube] ERR lecture coffre: {}", e);
                     }
@@ -2879,7 +2811,6 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 match crate::config::lire_tiktok_username(&tt_app) {
                     Ok(Some(username)) => {
-                        eprintln!("[TikTok] auto-resume: username trouvé ({})", username);
                         let chat_tx = tt_app
                             .try_state::<ScenesState>()
                             .map(|s| s.chat_tx.clone());
@@ -2902,9 +2833,7 @@ pub fn run() {
                             eprintln!("[TikTok] ERR auto-resume: ScenesState non trouvé");
                         }
                     }
-                    Ok(None) => {
-                        eprintln!("[TikTok] aucun username sauvegardé (déconnecté)");
-                    }
+                    Ok(None) => {}
                     Err(e) => {
                         eprintln!("[TikTok] ERR lecture username: {}", e);
                     }

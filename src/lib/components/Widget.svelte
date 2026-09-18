@@ -199,8 +199,7 @@
     if (aMorphs && morphCanvasEl && !renduMorph) {
       try {
         renduMorph = creerRenduMorph(morphCanvasEl);
-      } catch (e) {
-        console.warn("[Morph] WebGL indisponible — rendu natif:", e);
+      } catch {
       }
     }
     if (!aMorphs && renduMorph) {

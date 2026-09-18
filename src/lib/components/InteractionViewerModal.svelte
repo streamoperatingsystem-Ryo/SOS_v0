@@ -128,8 +128,7 @@
   async function testerAlerte(t: TypeAlerte) {
     try {
       await tauri.alertesTester(t);
-    } catch (e) {
-      console.warn("alertesTester:", e);
+    } catch {
     }
   }
   async function importerSonAlerte(t: TypeAlerte) {
@@ -338,8 +337,7 @@
     loadingClips = true;
     try {
       clipsStreamer = await tauri.welcomeListerClipsStreamer(userId, 20);
-    } catch (e) {
-      console.error("[Welcome] lister clips streamer:", String(e));
+    } catch {
     }
     loadingClips = false;
   }
@@ -354,8 +352,7 @@
     let mp4Url = "";
     try {
       mp4Url = await tauri.welcomeResoudreMp4(clip.id);
-    } catch (e) {
-      console.warn("[Welcome] résolution MP4 à l'attribution échouée (fallback à la volée) :", String(e));
+    } catch {
     }
 
     const config: WelcomeViewerConfig = {
@@ -371,9 +368,7 @@
     };
     try {
       await welcomeSauverViewer(login, config);
-      console.log("[Welcome] attribué manuel:", login, clip.title);
-    } catch (e) {
-      console.error("[Welcome] attribuer manuel:", String(e));
+    } catch {
     }
   }
 
@@ -399,9 +394,7 @@
         Math.round(clip.duration * 1000),
         selectedLogin,
       );
-      console.log("[Welcome] test clip lancé:", clip.title);
-    } catch (e) {
-      console.error("[Welcome] test clip:", String(e));
+    } catch {
       testingClipId = null;
     }
   }
@@ -423,10 +416,8 @@
         user_id: f.user_id,
         display_name: f.login,
       }));
-      const result = await welcomeAttribuerAuto(followersInput);
-      console.log("[Welcome] attribution auto terminée:", result);
-    } catch (e) {
-      console.error("[Welcome] attribution auto:", String(e));
+      await welcomeAttribuerAuto(followersInput);
+    } catch {
     }
     attributing = false;
   }
@@ -434,8 +425,7 @@
   async function onSupprimer(login: string) {
     try {
       await welcomeSupprimerViewer(login);
-    } catch (e) {
-      console.error("[Welcome] supprimer viewer:", String(e));
+    } catch {
     }
   }
 
@@ -444,8 +434,7 @@
     if (!config) return;
     try {
       await welcomeSauverViewer(login, { ...config, actif: !config.actif });
-    } catch (e) {
-      console.error("[Welcome] toggle actif:", String(e));
+    } catch {
     }
   }
 
@@ -527,8 +516,7 @@
     };
     try {
       await sauverPositionOverlay(cfg);
-    } catch (e) {
-      console.error("[PositionOverlay] set config:", String(e));
+    } catch {
     }
   }
 

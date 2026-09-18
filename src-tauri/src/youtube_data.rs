@@ -54,14 +54,12 @@ async fn youtube_get(
 
     // 401 → refresh + 1 retry.
     if status == reqwest::StatusCode::UNAUTHORIZED {
-        eprintln!("[YouTube] Data 401 → refresh...");
         let tokens = youtube_auth::lire_tokens()
             .map_err(|e| YoutubeError::Autre(format!("Coffre: {}", e)))?
             .ok_or(YoutubeError::Deconnecte)?;
         let new_tokens = youtube_auth::refresh_token(&tokens.refresh, &tokens)
             .await
-            .map_err(|e| {
-                eprintln!("[YouTube] refresh échoué: {}", e);
+            .map_err(|_| {
                 let _ = youtube_auth::effacer_tokens();
                 YoutubeError::Deconnecte
             })?;
@@ -168,7 +166,6 @@ pub async fn channel_info(access: &str) -> Result<ChannelInfo, YoutubeError> {
             .to_string(),
     };
 
-    eprintln!("[YouTube] channel: {} subs={}", info.display_name, info.subscriber_count);
     Ok(info)
 }
 
@@ -201,7 +198,6 @@ pub async fn members(access: &str) -> Result<MembersResp, YoutubeError> {
 
     let total = liste.len() as u64;
 
-    eprintln!("[YouTube] members: total={} liste={}", total, liste.len());
     Ok(MembersResp { total, liste })
 }
 
@@ -228,7 +224,6 @@ pub async fn live_viewers(access: &str, channel_id: &str) -> Result<Option<u32>,
         .ok_or_else(|| YoutubeError::Autre("search: items absent".into()))?;
 
     if search_items.is_empty() {
-        eprintln!("[YouTube] live: pas de live (search vide)");
         return Ok(None);
     }
 
@@ -249,18 +244,12 @@ pub async fn live_viewers(access: &str, channel_id: &str) -> Result<Option<u32>,
         .ok_or_else(|| YoutubeError::Autre("videos: items absent".into()))?;
 
     if video_items.is_empty() {
-        eprintln!("[YouTube] live: pas de vidéo (hors-ligne)");
         return Ok(None);
     }
 
     let viewers = video_items[0]["liveStreamingDetails"]["concurrentViewers"]
         .as_str()
         .and_then(|s| s.parse::<u32>().ok());
-
-    match viewers {
-        Some(v) => eprintln!("[YouTube] live: viewers={}", v),
-        None => eprintln!("[YouTube] live: pas de concurrentViewers (hors-ligne ou pas live)"),
-    }
 
     Ok(viewers)
 }
@@ -292,6 +281,5 @@ pub async fn resolve_channel(access: &str) -> Result<(String, String), YoutubeEr
         .unwrap_or("")
         .to_string();
 
-    eprintln!("[YouTube] channel résolu: id={} login={}", channel_id, login);
     Ok((channel_id, login))
 }

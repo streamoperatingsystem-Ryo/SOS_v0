@@ -98,8 +98,6 @@ pub async fn demarrer_device_flow() -> Result<DeviceFlow, String> {
         .await
         .map_err(|e| format!("Device flow parse: {}", e))?;
 
-    eprintln!("[Twitch] device OK user_code={}", d.user_code);
-
     Ok(DeviceFlow {
         device_code: d.device_code,
         user_code: d.user_code,
@@ -228,7 +226,6 @@ pub async fn valider_token(token: &str) -> Result<ValidateResp, String> {
         .json()
         .await
         .map_err(|e| format!("Validate parse: {}", e))?;
-    eprintln!("[Twitch] token OK login={}", v.login);
     Ok(v)
 }
 
@@ -319,6 +316,5 @@ pub async fn revoke_token(token: &str) -> Result<(), String> {
         let body = resp.text().await.unwrap_or_default();
         return Err(format!("Revoke HTTP {}: {}", status, body));
     }
-    eprintln!("[Twitch] token révoqué");
     Ok(())
 }

@@ -42,8 +42,7 @@
       await tauri.sceneSyncCaptures(
         get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
       );
-    } catch (e) {
-      console.warn("[OBS] sync captures après connexion:", e);
+    } catch {
     }
   }
 

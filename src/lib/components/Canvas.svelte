@@ -207,8 +207,7 @@
     if (bgAMorphs && bgMorphCanvasEl && !bgRendu) {
       try {
         bgRendu = creerRenduMorph(bgMorphCanvasEl);
-      } catch (e) {
-        console.warn("[Morph fond] WebGL indisponible:", e);
+      } catch {
       }
     }
     if (!bgAMorphs && bgRendu) {

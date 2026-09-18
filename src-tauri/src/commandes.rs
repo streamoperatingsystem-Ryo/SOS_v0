@@ -144,7 +144,6 @@ impl CommandesState {
     /// Crée l'état + charge la config depuis le disque.
     pub fn new(app: AppHandle, chat_tx: broadcast::Sender<String>) -> Self {
         let file = load_file(&app).unwrap_or_default();
-        let n = file.commandes.len();
         let state = Self {
             app,
             chat_tx,
@@ -155,7 +154,6 @@ impl CommandesState {
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
             dernier_global: Arc::new(Mutex::new(HashMap::new())),
         };
-        eprintln!("[Commandes] init : {} commande(s)", n);
         state
     }
 
@@ -223,11 +221,6 @@ impl CommandesState {
             duree_ms: cfg.duree_ms.max(1000),
         };
 
-        eprintln!(
-            "[Commandes] !{} pseudo={} → file/affichage",
-            cfg.commande, display_name
-        );
-
         // Une seule commande à la fois : direct si libre, sinon file (max 5).
         {
             let mut en_cours = self.en_cours.lock().unwrap();
@@ -279,9 +272,7 @@ impl CommandesState {
                         state.avancer();
                     }
                 }
-                _ = await_timer_cancel(&new_cancel) => {
-                    eprintln!("[Commandes] timer annulé");
-                }
+                _ = await_timer_cancel(&new_cancel) => {}
             }
         });
     }

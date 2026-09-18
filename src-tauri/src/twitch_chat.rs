@@ -66,12 +66,10 @@ pub fn demarrer(
         let mut cmd_rx = cmd_rx;
         loop {
             if is_cancelled(&cancel) {
-                eprintln!("[Twitch] IRC arrêt demandé");
                 return;
             }
             match connect_irc(&app, &chat_tx, &client, &mut avatar_cache, &token, &login, &cancel, cmd_rx.as_mut()).await {
                 Ok(()) => {
-                    eprintln!("[Twitch] IRC connexion terminée normalement");
                     return;
                 }
                 Err(e) => {
@@ -101,7 +99,6 @@ async fn connect_irc(
     cancel: &Cancel,
     mut cmd_rx: Option<&mut mpsc::Receiver<String>>,
 ) -> Result<(), String> {
-    eprintln!("[Twitch] IRC connecting...");
     let (ws, _) = tokio_tungstenite::connect_async(IRC_URL)
         .await
         .map_err(|e| format!("connect: {}", e))?;
@@ -134,8 +131,6 @@ async fn connect_irc(
         .await
         .map_err(|e| format!("JOIN: {}", e))?;
 
-    eprintln!("[Twitch] IRC joined #{}", login_lower);
-
     loop {
         if is_cancelled(cancel) {
             let _ = write.close().await;
@@ -167,7 +162,6 @@ async fn connect_irc(
                     // Envoi via PRIVMSG : Twitch interprète les "/" comme commandes.
                     let irc_cmd = format!("PRIVMSG #{} :{}", login_lower, cmd);
                     let _ = write.send(Message::Text(irc_cmd.into())).await;
-                    eprintln!("[Twitch] IRC commande envoyée: {}", cmd);
                 }
                 continue;
             }
@@ -192,10 +186,6 @@ async fn connect_irc(
             // aucun raid/sub jamais émis (bug "raid sans alerte" en live).
             if irc_command(line) == "USERNOTICE" {
                 if let Some(evt) = parse_usernotice(line) {
-                    eprintln!(
-                        "[Twitch] USERNOTICE type={} pseudo={}",
-                        evt.type_alerte, evt.pseudo
-                    );
                     let _ = app.emit("chat:event", &evt);
                     if let Some(alertes) = app.try_state::<crate::alertes::AlertesState>() {
                         alertes.on_event(evt);
@@ -225,7 +215,6 @@ async fn connect_irc(
                         destinataire: String::new(),
                         system_msg: format!("{} a envoyé {} bits !", payload.pseudo, nb_bits),
                     };
-                    eprintln!("[Twitch] bits pseudo={} nb={}", payload.pseudo, nb_bits);
                     let _ = app.emit("chat:event", &evt);
                     if let Some(alertes) = app.try_state::<crate::alertes::AlertesState>() {
                         alertes.on_event(evt);
@@ -251,21 +240,13 @@ async fn connect_irc(
                     .unwrap_or_default();
                 payload.avatar = Some(avatar_url).filter(|s| !s.is_empty());
                 let bio = Some(bio).filter(|s| !s.is_empty());
-                eprintln!(
-                    "[Twitch] PRIVMSG pseudo={} avatar={}",
-                    payload.pseudo,
-                    payload.avatar.as_deref().unwrap_or("(none)")
-                );
                 let json_msg = json!({
                     "type": "chat",
                     "message": payload,
                 })
                 .to_string();
                 let _ = app.emit("chat:message", &payload);
-                match chat_tx.send(json_msg) {
-                    Ok(n) => eprintln!("[Twitch] WS chat envoyé pseudo={} receivers={}", payload.pseudo, n),
-                    Err(_) => eprintln!("[Twitch] WS chat AUCUN client pseudo={}", payload.pseudo),
-                }
+                let _ = chat_tx.send(json_msg);
                 // Clip de bienvenue : détection 1er message d'un streamer enregistré.
                 // Récupère WelcomeState depuis l'app (non-fatal si absent).
                 if let Some(welcome) = app.try_state::<crate::welcome::WelcomeState>() {

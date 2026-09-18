@@ -395,16 +395,7 @@ pub async fn refresh_diffusion(host: &str, port: u16, password: &str) -> Result<
 
     let _ = write.close().await;
 
-    match refresh_result {
-        Ok(_) => {
-            eprintln!("[OBS] SOS-Diffusion rafraîchi");
-            Ok(())
-        }
-        Err(e) => {
-            eprintln!("[OBS] SOS-Diffusion refresh échoué (non-fatal): {}", e);
-            Err(e)
-        }
-    }
+    refresh_result.map(|_| ())
 }
 
 // --- Helpers WebSocket (pub(crate) pour obs_trou) ---

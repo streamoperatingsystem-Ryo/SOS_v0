@@ -237,7 +237,7 @@
     await listen("popout-closed", () => { popoutOpen = false; });
   });
   async function onDetacher() {
-    try { popoutOpen = await tauri.chatPopoutToggle(); } catch (e) { console.warn("onDetacher:", e); }
+    try { popoutOpen = await tauri.chatPopoutToggle(); } catch {}
   }
 
   // ===== Widget speedrun =====
@@ -311,7 +311,7 @@
     try {
       await tauri.inputViewerSetActif(!captureActive);
       captureActive = !captureActive;
-    } catch (e) { console.warn("toggleCaptureInput:", e); }
+    } catch {}
   }
 
   // ===== Widget caméra =====
@@ -324,8 +324,7 @@
       try {
         const list = await tauri.pcEnumerateCameras();
         if (!cancelled) cameraDevices = list;
-      } catch (e) {
-        console.warn("pcEnumerateCameras:", e);
+      } catch {
         if (!cancelled) cameraDevices = [];
       }
     })();

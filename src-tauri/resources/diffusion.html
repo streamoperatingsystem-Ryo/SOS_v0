@@ -1705,24 +1705,17 @@
       // Re-rend les widgets chat existants (appelé sur nouveau message).
       function rerenderChatWidgets() {
         if (!currentScene || !currentScene.widgets) {
-          console.log("[Chat] rerender: currentScene vide — AUCUN widget");
           return;
         }
         var chatGrad = gradientCadre(currentScene.cadreWidget);
-        var nChat = 0, nFilled = 0;
         for (var i = 0; i < currentScene.widgets.length; i++) {
           var w = currentScene.widgets[i];
           if ((w.type || "media") !== "chat") continue;
-          nChat++;
           var entry = widgetMap.get(w.id);
           if (entry && entry.chatBody) {
             fillChatBody(entry.chatBody, w.chatFiltre || "unifie", w.taillePolice || 16, chatGrad.from, chatGrad.to);
-            nFilled++;
-          } else {
-            console.log("[Chat] rerender: widget " + w.id + " PAS dans widgetMap (DOM non créé)");
           }
         }
-        console.log("[Chat] rerender: " + nChat + " widget(s) chat, " + nFilled + " rempli(s), " + chatMessages.length + " message(s)");
       }
 
       // État du fond de scène : { mediaEl, mediaKey, kind, mediaTime }.
@@ -2052,8 +2045,7 @@
               if (!bgMorphCanvas) bgMorphCanvas = document.createElement("canvas");
               try {
                 bgMorphRendu = morphCreerRendu(bgMorphCanvas);
-              } catch (e) {
-                console.warn("[Morph fond] WebGL indisponible:", e);
+              } catch {
                 bgMorphRendu = null;
               }
             }
@@ -2603,7 +2595,6 @@
 
       // Dernier état reçu (pour ne mettre à jour que les touches qui changent).
       var ivDernieresTouches = [];
-      var ivDebugLogCount = 0;
       function majInputViewerEtat(etat) {
         var nouveau = etat.touches || [];
         var ancien = ivDernieresTouches;
@@ -2614,11 +2605,6 @@
         var presseSet = {};
         for (var k = 0; k < nouveau.length; k++) presseSet[nouveau[k]] = true;
         var els = document.querySelectorAll(".widget.inputviewer [data-touche]");
-        // Log diagnostic (une fois au début pour vérifier le branchement).
-        if (ivDebugLogCount < 2 && (nouveau.length || ancien.length)) {
-          ivDebugLogCount++;
-          console.log("[InputViewer] majDOM: " + els.length + " keycaps, touches=" + JSON.stringify(nouveau));
-        }
         for (var e = 0; e < els.length; e++) {
           var code = els[e].getAttribute("data-touche");
           if (!aTraiter[code]) continue;
@@ -3083,24 +3069,6 @@
         // global sur #stage, sous les widgets.
         applyTitreFond(scene);
 
-        // DEBUG temporaire : vérifier que les cadres sont reçus et appliqués.
-        console.log("[DEBUG cadres] cadreWidget=", scene.cadreWidget ? "actif=" + scene.cadreWidget.actif + " style=" + scene.cadreWidget.style : "null",
-                    "cadreApp=", scene.cadreApp ? "actif=" + scene.cadreApp.actif + " style=" + scene.cadreApp.style : "null",
-                    "widgets=" + scene.widgets.length);
-
-        // Log trous + caméra (une fois par snapshot — aide debug).
-        let nTrous = 0;
-        const rects = [];
-        for (let i = 0; i < scene.widgets.length; i++) {
-          const w = scene.widgets[i];
-          if (w.trou === true || w.type === "camera") {
-            nTrous++;
-            rects.push("[" + Math.round(w.x) + "," + Math.round(w.y) + ","
-              + Math.round(w.largeur) + "x" + Math.round(w.hauteur) + "]");
-          }
-        }
-        console.log("[Trou] n=" + nTrous + " rects=" + rects.join(" "));
-
         var seen = new Set();
 
         for (var i = 0; i < scene.widgets.length; i++) {
@@ -3435,8 +3403,7 @@
                   mediaTime: 0, morphRendu: morphCreerRendu(mCv), morphOffscreen: null,
                   morphRaf: null, dernierW: w, cadreOverlayEl: null, cadreKey: "", titreEl: null
                 };
-              } catch (e) {
-                console.warn("[Morph] WebGL indisponible — fallback natif:", e);
+              } catch {
                 mMEntry = null;
               }
               if (mMEntry) {
@@ -4261,11 +4228,6 @@
         if (welcomeRoot && welcomeRoot.style.display === "block" && welcomeClipEl) {
           appliquerCadreOverlay(welcomeClipEl, "welcome");
         }
-        // Log types de widgets pour vérifier que les widgets chat existent.
-        var types = (msg.scene.widgets || []).map(function (w) {
-          return w.type || "media";
-        });
-        console.log("[Snapshot] widgets=" + (msg.scene.widgets || []).length + " types=[" + types.join(",") + "]");
       }
 
       function connect() {
@@ -4273,18 +4235,13 @@
         const ws = new WebSocket(proto + "//" + location.host + "/ws");
 
         ws.onopen = () => {
-          console.log("WS ok");
           // Demander le resync de l'état speedrun (LSS) — la diffusion peut
           // se (re)connecter après le chargement du .lss côté dashboard, auquel
           // cas elle a manqué l'event WS. Le serveur re-émet la dernière run.
           ws.send(JSON.stringify({ type: "speedrun-resync" }));
         };
         ws.onclose = () => {
-          console.log("WS fermé — reconnexion dans 2s");
           setTimeout(connect, 2000);
-        };
-        ws.onerror = () => {
-          console.error("WS erreur");
         };
         ws.onmessage = (ev) => {
           try {
@@ -4332,7 +4289,6 @@
               }
             } else if (msg.type === "chat" && msg.message) {
               // Message chat IRC → push + trim + re-rendre les widgets chat.
-              console.log("[Chat] message reçu pseudo=" + msg.message.pseudo + " avatar=" + (msg.message.avatar || "(none)"));
               chatMessages.push(msg.message);
               if (chatMessages.length > MAX_CHAT) {
                 chatMessages = chatMessages.slice(chatMessages.length - MAX_CHAT);
@@ -4345,61 +4301,44 @@
               rerenderViewersBars();
             } else if (msg.type === "welcome-clip-play") {
               // Clip de bienvenue : afficher l'overlay autonome + jouer la vidéo.
-              console.log("[Welcome] play viewer=" + (msg.viewer && msg.viewer.display_name));
               playWelcomeClip(msg);
             } else if (msg.type === "welcome-clip-stop") {
               // Stop : cacher l'overlay autonome + reset vidéo.
-              console.log("[Welcome] stop");
               stopWelcomeClip();
             } else if (msg.type === "welcome-clip-config") {
               // Config overlay (position/taille) — applique au root welcome.
-              console.log("[Welcome] config", msg.config);
               applyWelcomeOverlayConfig(msg.config || {});
             } else if (msg.type === "bandeau-premier-message-play") {
-              console.log("[BandeauPM] play viewer=" + (msg.viewer && msg.viewer.display_name));
               playBandeauPM(msg);
             } else if (msg.type === "bandeau-premier-message-stop") {
-              console.log("[BandeauPM] stop");
               stopBandeauPM();
             } else if (msg.type === "bandeau-premier-message-config") {
-              console.log("[BandeauPM] config", msg.config);
               applyBandeauPMConfig(msg.config || {});
             } else if (msg.type === "alerte-play") {
               // Alerte Twitch (follow/raid/sub/resub/subgift/bits).
-              console.log("[Alerte] play type=" + (msg.alerte && msg.alerte.type));
               playAlerte(msg);
             } else if (msg.type === "alerte-stop") {
-              console.log("[Alerte] stop");
               stopAlerte();
             } else if (msg.type === "alerte-config") {
-              console.log("[Alerte] config", msg.config);
               applyAlerteConfig(msg.config || {});
             } else if (msg.type === "commande-play") {
               // Commande chat tapée par un viewer (!commande).
-              console.log("[Commande] play texte=" + (msg.commande && msg.commande.texte));
               playCommande(msg);
             } else if (msg.type === "commande-stop") {
-              console.log("[Commande] stop");
               stopCommande();
             } else if (msg.type === "commande-config") {
               // Liste des commandes + overlay (position/taille du squelette
               // partagé). Le play porte déjà le contenu (texte/média/couleur).
-              console.log("[Commande] config (" + (msg.commandes || []).length + ")");
               if (msg.overlay) applyCommandeOverlayConfig(msg.overlay || {});
             } else if (msg.type === "pad-play") {
               // Pad numérique : touche pressée → affiche média + joue son.
-              console.log("[Pad] play type=" + (msg.pad && msg.pad.media_type));
               playPad(msg);
             } else if (msg.type === "pad-stop") {
-              console.log("[Pad] stop");
               stopPad();
             } else if (msg.type === "input-viewer-etat") {
               // État des entrées (capture globale Rust → WS direct, throttle
               // 30Hz). Maj DOM directe des keycaps/boutons (pas de re-render).
               var _ivEtat = msg.etat || {};
-              if ((_ivEtat.touches || []).length || (_ivEtat.souris && (_ivEtat.souris.gauche || _ivEtat.souris.droite || _ivEtat.souris.milieu))) {
-                console.log("[InputViewer] état reçu:", JSON.stringify(_ivEtat).slice(0, 120));
-              }
               majInputViewerEtat(_ivEtat);
             } else if (msg.type === "speedrun-etat") {
               // État du timer speedrun (moteur Rust → WS direct). Maj DOM
@@ -4408,7 +4347,6 @@
             } else if (msg.type === "position-overlay-config") {
               // Squelette de position unifié (clip de bienvenue + alertes +
               // commandes). Applique la même position/taille aux trois.
-              console.log("[PositionOverlay] config", msg.config);
               applyWelcomeOverlayConfig(msg.config || {});
               applyAlerteOverlayConfig(msg.config || {});
               applyCommandeOverlayConfig(msg.config || {});
@@ -4524,7 +4462,6 @@
       /// bufferées (canplay) → évite l'écran noir et le stuttering au démarrage.
       function playWelcomeClip(msg) {
         if (!welcomeRoot) {
-          console.warn("[Welcome] overlay non initialisé — clip ignoré");
           return;
         }
         var viewer = msg.viewer || {};
@@ -4564,20 +4501,13 @@
 
         welcomeVideoEl.oncanplay = function () {
           welcomeVideoWrapEl.style.display = "block";
-          welcomeVideoEl.play().catch(function (e) {
-            console.warn("[Welcome] video.play() échoué (autoplay policy) :", e);
-          });
+          welcomeVideoEl.play().catch(function () {});
           // La vidéo change la hauteur de la carte → re-mesurer le cadre.
           requestAnimationFrame(function () {
             appliquerCadreOverlay(welcomeClipEl, "welcome");
           });
           // One-shot : nettoyer après le 1er canplay.
           welcomeVideoEl.oncanplay = null;
-        };
-
-        welcomeVideoEl.onerror = function () {
-          console.error("[Welcome] erreur chargement vidéo (URL expirée ?) :", welcomeVideoEl.src);
-          // Le timer Rust émettra welcome-clip-stop → l'overlay se cachera.
         };
 
         // À la fin de la vidéo → le timer Rust émettra welcome-clip-stop.
@@ -4789,7 +4719,6 @@
       /// Affiche le bandeau avec les infos du viewer.
       function playBandeauPM(msg) {
         if (!bpmRoot) {
-          console.warn("[BandeauPM] overlay non initialisé — ignoré");
           return;
         }
         var viewer = msg.viewer || {};
@@ -4946,7 +4875,6 @@
       /// → son importé ; mode vidéo → son porté par la vidéo.
       function playAlerte(msg) {
         if (!alerteRoot) {
-          console.warn("[Alerte] overlay non initialisé — ignoré");
           return;
         }
         var a = msg.alerte || {};
@@ -4980,9 +4908,6 @@
             // La vidéo change la hauteur de la carte → re-mesurer le cadre.
             appliquerCadreOverlay(alerteCardEl, "alerte");
           };
-          vid.onerror = function () {
-            console.warn("[Alerte] chargement vidéo échoué:", vid.src);
-          };
           alerteMediaEl = vid;
         } else if (a.media) {
           var img = document.createElement("img");
@@ -5010,11 +4935,8 @@
           try {
             alerteAudio = new Audio("/" + a.son);
             alerteAudio.volume = 0.8;
-            alerteAudio.play().catch(function (e) {
-              console.warn("[Alerte] lecture son échouée:", e);
-            });
-          } catch (e) {
-            console.warn("[Alerte] création audio échouée:", e);
+            alerteAudio.play().catch(function () {});
+          } catch {
           }
         }
 
@@ -5120,7 +5042,6 @@
       /// Affiche la commande (texte + média/son optionnels) + cadre SVG.
       function playCommande(msg) {
         if (!commandeRoot) {
-          console.warn("[Commande] overlay non initialisé — ignoré");
           return;
         }
         var c = msg.commande || {};
@@ -5156,9 +5077,6 @@
               appliquerCadreOverlay(commandeCardEl, "commande");
             });
           };
-          vid.onerror = function () {
-            console.warn("[Commande] chargement vidéo échoué:", vid.src);
-          };
           commandeMediaEl = vid;
         } else if (c.media) {
           var img = document.createElement("img");
@@ -5185,11 +5103,8 @@
           try {
             commandeAudio = new Audio("/" + c.son);
             commandeAudio.volume = 0.8;
-            commandeAudio.play().catch(function (e) {
-              console.warn("[Commande] lecture son échouée:", e);
-            });
-          } catch (e) {
-            console.warn("[Commande] création audio échouée:", e);
+            commandeAudio.play().catch(function () {});
+          } catch {
           }
         }
 
@@ -5294,7 +5209,6 @@
       /// Pour l'audio pur : pas de média affiché, juste le son joué.
       function playPad(msg) {
         if (!padRoot) {
-          console.warn("[Pad] overlay non initialisé — ignoré");
           return;
         }
         var p = msg.pad || {};
@@ -5328,9 +5242,6 @@
             requestAnimationFrame(function () {
               appliquerCadreOverlay(padCardEl, "pad");
             });
-          };
-          vid.onerror = function () {
-            console.warn("[Pad] chargement vidéo échoué:", vid.src);
           };
           padMediaEl = vid;
         } else if (media) {
@@ -5367,11 +5278,8 @@
           try {
             padAudio = new Audio("/" + sonSrc);
             padAudio.volume = volume;
-            padAudio.play().catch(function (e) {
-              console.warn("[Pad] lecture son échouée:", e);
-            });
-          } catch (e) {
-            console.warn("[Pad] création audio échouée:", e);
+            padAudio.play().catch(function () {});
+          } catch {
           }
         }
 

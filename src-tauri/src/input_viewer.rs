@@ -504,19 +504,6 @@ fn poll_gilrs_fallback(
     };
     let manette = gilrs.gamepads().find(|(_, gp)| gp.is_connected());
     if let Some((_, gp)) = manette {
-        // Log une fois le nom + vendor ID de la manette gilrs.
-        {
-            use std::sync::atomic::AtomicBool;
-            static LOGGE: AtomicBool = AtomicBool::new(false);
-            if !LOGGE.swap(true, std::sync::atomic::Ordering::Relaxed) {
-                eprintln!(
-                    "[InputViewer] gilrs manette : nom=\"{}\" vendor={:?} product={:?}",
-                    gp.name(),
-                    gp.vendor_id(),
-                    gp.product_id(),
-                );
-            }
-        }
         let mut b = vec![false; 20];
         for i in 0..16usize {
             if i == 6 {
@@ -669,7 +656,6 @@ impl InputViewerState {
         if actif {
             *chat_tx_slot().lock().unwrap() = Some(self.chat_tx.clone());
             self.actif.store(true, Ordering::Relaxed);
-            eprintln!("[InputViewer] capture ON");
 
             // Thread moteur : poll clavier 60Hz + publication WS 30Hz.
             // Détaché — sort proprement quand ACTIF passe à false.
@@ -721,7 +707,6 @@ impl InputViewerState {
                         actif_flag.store(false, Ordering::Relaxed);
                         return;
                     };
-                    eprintln!("[InputViewer] hook souris installé");
 
                     // Boucle de messages — bloque (zéro CPU au repos) jusqu'au
                     // WM_QUIT posté par set_actif(false).
@@ -729,7 +714,6 @@ impl InputViewerState {
 
                     // Désinstallation sur le MÊME thread que l'installation.
                     souris_win32::desinstaller(hook);
-                    eprintln!("[InputViewer] hook souris désinstallé");
                 });
             }
 
@@ -757,7 +741,6 @@ impl InputViewerState {
             *manette_slot().lock().unwrap() = EtatManette::default();
             let mut vide = String::new();
             publier_etat(&mut vide);
-            eprintln!("[InputViewer] capture OFF");
         }
         Ok(())
     }

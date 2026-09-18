@@ -72,7 +72,6 @@ async fn get_channel(slug: &str) -> Result<serde_json::Value, String> {
 /// Résout un slug de canal Kick (ex: "xqc") en ID de chatroom (entier).
 /// GET https://kick.com/api/v2/channels/<slug> → data.chatroom.id.
 pub async fn resolve_chatroom(slug: &str) -> Result<u64, String> {
-    eprintln!("[Kick] resolve_chatroom: slug={}", slug);
     let body = get_channel(slug).await?;
     let chatroom_id = body["chatroom"]["id"]
         .as_u64()
@@ -108,16 +107,13 @@ pub fn run_ws(
     cancel: Arc<AtomicBool>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        eprintln!("[Kick] WS connecting to Pusher cloud");
-        let (mut ws, resp) = match connect_async(PUSHER_WS_URL).await {
+        let (mut ws, _resp) = match connect_async(PUSHER_WS_URL).await {
             Ok((ws, resp)) => (ws, resp),
-            Err(e) => {
-                eprintln!("[Kick] WS connect error: {}", e);
+            Err(_) => {
                 let _ = app.emit("kick:deconnecte", ());
                 return;
             }
         };
-        eprintln!("[Kick] WS connected, HTTP status: {}", resp.status());
 
         let channel = format!("chatrooms.{}.v2", chatroom_id);
         let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(20));
@@ -125,7 +121,6 @@ pub fn run_ws(
 
         loop {
             if cancel.load(Ordering::SeqCst) {
-                eprintln!("[Kick] WS arrêt demandé");
                 break;
             }
 
@@ -134,7 +129,6 @@ pub fn run_ws(
                 _ = ping_interval.tick() => {
                     let ping = serde_json::json!({"event":"pusher:ping","data":{}});
                     if ws.send(WsMessage::Text(ping.to_string().into())).await.is_err() {
-                        eprintln!("[Kick] WS send ping error, closing");
                         break;
                     }
                 }
@@ -142,13 +136,11 @@ pub fn run_ws(
                 // Message entrant
                 msg = ws.next() => {
                     let Some(msg_result) = msg else {
-                        eprintln!("[Kick] WS stream ended");
                         break;
                     };
                     let frame = match msg_result {
                         Ok(f) => f,
-                        Err(e) => {
-                            eprintln!("[Kick] WS read error: {}", e);
+                        Err(_) => {
                             break;
                         }
                     };
@@ -160,7 +152,6 @@ pub fn run_ws(
                             continue;
                         }
                         WsMessage::Close(_) => {
-                            eprintln!("[Kick] WS close frame received");
                             break;
                         }
                         _ => continue,
@@ -176,20 +167,17 @@ pub fn run_ws(
                     match event {
                         // 1. Connexion établie → subscribe
                         "pusher:connection_established" => {
-                            eprintln!("[Kick] Pusher connection established");
                             let subscribe = serde_json::json!({
                                 "event": "pusher:subscribe",
                                 "data": {"auth": "", "channel": &channel}
                             });
                             if ws.send(WsMessage::Text(subscribe.to_string().into())).await.is_err() {
-                                eprintln!("[Kick] WS send subscribe error");
                                 break;
                             }
                         }
 
                         // 2. Subscription confirmée → marquer connecté
                         "pusher_internal:subscription_succeeded" => {
-                            eprintln!("[Kick] subscribed to {}", channel);
                             if let Some(ks) = app.try_state::<KickState>() {
                                 ks.set_connected(true);
                             }
@@ -231,10 +219,7 @@ pub fn run_ws(
                                     "type": "chat",
                                     "message": chat_msg,
                                 }).to_string();
-                                match state.chat_tx.send(json_msg) {
-                                    Ok(n) => eprintln!("[Kick] WS chat envoyé pseudo={} receivers={}", pseudo, n),
-                                    Err(_) => eprintln!("[Kick] WS chat AUCUN client pseudo={}", pseudo),
-                                }
+                                let _ = state.chat_tx.send(json_msg);
                             }
                             // Bandeau premier message : détection 1er message.
                             if let Some(bandeau) = app.try_state::<crate::bandeau::BandeauState>() {
@@ -255,11 +240,7 @@ pub fn run_ws(
                         }
 
                         // Autres events → ignorer
-                        _ => {
-                            if !event.starts_with("pusher") && !event.starts_with("pusher_internal") {
-                                eprintln!("[Kick] event ignoré: {}", event);
-                            }
-                        }
+                        _ => {}
                     }
                 }
             }
@@ -271,6 +252,5 @@ pub fn run_ws(
             ks.set_connected(false);
         }
         let _ = app.emit("kick:deconnecte", ());
-        eprintln!("[Kick] WS task terminée");
     })
 }

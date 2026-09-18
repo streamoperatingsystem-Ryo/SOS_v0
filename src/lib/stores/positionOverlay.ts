@@ -42,15 +42,13 @@ export async function initPositionOverlay(): Promise<void> {
     positionOverlay.set(e.payload);
   });
 
-  console.log("[PositionOverlay] listeners bound");
 }
 
 /// Charge la config initiale depuis Rust. À appeler après initPositionOverlay.
 export async function chargerPositionOverlay(): Promise<void> {
   try {
     positionOverlay.set(await tauri.positionOverlayEtat());
-  } catch (e) {
-    console.error("[PositionOverlay] chargerPositionOverlay ERR:", String(e));
+  } catch {
   }
 }
 
@@ -61,8 +59,7 @@ export async function sauverPositionOverlay(
   positionOverlay.set(cfg);
   try {
     await tauri.positionOverlaySet(cfg);
-  } catch (e) {
-    console.error("[PositionOverlay] sauverPositionOverlay ERR:", String(e));
+  } catch {
   }
 }
 

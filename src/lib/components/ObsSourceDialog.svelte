@@ -36,7 +36,6 @@
         const games = await tauri.pcEnumerateGames();
         liste = games.map((g) => ({ nom: g.title, exe: g.exe, obs_value: g.obs_value }));
       }
-      console.log(`[OBS trou] ${k} → ${liste.length} cible(s) PC`);
     } catch (e) {
       error = String((e as Error)?.message ?? e);
     } finally {
@@ -49,17 +48,14 @@
     if (!kind) return;
     // target : caméra = nom device, fenêtre/jeu = obs_value ("title:class:exe").
     const target = "obs_value" in item ? item.obs_value : item.nom;
-    console.log("[OBS trou] invoke", kind, item, "target=", target, "widgetId=", widgetId);
     mode = "working";
     working = true;
     error = null;
     try {
       await createObsTrouFromPc(widgetId, kind, target);
-      console.log("[OBS trou] invoke OK, fermeture dialog");
       onClose();
     } catch (e) {
       const msg = String((e as Error)?.message ?? e);
-      console.error("[OBS trou] create_trou_from_pc échec:", msg, e);
       error = msg;
       mode = "liste";
     } finally {

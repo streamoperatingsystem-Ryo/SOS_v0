@@ -32,7 +32,6 @@ export async function initWelcome(): Promise<void> {
     }
   );
 
-  console.log("[Welcome] listeners bound");
 }
 
 /// Charge l'état initial de la queue + registre. À appeler après initWelcome.
@@ -40,14 +39,12 @@ export async function chargerWelcome(): Promise<void> {
   try {
     const etat = await tauri.welcomeEtat();
     welcomeEtat.set(etat);
-  } catch (e) {
-    console.error("[Welcome] chargerWelcome etat ERR:", String(e));
+  } catch {
   }
   try {
     const reg = await tauri.welcomeRegistreTwitch();
     welcomeRegistre.set(reg);
-  } catch (e) {
-    console.error("[Welcome] chargerWelcome registre ERR:", String(e));
+  } catch {
   }
 }
 
@@ -57,8 +54,7 @@ async function refresh(): Promise<void> {
   try {
     const etat = await tauri.welcomeEtat();
     welcomeEtat.set(etat);
-  } catch (e) {
-    console.error("[Welcome] refresh ERR:", String(e));
+  } catch {
   }
 }
 
@@ -132,8 +128,7 @@ export async function welcomeSauverViewer(
   try {
     const reg = await tauri.welcomeRegistreTwitch();
     welcomeRegistre.set(reg);
-  } catch (e) {
-    console.error("[Welcome] sauverViewer refresh registre ERR:", String(e));
+  } catch {
   }
 }
 
@@ -142,8 +137,7 @@ export async function welcomeSupprimerViewer(login: string): Promise<void> {
   try {
     const reg = await tauri.welcomeRegistreTwitch();
     welcomeRegistre.set(reg);
-  } catch (e) {
-    console.error("[Welcome] supprimerViewer refresh registre ERR:", String(e));
+  } catch {
   }
 }
 
@@ -158,8 +152,7 @@ export async function welcomeAttribuerAuto(
   try {
     const reg = await tauri.welcomeRegistreTwitch();
     welcomeRegistre.set(reg);
-  } catch (e) {
-    console.error("[Welcome] attribuerAuto refresh registre ERR:", String(e));
+  } catch {
   }
   welcomeAttributionProgress.set(null);
   return result;
