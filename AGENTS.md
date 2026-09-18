@@ -272,9 +272,12 @@ Widget caméra (dashboard) ── commitScene ── obsSyncTrous (item caméra,
    │ camera_sync / camera_hide (commandes Tauri)
    ▼
 OBS scène "SOS" : [SOS-Diffusion (browser :4321)] ← au-dessus
-                  [SOS-Caméra (dshow_input)]       ← juste dessous (sos_index + 1)
+                  [SOS-Caméra (dshow_input)]       ← juste dessous
+                  [SOS-Caméra-Fond (color_source)] ← plaque noire
+                  [SOS-Trou-* (captures)]          ← tout en bas
 diffusion.html : widget caméra = trou dans le canvas de fond (destination-out,
-forme du clip-path du cadre) → la caméra OBS apparaît à travers.
+forme du clip-path du cadre) → la caméra OBS apparaît à travers ; widgets DOM
+chevauchant le rect caméra clippés via clipPath SVG evenodd (#sos-cam-clip).
 ```
 
 ### Fichiers

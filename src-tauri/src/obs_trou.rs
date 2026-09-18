@@ -1,5 +1,10 @@
-/// Sources OBS "trou" : caméra / fenêtre / jeu placées SOUS la Browser Source
+/// Sources OBS "trou" : fenêtre / jeu placées SOUS la Browser Source
 /// SOS-Diffusion, calées sur la géométrie d'un widget troué (x y w h).
+/// La caméra (SOS-Caméra) et sa plaque noire (SOS-Caméra-Fond) sont AUSSI
+/// SOUS SOS-Diffusion mais AU-DESSUS des SOS-Trou-* : le flux dshow apparaît
+/// à travers le trou destination-out du canvas :4321 sans être masqué par
+/// une capture qui recouvrirait le même pixel ; les widgets :4321 qui
+/// chevauchent le rectangle caméra sont clippés côté diffusion.html.
 ///
 /// Connexion one-shot par opération (énum / création / sync / suppression) :
 /// connect → RPC(s) → close. Pas de client persistant. Si OBS offline → erreur
@@ -14,7 +19,7 @@ use crate::obs::{connect, rpc, SOURCE_NAME, WsSink, WsStreamHalf};
 use futures_util::SinkExt;
 
 /// Résultat de scene_sos() : scène « SOS » (via sceneUuid) + ses items +
-/// l'index de l'item SOS-Diffusion (0 = top visuel en OBS v5).
+/// l'index de l'item SOS-Diffusion (index OBS 32.x : 0 = bas visuel).
 struct SceneSos {
     scene_uuid: String,
     #[allow(dead_code)] // renvoyé par GetSceneList, non utilisé aujourd'hui
@@ -31,12 +36,20 @@ struct SceneSos {
 const SOS_SCENE_NAME: &str = "SOS";
 
 /// Nom de la source OBS caméra (singleton : 1 widget caméra / scène).
-/// dshow_input placée sous SOS-Diffusion, calée sur le widget.
+/// dshow_input placée SOUS SOS-Diffusion, au-dessus de la plaque noire
+/// (elle-même au-dessus des SOS-Trou-*), calée sur le widget.
 /// Contrat : l'input n'est JAMAIS supprimé (RemoveInput) — la suppression du
 /// widget cache l'item (SetSceneItemEnabled false), la recréation réutilise
 /// l'input existant (évite les conflits d'accès exclusif du capteur Windows
 /// et la perte des settings OBS : crop, color, buffer).
 pub const SOS_CAMERA: &str = "SOS-Caméra";
+
+/// Nom de la source OBS « plaque noire » placée sous "SOS-Caméra", au-dessus
+/// des SOS-Trou-* (singleton, même contrat : jamais RemoveInput). color_source
+/// noire opaque calée sur le même rectangle que le widget caméra : montre du
+/// noir dans le trou quand le capteur est off ou occupé.
+/// Item désactivé quand il n'y a plus de widget caméra.
+pub const SOS_CAMERA_FOND: &str = "SOS-Caméra-Fond";
 
 async fn scene_sos(write: &mut WsSink, read: &mut WsStreamHalf) -> Result<Option<SceneSos>, String> {
     // 1. GetSceneList → trouver scène sceneName == "SOS" → garder sceneUuid.
@@ -340,7 +353,7 @@ pub async fn create_trou_source(
     )
     .await?;
 
-    // 6. Reorder global : Diffusion (top) > Trou > Caméra (bottom).
+    // 6. Reorder global : Diffusion > Caméra > Fond > Trou (haut → bas).
     //    reorder_sos_sources est le SEUL endroit qui gère les indices.
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 
@@ -519,7 +532,7 @@ pub async fn link_existing_source(
     )
     .await?;
 
-    // 5. Reorder global : Diffusion (top) > Trou > Caméra (bottom).
+    // 5. Reorder global : Diffusion > Caméra > Fond > Trou (haut → bas).
     //    reorder_sos_sources est le SEUL endroit qui gère les indices.
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 
@@ -672,6 +685,40 @@ pub async fn sync_trous(
             }),
         )
         .await?;
+
+        // 4. Plaque noire sous la caméra : même rectangle CALCULÉ (centre +
+        //    bounds w×h + SCALE_OUTER + alignment 0), JAMAIS le crop dshow.
+        //    Fond absent → skip (auto-guérison au prochain ensure_camera).
+        if it.source_name == SOS_CAMERA {
+            if let Some(fond_id) = scene_items
+                .iter()
+                .find(|s| s["sourceName"].as_str() == Some(SOS_CAMERA_FOND))
+                .and_then(|s| s["sceneItemId"].as_i64())
+            {
+                if let Err(e) = rpc(
+                    &mut write,
+                    &mut read,
+                    "SetSceneItemTransform",
+                    "sync_fond_transform",
+                    json!({
+                        "sceneUuid": scene_uuid,
+                        "sceneItemId": fond_id,
+                        "sceneItemTransform": {
+                            "positionX": cx,
+                            "positionY": cy,
+                            "boundsWidth": it.w,
+                            "boundsHeight": it.h,
+                            "boundsType": "OBS_BOUNDS_SCALE_OUTER",
+                            "alignment": 0
+                        }
+                    }),
+                )
+                .await
+                {
+                    eprintln!("[OBS] sync fond transform: {}", e);
+                }
+            }
+        }
     }
 
     let _ = write.close().await;
@@ -681,7 +728,10 @@ pub async fn sync_trous(
 // ===== Caméra (widget type "camera" → source OBS "SOS-Caméra") =====
 
 /// Garantit que la source "SOS-Caméra" existe dans la scène « SOS », est
-/// activée, calée sur le widget et placée juste sous SOS-Diffusion.
+/// activée, calée sur le widget et placée sous SOS-Diffusion, au-dessus de
+/// la plaque (via reorder_sos_sources, seul endroit qui gère les indices).
+/// Garantit AUSSI la plaque noire "SOS-Caméra-Fond" (sous la caméra) :
+/// le trou montre du noir quand le capteur est off ou occupé.
 /// Connexion déjà ouverte (write/read) — partagée avec sync_scene_captures
 /// et camera_sync.
 ///
@@ -706,6 +756,11 @@ async fn ensure_camera(
     apply_device: bool,
 ) -> Result<(), String> {
     let scene_uuid = &sos.scene_uuid;
+
+    // 0. Plaque noire d'abord : créée/réactivée/calée sous la caméra.
+    //    Échec → Err propagé (STOP : la caméra n'est pas sync sur une base
+    //    cassée ; l'appelant décide de la remontée).
+    ensure_camera_fond(write, read, sos, x, y, w, h).await?;
 
     // 1. L'input "SOS-Caméra" existe-t-il globalement ?
     let inputs_resp = rpc(write, read, "GetInputList", "cam_inputs", json!({})).await?;
@@ -833,6 +888,156 @@ async fn ensure_camera(
     Ok(())
 }
 
+/// Garantit que la plaque noire "SOS-Caméra-Fond" existe dans la scène « SOS »,
+/// est activée et calée sur le même rectangle que le widget caméra.
+/// Miroir simplifié d'ensure_camera : pas de device, jamais RemoveInput,
+/// jamais SetInputSettings sur l'input existant (couleur fixée à la création).
+///
+/// Kind : color_source_v3 (OBS 28+). Fallback UNIQUE color_source_v2 si le
+/// CreateInput v3 échoue ; si v2 échoue aussi → Err (STOP, pas de 3e kind).
+/// Noir opaque = 0xFF000000 (alpha 255 + RGB 0 — l'ordre ARGB/ABGR est sans
+/// importance puisque les 3 canaux sont à 0). width/height = taille du widget
+/// (acceptés par v3, ignorés par v2) pour une taille native non nulle.
+///
+/// Transform : même sémantique que la caméra (position = centre du widget,
+/// bounds w×h, OBS_BOUNDS_SCALE_OUTER, alignment 0) — pas de crop.
+async fn ensure_camera_fond(
+    write: &mut WsSink,
+    read: &mut WsStreamHalf,
+    sos: &SceneSos,
+    x: f64,
+    y: f64,
+    w: f64,
+    h: f64,
+) -> Result<(), String> {
+    let scene_uuid = &sos.scene_uuid;
+
+    // 1. L'input "SOS-Caméra-Fond" existe-t-il globalement ?
+    let inputs_resp = rpc(write, read, "GetInputList", "fond_inputs", json!({})).await?;
+    let input_exists = inputs_resp["inputs"]
+        .as_array()
+        .map(|inputs| {
+            inputs
+                .iter()
+                .any(|i| i["inputName"].as_str() == Some(SOS_CAMERA_FOND))
+        })
+        .unwrap_or(false);
+
+    let item_id: i64 = if !input_exists {
+        // 2a. Input absent → CreateInput color_source_v3 (crée aussi l'item).
+        //     Échec (kind inconnu, OBS < 28) → UN SEUL fallback v2, puis STOP.
+        let settings = json!({
+            "color": 4278190080i64,
+            "width": w.round() as i64,
+            "height": h.round() as i64
+        });
+        let mut create_res = rpc(
+            write,
+            read,
+            "CreateInput",
+            "fond_create_v3",
+            json!({
+                "sceneUuid": scene_uuid,
+                "inputName": SOS_CAMERA_FOND,
+                "inputKind": "color_source_v3",
+                "inputSettings": settings.clone(),
+                "sceneItemEnabled": true
+            }),
+        )
+        .await;
+        if create_res.is_err() {
+            create_res = rpc(
+                write,
+                read,
+                "CreateInput",
+                "fond_create_v2",
+                json!({
+                    "sceneUuid": scene_uuid,
+                    "inputName": SOS_CAMERA_FOND,
+                    "inputKind": "color_source_v2",
+                    "inputSettings": settings,
+                    "sceneItemEnabled": true
+                }),
+            )
+            .await;
+        }
+        let created = create_res.map_err(|e| {
+            format!("OBS: création \"{}\" impossible (v3 + v2): {}", SOS_CAMERA_FOND, e)
+        })?;
+        created["sceneItemId"]
+            .as_i64()
+            .ok_or("OBS: CreateInput fond sans sceneItemId")?
+    } else {
+        // 2b. Input existant → item dans la scène « SOS » ?
+        let existing = sos
+            .items
+            .iter()
+            .find(|it| it["sourceName"].as_str() == Some(SOS_CAMERA_FOND))
+            .and_then(|it| it["sceneItemId"].as_i64());
+
+        if let Some(id) = existing {
+            // Item présent → réactiver.
+            let _ = rpc(
+                write,
+                read,
+                "SetSceneItemEnabled",
+                &format!("fond_enable_{}", id),
+                json!({
+                    "sceneUuid": scene_uuid,
+                    "sceneItemId": id,
+                    "sceneItemEnabled": true
+                }),
+            )
+            .await;
+            id
+        } else {
+            // Item absent → CreateSceneItem (input réutilisé, jamais dupliqué).
+            let cs_res = rpc(
+                write,
+                read,
+                "CreateSceneItem",
+                "fond_create_item",
+                json!({
+                    "sceneUuid": scene_uuid,
+                    "sourceName": SOS_CAMERA_FOND,
+                    "sceneItemEnabled": true
+                }),
+            )
+            .await?;
+            cs_res["sceneItemId"]
+                .as_i64()
+                .ok_or("OBS: CreateSceneItem fond sans sceneItemId")?
+        }
+    };
+
+    // 3. Transform : centre + SCALE_OUTER (cover) + alignment 0 (caméra).
+    let cx = x + w / 2.0;
+    let cy = y + h / 2.0;
+    rpc(
+        write,
+        read,
+        "SetSceneItemTransform",
+        "fond_transform",
+        json!({
+            "sceneUuid": scene_uuid,
+            "sceneItemId": item_id,
+            "sceneItemTransform": {
+                "positionX": cx,
+                "positionY": cy,
+                "boundsWidth": w,
+                "boundsHeight": h,
+                "boundsType": "OBS_BOUNDS_SCALE_OUTER",
+                "alignment": 0
+            }
+        }),
+    )
+    .await?;
+
+    // Index géré uniquement par reorder_sos_sources (plaque sous la caméra,
+    // au-dessus des trous).
+    Ok(())
+}
+
 /// Commande frontend : crée / met à jour la source "SOS-Caméra" dans OBS.
 /// Appelée à la création du widget caméra (device=None → device par défaut
 /// d'OBS) et au changement de device (apply_device → SetInputSettings).
@@ -852,38 +1057,48 @@ pub async fn camera_sync(
     let sos = scene_sos(&mut write, &mut read).await?
         .ok_or("OBS: scène « SOS » introuvable ou sans SOS-Diffusion")?;
     ensure_camera(&mut write, &mut read, &sos, device, x, y, w, h, device.is_some()).await?;
+    // Ordre des items : Diffusion en haut, caméra + plaque au-dessus des
+    // trous, dès la création (CreateInput place les nouveaux items en haut
+    // de scène).
+    // reorder_sos_sources est le SEUL endroit qui gère les indices.
+    reorder_sos_sources(&mut write, &mut read, &sos.scene_uuid).await;
     let _ = write.close().await;
     Ok(())
 }
 
-/// Commande frontend : cache l'item "SOS-Caméra" (SetSceneItemEnabled false).
-/// L'input OBS est CONSERVÉ (contrat : jamais RemoveInput — la recréation du
-/// widget le réutilisera). Non-fatal si l'item est absent (déjà caché).
-/// One-shot : connect → scene_sos() → SetSceneItemEnabled → close.
+/// Commande frontend : cache les items "SOS-Caméra" ET "SOS-Caméra-Fond"
+/// (SetSceneItemEnabled false) à la suppression du widget caméra — le trou
+/// n'existe plus, une plaque enabled résiduelle resterait une source allumée
+/// pour rien (visible à travers les autres trous destination-out). Les inputs OBS sont CONSERVÉS (contrat : jamais
+/// RemoveInput — la recréation du widget les réutilisera). Non-fatal si un
+/// item est absent (déjà caché ou jamais créé).
+/// One-shot : connect → scene_sos() → SetSceneItemEnabled × 2 → close.
 pub async fn camera_hide(host: &str, port: u16, password: &str) -> Result<(), String> {
     let (mut write, mut read) = connect(host, port, password).await?;
     let Some(sos) = scene_sos(&mut write, &mut read).await? else {
         let _ = write.close().await;
         return Ok(());
     };
-    if let Some(item_id) = sos
-        .items
-        .iter()
-        .find(|it| it["sourceName"].as_str() == Some(SOS_CAMERA))
-        .and_then(|it| it["sceneItemId"].as_i64())
-    {
-        let _ = rpc(
-            &mut write,
-            &mut read,
-            "SetSceneItemEnabled",
-            "cam_hide",
-            json!({
-                "sceneUuid": sos.scene_uuid,
-                "sceneItemId": item_id,
-                "sceneItemEnabled": false
-            }),
-        )
-        .await;
+    for name in [SOS_CAMERA, SOS_CAMERA_FOND] {
+        if let Some(item_id) = sos
+            .items
+            .iter()
+            .find(|it| it["sourceName"].as_str() == Some(name))
+            .and_then(|it| it["sceneItemId"].as_i64())
+        {
+            let _ = rpc(
+                &mut write,
+                &mut read,
+                "SetSceneItemEnabled",
+                &format!("cam_hide_{}", item_id),
+                json!({
+                    "sceneUuid": sos.scene_uuid,
+                    "sceneItemId": item_id,
+                    "sceneItemEnabled": false
+                }),
+            )
+            .await;
+        }
     }
     let _ = write.close().await;
     Ok(())
@@ -921,13 +1136,15 @@ pub async fn sync_scene_captures(
         .collect();
 
     // ===== Caméra : auto-guérison (contrat 2) =====
-    // Widget caméra présent → garantir la source "SOS-Caméra" (créer si
-    // absente, réactiver l'item, caler transform + index sous SOS-Diffusion).
+    // Widget caméra présent → garantir la plaque "SOS-Caméra-Fond" puis la
+    // source "SOS-Caméra" (créer si absente, réactiver l'item, caler transform
+    // + index sous SOS-Diffusion via reorder_sos_sources).
     // apply_device=false → on ne touche PAS aux settings d'un input existant
     // (pas de restart du capteur dshow au boot).
-    // Pas de widget caméra → cacher l'item orphelin (l'input est conservé).
+    // Pas de widget caméra → cacher les items orphelins caméra + fond
+    // (inputs conservés, jamais RemoveInput).
     if let Some(cam) = widgets.iter().find(|w| w.widget_type == "camera") {
-        let _ = ensure_camera(
+        if let Err(e) = ensure_camera(
             &mut write,
             &mut read,
             &sos,
@@ -938,25 +1155,32 @@ pub async fn sync_scene_captures(
             cam.hauteur,
             false,
         )
-        .await;
-    } else if let Some(item_id) = sos
-        .items
-        .iter()
-        .find(|it| it["sourceName"].as_str() == Some(SOS_CAMERA))
-        .and_then(|it| it["sceneItemId"].as_i64())
-    {
-        let _ = rpc(
-            &mut write,
-            &mut read,
-            "SetSceneItemEnabled",
-            &format!("sync_cap_cam_hide_{}", item_id),
-            json!({
-                "sceneUuid": scene_uuid,
-                "sceneItemId": item_id,
-                "sceneItemEnabled": false
-            }),
-        )
-        .await;
+        .await
+        {
+            eprintln!("[OBS] sync captures caméra/fond: {}", e);
+        }
+    } else {
+        for name in [SOS_CAMERA, SOS_CAMERA_FOND] {
+            if let Some(item_id) = sos
+                .items
+                .iter()
+                .find(|it| it["sourceName"].as_str() == Some(name))
+                .and_then(|it| it["sceneItemId"].as_i64())
+            {
+                let _ = rpc(
+                    &mut write,
+                    &mut read,
+                    "SetSceneItemEnabled",
+                    &format!("sync_cap_cam_hide_{}", item_id),
+                    json!({
+                        "sceneUuid": scene_uuid,
+                        "sceneItemId": item_id,
+                        "sceneItemEnabled": false
+                    }),
+                )
+                .await;
+            }
+        }
     }
 
     for item in &sos.items {
@@ -1021,7 +1245,8 @@ pub async fn sync_scene_captures(
     }
 
     // ===== Vérification/Maj ordre des sources au démarrage =====
-    // Ordre visuel souhaité : SOS-Diffusion (top) > SOS-Trou-* > SOS-Caméra (bottom).
+    // Ordre visuel souhaité (bas → haut) : SOS-Trou-* < SOS-Caméra-Fond <
+    // SOS-Caméra < SOS-Diffusion.
     // Reorder one-shot : GetSceneItemList → SetSceneItemIndex (bottom-up).
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 
@@ -1030,9 +1255,19 @@ pub async fn sync_scene_captures(
 }
 
 /// Force l'ordre visuel des sources SOS dans la scène :
-///   Index 0 (BAS)     : SOS-Caméra
-///   Index 1 (MILIEU)  : SOS-Trou-* (tous les trous, ordre relatif conservé)
-///   Index N (HAUT)    : SOS-Diffusion
+///   Index 0..T-1 (BAS) : SOS-Trou-* (tous les trous, ordre relatif conservé)
+///   Index T            : SOS-Caméra-Fond (plaque noire)
+///   Index T+1          : SOS-Caméra
+///   Index T+2 (HAUT)   : SOS-Diffusion
+///
+/// Diffusion AU-DESSUS de tout : les widgets :4321 (chat/médias + cadres
+/// SVG) passent devant les captures. La caméra apparaît via le trou
+/// destination-out du canvas :4321 (les widgets qui chevauchent son
+/// rectangle sont clippés côté diffusion.html) ; AU-DESSUS des trous pour
+/// qu'une capture qui recouvre son rectangle ne masque pas le flux. La
+/// plaque sous la caméra (mais au-dessus des trous) montre du noir quand
+/// le capteur est off. Les trous fenêtre/jeu restent SOUS Diffusion
+/// (destination-out inchangé).
 ///
 /// Dans OBS 32.x, index 0 = bas visuel, index max = haut visuel.
 /// SetSceneItemIndex du HAUT vers le BAS pour éviter de déplacer les items
@@ -1062,6 +1297,7 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
     let mut diffusion_id: Option<i64> = None;
     let mut trou_ids: Vec<i64> = Vec::new();
     let mut camera_id: Option<i64> = None;
+    let mut fond_id: Option<i64> = None;
 
     for it in arr {
         let name = it["sourceName"].as_str().unwrap_or("");
@@ -1071,44 +1307,42 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
             diffusion_id = Some(id);
         } else if name == SOS_CAMERA {
             camera_id = Some(id);
+        } else if name == SOS_CAMERA_FOND {
+            fond_id = Some(id);
         } else if name.starts_with("SOS-Trou-") {
             trou_ids.push(id);
         }
     }
 
     // OBS 32.x : index 0 = BAS visuel, index max = HAUT visuel.
-    // Ordre souhaité (du bas vers le haut) : Caméra > Trou > Diffusion.
-    // SetSceneItemIndex du HAUT vers le BAS (diffusion d'abord, puis trous,
-    // puis caméra) pour ne pas déplacer les items déjà positionnés.
-    let trou_count = trou_ids.len() as i64;
-    let top_index = 1 + trou_count; // index le plus haut = Diffusion
-
-    // 1. Diffusion → index le plus haut (HAUT visuel)
-    if let Some(diff_id) = diffusion_id {
-        let _ = rpc(write, read, "SetSceneItemIndex", "reorder_diff", json!({
-            "sceneUuid": scene_uuid,
-            "sceneItemId": diff_id,
-            "sceneItemIndex": top_index
-        })).await;
+    // Ordre souhaité (du bas vers le haut) : Trou-* < Fond < Caméra < Diffusion.
+    // Caméra AU-DESSUS des trous : un SOS-Trou-* qui recouvre le rectangle
+    // caméra ne masque plus le flux dshow ; la plaque reste sous la caméra
+    // mais au-dessus des trous (noir, pas le jeu, quand le capteur est off).
+    // SetSceneItemIndex du HAUT vers le BAS (diffusion, caméra, fond, puis
+    // trous) pour ne pas déplacer les items déjà positionnés.
+    // Liste ordonnée haut→bas : gère les absences (caméra/fond/diffusion
+    // optionnels) — chaque item présent prend le prochain index décroissant.
+    let mut top_to_bottom: Vec<i64> = Vec::new();
+    if let Some(id) = diffusion_id {
+        top_to_bottom.push(id);
     }
+    if let Some(id) = camera_id {
+        top_to_bottom.push(id);
+    }
+    if let Some(id) = fond_id {
+        top_to_bottom.push(id);
+    }
+    top_to_bottom.extend(trou_ids.iter().copied());
 
-    // 2. Trous du premier au dernier : indices décroissants (du haut vers le bas
-    //    parmi les trous, pour ne pas déplacer ceux déjà positionnés).
-    for (i, tid) in trou_ids.iter().enumerate() {
-        let idx = trou_count - i as i64; // trou_count = juste sous Diffusion
-        let _ = rpc(write, read, "SetSceneItemIndex", &format!("reorder_trou_{}", tid), json!({
+    let mut idx = top_to_bottom.len() as i64 - 1; // index le plus haut = Diffusion
+    for id in top_to_bottom {
+        let _ = rpc(write, read, "SetSceneItemIndex", &format!("reorder_{}", id), json!({
             "sceneUuid": scene_uuid,
-            "sceneItemId": tid,
+            "sceneItemId": id,
             "sceneItemIndex": idx
         })).await;
-    }
-    // 3. Caméra → index 0 (BAS visuel)
-    if let Some(cam_id) = camera_id {
-        let _ = rpc(write, read, "SetSceneItemIndex", "reorder_cam", json!({
-            "sceneUuid": scene_uuid,
-            "sceneItemId": cam_id,
-            "sceneItemIndex": 0
-        })).await;
+        idx -= 1;
     }
 }
 
@@ -1393,7 +1627,7 @@ pub async fn create_trou_from_pc(
     )
     .await?;
 
-    // 6. Reorder global : Diffusion (top) > Trou > Caméra (bottom).
+    // 6. Reorder global : Diffusion > Caméra > Fond > Trou (haut → bas).
     //    reorder_sos_sources est le SEUL endroit qui gère les indices.
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 

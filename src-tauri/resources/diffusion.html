@@ -1465,6 +1465,19 @@
            puis revient à 0 une fois la nouvelle scène rendue sous le voile.
            pointer-events:none pour ne pas bloquer les overlays. -->
       <div id="voile-noir"></div>
+      <!-- Clip « scène − rect caméra » en SVG evenodd : le CEF d'OBS ignore
+           clip-path path() → url(#sos-cam-clip) est le fallback fiable.
+           UN SEUL <path> à 2 sous-chemins : les enfants d'un clipPath sont
+           UNIS (OR logique) → 2 <rect> frères ne peuvent jamais faire de
+           trou. userSpaceOnUse = repère du .widget-wrap clippé (inset:0 →
+           coords scène). Le <path> + width/height du svg sont mis à jour à
+           chaque renderScene. z-index:-1 + pointer-events:none : ne peint
+           rien. width/height réels — le 0×0 fait échouer url(#…) dans CEF. -->
+      <svg id="sos-cam-clip-svg" width="1920" height="1080" style="position:absolute;left:0;top:0;pointer-events:none;overflow:visible;z-index:-1" aria-hidden="true">
+        <clipPath id="sos-cam-clip" clipPathUnits="userSpaceOnUse" clip-rule="evenodd">
+          <path id="sos-cam-clip-path" d="M0 0H1920V1080H0Z"/>
+        </clipPath>
+      </svg>
     </div>
     <script>
       // ZÉRO import Tauri. État uniquement via WebSocket snapshot.
@@ -1478,6 +1491,10 @@
       const rootStyle = document.documentElement.style;
       // Voile noir pour le fondu de changement de scène (fade to black).
       const voileNoirEl = document.getElementById("voile-noir");
+      // Path du clipPath SVG « scène − caméra » (d + dims svg mis à jour dans
+      // renderScene).
+      const camClipSvg = document.getElementById("sos-cam-clip-svg");
+      const camClipPath = document.getElementById("sos-cam-clip-path");
       // Durée d'une demi-transition (fade out ou fade in), en ms.
       const FONDU_DEMI = 300;
       // Id de la scène actuellement affichée (pour distinguer un CHANGEMENT de
@@ -3510,6 +3527,76 @@
             entry.wrapEl.remove();
             widgetMap.delete(id);
           }
+        }
+
+        // ===== Clip caméra : aucun pixel widget dans le rectangle caméra =====
+        // La source OBS "SOS-Caméra" est SOUS SOS-Diffusion mais AU-DESSUS des
+        // SOS-Trou-* : le flux dshow apparaît via le trou destination-out du
+        // canvas de fond. Tout pixel DOM peint dans le rectangle caméra
+        // masquerait le flux → on clippe chaque .widget-wrap (inset:0 →
+        // coordonnées scène) à « scène − rect caméra » via clip-path:
+        // url(#sos-cam-clip). Le clipPath = UN SEUL <path> evenodd à 2
+        // sous-chemins (canvas + rect caméra) : les enfants d'un clipPath
+        // sont UNIS (OR logique) → 2 <rect> frères ne peuvent pas faire de
+        // trou. path() CSS est ignoré par le CEF d'OBS → fallback SVG <path>.
+        // Sur wrapEl (JAMAIS el) : applyCadreWidget possède el.style.clipPath
+        // et le userSpaceOnUse de el serait sa propre border-box, pas la
+        // scène. Seul le wrap du widget caméra échappe au clip (exclu par id,
+        // pas par kind — les wraps "trou" des autres widgets SONT clippés :
+        // leur cadre/titre DOM masquerait le flux, SOS-Caméra étant au-dessus
+        // des SOS-Trou-* dans OBS) : son cadre SVG doit rester visible
+        // au-dessus du trou → z-index = max+1.
+        var stageW = scene.canvasW || 1920;
+        var stageH = scene.canvasH || 1080;
+        camClipSvg.setAttribute("width", stageW);
+        camClipSvg.setAttribute("height", stageH);
+        var camWdg = null;
+        for (var ci = 0; ci < scene.widgets.length; ci++) {
+          var cand = scene.widgets[ci];
+          if ((cand.type || "media") === "camera") { camWdg = cand; break; }
+        }
+        var camRect = null;
+        if (camWdg) {
+          var cx0 = Math.max(0, camWdg.x);
+          var cy0 = Math.max(0, camWdg.y);
+          var cx1 = Math.min(stageW, camWdg.x + camWdg.largeur);
+          var cy1 = Math.min(stageH, camWdg.y + camWdg.hauteur);
+          if (cx1 > cx0 && cy1 > cy0) {
+            camRect = { x0: cx0, y0: cy0, x1: cx1, y1: cy1 };
+          }
+        }
+        // « Canvas − rect caméra » : le trou est le 2e sous-chemin (evenodd).
+        var camClipD = "M0 0H" + stageW + "V" + stageH + "H0Z";
+        if (camRect) {
+          camClipD += " M" + camRect.x0 + " " + camRect.y0
+            + "H" + camRect.x1 + "V" + camRect.y1
+            + "H" + camRect.x0 + "Z";
+        }
+        camClipPath.setAttribute("d", camClipD);
+        var maxZ = 0;
+        for (var zi = 0; zi < scene.widgets.length; zi++) {
+          var wz = Number(scene.widgets[zi].z);
+          if (isFinite(wz) && wz > maxZ) maxZ = wz;
+        }
+        for (const [cid, centry] of widgetMap) {
+          // Wrap caméra : jamais clippé, z au max (cadre au-dessus des voisins).
+          if (camWdg && cid === camWdg.id) {
+            centry.wrapEl.style.zIndex = maxZ + 1;
+            continue;
+          }
+          var hit = false;
+          if (camRect) {
+            for (var wi = 0; wi < scene.widgets.length; wi++) {
+              var wdg = scene.widgets[wi];
+              if (wdg.id === cid && (wdg.type || "media") !== "camera") {
+                hit = wdg.x < camRect.x1 && wdg.x + wdg.largeur > camRect.x0
+                  && wdg.y < camRect.y1 && wdg.y + wdg.hauteur > camRect.y0;
+                break;
+              }
+            }
+          }
+          centry.wrapEl.style.clipPath = hit ? "url(#sos-cam-clip)" : "";
+          centry.wrapEl.style.webkitClipPath = hit ? "url(#sos-cam-clip)" : "";
         }
       }
 
