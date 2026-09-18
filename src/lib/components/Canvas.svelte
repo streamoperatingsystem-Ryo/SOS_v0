@@ -4,7 +4,7 @@
   import { setCarteEdition } from "../stores/ui";
   import { registerVideo, unregisterVideo } from "../stores/video";
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
-  import { creerRenduMorph, dessinerFitCanvas, type RenduMorph } from "../morph/gl-morph";
+  import { creerRenduMorph, dessinerFitCanvas, chaineFilter, type RenduMorph } from "../morph/gl-morph";
   import WidgetComp from "./Widget.svelte";
   import AlignmentGuides from "./AlignmentGuides.svelte";
   import CadreSVG from "./CadreSVG.svelte";
@@ -37,6 +37,15 @@
   let bgRot = $derived($sceneStore.bgRot ?? 0);
   let bgOx = $derived($sceneStore.bgOffsetX ?? 0);
   let bgOy = $derived($sceneStore.bgOffsetY ?? 0);
+  // Effets visuels du fond (luminosité/contraste/teinte/flou). La pixelisation
+  // est rendue en canvas : chemin morph via rendreBgMorph, chemin DOM via un
+  // canvas overlay peint par rendreBgPixel (même formule que diffusion.html).
+  let bgLum = $derived($sceneStore.bgLum ?? 0);
+  let bgContraste = $derived($sceneStore.bgContraste ?? 0);
+  let bgTeinte = $derived($sceneStore.bgTeinte ?? 0);
+  let bgFlou = $derived($sceneStore.bgFlou ?? 0);
+  let bgPixel = $derived($sceneStore.bgPixel ?? 0);
+  let bgFilter = $derived(chaineFilter(bgLum, bgContraste, bgTeinte, bgFlou));
   let hasFond = $derived(bgMedia.length > 0);
   let bgIsVideo = $derived(bgKind === "video");
   // Badge « en lecture dans OBS » (fond) : bgPaused === false = la vidéo de
@@ -159,6 +168,7 @@
   let bgRendu: RenduMorph | undefined = $state(undefined);
   let bgOff: HTMLCanvasElement | undefined = $state(undefined);
   let bgPret = $state(0);
+  let bgPixelCanvasEl: HTMLCanvasElement | undefined = $state(undefined);
 
   function rendreBgMorph(): void {
     if (!bgRendu) return;
@@ -176,12 +186,43 @@
     if (!ctx) return;
     ctx.clearRect(0, 0, canvasW, canvasH);
     ctx.save();
+    // Effets visuels (filter + pixelisation) appliqués AVANT le warp GL —
+    // même ordre que dessinerContenuFond (diffusion.html) / Widget.dessinerOffscreen.
+    if (bgPixel > 0) {
+      const pf = Math.max(1, bgPixel);
+      const pw = Math.max(1, Math.round(canvasW / pf));
+      const ph = Math.max(1, Math.round(canvasH / pf));
+      const pix = document.createElement("canvas");
+      pix.width = pw;
+      pix.height = ph;
+      const pctx = pix.getContext("2d");
+      if (pctx) {
+        pctx.filter = bgFilter;
+        pctx.save();
+        pctx.translate(pw / 2, ph / 2);
+        pctx.translate(bgOx / pf, bgOy / pf);
+        pctx.rotate((bgRot * Math.PI) / 180);
+        pctx.scale(bgZoom, bgZoom);
+        pctx.translate(-pw / 2, -ph / 2);
+        dessinerFitCanvas(pctx, src, sw, sh, pw, ph, bgFitCss);
+        pctx.restore();
+        ctx.filter = "none";
+        ctx.imageSmoothingEnabled = false;
+        ctx.drawImage(pix, 0, 0, pw, ph, 0, 0, canvasW, canvasH);
+        ctx.imageSmoothingEnabled = true;
+        ctx.restore();
+        bgRendu.rendre(bgOff, $sceneStore.bgMorphs ?? []);
+        return;
+      }
+    }
+    ctx.filter = bgFilter;
     ctx.translate(canvasW / 2, canvasH / 2);
     ctx.translate(bgOx, bgOy);
     ctx.rotate((bgRot * Math.PI) / 180);
     ctx.scale(bgZoom, bgZoom);
     ctx.translate(-canvasW / 2, -canvasH / 2);
     dessinerFitCanvas(ctx, src, sw, sh, canvasW, canvasH, bgFitCss);
+    ctx.filter = "none";
     ctx.restore();
     bgRendu.rendre(bgOff, $sceneStore.bgMorphs ?? []);
   }
@@ -199,7 +240,75 @@
     void bgOx;
     void bgOy;
     void bgFitCss;
+    void bgFilter;
+    void bgPixel;
     rendreBgMorph();
+  });
+
+  // ===== Pixelisation du fond SANS morph (chemin DOM) =====
+  // Le img/video reste chargé comme source drawImage mais est masqué
+  // (visibility:hidden) ; un canvas overlay est peint avec la même formule
+  // que rendreBgMorph / dessinerContenuFond (diffusion.html). Aucun filter
+  // ni transform CSS sur le canvas — tout est dessiné ici.
+  function rendreBgPixel(): void {
+    const cv = bgPixelCanvasEl;
+    if (!cv) return;
+    const src: HTMLImageElement | HTMLVideoElement | null = bgIsVideo
+      ? bgVideoEl ?? null
+      : bgImgEl ?? null;
+    if (!src) return;
+    const sw = bgIsVideo ? bgVideoEl!.videoWidth : bgImgEl!.naturalWidth;
+    const sh = bgIsVideo ? bgVideoEl!.videoHeight : bgImgEl!.naturalHeight;
+    if (!sw || !sh) return;
+    if (bgIsVideo && bgVideoEl!.readyState < 2) return;
+    if (cv.width !== canvasW) cv.width = canvasW;
+    if (cv.height !== canvasH) cv.height = canvasH;
+    const ctx = cv.getContext("2d");
+    if (!ctx) return;
+    ctx.clearRect(0, 0, canvasW, canvasH);
+    ctx.save();
+    const pf = Math.max(1, bgPixel);
+    const pw = Math.max(1, Math.round(canvasW / pf));
+    const ph = Math.max(1, Math.round(canvasH / pf));
+    const pix = document.createElement("canvas");
+    pix.width = pw;
+    pix.height = ph;
+    const pctx = pix.getContext("2d");
+    if (!pctx) {
+      ctx.restore();
+      return;
+    }
+    pctx.filter = bgFilter;
+    pctx.save();
+    pctx.translate(pw / 2, ph / 2);
+    pctx.translate(bgOx / pf, bgOy / pf);
+    pctx.rotate((bgRot * Math.PI) / 180);
+    pctx.scale(bgZoom, bgZoom);
+    pctx.translate(-pw / 2, -ph / 2);
+    dessinerFitCanvas(pctx, src, sw, sh, pw, ph, bgFitCss);
+    pctx.restore();
+    ctx.filter = "none";
+    ctx.imageSmoothingEnabled = false;
+    ctx.drawImage(pix, 0, 0, pw, ph, 0, 0, canvasW, canvasH);
+    ctx.imageSmoothingEnabled = true;
+    ctx.restore();
+  }
+
+  // Rendu one-shot réactif : pixel, média, dims, transforms fond, prêt.
+  $effect(() => {
+    if (bgAMorphs || bgPixel <= 0 || !bgPixelCanvasEl) return;
+    void bgPret;
+    void bgMedia;
+    canvasW;
+    canvasH;
+    void bgZoom;
+    void bgRot;
+    void bgOx;
+    void bgOy;
+    void bgFitCss;
+    void bgFilter;
+    void bgPixel;
+    rendreBgPixel();
   });
 
   // Lifecycle GL (créé/détruit selon bgAMorphs).
@@ -265,24 +374,37 @@
                 onload={() => (bgPret += 1)}
               />
             {/if}
-          {:else if bgIsVideo}
-            <video
-              class="bg-media bg-video"
-              bind:this={bgVideoEl}
-              muted
-              playsinline
-              preload="metadata"
-              draggable="false"
-              style="object-fit:{bgFitCss}; object-position:{bgFit === 'centrer' ? 'center' : '50% 50%'}; transform:{bgMediaTransform}; transform-origin:center center;"
-            ></video>
           {:else}
-            <img
-              class="bg-media"
-              src={MEDIA_BASE + bgMedia}
-              alt=""
-              draggable="false"
-              style="object-fit:{bgFitCss}; object-position:{bgFit === 'centrer' ? 'center' : '50% 50%'}; transform:{bgMediaTransform}; transform-origin:center center;"
-            />
+            {#if bgIsVideo}
+              <video
+                class="bg-media bg-video"
+                class:bg-cachee={bgPixel > 0}
+                bind:this={bgVideoEl}
+                muted
+                playsinline
+                preload="metadata"
+                draggable="false"
+                onloadeddata={() => (bgPret += 1)}
+                onseeked={() => (bgPret += 1)}
+                style="object-fit:{bgFitCss}; object-position:{bgFit === 'centrer' ? 'center' : '50% 50%'}; transform:{bgMediaTransform}; transform-origin:center center; filter:{bgFilter};"
+              ></video>
+            {:else}
+              <img
+                class="bg-media"
+                class:bg-cachee={bgPixel > 0}
+                bind:this={bgImgEl}
+                src={MEDIA_BASE + bgMedia}
+                alt=""
+                draggable="false"
+                onload={() => (bgPret += 1)}
+                style="object-fit:{bgFitCss}; object-position:{bgFit === 'centrer' ? 'center' : '50% 50%'}; transform:{bgMediaTransform}; transform-origin:center center; filter:{bgFilter};"
+              />
+            {/if}
+            {#if bgPixel > 0}
+              <!-- Fond pixelisé : le média masqué sert de source drawImage ;
+                   aucun filter/transform CSS sur le canvas (tout est peint). -->
+              <canvas bind:this={bgPixelCanvasEl} class="bg-media bg-pixel-canvas" draggable="false"></canvas>
+            {/if}
           {/if}
           <!-- Curseur cercle rayon : visible dès l'activation du mode (pas
                seulement après le premier morph) pour viser avant de cliquer. -->
@@ -406,6 +528,17 @@
     height: 1px;
     opacity: 0;
     pointer-events: none;
+  }
+  /* Fond pixelisé (chemin non-morph) : le média reste chargé comme source
+     drawImage mais masqué (visibility — jamais display:none, sinon perte de
+     naturalWidth/videoWidth). Le canvas overlay est peint par rendreBgPixel. */
+  .bg-cachee {
+    visibility: hidden;
+  }
+  .bg-pixel-canvas {
+    position: absolute;
+    inset: 0;
+    display: block;
   }
   /* Mode morphing sur le fond : curseur croix + cercle rayon (orange
      actionnable). Le cercle est en coords LOCALES du canvas (canvas px) —
