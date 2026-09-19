@@ -1,6 +1,6 @@
 [package]
 name = "streamos-v0"
-version = "0.1.2"
+version = "0.1.3"
 description = "StreamOS v0 — dashboard + diffusion"
 edition = "2021"
 rust-version = "1.77"

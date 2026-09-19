@@ -35,8 +35,8 @@ export async function loadScene(): Promise<void> {
 
 /// Ajoute un widget par défaut (200×150, type media, z auto, id unique).
 /// z calculé SANS les widgets caméra (plage réservée 5000+) → reste 0..N.
-/// Commit immédiat → save config.json + snapshot WS.
-export async function createWidget(): Promise<void> {
+/// Commit immédiat → save config.json + snapshot WS. Retourne l'id créé.
+export async function createWidget(): Promise<string> {
   const current = get(sceneStore);
   const z = current.widgets.filter((w) => w.type !== "camera").reduce((m, w) => Math.max(m, w.z), -1) + 1;
   const w: Widget = {
@@ -59,6 +59,7 @@ export async function createWidget(): Promise<void> {
   };
   sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
   await commitScene();
+  return w.id;
 }
 
 /// Ajoute un widget chat (300×400, type chat, z auto, filtre unifié, police 16).
@@ -640,6 +641,101 @@ export async function importMedia(): Promise<void> {
   } catch (e) {
     alert("Import refusé : " + e);
   }
+}
+
+// ===== Bibliothèque médias (import par chemins — drop Tauri) =====
+
+/// Entrée de la bibliothèque médias : fichier copié dans medias/ via
+/// import_media_from_paths, pas encore transformé en widget.
+export interface MediaBibliotheque {
+  /// Chemin relatif ("medias/<uuid>.<ext>").
+  rel: string;
+  /// Kind retourné par Rust : "image" | "video".
+  kind: string;
+  /// Nom original du fichier (avec extension, sans chemin).
+  nom: string;
+}
+
+/// Bibliothèque des médias importés par chemins disque (drop Tauri).
+/// Volatile (pas persistée) : les fichiers restent dans medias/ sur disque.
+export const bibliothequeMedias = writable<MediaBibliotheque[]>([]);
+
+/// Importe des médias depuis des chemins disque (drop Tauri — pas de dialog)
+/// puis pose chacun en widget média immédiatement (auto-pose, sansCadre).
+/// Mêmes règles qu'importMedia (validation + copie/remux vers medias/).
+/// Un échec sur un fichier n'annule pas les autres : les erreurs sont
+/// affichées concaténées. Les entrées RESTENT dans bibliothequeMedias après
+/// la pose : le bouton « Transformer en widget ! » (Toolbar, widget sansCadre
+/// sélectionné) convertit ensuite le widget déjà posé (sansCadre → cadre
+/// normal) et consomme la ligne à ce moment-là.
+export async function ajouterALaBibliotheque(paths: string[]): Promise<void> {
+  if (paths.length === 0) return;
+  try {
+    const res = await tauri.importMediaFromPaths(paths);
+    if (res.ok.length > 0) {
+      const entries: MediaBibliotheque[] = res.ok.map(([rel, kind, nom]) => ({
+        rel,
+        kind,
+        nom,
+      }));
+      bibliothequeMedias.update((l) => [...l, ...entries]);
+      // Auto-pose séquentielle : chaque média devient un widget média
+      // (sansCadre) sur le canvas + :4321 tout de suite. La ligne de
+      // bibliothèque est conservée (transformerEnWidget la consommera).
+      for (const [rel] of res.ok) {
+        await poserMediaDepuisBibliotheque(rel);
+      }
+    }
+    if (res.erreurs.length > 0) {
+      alert("Import refusé :\n" + res.erreurs.join("\n"));
+    }
+  } catch (e) {
+    alert("Import refusé : " + e);
+  }
+}
+
+/// Pose une entrée de la bibliothèque sur le canvas : crée le widget via
+/// createWidget(), remplit ses champs média (media + kind + mediaNom) et
+/// sansCadre:true (opt-out du cadre SVG de scène — les widgets droppés
+/// s'affichent bruts), puis commit. NE retire PAS l'entrée de la
+/// bibliothèque : elle reste listée dans le DropBar (transformerEnWidget la
+/// consommera au clic du bouton Toolbar).
+/// Si createWidget échoue → stop, pas de widget fantôme.
+export async function poserMediaDepuisBibliotheque(rel: string): Promise<void> {
+  const entry = get(bibliothequeMedias).find((m) => m.rel === rel);
+  if (!entry) return;
+  const id = await createWidget();
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, media: entry.rel, kind: entry.kind, mediaNom: entry.nom, sansCadre: true } : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Convertit un média en widget classique (avec cadre de scène) — bouton
+/// « Transformer en widget ! » de la Toolbar (widget sélectionné sansCadre).
+/// Ne crée PAS de doublon : si un widget référence déjà ce média (auto-pose
+/// au drop), on repasse simplement sansCadre à false sur CE widget — filet
+/// dashboard + cadre SVG :4321 comme un média importé à la main. Sinon (pas
+/// encore de widget pour ce rel) on pose d'abord via
+/// poserMediaDepuisBibliotheque puis on enlève le sansCadre. L'entrée est
+/// retirée de la bibliothèque si présente (no-op sinon — le store est
+/// volatile, un widget sansCadre rechargé fonctionne quand même) puis commit.
+export async function transformerEnWidget(rel: string): Promise<void> {
+  const dejaPose = get(sceneStore).widgets.some((w) => w.media === rel);
+  if (!dejaPose) {
+    await poserMediaDepuisBibliotheque(rel);
+  }
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.media === rel ? { ...w, sansCadre: false } : w
+    ),
+  }));
+  bibliothequeMedias.update((l) => l.filter((m) => m.rel !== rel));
+  await commitScene();
 }
 
 /// Retire le média d'un widget (widgets chat / input viewer / speedrun :

@@ -205,6 +205,48 @@ pub fn sauver_speedrun_config(app: &AppHandle, cfg: &SpeedrunConfig) -> Result<(
         .map_err(|e| format!("Écrire speedrun.json: {}", e))
 }
 
+// ===== Persistance barre de raccourcis =====
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct RaccourcisConfig {
+    #[serde(default)]
+    pub visible: bool,
+    /// Bord de l'écran : "gauche" | "droite" | "haut" | "bas".
+    #[serde(default = "default_bord_raccourcis")]
+    pub bord: String,
+    /// Index dans available_monitors() au moment de la sauvegarde.
+    #[serde(default)]
+    pub monitor_index: usize,
+}
+
+fn default_bord_raccourcis() -> String {
+    "droite".to_string()
+}
+
+/// Lit la config de la barre de raccourcis (raccourcis.json). None si absent.
+pub fn lire_raccourcis_config(app: &AppHandle) -> Result<Option<RaccourcisConfig>, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("raccourcis.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Lire raccourcis.json: {}", e))?;
+    let cfg: RaccourcisConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("Parse raccourcis.json: {}", e))?;
+    Ok(Some(cfg))
+}
+
+/// Sauve la config de la barre de raccourcis (écrase si existe).
+pub fn sauver_raccourcis_config(app: &AppHandle, cfg: &RaccourcisConfig) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("raccourcis.json");
+    let json = serde_json::to_string(cfg)
+        .map_err(|e| format!("Serialize raccourcis.json: {}", e))?;
+    fs::write(&path, json)
+        .map_err(|e| format!("Écrire raccourcis.json: {}", e))
+}
+
 // ===== Persistance snapshot followers (détection unfollows) =====
 
 /// Entrée minimale d'un follower pour le snapshot (comparaison au démarrage).

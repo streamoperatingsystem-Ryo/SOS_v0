@@ -280,4 +280,22 @@ export const devLog: DevEntry[] = [
     date: "2026-09-15",
     note: "CarteEdition adopte une couleur selon la cible : widget classique = rouge bordeaux (--dash-danger), fond = orange (--dash-orange), widget input-viewer = jaune (--dash-jaune). Classe CSS dérivée (carteClasse) — la cible du store reste \"widget\", seul le rendu change. Boutons .action internes suivent la couleur de la carte dès l'état repos (bordure + surface teintée via --btn-tint = --accent-carte), pas seulement au hover/active. Variables --dash-orange / --dash-jaune ajoutées dans app.css (palette --dash-* assombrie).",
   },
+  {
+    id: 46,
+    titre: "Drop → widget média auto sans cadre SVG",
+    date: "2026-09-19",
+    note: "Chaque fichier droppé dans la zone Widgets devient immédiatement un widget média (dashboard + :4321) : ajouterALaBibliotheque auto-transforme chaque ok via transformerEnWidget (la bibliothèque se vide au fur et à mesure). Nouveau flag par widget sansCadre (serde default false → anciennes scènes OK) : opt-out du cadre SVG de scène pour CE widget — cadreActif gâté dans Widget.svelte, applyCadreWidget le traite comme cadre inactif, trou éventuel rectangulaire (peindreFond), titre en gradient fallback (applyTitreWidget, parité dashboard). Cadre de scène / cadreApp / CadresModal inchangés — les autres widgets gardent leur cadre.",
+  },
+  {
+    id: 47,
+    titre: "Bouton « Transformer en widget ! » dans le bandeau drop",
+    date: "2026-09-19",
+    note: "Le bouton Transformer quitte les lignes du DropBar (liste = noms seuls) pour un bouton rouge contextuel aligné à droite du bandeau glisser/déposer : visible uniquement quand le widget sélectionné a sansCadre === true (selectedIdStore + sceneStore), .action.danger compacte (recette --dash-danger identique .header.etat-erreur). Groupe .droite margin-left:auto → bouton au bord droit même biblio vide. transformerEnWidget(rel) assoupli : plus d'early-return sur entrée bibliothèque absente (store volatile) — widget media===rel → sansCadre=false, entrée biblio filtrée si présente, sinon poserMediaDepuisBibliotheque (ancien flux createWidget). Un widget sansCadre rechargé depuis une scène sauvegardée peut donc être transformé.",
+  },
+  {
+    id: 48,
+    titre: "Barre de raccourcis TOPMOST dockée à un bord d'écran",
+    date: "2026-09-19",
+    note: "Fenêtre WebviewWindow « raccourcis » (raccourcis.rs, modèle pop-out chat) : decorations/resizable off, skip_taskbar, focusable(false) = ne vole pas le focus au jeu, transparent(true) → bande noire translucide rgba(0,0,0,0.7), 56px×côté du moniteur (physique, ×scale_factor), bord gauche/droite/haut/bas + moniteur persistés dans raccourcis.json + restore boot (fallback primaire si index mort). Timer tokio 2s SetWindowPos(HWND_TOPMOST) pour repasser devant un jeu borderless topmost — AUCUN hook/inject ; plein écran EXCLUSIF non couvert (limite Win32 documentée). 14 icônes SVG émettent raccourcis:action {id} → App.svelte dispatche vers les fonctions existantes (widgets, toggles plateformes avec slug sauvegardé, OBS=re-sync one-shot, modales, masquer). Bord passé par ?bord= + emit_to raccourcis:bord ; pastilles vertes via emitTo raccourcis:connexions + handshake raccourcis:ready. withGlobalTauri:true requis (HTML vanilla). Section « Raccourcis » dans la Toolbar : afficher/masquer, 4 bords, sélecteur moniteur.",
+  },
 ];

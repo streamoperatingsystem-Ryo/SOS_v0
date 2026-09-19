@@ -247,7 +247,7 @@ impl AlertesState {
     /// Crée l'état + charge la config depuis le disque.
     pub fn new(app: AppHandle, chat_tx: broadcast::Sender<String>) -> Self {
         let config = load_file(&app).unwrap_or_default();
-        let state = Self {
+        Self {
             app,
             chat_tx,
             config: Arc::new(Mutex::new(config)),
@@ -256,8 +256,7 @@ impl AlertesState {
             timer_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
             cooldowns: Arc::new(Mutex::new(HashMap::new())),
             dernier_global: Arc::new(Mutex::new(HashMap::new())),
-        };
-        state
+        }
     }
 
     // ===== Déclenchement =====

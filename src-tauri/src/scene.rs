@@ -217,6 +217,11 @@ pub struct Widget {
     pub mediaTime: f64,
     #[serde(default)]
     pub trou: bool,
+    /// Opt-out du cadre SVG de scène pour CE widget (widgets créés par drop
+    /// bibliothèque → transformerEnWidget). false/absent = cadre de scène
+    /// appliqué (comportement historique, toutes anciennes scènes).
+    #[serde(default)]
+    pub sansCadre: bool,
     /// Nom de la source OBS liée au trou (None = pas de source OBS).
     /// Convention : "SOS-Trou-<id8>". Quand Some → commitScene sync la
     /// transform OBS (position + taille = widget x/y/largeur/hauteur).

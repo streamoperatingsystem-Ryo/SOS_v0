@@ -6,7 +6,8 @@ export type Section =
   | "connexions"
   | "communaute"
   | "obs"
-  | "personnalisation";
+  | "personnalisation"
+  | "raccourcis";
 // NB : "Interactions chat" n'est PAS une section d'accordéon — c'est un
 // lanceur direct qui ouvre interactionModalOpen (modale à onglets).
 // NB : "scene" (Arrière-plan de l'application) a été retiré de l'accordéon —

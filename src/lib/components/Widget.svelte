@@ -99,8 +99,10 @@
   // cadreWidget est lu depuis le store scène (un cadre pour tous les widgets).
   // Appliqué sur tous les widgets, y compris les widgets trou (le cadre SVG
   // encadre le trou, visible côté diffusion/OBS).
+  // Exception : w.sansCadre (widgets créés par drop bibliothèque) — opt-out
+  // par widget, le cadre de scène reste actif pour les autres.
   let cadre = $derived($sceneStore.cadreWidget ?? null);
-  let cadreActif = $derived(!!cadre?.actif && (cadre?.strokeWidth ?? 0) > 0);
+  let cadreActif = $derived(!!cadre?.actif && (cadre?.strokeWidth ?? 0) > 0 && w.sansCadre !== true);
   // Couleur du badge « en lecture dans OBS » = couleur RÉELLE du cadre SVG
   // widget choisi (couleur utilisateur si personnalisable, palette de la
   // variante pour les presets). Fallback --texte si pas de cadre actif.
@@ -510,6 +512,7 @@
     class:avec-cadre={cadreActif}
     class:input-viewer={isInputViewer}
     class:speedrun={isSpeedrun}
+    class:sans-cadre={w.sansCadre === true}
     style="transform: perspective(800px) rotateX({rx}deg) rotateY({ry}deg);{clipPathCorps ? ` clip-path: ${clipPathCorps}; -webkit-clip-path: ${clipPathCorps};` : ''}"
   >
     {#if isChat}
@@ -702,6 +705,11 @@
      remplace). L'outline de sélection reste pour le feedback dashboard. */
   .widget-3d.avec-cadre {
     border-color: transparent;
+  }
+  /* Widgets sansCadre (drop bibliothèque) : aucun contour 1px — seul le
+     média est visible. L'outline .selected (gizmo de sélection) reste. */
+  .widget-3d.sans-cadre {
+    border: none;
   }
   .widget-3d.selected {
     outline: 2px solid var(--texte);

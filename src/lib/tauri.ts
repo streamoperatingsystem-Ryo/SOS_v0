@@ -33,6 +33,9 @@ export interface Widget {
   mediaPaused?: boolean;
   mediaTime?: number;
   trou?: boolean;
+  /// Opt-out du cadre SVG de scène pour ce widget (widgets créés par drop
+  /// bibliothèque → transformerEnWidget). undefined/false = cadre appliqué.
+  sansCadre?: boolean;
   obsSource?: string;
   chatFiltre?: string;
   taillePolice?: number;
@@ -314,6 +317,25 @@ export interface PositionOverlayConfig {
 }
 
 /// Config complète des alertes (champ absent = défaut du type côté Rust).
+/// Bord de l'écran où la barre de raccourcis est dockée.
+export type BordRaccourcis = "gauche" | "droite" | "haut" | "bas";
+
+/// Moniteur Windows pour le sélecteur de la section Raccourcis (Toolbar).
+export interface RaccourcisMoniteur {
+  index: number;
+  nom: string | null;
+  largeur: number;
+  hauteur: number;
+  primaire: boolean;
+}
+
+/// État barre de raccourcis : config persistée + fenêtre réellement ouverte.
+export interface RaccourcisEtat {
+  visible: boolean;
+  bord: BordRaccourcis;
+  monitor_index: number;
+}
+
 export interface AlertesConfig {
   follow?: AlerteTypeConfig;
   raid?: AlerteTypeConfig;
@@ -396,6 +418,16 @@ export const tauri = {
     return invoke<[string, string] | null>("import_media", { widgetId });
   },
 
+  /// Importe des médias depuis des chemins disque (drop Tauri). Mêmes règles
+  /// qu'importMedia (validation + copie/remux vers medias/) mais sans dialog
+  /// ni mutation scène. Retourne les succès (rel, kind, nom) + les erreurs
+  /// concaténées — un échec sur un fichier n'annule pas les autres.
+  async importMediaFromPaths(
+    paths: string[]
+  ): Promise<{ ok: [string, string, string][]; erreurs: string[] }> {
+    return invoke("import_media_from_paths", { paths });
+  },
+
   /// Importe un média (image OU vidéo) comme fond de scène. Retourne le
   /// chemin relatif ("medias/<uuid>.<ext>") ou null si dialog annulé.
   /// Mêmes limites que importMedia (helper commun Rust). Le kind est déduit
@@ -428,6 +460,37 @@ export const tauri = {
   /// Ferme explicitement la fenêtre pop-out chat. Non-fatal si déjà fermée.
   async chatPopoutFermer(): Promise<void> {
     await invoke("chat_popout_fermer");
+  },
+
+  // ===== Barre de raccourcis (fenêtre TOPMOST dockée) =====
+
+  /// Liste les moniteurs Windows pour le sélecteur de la Toolbar.
+  async raccourcisMoniteurs(): Promise<RaccourcisMoniteur[]> {
+    return await invoke<RaccourcisMoniteur[]>("raccourcis_moniteurs");
+  },
+
+  /// État courant de la barre : config persistée (bord/moniteur) + fenêtre
+  /// réellement ouverte (visible).
+  async raccourcisEtat(): Promise<RaccourcisEtat> {
+    return await invoke<RaccourcisEtat>("raccourcis_etat");
+  },
+
+  /// Applique bord + moniteur : crée/montre la barre dockée et persiste
+  /// raccourcis.json. Index hors bornes → fallback moniteur primaire.
+  async raccourcisAppliquer(
+    bord: BordRaccourcis,
+    monitorIndex: number
+  ): Promise<RaccourcisEtat> {
+    return await invoke<RaccourcisEtat>("raccourcis_appliquer", {
+      bord,
+      monitorIndex,
+    });
+  },
+
+  /// Masque la barre (détruit la fenêtre) + persiste visible:false.
+  /// Non-fatal si déjà fermée.
+  async raccourcisMasquer(): Promise<void> {
+    await invoke("raccourcis_masquer");
   },
 
   /// Arrête l'application (quitte proprement).

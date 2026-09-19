@@ -23,10 +23,14 @@ mod twitch_clips;
 mod welcome;
 mod bandeau;
 mod position_overlay;
+mod raccourcis;
 mod speedrun;
 // Les commandes speedrun sont définies dans speedrun::commands (réelles sur
 // Windows, stubs sur les autres plateformes). Importées dans le scope pour
 // generate_handler!.
+use raccourcis::{
+    raccourcis_appliquer, raccourcis_etat, raccourcis_masquer, raccourcis_moniteurs,
+};
 use speedrun::commands::{
     speedrun_action_manuelle, speedrun_arreter, speedrun_charger_asl,
     speedrun_charger_lss, speedrun_demarrer, speedrun_est_actif,
@@ -324,6 +328,42 @@ fn import_media(
     scenes::save_current(&app, &state)?;
 
     Ok(Some((rel, nom)))
+}
+
+/// Résultat d'un import multi-fichiers : succès + erreurs concaténées.
+/// Un échec sur UN fichier n'annule pas les autres (comportement drop).
+#[derive(serde::Serialize)]
+struct ImportCheminsResult {
+    /// (rel, kind, nom_original) pour chaque fichier importé avec succès.
+    ok: Vec<(String, String, String)>,
+    /// Messages d'erreur préfixés du nom de fichier (affichage direct).
+    erreurs: Vec<String>,
+}
+
+/// Importe des médias depuis des chemins disque (drop Tauri — pas de dialog).
+/// Mêmes règles que validate_and_copy_media : extension + taille + magic
+/// bytes + copie/remux MKV→MP4 vers medias/. AUCUNE mutation de scène —
+/// le frontend range les résultats dans la bibliothèque médias.
+#[tauri::command]
+fn import_media_from_paths(
+    app: AppHandle,
+    paths: Vec<String>,
+) -> Result<ImportCheminsResult, String> {
+    let mut ok = Vec::new();
+    let mut erreurs = Vec::new();
+    for p in &paths {
+        let src = std::path::Path::new(p);
+        let nom = src
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(p.as_str())
+            .to_string();
+        match validate_and_copy_media(&app, src) {
+            Ok(t) => ok.push(t),
+            Err(e) => erreurs.push(format!("{} : {}", nom, e)),
+        }
+    }
+    Ok(ImportCheminsResult { ok, erreurs })
 }
 
 /// Importe un média (image OU vidéo) comme fond de scène : dialog → validation
@@ -2639,6 +2679,15 @@ pub fn run() {
                 .body(CHAT_POPOUT_HTML.as_bytes().to_vec())
                 .unwrap()
         })
+        // Barre de raccourcis : custom protocol servant le HTML embarqué.
+        // Toute URL streamos-raccourcis://localhost/* → RACCOURCIS_HTML
+        // (?bord= dans la query est lu par le HTML, pas par le handler).
+        .register_uri_scheme_protocol("streamos-raccourcis", |_ctx, _request| {
+            tauri::http::Response::builder()
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(raccourcis::RACCOURCIS_HTML.as_bytes().to_vec())
+                .unwrap()
+        })
         .setup(|app| {
             let handle = app.handle().clone();
 
@@ -2840,6 +2889,30 @@ pub fn run() {
                 }
             });
 
+            // Restore barre de raccourcis : si visible:true persisté → recrée la
+            // fenêtre dockée au bord/moniteur sauvegardé. Non-fatal (moniteur
+            // débranché → fallback primaire dans creer_ou_appliquer).
+            let racc_app = handle.clone();
+            tauri::async_runtime::spawn(async move {
+                match crate::config::lire_raccourcis_config(&racc_app) {
+                    Ok(Some(cfg)) if cfg.visible => {
+                        if let Err(e) = raccourcis::creer_ou_appliquer(
+                            &racc_app,
+                            &cfg.bord,
+                            cfg.monitor_index,
+                        )
+                        .await
+                        {
+                            eprintln!("[Raccourcis] ERR restore: {}", e);
+                        }
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        eprintln!("[Raccourcis] ERR lecture config: {}", e);
+                    }
+                }
+            });
+
             // Démarre le serveur :4321 en arrière-plan.
             // run_server émet server_ready (bind OK) ou server_error (port pris)
             // directement — pas de probe externe, pas de fallback port.
@@ -2862,6 +2935,7 @@ pub fn run() {
             get_scene,
             update_scene,
             import_media,
+            import_media_from_paths,
             import_fond,
             import_son,
             import_alerte_media,
@@ -2869,6 +2943,10 @@ pub fn run() {
             obs_refresh_diffusion,
             chat_popout_toggle,
             chat_popout_fermer,
+            raccourcis_moniteurs,
+            raccourcis_etat,
+            raccourcis_appliquer,
+            raccourcis_masquer,
             app_arreter,
             app_redemarrer,
             scene_sync_captures,

@@ -415,6 +415,9 @@
               {/if}
               {#if !isCameraWidget}
                 <button class="action" onclick={importMedia}>Importer un média</button>
+                {#if selectedWidget?.media}
+                  <button class="action" onclick={onClearMedia}>Retirer le média</button>
+                {/if}
               {/if}
               {#if isChatWidget}
                 <div class="fit-group">
@@ -662,9 +665,6 @@
   {@render sliderLigne("Offset X", currentOffsetX, -2000, 2000, 1, onOffsetXInput, onOffsetChange, (v) => Math.round(v) + "px")}
   {@render sliderLigne("Offset Y", currentOffsetY, -2000, 2000, 1, onOffsetYInput, onOffsetChange, (v) => Math.round(v) + "px")}
   <button class="action" onclick={onResetMedia}>Reset transformation</button>
-  {#if selectedWidget?.media}
-    <button class="action" onclick={onClearMedia}>Retirer le média</button>
-  {/if}
 {/snippet}
 
 {#snippet controlesEffetsWidget()}

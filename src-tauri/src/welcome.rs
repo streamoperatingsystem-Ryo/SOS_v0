@@ -172,7 +172,7 @@ impl WelcomeState {
         let mut registry = HashMap::new();
         registry.insert("twitch".to_string(), file.twitch.clone());
 
-        let state = Self {
+        Self {
             app,
             chat_tx,
             registry: Arc::new(Mutex::new(registry)),
@@ -181,9 +181,7 @@ impl WelcomeState {
             current: Arc::new(Mutex::new(None)),
             config_globale: Arc::new(Mutex::new(file.config_globale.clone())),
             timer_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
-        };
-
-        state
+        }
     }
 
     // ===== Détection 1er message =====

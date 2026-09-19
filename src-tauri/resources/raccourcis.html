@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Raccourcis</title>
+    <style>
+      /* Barre de raccourcis : bande noire translucide, icônes seules.
+         AUCUNE logique métier — un clic émet "raccourcis:action" {id} vers le
+         dashboard qui dispatche. Orientation lue depuis ?bord= au chargement
+         puis poussée par l'event "raccourcis:bord". État des connexions reçu
+         via "raccourcis:connexions" (pastille verte — affichage seul). */
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: transparent;
+        overflow: hidden;
+      }
+      body {
+        background: rgba(0, 0, 0, 0.7);
+        color: #efeff1;
+        font-family: system-ui, sans-serif;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      #bar {
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 8px;
+        padding: 6px;
+      }
+      /* Bord gauche/droite → colonne verticale ; haut/bas → rangée. */
+      body[data-bord="gauche"] #bar,
+      body[data-bord="droite"] #bar { flex-direction: column; }
+      body[data-bord="haut"] #bar,
+      body[data-bord="bas"] #bar { flex-direction: row; }
+
+      .ico {
+        position: relative;
+        width: 40px;
+        height: 40px;
+        flex-shrink: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: transparent;
+        border: none;
+        border-radius: 8px;
+        cursor: pointer;
+        color: #efeff1;
+        transition: background 0.12s ease;
+      }
+      .ico:hover { background: rgba(255, 255, 255, 0.2); }
+      .ico svg { width: 28px; height: 28px; display: block; }
+
+      .sep {
+        flex-shrink: 0;
+        background: rgba(255, 255, 255, 0.18);
+        border-radius: 1px;
+      }
+      body[data-bord="gauche"] .sep,
+      body[data-bord="droite"] .sep { width: 26px; height: 1px; }
+      body[data-bord="haut"] .sep,
+      body[data-bord="bas"] .sep { width: 1px; height: 26px; }
+
+      /* Pastille d'état connexion (plateformes + OBS) — affichage seul. */
+      .dot {
+        position: absolute;
+        right: 3px;
+        bottom: 3px;
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: #22c55e;
+        box-shadow: 0 0 4px rgba(34, 197, 94, 0.8);
+        display: none;
+      }
+      .ico.on .dot { display: block; }
+    </style>
+  </head>
+  <body data-bord="droite">
+    <div id="bar">
+      <!-- WIDGETS -->
+      <button class="ico" data-id="widget-media" title="Widget média">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="9" cy="10" r="2"/><path d="M4 18l5-5 4 4 3-3 4 4"/></svg>
+      </button>
+      <button class="ico" data-id="widget-chat" title="Widget chat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a8 8 0 0 1-8 8H4l2-3.5A8 8 0 1 1 21 12z"/></svg>
+      </button>
+      <button class="ico" data-id="widget-camera" title="Widget caméra">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="7" width="15" height="12" rx="2"/><circle cx="9.5" cy="13" r="3"/><path d="M17 10.5l5-2.5v10l-5-2.5"/></svg>
+      </button>
+      <button class="ico" data-id="widget-input-viewer" title="Widget input viewer">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h.01M10 10h.01M14 10h.01M18 10h.01M6 14h.01M18 14h.01M9 14h6"/></svg>
+      </button>
+      <button class="ico" data-id="widget-speedrun" title="Widget speedrun">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="14" r="7"/><path d="M12 14V10M10 3h4M12 3v4"/></svg>
+      </button>
+      <span class="sep"></span>
+      <!-- CONNEXIONS (toggle : connecté = déconnecter — état = pastille verte) -->
+      <button class="ico" data-id="connexion-twitch" data-plat="twitch" title="Twitch">
+        <svg viewBox="0 0 16 16"><path fill="#9146ff" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/><rect x="9" y="4" width="1" height="3" fill="#9146ff"/><rect x="6" y="4" width="1" height="3" fill="#9146ff"/></svg>
+        <span class="dot"></span>
+      </button>
+      <button class="ico" data-id="connexion-kick" data-plat="kick" title="Kick">
+        <svg viewBox="0 0 24 24"><path fill="#53fc18" d="M5 2h4v6h2V6h2V4h2V2h4v6h-2v2h-2v4h2v2h2v6h-4v-2h-2v-2h-2v4H5z"/></svg>
+        <span class="dot"></span>
+      </button>
+      <button class="ico" data-id="connexion-youtube" data-plat="youtube" title="YouTube">
+        <svg viewBox="0 0 24 24"><rect x="2" y="5" width="20" height="14" rx="4" fill="#ff0033"/><path d="M10 9.5l5 2.5-5 2.5z" fill="#fff"/></svg>
+        <span class="dot"></span>
+      </button>
+      <button class="ico" data-id="connexion-tiktok" data-plat="tiktok" title="TikTok">
+        <svg viewBox="0 0 24 24"><path fill="#25f4ee" d="M16.5 3c.3 1.8 1.6 3.2 3.5 3.5v3.1c-1.4 0-2.7-.5-3.7-1.2v6.3a5.6 5.6 0 1 1-5.6-5.6c.4 0 .8 0 1.2.1v3.2a2.5 2.5 0 1 0 1.4 2.3V3h3.2z"/></svg>
+        <span class="dot"></span>
+      </button>
+      <button class="ico" data-id="connexion-obs" data-plat="obs" title="OBS (re-sync)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="#e8e8e8" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7a5 5 0 0 1 4.3 2.5M16.8 14a5 5 0 0 1-4.8 3M7.2 14a5 5 0 0 1-.2-4.3" /></svg>
+        <span class="dot"></span>
+      </button>
+      <span class="sep"></span>
+      <!-- MODALES -->
+      <button class="ico" data-id="modale-interactions" title="Interactions chat">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 2L4 14h6l-1 8 9-12h-6z"/></svg>
+      </button>
+      <button class="ico" data-id="modale-moderation" title="Modération &amp; Rôles">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3l7 3v5c0 4.5-3 8-7 10-4-2-7-5.5-7-10V6z"/><path d="M9 12l2 2 4-4"/></svg>
+      </button>
+      <button class="ico" data-id="modale-cadres" title="Cadres">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="4" width="16" height="16" rx="1" stroke-dasharray="4 3"/></svg>
+      </button>
+      <span class="sep"></span>
+      <!-- SYSTÈME -->
+      <button class="ico" data-id="systeme-masquer" title="Masquer la barre">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12s3.5-6 9-6c1.8 0 3.4.7 4.7 1.6M21 12s-3.5 6-9 6c-1.8 0-3.4-.7-4.7-1.6"/><path d="M4 4l16 16"/></svg>
+      </button>
+    </div>
+    <script>
+      var TAURI = window.__TAURI__;
+
+      function setBord(bord) {
+        if (bord !== "gauche" && bord !== "droite" && bord !== "haut" && bord !== "bas") {
+          bord = "droite";
+        }
+        document.body.dataset.bord = bord;
+      }
+
+      // Bord initial : lu dans l'URL (?bord=) posée à la création de la fenêtre.
+      try {
+        var q = new URLSearchParams(location.search).get("bord");
+        if (q) setBord(q);
+      } catch (e) {}
+
+      // Pastilles d'état des connexions (poussées par le dashboard).
+      function setConnexions(c) {
+        if (!c) return;
+        var boutons = document.querySelectorAll(".ico[data-plat]");
+        for (var i = 0; i < boutons.length; i++) {
+          var p = boutons[i].dataset.plat;
+          boutons[i].classList.toggle("on", !!c[p]);
+        }
+      }
+
+      // Clic icône → event vers le dashboard. Pas de logique métier ici.
+      var boutons = document.querySelectorAll(".ico[data-id]");
+      for (var i = 0; i < boutons.length; i++) {
+        (function (btn) {
+          btn.addEventListener("click", function () {
+            if (TAURI && TAURI.event && TAURI.event.emit) {
+              TAURI.event.emit("raccourcis:action", { id: btn.dataset.id });
+            }
+          });
+        })(boutons[i]);
+      }
+
+      if (TAURI && TAURI.event && TAURI.event.listen) {
+        // Ré-application sur fenêtre existante : bascule colonne ↔ rangée.
+        TAURI.event.listen("raccourcis:bord", function (e) { setBord(e.payload); });
+        TAURI.event.listen("raccourcis:connexions", function (e) { setConnexions(e.payload); });
+        // Listeners prêts → demander l'état des connexions au dashboard
+        // (la fenêtre peut être créée avant la fin de l'init dashboard ;
+        // sans ce handshake les pastilles resteraient éteintes jusqu'au
+        // prochain changement d'état).
+        if (TAURI.event.emit) TAURI.event.emit("raccourcis:ready");
+      }
+    </script>
+  </body>
+</html>

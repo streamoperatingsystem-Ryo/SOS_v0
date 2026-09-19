@@ -99,6 +99,13 @@
         background: transparent;
         border: none;
       }
+      /* Widgets sansCadre (drop bibliothèque) : aucun contour 1px ni voile
+         de fond rgba — le média seul est visible (le cadre SVG de scène est
+         déjà exclu par applyCadreWidget). */
+      .widget.sans-cadre {
+        background: transparent;
+        border: none;
+      }
       .widget img {
         width: 100%;
         height: 100%;
@@ -1763,6 +1770,9 @@
         const rx = w.rotateX || 0;
         const ry = w.rotateY || 0;
         el.style.transform = "perspective(800px) rotateX(" + rx + "deg) rotateY(" + ry + "deg)";
+        // Widgets sansCadre (drop bibliothèque) : opt-out du contour 1px +
+        // voile de fond — classe dédiée (UPDATE couvert, tous les kinds).
+        el.classList.toggle("sans-cadre", w.sansCadre === true);
       }
 
       function applyMediaStyle(mediaEl, w) {
@@ -2117,8 +2127,10 @@
             const ry = w.rotateY || 0;
 
             // Clip-path du cadre pour ce widget (forme du cadre, pas rectangle).
+            // w.sansCadre = pas de cadre dessiné → trou rectangulaire (sinon
+            // les coins du clip-path resteraient remplis sans cadre visible).
             var clipStr = null;
-            if (cadreWidgetActif) {
+            if (cadreWidgetActif && w.sansCadre !== true) {
               clipStr = genererCadreClipPath(cadreWidget, w.largeur, w.hauteur);
             }
             var clipPts = getCadreClipPathPoints(clipStr);
@@ -4127,8 +4139,9 @@
       // Applique le cadre widget sur un élément .widget : clip-path sur el +
       // overlay SVG dans un div .cadre-overlay enfant. Recrée seulement si
       // la clé a changé (style/variante/strokeWidth/dims).
+      // w.sansCadre (widgets créés par drop) = opt-out : comme cadre inactif.
       function applyCadreWidget(el, entry, w, cadre) {
-        var cadreActif = cadre && cadre.actif && (cadre.strokeWidth || 0) > 0;
+        var cadreActif = cadre && cadre.actif && (cadre.strokeWidth || 0) > 0 && w.sansCadre !== true;
         if (!cadreActif) {
           // Nettoyer : retirer clip-path + overlay si présent.
           el.style.clipPath = "";
@@ -4182,7 +4195,9 @@
         var italique = w.titreItalique || false;
         var souligne = w.titreSouligne || false;
         var espacement = w.titreEspacement || 0;
-        var grad = gradientCadre(cadre);
+        // w.sansCadre = pas de cadre sur ce widget → gradient fallback
+        // blanc→gris (parité dashboard : titreGradient gâté par cadreActif).
+        var grad = gradientCadre(w.sansCadre === true ? null : cadre);
         var cx = w.x + w.largeur / 2;
         if (!entry.titreEl) {
           var el = document.createElement("div");

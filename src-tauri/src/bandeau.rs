@@ -93,14 +93,13 @@ impl BandeauState {
     /// Crée l'état + charge la config depuis le disque.
     pub fn new(app: AppHandle, chat_tx: broadcast::Sender<String>) -> Self {
         let file = load_file(&app).unwrap_or_default();
-        let state = Self {
+        Self {
             app,
             chat_tx,
             config: Arc::new(Mutex::new(file.config)),
             seen: Arc::new(Mutex::new(HashSet::new())),
             timer_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
-        };
-        state
+        }
     }
 
     // ===== Détection 1er message =====

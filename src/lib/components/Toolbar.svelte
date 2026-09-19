@@ -7,6 +7,8 @@
   import { connecterYoutube, deconnecterYoutube, demarrerChatYoutube, arreterChatYoutube } from "../stores/youtube";
   import { connecterTiktok, deconnecterTiktok, lireUsernameSauve } from "../stores/tiktok";
   import { youtubeErreur as youtubeErreurStore, tiktokErreur as tiktokErreurStore, youtubeChatActif as youtubeChatActifStore } from "../stores/chat";
+  import { raccourcisVisible, raccourcisBord, raccourcisMonitorIndex, raccourcisMoniteurs, appliquerRaccourcis, masquerRaccourcis } from "../stores/raccourcis";
+  import type { BordRaccourcis } from "../tauri";
   import { tauri } from "../tauri";
   import { get } from "svelte/store";
   import { onMount } from "svelte";
@@ -75,6 +77,36 @@
 
   let kickSlug = $state("");
   let tiktokUsername = $state("");
+
+  // ===== Barre de raccourcis (fenêtre TOPMOST dockée) =====
+  let raccVisible = $derived($raccourcisVisible);
+  let raccBord = $derived($raccourcisBord);
+  let raccMonIdx = $derived($raccourcisMonitorIndex);
+  let raccMons = $derived($raccourcisMoniteurs);
+
+  const BORDS: { id: BordRaccourcis; label: string }[] = [
+    { id: "gauche", label: "Gauche" },
+    { id: "droite", label: "Droite" },
+    { id: "haut", label: "Haut" },
+    { id: "bas", label: "Bas" },
+  ];
+
+  async function onToggleBarre() {
+    if (raccVisible) {
+      await masquerRaccourcis();
+    } else {
+      await appliquerRaccourcis(raccBord, raccMonIdx);
+    }
+  }
+  // Choisir un bord applique immédiatement : la barre saute (et s'affiche si
+  // elle était masquée — changer de bord = on veut la voir bouger).
+  async function onBord(b: BordRaccourcis) {
+    await appliquerRaccourcis(b, raccMonIdx);
+  }
+  async function onMoniteur(e: Event) {
+    const idx = parseInt((e.target as HTMLSelectElement).value, 10);
+    if (!isNaN(idx)) await appliquerRaccourcis(raccBord, idx);
+  }
 
   onMount(async () => {
     await listen("popout-closed", () => {});
@@ -275,6 +307,42 @@
           {:else}
             Aucun cadre actif
           {/if}
+        </p>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Section Raccourcis : fenêtre TOPMOST dockée à un bord d'écran.
+       Afficher/masquer + choix du bord (appliqué immédiatement) + moniteur. -->
+  <div class="section">
+    <button class="header" onclick={() => toggleSection("raccourcis")}>
+      <span class="arrow">{open === "raccourcis" ? "▼" : "▶"}</span>
+      <span>Raccourcis</span>
+    </button>
+    {#if open === "raccourcis"}
+      <div class="content">
+        <button class="action" onclick={onToggleBarre}>
+          {raccVisible ? "Masquer la barre" : "Afficher la barre"}
+        </button>
+        <div class="bord-row">
+          {#each BORDS as b (b.id)}
+            <button
+              class="action small"
+              class:actif={raccBord === b.id}
+              onclick={() => onBord(b.id)}
+            >{b.label}</button>
+          {/each}
+        </div>
+        <select onchange={onMoniteur}>
+          {#each raccMons as m (m.index)}
+            <option value={m.index} selected={m.index === raccMonIdx}>
+              {m.nom ?? `Moniteur ${m.index + 1}`} — {m.largeur}×{m.hauteur}{m.primaire ? " (principal)" : ""}
+            </option>
+          {/each}
+        </select>
+        <p class="hint">
+          Barre toujours au-dessus, dockée au bord choisi. Visible au-dessus
+          des jeux en fenêtré sans bordure — pas en plein écran exclusif.
         </p>
       </div>
     {/if}
@@ -484,5 +552,28 @@
     flex-shrink: 0;
     padding: 0.1rem 0.3rem;
     font-size: 0.78rem;
+  }
+  /* ===== Section Raccourcis ===== */
+  .bord-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+  }
+  .action.small.actif {
+    border: 1px solid var(--dash-accent);
+    color: var(--dash-accent);
+  }
+  select {
+    background: var(--fond-controle);
+    color: var(--texte);
+    border: 1px solid var(--bordure);
+    padding: 0.3rem 0.4rem;
+    font: inherit;
+    font-size: 0.85rem;
+    width: 100%;
+  }
+  select:focus {
+    outline: none;
+    border-color: var(--dash-accent);
   }
 </style>

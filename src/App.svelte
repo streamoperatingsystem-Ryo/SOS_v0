@@ -1,11 +1,15 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { listen } from "@tauri-apps/api/event";
-  import { loadScene, selectedIdStore, loadedStore } from "./lib/stores/scene";
+  import { listen, emitTo } from "@tauri-apps/api/event";
+  import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene } from "./lib/stores/scenes";
-  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen } from "./lib/stores/ui";
+  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, openSectionExplicit } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "./lib/stores/obs";
-  import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions } from "./lib/stores/chat";
+  import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
+  import { connecterKick, deconnecterKick, lireSlugSauve } from "./lib/stores/kick";
+  import { connecterYoutube, deconnecterYoutube } from "./lib/stores/youtube";
+  import { connecterTiktok, deconnecterTiktok, lireUsernameSauve } from "./lib/stores/tiktok";
+  import { initRaccourcis, masquerRaccourcis } from "./lib/stores/raccourcis";
   import { chargerCommunaute, resetCommunaute, chargerCommunauteYoutube } from "./lib/stores/communaute";
   import { initSpeedrun, chargerPreferencesSpeedrun } from "./lib/stores/speedrun";
   import { tauri } from "./lib/tauri";
@@ -15,6 +19,7 @@
   import CarteEdition from "./lib/components/CarteEdition.svelte";
   import Canvas from "./lib/components/Canvas.svelte";
   import SceneBar from "./lib/components/SceneBar.svelte";
+  import DropBar from "./lib/components/DropBar.svelte";
   import DevPanel from "./lib/components/DevPanel.svelte";
   import TwitchDeviceModal from "./lib/components/TwitchDeviceModal.svelte";
   import ConfirmDeleteWidgetModal from "./lib/components/ConfirmDeleteWidgetModal.svelte";
@@ -77,6 +82,90 @@
   function closeDev() {
     devOpen = false;
   }
+
+  // ===== Barre de raccourcis : dispatch des actions =====
+  // La fenêtre raccourcis émet "raccourcis:action" {id} — le mapping ci-dessous
+  // appelle les fonctions EXISTANTES des stores (mêmes que la Toolbar).
+  // Aucune logique métier dans la barre : elle n'est qu'un relais.
+  async function dispatchRaccourcis(id: string) {
+    const c = get(connexions);
+    switch (id) {
+      case "widget-media": createWidget(); break;
+      case "widget-chat": createChatWidget(); break;
+      case "widget-camera":
+        // Même garde que le bouton Toolbar (singleton caméra).
+        if (!get(sceneStore).widgets.some((w) => w.type === "camera")) {
+          createCameraWidget();
+        }
+        break;
+      case "widget-input-viewer": createInputViewerWidget(); break;
+      case "widget-speedrun": createSpeedrunWidget(); break;
+      case "connexion-twitch":
+        // connecterTwitch ouvre la modale Device Flow sur le dashboard.
+        if (c.twitch) await deconnecterTwitch(); else await connecterTwitch();
+        break;
+      case "connexion-youtube":
+        if (c.youtube) await deconnecterYoutube(); else await connecterYoutube();
+        break;
+      case "connexion-kick":
+        if (c.kick) {
+          await deconnecterKick();
+        } else {
+          // Pas d'input dans la barre : slug courant puis slug sauvegardé.
+          // Aucun des deux → ouvrir la section Connexions pour le saisir.
+          const slug = get(kickSlug) ?? (await lireSlugSauve());
+          if (slug) await connecterKick(slug);
+          else openSectionExplicit("connexions");
+        }
+        break;
+      case "connexion-tiktok":
+        if (c.tiktok) {
+          await deconnecterTiktok();
+        } else {
+          const username = get(tiktokUsername) ?? (await lireUsernameSauve());
+          if (username) await connecterTiktok(username);
+          else openSectionExplicit("connexions");
+        }
+        break;
+      case "connexion-obs":
+        // OBS est one-shot (pas de déconnexion) : clic = re-connect + re-sync,
+        // comme le bouton « Connecter » de la section OBS.
+        try {
+          await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
+          await tauri.sceneSyncCaptures(
+            get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
+          );
+        } catch {
+        }
+        break;
+      case "modale-interactions": interactionModalOpen.set(true); break;
+      case "modale-moderation": moderationModalOpen.set(true); break;
+      case "modale-cadres": cadreModalOpen.set("widget"); break;
+      case "systeme-masquer": await masquerRaccourcis(); break;
+    }
+  }
+
+  // Pousse l'état des connexions vers la barre (pastilles vertes — affichage
+  // seul). Appelé par le $effect réactif ET par "raccourcis:ready" (la barre
+  // annonce que ses listeners sont prêts — évite l'état périmé quand elle est
+  // créée après le dernier changement d'état).
+  function pushRaccourcisConnexions() {
+    const c = get(connexions);
+    void emitTo("raccourcis", "raccourcis:connexions", {
+      twitch: c.twitch,
+      youtube: c.youtube,
+      kick: c.kick,
+      tiktok: c.tiktok,
+      obs: get(obsStatus) === "connected",
+    }).catch(() => {});
+  }
+
+  $effect(() => {
+    // Référence réactive : relire les stores à chaque changement.
+    void cx;
+    void obsSt;
+    pushRaccourcisConnexions();
+  });
 
   // ===== Boutons topbar : Arrêter / Redémarrer / Refresh OBS =====
   async function onArreter() {
@@ -194,6 +283,16 @@
     //     + charge la config initiale. L'audio local est joué côté dashboard.
     await initPad();
     await chargerPad();
+
+    // 3g. Barre de raccourcis : état initial (visible/bord/moniteur) + listener
+    //     des actions émises par la fenêtre + handshake "ready" (la barre peut
+    //     être créée avant que le dashboard ait fini son init → elle demande
+    //     l'état des connexions pour ses pastilles).
+    await initRaccourcis();
+    await listen<{ id: string }>("raccourcis:action", (e) => {
+      void dispatchRaccourcis(e.payload.id);
+    });
+    await listen("raccourcis:ready", () => pushRaccourcisConnexions());
 
     // 4. Fallback : si :4321 déjà up (event manqué), boot OBS maintenant.
     const up = await checkServerUp();
@@ -340,6 +439,7 @@
     </div>
     <div class="canvas-col">
       <SceneBar />
+      <DropBar />
       <Canvas />
     </div>
   </div>

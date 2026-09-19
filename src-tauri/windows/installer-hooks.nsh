@@ -1,12 +1,12 @@
-; StreamOS v0 — Hooks NSIS pour l'installer (setup-base0003).
+; StreamOS v0 — Hooks NSIS pour l'installer (setup-base0004).
 ;
 ; NSIS_HOOK_PREINSTALL : runs before copying files, after the PageReinstall
 ; page (which already offered to uninstall the old app version).
 ;
-; Wipe silencieux du dossier %APPDATA%/com.streamos.v0/ (données base0002 :
-; scènes, médias importés, kick.json, tiktok.json, configs). Garantit un
-; fresh install aux utilisateurs à qui le setup.exe est partagé — aucune
-; donnée résiduelle de l'ancienne version n'est reprise.
+; Wipe silencieux du dossier %APPDATA%/com.streamos.v0/ (données de toute
+; install précédente : scènes, médias importés, kick.json, tiktok.json,
+; configs). Garantit un fresh install aux utilisateurs à qui le setup.exe
+; est partagé — aucune donnée résiduelle de l'ancienne version n'est reprise.
 ;
 ; Les tokens OAuth2 Twitch/YouTube sont stockés dans le keyring OS (coffre
 ; Windows), PAS dans APPDATA → ils ne sont PAS affectés par ce wipe.
@@ -20,7 +20,7 @@
   IfFileExists "$APPDATA\com.streamos.v0\*.*" 0 skip_data_cleanup
 
     ; Wipe silencieux (sans MessageBox) : fresh install garanti.
-    DetailPrint "Suppression des données base0002 : $APPDATA\com.streamos.v0"
+    DetailPrint "Suppression des donnees precedentes : $APPDATA\com.streamos.v0"
     RMDir /r "$APPDATA\com.streamos.v0"
 
   skip_data_cleanup:
