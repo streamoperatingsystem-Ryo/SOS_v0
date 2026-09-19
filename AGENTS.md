@@ -621,7 +621,7 @@ morphs: [{ x, y, rayon, intensite, mode }]  (normalisés 0-1, ordre = cumul)
 
 | Variable | Couleur | Sémantique | Usages |
 |---|---|---|---|
-| `--message-user-action-color` | `#e0a060` (orange) | Action requise de l'utilisateur | Toolbar `.obs-status.erreur` (mot de passe OBS invalide, OBS injoignable), ObsSourceDialog `.hint.warn` |
+| `--message-user-action-color` | `#f59e0b` (orange) | Action requise de l'utilisateur | Toolbar `.obs-status.erreur` (mot de passe OBS invalide, OBS injoignable), ObsSourceDialog `.hint.warn` |
 | `--message-ok-color` | `#22c55e` (vert) | Succès / état connecté | Toolbar `.obs-status.ok` + `.header.etat-ok` (en-tête section OBS) + `.dot.on`, App.svelte `.dot.on` (bandeau top), DevPanel `.check` |
 | `--message-error-color` | `#c0392b` (rouge) | Erreur / danger | Toolbar `.header.etat-erreur` (en-tête section OBS non connecté : idle/error → texte + bordure rouges, couleur préservée au hover), App.svelte `.dot` (bandeau top, état off), boutons destructifs au survol (ConfirmDeleteWidgetModal `.action.danger:hover`, SceneBar `.ctx-item.danger:hover`) |
 
@@ -703,6 +703,19 @@ morphs: [{ x, y, rayon, intensite, mode }]  (normalisés 0-1, ordre = cumul)
 (au-dessus du fond, sous le texte), `isolation: isolate` sur le bouton pour
 contenir le z-index négatif. `@keyframes btn-shine` = sweep `translateX` +
 `skewX(-18deg)`, 0.7s ease-out, one-shot au `:hover:not(:disabled)`.
+
+### Pastille de message centré — recette `.msg-pill` (2026-09-19)
+
+> Badge centré sur un widget ou le fond du canvas (lecture OBS, input
+> viewer). Source unique : `src/app.css`. **Ne jamais re-copier le bloc**
+> dans un composant — la triple duplication (`.lecture-obs` /
+> `.input-viewer-obs` / `.lecture-obs-fond`) a été unifiée.
+
+- `.msg-pill` : conteneur (centrage `translate(-50%,-50%)`, fond `--fond` 82%, `--rayon-petit`, `font-size: clamp(0.5rem, 9cqw, 1.25rem)`).
+- `.msg-pill-text` : sur le `<span>` texte — 4 lignes max + ellipsis (`-webkit-line-clamp:4` ; `min-width:0` requis pour le shrink flex).
+- `.msg-pill-icon` : icône ▶ à `1.08em` (suit le clamp cqw).
+- **Prérequis cqw** : un ancêtre `container-type: inline-size` (`.widget-3d`, `.bg-layer`, `.titre-zone`), sinon fallback % viewport.
+- Couleur de texte par contexte : classe locale (`.input-viewer-obs` = `--message-user-action-color`) ou inline (`lectureCouleur`/`bgLectureCouleur` = couleur réelle du cadre SVG).
 
 ### Couleurs de marque des plateformes (décoratif, 2026-09-15)
 
@@ -787,6 +800,40 @@ contenir le z-index négatif. `@keyframes btn-shine` = sweep `translateX` +
    widgets canvas de `Widget.svelte` (WYSIWYG diffusion).
 6. ❌ Arrondir les widgets canvas ou toucher `diffusion.html` pour le style —
    règle figée cadres (voir section dédiée).
+
+## Titre de widget (2026-09-19)
+
+> Titre optionnel affiché au-dessus ou en dessous d'un widget, rendu en
+> dashboard ET en diffusion :4321. Pendant pour le fond de l'application :
+> champs `bgTitre*` (`.bg-titre` dashboard / `#bg-titre` diffusion).
+
+### Champs `Widget` (tauri.ts + scene.rs)
+
+`titre` (vide/undefined = pas de titre), `titrePosition` ("dessus"/"dessous"),
+`titrePolice` (id Google Font, `fonts.ts` — woff2 embarqués via `server.rs`),
+`titreTaille` (12–72 px, défaut 24), `titreGras`/`titreItalique`/`titreSouligne`,
+`titreEspacement` (−2 à 20 px).
+
+### Édition (dashboard)
+
+Double-clic sur le widget : `relY < 0.25` → position "dessus", le reste →
+"dessous" → `titreModalOpen` (ui.ts) → `TitreModal.svelte` → `majTitreWidget`
+(scene.ts). Zones `.titre-zone` (25% haut/bas) : affichées au `:hover` dès
+que le widget est `selected`, **avec ou sans titre existant**, avec label
+explicite ambre (« Double-cliquez ici pour ajouter/modifier un titre
+au-dessus/en dessous de votre widget »).
+
+### Rendu
+
+- Dashboard : `.widget-titre` hors `.widget-3d` (non clippé par le cadre
+  SVG), gradient de texte = couleurs du cadre actif (`gradientCadre`,
+  fallback blanc→gris). Position `bottom:100%`/`top:100%`.
+- Diffusion : `applyTitreWidget` / `entry.titreEl` (diffusion.html) —
+  créé/maj/supprimé selon `w.titre`, mêmes champs.
+- **Contour des lettres** : `-webkit-text-stroke: 2px #fff` +
+  `paint-order: stroke fill` (contour SOUS le gradient — sans paint-order il
+  mange les glyphes). Appliqué aux 4 règles : `.widget-titre` + `.bg-titre`
+  (dashboard) et `.widget-titre` + `#bg-titre` (diffusion).
 
 ## Cadres SVG — règle absolue (NE PAS REGRESSER)
 

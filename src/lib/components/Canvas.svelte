@@ -417,9 +417,9 @@
           {#if bgLecture}
             <!-- Badge lecture OBS (dashboard seulement) : la barre lecteur
                  pilote :4321 via bgPaused — la vignette dashboard reste figée. -->
-            <div class="lecture-obs-fond" style="color: {bgLectureCouleur};">
-              <span class="lecture-obs-icon">▶</span>
-              <span>Votre vidéo de fond est en lecture dans OBS</span>
+            <div class="lecture-obs-fond msg-pill" style="color: {bgLectureCouleur};">
+              <span class="msg-pill-icon">▶</span>
+              <span class="msg-pill-text">Votre vidéo de fond est en lecture dans OBS</span>
             </div>
           {/if}
         </div>
@@ -496,6 +496,9 @@
     overflow: hidden;
     z-index: 0;
     pointer-events: none;
+    /* Conteneur de requête pour le font-size cqw de la pastille
+       .msg-pill (.lecture-obs-fond) — recette app.css. */
+    container-type: inline-size;
   }
   /* ===== Titre du fond de l'application ===== */
   /* Positionné à l'intérieur du canvas, en haut ou en bas, centré
@@ -511,6 +514,10 @@
     line-height: 1.1;
     font-weight: 400;
     text-align: center;
+    /* Contour blanc 2px autour des lettres : paint-order:stroke paint le
+       contour SOUS le gradient de remplissage (sinon il mange les glyphes). */
+    -webkit-text-stroke: 2px #fff;
+    paint-order: stroke fill;
   }
   .bg-titre.haut { top: 8px; }
   .bg-titre.bas { bottom: 8px; }
@@ -557,31 +564,8 @@
   .bg-video {
     pointer-events: none;
   }
-  /* Badge « en lecture dans OBS » (fond) : pastille centrée sur le canvas,
-     par-dessus la vignette figée. Variables CSS UI (pas de #hex). */
-  .lecture-obs-fond {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.45rem 0.7rem;
-    background: var(--fond);
-    background: color-mix(in srgb, var(--fond) 82%, transparent);
-    font-size: 1.25rem;
-    border-radius: var(--rayon-petit);
-    white-space: nowrap;
-    max-width: 96%;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 2;
-  }
-  .lecture-obs-icon {
-    font-size: 1.35rem;
-    line-height: 1;
-  }
+  /* Badge « en lecture dans OBS » (fond) : pastille .msg-pill (recette
+     app.css), couleur inline bgLectureCouleur = couleur réelle du cadre. */
   /* Overlay cadre app : bord extérieur du canvas, au-dessus des widgets. */
   .cadre-app-overlay {
     position: absolute;

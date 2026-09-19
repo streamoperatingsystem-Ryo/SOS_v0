@@ -543,9 +543,9 @@
            Mode/layout/skin/couleur réglés dans la Toolbar ; capture ON/OFF
            dans les options. -->
       {@render mediaFond()}
-      <div class="input-viewer-obs">
-        <span class="lecture-obs-icon">▶</span>
-        <span>Votre input viewer est affiché dans OBS</span>
+      <div class="input-viewer-obs msg-pill">
+        <span class="msg-pill-icon">▶</span>
+        <span class="msg-pill-text">Votre input viewer est affiché dans OBS</span>
       </div>
     {:else if isSpeedrun}
       <!-- Widget speedrun splitter (dashboard) : timer + contrôles manuels +
@@ -607,9 +607,9 @@
     {#if lectureObs}
       <!-- Badge lecture OBS (dashboard seulement) : la barre lecteur pilote
            :4321 via mediaPaused — la vignette dashboard reste figée. -->
-      <div class="lecture-obs" style="color: {lectureCouleur};">
-        <span class="lecture-obs-icon">▶</span>
-        <span>Votre vidéo est en lecture dans OBS</span>
+      <div class="lecture-obs msg-pill" style="color: {lectureCouleur};">
+        <span class="msg-pill-icon">▶</span>
+        <span class="msg-pill-text">Votre vidéo est en lecture dans OBS</span>
       </div>
     {/if}
 
@@ -645,10 +645,25 @@
   {/if}
 
   <!-- Zones de double-clic (haut/bas) — affichées au survol du widget
-       sélectionné pour indiquer où double-cliquer pour ajouter/éditer un titre. -->
-  {#if selected && !titreVisible}
-    <div class="titre-zone titre-zone-haut"></div>
-    <div class="titre-zone titre-zone-bas"></div>
+       sélectionné (avec ou sans titre existant) pour indiquer où
+       double-cliquer pour ajouter/modifier un titre. -->
+  {#if selected}
+    <div class="titre-zone titre-zone-haut">
+      <div class="msg-pill">
+        <span class="msg-pill-icon">▶</span>
+        <span class="msg-pill-text"
+          >Double-cliquez ici pour {titreVisible ? "modifier le" : "ajouter un"} titre au-dessus de votre widget</span
+        >
+      </div>
+    </div>
+    <div class="titre-zone titre-zone-bas">
+      <div class="msg-pill">
+        <span class="msg-pill-icon">▶</span>
+        <span class="msg-pill-text"
+          >Double-cliquez ici pour {titreVisible ? "modifier le" : "ajouter un"} titre en dessous de votre widget</span
+        >
+      </div>
+    </div>
   {/if}
 
   <!-- Overlay trou : cadre pointillé par-dessus le widget quand trou activé.
@@ -700,6 +715,9 @@
     pointer-events: none;
     box-sizing: border-box;
     overflow: hidden;
+    /* Conteneur de requête pour le font-size cqw des pastilles .msg-pill
+       (recette app.css) — le texte suit la taille réelle du widget. */
+    container-type: inline-size;
   }
   /* Quand un cadre SVG est actif : masquer la bordure native (le cadre SVG
      remplace). L'outline de sélection reste pour le feedback dashboard. */
@@ -831,27 +849,10 @@
     background: #000;
     color: var(--texte);
   }
-  /* Badge « input viewer affiché dans OBS » (dashboard) : pastille centrée,
-     orange (--message-user-action-color) — même forme que .lecture-obs. */
+  /* Badge « input viewer affiché dans OBS » (dashboard) : pastille centrée
+     .msg-pill (recette app.css), teinte orange action utilisateur. */
   .input-viewer-obs {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.45rem 0.7rem;
-    background: var(--fond);
-    background: color-mix(in srgb, var(--fond) 82%, transparent);
     color: var(--message-user-action-color);
-    font-size: 1.25rem;
-    border-radius: var(--rayon-petit);
-    white-space: nowrap;
-    max-width: 96%;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 2;
   }
   /* Fond du widget input viewer (dashboard) : voile opaque sombre + halo
      orange doux au centre — signale visuellement l'overlay OBS. */
@@ -864,32 +865,9 @@
       rgba(12, 14, 22, 0.92);
     box-shadow: inset 0 0 2.5rem color-mix(in srgb, var(--message-user-action-color) 16%, transparent);
   }
-  /* Badge « en lecture dans OBS » : pastille centrée sur le widget,
-     par-dessus la vignette figée. Variables CSS UI (pas de #hex). Dans
+  /* Badge « en lecture dans OBS » : pastille .msg-pill (recette app.css),
+     couleur inline lectureCouleur = couleur réelle du cadre SVG. Dans
      .widget-3d → suit le tilt 3D et est découpé par le clip-path du cadre. */
-  .lecture-obs {
-    position: absolute;
-    left: 50%;
-    top: 50%;
-    transform: translate(-50%, -50%);
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.45rem 0.7rem;
-    background: var(--fond);
-    background: color-mix(in srgb, var(--fond) 82%, transparent);
-    font-size: 1.25rem;
-    border-radius: var(--rayon-petit);
-    white-space: nowrap;
-    max-width: 96%;
-    overflow: hidden;
-    pointer-events: none;
-    z-index: 2;
-  }
-  .lecture-obs-icon {
-    font-size: 1.35rem;
-    line-height: 1;
-  }
   .handle {
     position: absolute;
     width: 8px;
@@ -922,6 +900,10 @@
     line-height: 1.1;
     font-weight: 400;
     text-align: center;
+    /* Contour blanc 2px autour des lettres : paint-order:stroke paint le
+       contour SOUS le gradient de remplissage (sinon il mange les glyphes). */
+    -webkit-text-stroke: 2px #fff;
+    paint-order: stroke fill;
   }
   .widget-titre.dessus {
     bottom: 100%;
@@ -931,14 +913,17 @@
     top: 100%;
     margin-top: 2px;
   }
-  /* Zones de double-clic (haut/bas) — feedback visuel subtil au survol du
-     widget sélectionné sans titre. Indique où double-cliquer pour ajouter
-     un titre. pointer-events:none (le dblclick est géré par le parent). */
+  /* Zones de double-clic (haut/bas) — vraie pastille .msg-pill (même
+     recette que « lecture OBS », teinte ambre action) au survol du widget
+     sélectionné, avec ou sans titre existant. container-type:inline-size
+     pour le cqw de la pastille. pointer-events:none (le dblclick est
+     géré par le parent). */
   .titre-zone {
     position: absolute;
     left: 0;
     width: 100%;
     height: 25%;
+    container-type: inline-size;
     pointer-events: none;
     z-index: 3;
     opacity: 0;
@@ -949,4 +934,7 @@
   .titre-zone-haut { top: 0; }
   .titre-zone-bas { bottom: 0; }
   .widget:hover .titre-zone { opacity: 1; }
+  .titre-zone .msg-pill {
+    color: var(--message-user-action-color);
+  }
 </style>

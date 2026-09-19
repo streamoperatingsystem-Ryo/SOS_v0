@@ -384,3 +384,51 @@ input[type="radio"] {
   flex-direction: column;
   gap: 0.6rem;
 }
+
+/* ===== Pastille de message centré — recette .msg-pill (2026-09-19) =====
+   Badge centré sur un widget ou le fond du canvas (lecture OBS, input
+   viewer). Unifie les 3 copies dupliquées (.lecture-obs et
+   .input-viewer-obs dans Widget.svelte, .lecture-obs-fond dans
+   Canvas.svelte) — ne jamais re-copier ce bloc dans un composant.
+   Couleur de texte par contexte : classe locale (.input-viewer-obs) ou
+   inline style="color: ..." (couleur réelle du cadre SVG).
+   font-size en cqw → requiert un ancêtre container-type: inline-size
+   (.widget-3d, .bg-layer, .titre-zone), sinon fallback % viewport. */
+.msg-pill {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.7rem;
+  background: var(--fond);
+  background: color-mix(in srgb, var(--fond) 82%, transparent);
+  font-size: clamp(0.5rem, 9cqw, 1.25rem);
+  border-radius: var(--rayon-petit);
+  max-width: 96%;
+  pointer-events: none;
+  z-index: 2;
+}
+/* Texte : 4 lignes max + ellipsis (remplace l'ancien white-space:nowrap
+   qui coupait net sur les petits widgets). À poser sur le <span> texte,
+   pas sur le conteneur .msg-pill. */
+.msg-pill-text {
+  display: -webkit-box;
+  -webkit-line-clamp: 4;
+  line-clamp: 4;
+  -webkit-box-orient: vertical;
+  /* Flex item : sans min-width:0 il garde sa taille de contenu et
+     l'ellipsis ne se déclenche jamais. */
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-align: center;
+}
+/* Icône ▶ : 1.08em ≈ ancien ratio 1.35rem/1.25rem → suit le clamp() cqw. */
+.msg-pill-icon {
+  font-size: 1.08em;
+  line-height: 1;
+  flex-shrink: 0;
+}

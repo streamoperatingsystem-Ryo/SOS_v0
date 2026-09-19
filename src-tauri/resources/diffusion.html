@@ -149,6 +149,10 @@
         line-height: 1.1;
         font-weight: 400;
         text-align: center;
+        /* Contour blanc 2px : paint-order:stroke sous le gradient (dashboard
+           parité — sinon le contour mange les glyphes). */
+        -webkit-text-stroke: 2px #fff;
+        paint-order: stroke fill;
       }
       /* Titre du fond de l'application (intérieur haut/bas) — hors #bg (non
          clippé). Positionné sur #stage (couvre tout le canvas). Au-dessus du
@@ -162,6 +166,9 @@
         line-height: 1.1;
         font-weight: 400;
         text-align: center;
+        /* Contour blanc 2px : paint-order:stroke sous le gradient. */
+        -webkit-text-stroke: 2px #fff;
+        paint-order: stroke fill;
       }
       /* Overlay cadre app : bord extérieur du canvas, au-dessus des widgets. */
       #cadre-app-overlay {
