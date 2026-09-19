@@ -7,6 +7,6 @@ src-tauri/binaries/
 
 # Artefacts locaux hors-projet
 SETUP/
-Agent Manager/
+Agent Manager/archives/
 ASL_LSS_EXAMPLES*/
 nul

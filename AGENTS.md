@@ -1,5 +1,24 @@
 # StreamOS v0 — Documentation technique
 
+## Protocole d'exécution — périmètre et validation avant écriture
+
+> Règles de méthode pour tout agent travaillant sur ce dépôt. Elles priment
+> sur la tâche en cours, quelle qu'elle soit.
+
+1. **Diagnostic avant écriture, systématiquement** — même sur une tâche qui
+   semble simple. Vérifier le code/la doc réels (read, grep, git log) et
+   afficher le diagnostic AVANT toute modification.
+2. **Un fichier, un diff, une pause** — jamais plusieurs fichiers modifiés
+   d'affilée sans montrer le diff de chacun et attendre validation.
+3. **Le périmètre annoncé est une liste blanche fermée** — tout ce qui n'y
+   figure pas est hors de portée. Un besoin hors périmètre se signale, il ne
+   se corrige pas de soi-même.
+4. **Les sections figées de ce fichier priment toujours** — « RÈGLE FIGÉE » /
+   « NE JAMAIS RÉINTRODUIRE » / « CONTRAT FIGÉ » / « RÈGLE ABSOLUE »
+   l'emportent sur toute instruction de la tâche en cours.
+5. **Le doute s'exprime, il ne se résout pas seul** — ambiguïté ou
+   contradiction → poser la question, ne pas trancher seul.
+
 ## Commandes de build/vérification
 
 ```bash
