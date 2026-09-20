@@ -205,6 +205,43 @@ pub fn sauver_speedrun_config(app: &AppHandle, cfg: &SpeedrunConfig) -> Result<(
         .map_err(|e| format!("Écrire speedrun.json: {}", e))
 }
 
+// ===== Persistance baselines Speedrun (référence « dernière fois ») =====
+
+/// Baselines de comparaison du splitter : temps de split cumulés (secondes)
+/// par segment, indexés par chemin du fichier .lss. Mis à jour à chaque split
+/// réalisé (commande `speedrun_baseline_enregistrer`) — la colonne delta du
+/// splitter compare le run en cours à ces valeurs (fallback : PB du .lss).
+/// Persisté dans `speedrun_baselines.json`.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+pub struct SpeedrunBaselines {
+    /// Map : chemin .lss → temps cumulés par segment (None = pas de données).
+    #[serde(default)]
+    pub par_lss: std::collections::HashMap<String, Vec<Option<f64>>>,
+}
+
+/// Lit les baselines speedrun (speedrun_baselines.json). Defaults si absent.
+pub fn lire_speedrun_baselines(app: &AppHandle) -> Result<SpeedrunBaselines, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("speedrun_baselines.json");
+    if !path.exists() {
+        return Ok(SpeedrunBaselines::default());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Lire speedrun_baselines.json: {}", e))?;
+    serde_json::from_str(&content)
+        .map_err(|e| format!("Parse speedrun_baselines.json: {}", e))
+}
+
+/// Sauve les baselines speedrun (écrase si existe).
+pub fn sauver_speedrun_baselines(app: &AppHandle, cfg: &SpeedrunBaselines) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("speedrun_baselines.json");
+    let json = serde_json::to_string(cfg)
+        .map_err(|e| format!("Serialize speedrun_baselines.json: {}", e))?;
+    fs::write(&path, json)
+        .map_err(|e| format!("Écrire speedrun_baselines.json: {}", e))
+}
+
 // ===== Persistance barre de raccourcis =====
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

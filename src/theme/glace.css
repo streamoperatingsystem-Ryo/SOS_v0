@@ -1,0 +1,87 @@
+/* ===== StreamOS — thème « glace » (thème de base) =====
+   Couche 2b (cf. IDEE/IDEA02.md). Assigne chaque variable de rôle à un
+   token — c'est LE fichier du thème : un futur thème = un nouveau
+   theme-*.css + un import dans main.ts, zéro touch aux composants.
+   Fill des boutons = verre sombre translucide (--btn-tint: transparent) ;
+   la couleur vit dans les bordures/glows/textes et dans les signaux
+   sémantiques (--dash-danger, --ctrl-*, --plat-*, --message-* — non
+   décoratifs, jamais retirés). */
+:root {
+  /* ===== Fondations ===== */
+  --fond: var(--t-fond);
+  --texte: var(--t-texte);
+  --gris: var(--t-gris);
+  --gris-fonce: var(--t-gris-fonce);
+  --bordure: var(--t-bordure);
+  --bordure-active: var(--t-bordure-active);
+  --fond-panneau: var(--t-fond-panneau);
+  --fond-controle: var(--t-fond-controle);
+  /* ===== Accents néon ===== */
+  --accent-violet: var(--t-violet);
+  --accent-orange: var(--t-orange);
+  --accent-magenta: var(--t-magenta);
+  --accent-rose: var(--t-rose);
+  /* Fond d'ambiance « aurora » de l'application : base nuit + gros halos
+     qui débordent des bords — violet centre-droit, orange haut-droit,
+     magenta en accent. Le halo bas-gauche (le plus fort) suit la couleur
+     du cadre SVG de l'app (--cadre-couleur, poussée par App.svelte quand
+     le cadre est actif ; fallback orange sinon). Les rims orbitaux fins
+     vivent dans la couche .fond-decor (app.css), pas ici. Consommé par
+     body (app.css) — les panneaux du chrome sont transparents par-dessus. */
+  --fond-ambiance:
+    radial-gradient(65% 60% at 97% 52%, color-mix(in srgb, var(--t-violet) 32%, transparent), transparent 72%),
+    radial-gradient(50% 58% at 106% 82%, color-mix(in srgb, var(--t-orange) 30%, transparent), transparent 70%),
+    radial-gradient(40% 45% at 103% 30%, color-mix(in srgb, var(--t-magenta) 20%, transparent), transparent 72%),
+    radial-gradient(70% 62% at -6% 100%, color-mix(in srgb, var(--cadre-couleur, var(--t-orange)) 55%, transparent), transparent 68%),
+    radial-gradient(38% 36% at -3% 98%, color-mix(in srgb, var(--cadre-couleur, var(--t-orange)) 65%, transparent), transparent 65%),
+    var(--t-fond);
+  --gradient-sig: var(--t-gradient-sig);
+  --glow-orange: var(--t-glow-orange);
+  /* ===== Accent utilisateur — couleur du cadre SVG actif =====
+     --cadre-couleur / --cadre-couleur-fin sont poussés sur :root par
+     App.svelte quand un cadre app est actif ; fallback = accents du thème.
+     Colore le chrome : bordures de boutons, hovers, focus, anneaux.
+     Les rôles --bordure / --bordure-active RESTENT neutres (consommés
+     aussi par le canvas — hors périmètre) ; les variantes teintées sont
+     --bordure-ui / --bordure-ui-active. */
+  --accent-ui: var(--cadre-couleur, var(--accent-violet));
+  --glow-ui: 0 0 8px color-mix(in srgb, var(--accent-ui) 40%, transparent);
+  --bordure-ui: color-mix(in srgb, var(--accent-ui) 35%, var(--bordure));
+  --bordure-ui-active: color-mix(in srgb, var(--accent-ui) 65%, var(--bordure-active));
+  --gradient-cadre: linear-gradient(135deg, var(--cadre-couleur, var(--t-orange)), var(--cadre-couleur-fin, var(--t-violet)));
+  /* ===== Contextes dashboard — signaux de zone =====
+     Bordures, glow, texte, indicateurs actifs uniquement — JAMAIS de fill
+     de bouton coloré au repos sous glace (décision IDEA02). */
+  --dash-danger: var(--t-bordeaux-900);
+  --dash-success: var(--t-emeraude-700);
+  --dash-orange: var(--t-orange-800);
+  --dash-jaune: var(--t-jaune-700);
+  --dash-glow-danger: var(--t-dash-glow-danger);
+  /* ===== Boutons — verre sombre translucide, aucune teinte colorée =====
+     --btn-tint transparent : pas de couleur dans le fill ni le shine ;
+     --btn-base = verre sombre translucide (le fond ambiant transparaît,
+     légèrement plus dense en bas = pilule verre). La couleur vit dans les
+     bordures/glows/textes ; les états sémantiques reposent leur --btn-tint
+     coloré (danger/success/ctrl-*) donc gardent un voile teinté. */
+  --btn-tint: transparent;
+  --btn-base: color-mix(in srgb, var(--fond-controle) 80%, transparent);
+  /* ===== Messages & états UI — SEULE source de vérité =====
+     Sémantique, non thémable : jamais de #hex pour un message/état dans
+     un composant. */
+  --message-user-action-color: var(--t-ambre);
+  --surbrillance-orange: var(--t-orange);
+  --message-ok-color: var(--t-vert);
+  --message-error-color: var(--t-rouge);
+  /* ===== Contrôles topbar + guide snap + gizmo ===== */
+  --ctrl-arreter: var(--message-error-color);
+  --ctrl-redemarrer: var(--accent-orange);
+  --ctrl-refresh: var(--message-ok-color);
+  --ctrl-centre: var(--t-jaune-centre);
+  /* ===== Couleurs de marque des plateformes (décoratif) ===== */
+  --plat-twitch: var(--t-twitch);
+  --plat-kick: var(--t-vert);
+  --plat-youtube: var(--t-youtube);
+  --plat-tiktok: var(--t-tiktok);
+  --plat-obs: var(--t-obs);
+  --plat-diffusion: var(--t-vert);
+}

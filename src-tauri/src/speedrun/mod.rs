@@ -127,4 +127,22 @@ pub mod commands {
     ) -> Result<(), String> {
         Err(MSG_INDISPONIBLE.to_string())
     }
+
+    #[tauri::command]
+    pub fn speedrun_baseline_lire(
+        _app_handle: AppHandle,
+        _chemin_lss: String,
+    ) -> Result<Vec<Option<f64>>, String> {
+        Err(MSG_INDISPONIBLE.to_string())
+    }
+
+    #[tauri::command]
+    pub fn speedrun_baseline_enregistrer(
+        _app_handle: AppHandle,
+        _chemin_lss: String,
+        _index: usize,
+        _cumul_secs: f64,
+    ) -> Result<(), String> {
+        Err(MSG_INDISPONIBLE.to_string())
+    }
 }

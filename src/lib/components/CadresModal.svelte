@@ -257,7 +257,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.3rem 0.7rem;
     font: inherit;
@@ -268,17 +268,17 @@
   .onglet:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .onglet.actif {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .modal-body-content {
     display: flex;
@@ -307,7 +307,7 @@
     align-items: center;
     gap: 0.3rem;
     padding: 0.4rem;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     cursor: pointer;
@@ -317,17 +317,17 @@
   .thumb:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .thumb.selectionne {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .thumb-vignette {
     width: 120px;
@@ -351,13 +351,13 @@
     justify-content: center;
     width: 120px;
     padding: 3px;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     background: var(--fond);
   }
   .variante {
     width: 12px;
     height: 12px;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     cursor: pointer;
     padding: 0;
   }
@@ -372,7 +372,7 @@
     width: 220px;
     flex-shrink: 0;
     padding: 0.5rem;
-    border-left: 1px solid var(--bordure);
+    border-left: 1px solid var(--bordure-ui);
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -383,11 +383,11 @@
     font-weight: 700;
     text-align: center;
     padding: 0.3rem 0;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
   }
   .toggle {
     padding: 0.4rem 0.6rem;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     font-size: 0.8rem;
     font-weight: 600;
     cursor: pointer;
@@ -400,17 +400,17 @@
   .toggle:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .toggle.actif {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .config-section {
     display: flex;
@@ -442,7 +442,7 @@
   .color {
     width: 28px;
     height: 24px;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     background: transparent;
     cursor: pointer;
     flex-shrink: 0;
@@ -468,6 +468,6 @@
     position: relative;
     overflow: hidden;
     background: var(--fond);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
   }
 </style>

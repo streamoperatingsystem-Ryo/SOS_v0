@@ -196,7 +196,7 @@
     color: var(--message-user-action-color);
     line-height: 1.3;
     padding: 0.4rem 0.5rem;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
   }
   .btn-list {
@@ -223,7 +223,7 @@
     width: 3rem;
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.15rem 0.3rem;
     font: inherit;
@@ -233,13 +233,13 @@
   }
   .btn-input:focus {
     outline: none;
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .bind-btn {
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.2rem 0.5rem;
     font: inherit;
     font-size: 0.78rem;
@@ -250,7 +250,7 @@
   .bind-btn:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .bind-btn.binding {
     background: var(--message-user-action-color);
@@ -278,7 +278,7 @@
     flex-direction: column;
     gap: 0.4rem;
     padding-top: 0.6rem;
-    border-top: 1px solid var(--bordure);
+    border-top: 1px solid var(--bordure-ui);
   }
   .toggle-row {
     display: flex;

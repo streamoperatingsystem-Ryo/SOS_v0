@@ -25,6 +25,7 @@ mod bandeau;
 mod position_overlay;
 mod raccourcis;
 mod speedrun;
+mod telemetrie;
 // Les commandes speedrun sont définies dans speedrun::commands (réelles sur
 // Windows, stubs sur les autres plateformes). Importées dans le scope pour
 // generate_handler!.
@@ -32,11 +33,12 @@ use raccourcis::{
     raccourcis_appliquer, raccourcis_etat, raccourcis_masquer, raccourcis_moniteurs,
 };
 use speedrun::commands::{
-    speedrun_action_manuelle, speedrun_arreter, speedrun_charger_asl,
-    speedrun_charger_lss, speedrun_demarrer, speedrun_est_actif,
-    speedrun_lire_config, speedrun_maj_settings, speedrun_maj_settings_asl,
-    speedrun_sauver_config,
+    speedrun_action_manuelle, speedrun_arreter, speedrun_baseline_enregistrer,
+    speedrun_baseline_lire, speedrun_charger_asl, speedrun_charger_lss,
+    speedrun_demarrer, speedrun_est_actif, speedrun_lire_config,
+    speedrun_maj_settings, speedrun_maj_settings_asl, speedrun_sauver_config,
 };
+use telemetrie::commands::{telemetrie_derniers, telemetrie_etat};
 
 use scenes::{ScenesState, SceneIndex};
 use std::sync::Arc;
@@ -552,6 +554,41 @@ async fn obs_refresh_diffusion(
     password: String,
 ) -> Result<(), String> {
     obs::refresh_diffusion(&host, port, &password).await
+}
+
+/// Bascule le streaming OBS (ToggleStream). One-shot connect → request → close.
+/// Retourne le nouvel état (true = en live).
+#[tauri::command]
+async fn obs_toggle_stream(
+    host: String,
+    port: u16,
+    password: String,
+) -> Result<bool, String> {
+    obs::toggle_stream(&host, port, &password).await
+}
+
+/// Bascule l'enregistrement OBS (ToggleRecord). One-shot connect → request →
+/// close. Retourne le nouvel état (true = enregistrement en cours).
+#[tauri::command]
+async fn obs_toggle_record(
+    host: String,
+    port: u16,
+    password: String,
+) -> Result<bool, String> {
+    obs::toggle_record(&host, port, &password).await
+}
+
+/// Lit l'état des sorties OBS (GetStreamStatus + GetRecordStatus, une
+/// connexion). Retourne { stream, record }. Appelé au connect + après chaque
+/// toggle — PAS de polling (connexion OBS = one-shot, pas persistante).
+#[tauri::command]
+async fn obs_outputs_status(
+    host: String,
+    port: u16,
+    password: String,
+) -> Result<serde_json::Value, String> {
+    let (stream, record) = obs::outputs_status(&host, port, &password).await?;
+    Ok(serde_json::json!({ "stream": stream, "record": record }))
 }
 
 // ===== Pop-out chat (Lot B) =====
@@ -2782,6 +2819,18 @@ pub fn run() {
             // (tick 15s, fetch 60s live / 180s off, dedup, push via chat_tx).
             viewers::demarrer(handle.clone(), chat_tx.clone());
 
+            // Télémétrie multiplateforme — collecte passive (listeners events
+            // + tap chat_tx). Enregistrée AVANT les auto-resume pour capter
+            // leurs connexions. Non-fatal : l'app continue sans si l'init
+            // du fichier échoue.
+            match telemetrie::TelemetrieState::new(&handle) {
+                Ok(telemetrie_state) => {
+                    telemetrie_state.demarrer(&handle, chat_tx.clone());
+                    app.manage(telemetrie_state);
+                }
+                Err(e) => eprintln!("[Telemetrie] ERR init: {}", e),
+            }
+
             // Auto-resume : si token valide en coffre → IRC + point vert.
             // Pas de modal. Si token absent/invalide → reste déconnecté.
             let resume_app = handle.clone();
@@ -2941,6 +2990,9 @@ pub fn run() {
             import_alerte_media,
             obs_connect,
             obs_refresh_diffusion,
+            obs_toggle_stream,
+            obs_toggle_record,
+            obs_outputs_status,
             chat_popout_toggle,
             chat_popout_fermer,
             raccourcis_moniteurs,
@@ -3067,7 +3119,11 @@ pub fn run() {
             speedrun_action_manuelle,
             speedrun_lire_config,
             speedrun_sauver_config,
-            speedrun_maj_settings_asl
+            speedrun_maj_settings_asl,
+            speedrun_baseline_lire,
+            speedrun_baseline_enregistrer,
+            telemetrie_etat,
+            telemetrie_derniers
         ])
         .run(tauri::generate_context!())
         .expect("erreur lors du lancement de StreamOS v0");

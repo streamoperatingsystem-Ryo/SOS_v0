@@ -1,7 +1,7 @@
 // Store speedrun côté dashboard. Écoute l'event Tauri speedrun:event et expose
 // l'état du timer, des splits, de la connexion processus et des erreurs.
 // Pattern identique à chat.ts : stores writables + initSpeedrun() au montage.
-import { writable } from "svelte/store";
+import { writable, get } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
 import { tauri, type SpeedrunEvent, type SpeedrunConfig, type AslSettingDetail } from "../tauri";
 import { speedrunConfigModalOpen } from "./ui";
@@ -71,6 +71,63 @@ export const nomsSplitsAsl = writable<Record<string, string>>({});
 /// Erreur speedrun (affichage discret). null = pas d'erreur.
 export const erreurSpeedrun = writable<string | null>(null);
 
+/// Référence de comparaison de la colonne delta (temps de split CUMULÉS en
+/// secondes par segment) : baseline « dernière fois » (speedrun_baselines.json)
+/// mergée avec les PB du .lss. Figée à chaque départ de run — les splits
+/// enregistrés en cours de run préparent la référence du run SUIVANT sans
+/// modifier celle affichée.
+export const referenceSplits = writable<(number | null)[]>([]);
+
+/// Parse un temps formaté "MM:SS.cc" / "HH:MM:SS.cc" vers des secondes.
+/// Retourne null si vide ou placeholder ("--/--/--").
+function parseTempsSecondes(str: string | null | undefined): number | null {
+  if (!str || str === "--/--/--") return null;
+  const parts = str.split(":");
+  let h = 0, m = 0, s = 0;
+  if (parts.length === 3) {
+    h = parseFloat(parts[0]) || 0;
+    m = parseFloat(parts[1]) || 0;
+    s = parseFloat(parts[2]) || 0;
+  } else if (parts.length === 2) {
+    m = parseFloat(parts[0]) || 0;
+    s = parseFloat(parts[1]) || 0;
+  } else {
+    s = parseFloat(parts[0]) || 0;
+  }
+  const total = h * 3600 + m * 60 + s;
+  return isNaN(total) ? null : total;
+}
+
+/// Recharge la référence de comparaison (baseline « dernière fois » mergée
+/// avec les PB du .lss : priorité au temps enregistré) et la fige dans
+/// referenceSplits. Appelée au chargement du .lss et à chaque départ de run.
+export async function chargerBaseline() {
+  const path = get(cheminLss);
+  const segs = get(segmentsLss);
+  if (!path || segs.length === 0) {
+    referenceSplits.set([]);
+    return;
+  }
+  try {
+    const saved = await tauri.speedrunBaselineLire(path);
+    referenceSplits.set(
+      segs.map((s, i) => saved[i] ?? s.pbRealTime ?? s.pbGameTime)
+    );
+  } catch {
+    // Non-fatal : fallback sur les PB du .lss uniquement
+    referenceSplits.set(segs.map((s) => s.pbRealTime ?? s.pbGameTime));
+  }
+}
+
+/// Enregistre le temps cumulé d'un split réalisé dans la baseline du .lss
+/// (référence « dernière fois » du prochain run). Non-fatal, fire-and-forget.
+function enregistrerSplitBaseline(segIdx: number, timeStr: string) {
+  const path = get(cheminLss);
+  const secs = parseTempsSecondes(timeStr);
+  if (!path || secs === null) return;
+  tauri.speedrunBaselineEnregistrer(path, segIdx, secs).catch(() => {});
+}
+
 // ===== Init =====
 
 let unlisten: (() => void) | null = null;
@@ -86,6 +143,9 @@ export async function initSpeedrun() {
         phaseTimer.set("Running");
         estActif.set(true);
         indexSplitCourant.set(0);
+        // Refiger la référence delta : elle intègre les temps enregistrés
+        // pendant le run précédent (« dernière fois »).
+        chargerBaseline().catch(() => {});
         break;
       case "split":
         if (event.index !== undefined) {
@@ -100,6 +160,9 @@ export async function initSpeedrun() {
             s[segIdx] = event.time!;
             return s;
           });
+          // Enregistrer le split dans la baseline « dernière fois » (fichier) —
+          // la référence affichée (referenceSplits) reste figée pour ce run.
+          enregistrerSplitBaseline(segIdx, event.time);
         }
         break;
       case "splitSkipped":
@@ -127,6 +190,20 @@ export async function initSpeedrun() {
         break;
       case "ended":
         phaseTimer.set("Ended");
+        // Le DERNIER split émet "ended" (pas "split") côté moteur — son temps
+        // cumulé est dans event.time. Le stocker dans splits (colonne droite)
+        // et l'enregistrer dans la baseline, comme les autres splits.
+        if (event.time) {
+          const lastIdx = get(totalSplits) - 1;
+          if (lastIdx >= 0) {
+            splits.update((s) => {
+              while (s.length <= lastIdx) s.push("");
+              s[lastIdx] = event.time!;
+              return s;
+            });
+            enregistrerSplitBaseline(lastIdx, event.time);
+          }
+        }
         break;
       case "gameTime":
         if (event.time) tempsJeu.set(event.time);
@@ -265,6 +342,9 @@ export async function chargerLss(path: string) {
       }))
     );
     totalSplits.set(run.segments?.length || 0);
+    // Charger la référence delta (baseline « dernière fois » mergée avec les
+    // PB du .lss) — figée jusqu'au prochain départ de run.
+    await chargerBaseline();
     erreurSpeedrun.set(null);
   } catch (e) {
     erreurSpeedrun.set(String(e));

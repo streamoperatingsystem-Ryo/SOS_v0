@@ -1728,7 +1728,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.3rem 0.45rem;
     font: inherit;
@@ -1740,17 +1740,17 @@
   .alerte-select:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .alerte-select.selected {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .alerte-detail {
     display: flex;
@@ -1772,7 +1772,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.2rem 0;
     font: inherit;
@@ -1784,17 +1784,17 @@
   .mode-btn:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .mode-btn.active {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
 
   /* Pad numérique : plages + grille 4×4 */
@@ -1808,7 +1808,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.3rem 0;
     font: inherit;
@@ -1818,17 +1818,17 @@
   .pad-plage-btn:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .pad-plage-btn.active {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .pad-grille {
     display: grid;
@@ -1844,7 +1844,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.4rem 0;
     font: inherit;
@@ -1855,17 +1855,17 @@
   .pad-touche:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .pad-touche.selected {
-    border-color: var(--accent-violet);
-    box-shadow: 0 0 0 1px var(--accent-violet);
+    border-color: var(--accent-ui);
+    box-shadow: 0 0 0 1px var(--accent-ui);
   }
   .pad-touche.reservee {
     opacity: 0.5;
     cursor: default;
   }
-  .pad-touche.audio { background: color-mix(in srgb, var(--accent-violet) 15%, var(--fond-controle)); }
+  .pad-touche.audio { background: color-mix(in srgb, var(--accent-ui) 15%, var(--fond-controle)); }
   .pad-touche.image { background: color-mix(in srgb, var(--message-ok-color) 15%, var(--fond-controle)); }
   .pad-touche.video { background: color-mix(in srgb, var(--accent-orange) 15%, var(--fond-controle)); }
   .pad-touche-nom {
@@ -1901,7 +1901,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.15rem 0.5rem;
     font: inherit;
@@ -1918,7 +1918,7 @@
   .alerte-toggle:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .alerte-toggle.on:hover {
     background: var(--message-ok-color);
@@ -1934,7 +1934,7 @@
   .alerte-field input {
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.25rem 0.4rem;
     font: inherit;
@@ -1973,12 +1973,12 @@
     word-break: break-all;
   }
 
-  /* Tabs — mêmes patterns que CadresModal (bordures var(--accent-violet), pas de radius) */
+  /* Tabs — mêmes patterns que CadresModal (bordures var(--accent-ui), pas de radius) */
   .tabs {
     display: flex;
     flex-shrink: 0;
     gap: 0.2rem;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
     padding: 0 1rem;
   }
   .tab {
@@ -1999,7 +1999,7 @@
   }
   .tab.active {
     opacity: 1;
-    border-bottom-color: var(--accent-violet);
+    border-bottom-color: var(--accent-ui);
   }
 
   /* Corps : scroll, colonne de contenu contenue et centrée (pas étirée sur
@@ -2020,7 +2020,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon);
     padding: 0.6rem 0.9rem;
     background: var(--fond-panneau);
@@ -2029,7 +2029,7 @@
     font-size: 0.85rem;
     font-weight: 600;
     opacity: 0.85;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
     padding-bottom: 0.2rem;
   }
 
@@ -2041,7 +2041,7 @@
     cursor: pointer;
   }
   .toggle input[type="checkbox"] {
-    accent-color: var(--accent-violet);
+    accent-color: var(--accent-ui);
   }
 
   /* Slider durée — même style que CadresModal .range */
@@ -2059,7 +2059,7 @@
     width: 100%;
     height: 14px;
     cursor: pointer;
-    accent-color: var(--accent-violet);
+    accent-color: var(--accent-ui);
     background: var(--fond);
   }
   .position-row {
@@ -2071,7 +2071,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.4rem 0.6rem;
     cursor: pointer;
     font-size: 0.85rem;
@@ -2080,17 +2080,17 @@
   .pos-btn:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .pos-btn.active {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
     font-weight: 600;
   }
   .hint {
@@ -2108,15 +2108,15 @@
     width: 100%;
     aspect-ratio: 16 / 9;
     background: var(--fond);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     overflow: hidden;
     touch-action: none;
     user-select: none;
   }
   .overlay-skeleton {
     position: absolute;
-    background: color-mix(in srgb, var(--accent-violet) 12%, transparent);
-    border: 2px solid var(--bordure-active);
+    background: color-mix(in srgb, var(--accent-ui) 12%, transparent);
+    border: 2px solid var(--bordure-ui-active);
     cursor: move;
     display: flex;
     align-items: center;
@@ -2124,7 +2124,7 @@
     touch-action: none;
   }
   .overlay-skeleton:hover {
-    background: color-mix(in srgb, var(--accent-violet) 18%, transparent);
+    background: color-mix(in srgb, var(--accent-ui) 18%, transparent);
   }
   .skeleton-label {
     font-size: 0.7rem;
@@ -2135,7 +2135,7 @@
     position: absolute;
     width: 10px;
     height: 10px;
-    background: var(--accent-violet);
+    background: var(--accent-ui);
     border: 1px solid var(--fond);
   }
   .sk-handle.nw { top: -6px; left: -6px; cursor: nwse-resize; }
@@ -2143,12 +2143,12 @@
   .sk-handle.sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
   .sk-handle.se { bottom: -6px; right: -6px; cursor: nwse-resize; }
 
-  /* File d'attente — boutons style CadresModal (border var(--accent-violet), hover accent) */
+  /* File d'attente — boutons style CadresModal (border var(--accent-ui), hover accent) */
   .current {
     margin-bottom: 0.4rem;
     padding: 0.4rem;
     background: var(--fond-panneau);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
   }
   .current-label {
     font-size: 0.75rem;
@@ -2164,7 +2164,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.2rem 0.5rem;
     cursor: pointer;
     font-size: 0.8rem;
@@ -2173,7 +2173,7 @@
   .queue-actions button:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .queue-actions button:disabled {
     opacity: 0.4;
@@ -2192,7 +2192,7 @@
     align-items: center;
     gap: 0.4rem;
     padding: 0.3rem;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
   }
   .avatar {
     width: 24px;
@@ -2229,13 +2229,13 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   }
   .item-actions button:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .item-actions button:disabled {
     opacity: 0.3;
@@ -2264,7 +2264,7 @@
     flex: 1;
     overflow-y: auto;
     max-height: 240px;
-    border-right: 1px solid var(--bordure);
+    border-right: 1px solid var(--bordure-ui);
     padding-right: 0.6rem;
   }
   .followers-list h3 {
@@ -2276,7 +2276,7 @@
     box-sizing: border-box;
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.3rem 0.5rem;
     font: inherit;
     font-size: 0.8rem;
@@ -2287,7 +2287,7 @@
   }
   .search-input:focus {
     outline: none;
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .followers-list ul {
     list-style: none;
@@ -2307,7 +2307,7 @@
     justify-content: space-between;
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     color: var(--texte);
     padding: 0.25rem 0.4rem;
     cursor: pointer;
@@ -2318,16 +2318,16 @@
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .follower-row:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .login {
     overflow: hidden;
@@ -2348,7 +2348,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     cursor: pointer;
     padding: 0.2rem 0.3rem;
     font-size: 0.8rem;
@@ -2357,7 +2357,7 @@
   .mini-btn:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .clip-picker {
     flex: 1;
@@ -2386,7 +2386,7 @@
     min-width: 0;
   }
   .clip-row.attribue {
-    background: color-mix(in srgb, var(--accent-violet) 15%, var(--fond-controle));
+    background: color-mix(in srgb, var(--accent-ui) 15%, var(--fond-controle));
     color: var(--texte);
   }
   .clip-actions {
@@ -2420,15 +2420,15 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.4rem 0.8rem;
     cursor: pointer;
     transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   }
   .action:hover {
     background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover), var(--glow-violet);
-    border-color: var(--accent-violet);
+    box-shadow: var(--btn-inset-hover), var(--glow-ui);
+    border-color: var(--accent-ui);
   }
   .action:disabled {
     opacity: 0.4;
@@ -2440,7 +2440,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.2rem 0.5rem;
     cursor: pointer;
     font-size: 0.75rem;
@@ -2451,7 +2451,7 @@
   .test-btn:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .test-btn:disabled {
     opacity: 0.4;
@@ -2470,7 +2470,7 @@
   .followers-list,
   .clip-picker {
     scrollbar-width: thin;
-    scrollbar-color: var(--bordure-active) var(--fond);
+    scrollbar-color: var(--bordure-ui-active) var(--fond);
   }
   .tab-body::-webkit-scrollbar,
   .followers-list::-webkit-scrollbar,
@@ -2485,12 +2485,12 @@
   .tab-body::-webkit-scrollbar-thumb,
   .followers-list::-webkit-scrollbar-thumb,
   .clip-picker::-webkit-scrollbar-thumb {
-    background: var(--bordure-active);
+    background: var(--bordure-ui-active);
     border: 2px solid var(--fond);
   }
   .tab-body::-webkit-scrollbar-thumb:hover,
   .followers-list::-webkit-scrollbar-thumb:hover,
   .clip-picker::-webkit-scrollbar-thumb:hover {
-    background: var(--accent-violet);
+    background: var(--accent-ui);
   }
 </style>

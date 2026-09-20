@@ -22,6 +22,10 @@ export interface Widget {
   mediaRot?: number;
   mediaOffsetX?: number;
   mediaOffsetY?: number;
+  /// Miroir du média : retournement horizontal/vertical du contenu
+  /// (scale ±1 combiné au zoom dans le rendu). undefined/false = pas de miroir.
+  mediaMiroirH?: boolean;
+  mediaMiroirV?: boolean;
   /// Effets visuels du média (0 = neutre) : luminosité (-100..100),
   /// contraste (-100..100), teinte (0..360 deg), flou (0..20 px),
   /// pixelisation (0..50, 0 = désactivé).
@@ -223,6 +227,9 @@ export interface Scene {
   bgRot?: number;
   bgOffsetX?: number;
   bgOffsetY?: number;
+  /// Miroir du fond : retournement horizontal/vertical du média de fond.
+  bgMiroirH?: boolean;
+  bgMiroirV?: boolean;
   /// Effets visuels du fond (0 = neutre) : luminosité (-100..100),
   /// contraste (-100..100), teinte (0..360 deg), flou (0..20 px),
   /// pixelisation (0..50, 0 = désactivé).
@@ -448,6 +455,26 @@ export const tauri = {
   /// Appelé quand serveur :4321 ready + OBS connecté. One-shot, non-fatal.
   async obsRefreshDiffusion(host: string, port: number, password: string): Promise<void> {
     await invoke("obs_refresh_diffusion", { host, port, password });
+  },
+
+  /// Bascule le streaming OBS (ToggleStream). Retourne le nouvel état.
+  async obsToggleStream(host: string, port: number, password: string): Promise<boolean> {
+    return await invoke<boolean>("obs_toggle_stream", { host, port, password });
+  },
+
+  /// Bascule l'enregistrement OBS (ToggleRecord). Retourne le nouvel état.
+  async obsToggleRecord(host: string, port: number, password: string): Promise<boolean> {
+    return await invoke<boolean>("obs_toggle_record", { host, port, password });
+  },
+
+  /// État des sorties OBS (stream + record, une connexion). Pas de polling :
+  /// lu au connect + après chaque toggle.
+  async obsOutputsStatus(
+    host: string,
+    port: number,
+    password: string,
+  ): Promise<{ stream: boolean; record: boolean }> {
+    return await invoke("obs_outputs_status", { host, port, password });
   },
 
   /// Toggle fenêtre pop-out chat (always_on_top, 360×520).
@@ -1384,6 +1411,23 @@ export const tauri = {
   /// Boa. Appelé quand l'utilisateur valide la modale de configuration.
   async speedrunMajSettingsAsl(valeurs: Record<string, boolean>): Promise<void> {
     await invoke("speedrun_maj_settings_asl", { valeurs });
+  },
+
+  /// Lit la baseline sauvegardée d'un .lss (temps de split cumulés en secondes
+  /// par segment, null = pas de données). Référence « dernière fois » de la
+  /// colonne delta — vide si aucune run enregistrée pour ce .lss.
+  async speedrunBaselineLire(cheminLss: string): Promise<(number | null)[]> {
+    return invoke<(number | null)[]>("speedrun_baseline_lire", { cheminLss });
+  },
+
+  /// Enregistre le temps cumulé (secondes) d'un split réalisé dans la
+  /// baseline du .lss — devient la référence du prochain run.
+  async speedrunBaselineEnregistrer(
+    cheminLss: string,
+    index: number,
+    cumulSecs: number
+  ): Promise<void> {
+    await invoke("speedrun_baseline_enregistrer", { cheminLss, index, cumulSecs });
   },
 };
 

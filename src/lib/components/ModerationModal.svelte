@@ -795,7 +795,7 @@
     display: flex;
     flex-shrink: 0;
     gap: 0.2rem;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
     padding: 0 1rem;
   }
   .tab {
@@ -816,7 +816,7 @@
   }
   .tab.active {
     opacity: 1;
-    border-bottom-color: var(--accent-violet);
+    border-bottom-color: var(--accent-ui);
   }
   .tab:disabled {
     opacity: 0.3;
@@ -857,7 +857,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.3rem 0.45rem;
     font: inherit;
@@ -869,17 +869,17 @@
   .mod-select:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .mod-select.selected {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .mod-detail {
     display: flex;
@@ -893,7 +893,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon);
     padding: 0.6rem 0.9rem;
     background: var(--fond-panneau);
@@ -902,7 +902,7 @@
     font-size: 0.85rem;
     font-weight: 600;
     opacity: 0.85;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
     padding-bottom: 0.2rem;
   }
 
@@ -927,7 +927,7 @@
     justify-content: space-between;
     gap: 0.5rem;
     padding: 0.25rem 0;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
   }
   .viewer-row:last-child {
     border-bottom: none;
@@ -976,7 +976,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.15rem 0.4rem;
     font: inherit;
@@ -988,38 +988,38 @@
   .btn-mod:hover:not(:disabled) {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .btn-mod:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
   .btn-mod.ban {
-    border-color: color-mix(in srgb, var(--message-error-color) 40%, var(--bordure));
+    border-color: color-mix(in srgb, var(--message-error-color) 40%, var(--bordure-ui));
     color: var(--message-error-color);
   }
   .btn-mod.timeout {
-    border-color: color-mix(in srgb, var(--message-user-action-color) 40%, var(--bordure));
+    border-color: color-mix(in srgb, var(--message-user-action-color) 40%, var(--bordure-ui));
     color: var(--message-user-action-color);
   }
   .btn-mod.vip {
-    border-color: color-mix(in srgb, var(--accent-magenta) 40%, var(--bordure));
+    border-color: color-mix(in srgb, var(--accent-magenta) 40%, var(--bordure-ui));
     color: var(--accent-magenta);
   }
   .btn-mod.mod {
-    border-color: color-mix(in srgb, var(--message-ok-color) 40%, var(--bordure));
+    border-color: color-mix(in srgb, var(--message-ok-color) 40%, var(--bordure-ui));
     color: var(--message-ok-color);
   }
   .btn-mod.retirer {
-    border-color: color-mix(in srgb, var(--message-user-action-color) 40%, var(--bordure));
+    border-color: color-mix(in srgb, var(--message-user-action-color) 40%, var(--bordure-ui));
     color: var(--message-user-action-color);
   }
   .btn-mod.debannir {
-    border-color: color-mix(in srgb, var(--message-ok-color) 40%, var(--bordure));
+    border-color: color-mix(in srgb, var(--message-ok-color) 40%, var(--bordure-ui));
     color: var(--message-ok-color);
   }
   .btn-mod.suppr-msg {
-    border-color: color-mix(in srgb, var(--message-error-color) 40%, var(--bordure));
+    border-color: color-mix(in srgb, var(--message-error-color) 40%, var(--bordure-ui));
     color: var(--message-error-color);
     padding: 0.15rem 0.3rem;
   }
@@ -1038,7 +1038,7 @@
     align-items: center;
     gap: 0.4rem;
     padding: 0.2rem 0;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
   }
   .msg-row:last-child {
     border-bottom: none;
@@ -1068,7 +1068,7 @@
     gap: 0.4rem;
     justify-content: flex-end;
     padding-top: 0.4rem;
-    border-top: 1px solid var(--bordure);
+    border-top: 1px solid var(--bordure-ui);
   }
 
   /* Hints */
@@ -1108,12 +1108,12 @@
   }
   .tab-body::-webkit-scrollbar-thumb,
   .liste-scroll::-webkit-scrollbar-thumb {
-    background: var(--bordure);
+    background: var(--bordure-ui);
     border-radius: 3px;
   }
   .tab-body::-webkit-scrollbar-thumb:hover,
   .liste-scroll::-webkit-scrollbar-thumb:hover {
-    background: var(--accent-violet);
+    background: var(--accent-ui);
   }
 
   /* ===== Section Communauté (lecture seule) ===== */
@@ -1127,7 +1127,7 @@
     width: 2.2rem;
     height: 2.2rem;
     border-radius: 50%;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     flex-shrink: 0;
   }
   .bc-info {
@@ -1160,7 +1160,7 @@
     display: flex;
     justify-content: space-between;
     padding: 0.1rem 0;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
   }
   .liste-entry:last-child {
     border-bottom: none;
@@ -1179,7 +1179,7 @@
     width: 1.4rem;
     height: 1.4rem;
     border-radius: 50%;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     flex-shrink: 0;
   }
   .liste-date,

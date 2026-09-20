@@ -227,7 +227,7 @@
     display: flex;
     gap: 0.5rem;
     padding: 0.6rem 1rem;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
     align-items: center;
   }
   .asl-presets {
@@ -238,7 +238,7 @@
   .preset-btn {
     background: var(--btn-surface);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.25rem 0.5rem;
     font-size: 0.78rem;
@@ -247,7 +247,7 @@
   }
   .preset-btn:hover:not(:disabled) {
     background: var(--btn-surface-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .preset-btn:disabled {
     opacity: 0.4;
@@ -257,21 +257,21 @@
     flex: 1;
     background: var(--fond-panneau);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     padding: 0.25rem 0.5rem;
     font-size: 0.85rem;
   }
   .asl-recherche:focus {
     outline: none;
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
 
   .asl-compteur {
     padding: 0.3rem 1rem;
     font-size: 0.78rem;
     color: var(--gris);
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
   }
 
   .asl-liste {
@@ -294,9 +294,9 @@
   .asl-groupe-titre {
     font-size: 0.8rem;
     font-weight: 600;
-    color: var(--accent-violet);
+    color: var(--accent-ui);
     padding: 0.3rem 0;
-    border-bottom: 1px solid color-mix(in srgb, var(--bordure) 50%, transparent);
+    border-bottom: 1px solid color-mix(in srgb, var(--bordure-ui) 50%, transparent);
     margin-bottom: 0.2rem;
   }
 
@@ -310,11 +310,11 @@
     transition: background 0.1s ease;
   }
   .asl-setting:hover {
-    background: color-mix(in srgb, var(--accent-violet) 8%, transparent);
+    background: color-mix(in srgb, var(--accent-ui) 8%, transparent);
   }
   .asl-setting input[type="checkbox"] {
     flex-shrink: 0;
-    accent-color: var(--accent-violet);
+    accent-color: var(--accent-ui);
   }
   .asl-setting-label {
     flex: 1;
@@ -337,14 +337,14 @@
     justify-content: flex-end;
     gap: 0.5rem;
     padding: 0.6rem 1rem;
-    border-top: 1px solid var(--bordure);
+    border-top: 1px solid var(--bordure-ui);
   }
   .asl-btn {
     padding: 0.4rem 1rem;
     border-radius: var(--rayon-petit);
     font-size: 0.85rem;
     cursor: pointer;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     transition: background 0.15s ease, border-color 0.15s ease;
   }
   .asl-btn.annuler {
@@ -355,13 +355,13 @@
     background: var(--btn-surface-hover);
   }
   .asl-btn.valider {
-    background: var(--accent-violet);
+    background: var(--accent-ui);
     color: white;
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
     font-weight: 600;
   }
   .asl-btn.valider:hover:not(:disabled) {
-    background: color-mix(in srgb, var(--accent-violet) 85%, white);
+    background: color-mix(in srgb, var(--accent-ui) 85%, white);
   }
   .asl-btn:disabled {
     opacity: 0.5;

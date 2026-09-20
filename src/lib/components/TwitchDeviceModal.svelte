@@ -55,7 +55,7 @@
     gap: 0.6rem;
   }
   .code-box {
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.6rem;
     text-align: center;
   }

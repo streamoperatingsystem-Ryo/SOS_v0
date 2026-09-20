@@ -235,13 +235,13 @@
     padding: 0.5rem 0.7rem;
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     font: inherit;
     font-size: 0.9rem;
   }
   .titre-input:focus {
     outline: none;
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .position-boutons {
     display: flex;
@@ -263,7 +263,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     font: inherit;
     font-size: 0.95rem;
     cursor: pointer;
@@ -273,18 +273,18 @@
   .style-btn:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
     opacity: 1;
   }
   .style-btn.active {
     background:
       linear-gradient(
         180deg,
-        color-mix(in srgb, var(--accent-violet) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-violet) 12%, var(--fond-controle)) 100%
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
       );
     color: var(--texte);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
     opacity: 1;
   }
   .police-select {
@@ -292,14 +292,14 @@
     padding: 0.4rem 0.5rem;
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     font: inherit;
     font-size: 0.85rem;
     cursor: pointer;
   }
   .police-select:focus {
     outline: none;
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .police-select option {
     padding: 0.3rem;
@@ -328,7 +328,7 @@
     min-height: 60px;
     padding: 0.8rem;
     background: var(--fond);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
     overflow: hidden;
   }

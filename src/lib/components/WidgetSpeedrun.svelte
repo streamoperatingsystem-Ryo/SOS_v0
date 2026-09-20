@@ -13,6 +13,7 @@
     totalSplits,
     segmentsLss,
     splits,
+    referenceSplits,
     nomJeuLss,
     nomCategorieLss,
     estActif,
@@ -118,18 +119,48 @@
     return "--/--/--";
   }
 
-  // PB de segment (delta cumulé PB) pour les segments parcourus/actifs.
-  //   - non parcouru : "--/--/--"
-  function pbSegment(i: number): string {
+  // Formate un delta signé façon LiveSplit (colonne "+/−") : signe toujours
+  // présent, précision au dixième — "-1.6", "+2.3", "-1:23.4", "+1:02:03.4".
+  function formatDelta(secs: number): string {
+    const sign = secs < 0 ? "-" : "+";
+    const totalDs = Math.round(Math.abs(secs) * 10);
+    const h = Math.floor(totalDs / 36000);
+    const m = Math.floor((totalDs % 36000) / 600);
+    const s = Math.floor((totalDs % 600) / 10);
+    const d = totalDs % 10;
+    if (h > 0) {
+      return `${sign}${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${d}`;
+    }
+    if (m > 0) {
+      return `${sign}${m}:${String(s).padStart(2, "0")}.${d}`;
+    }
+    return `${sign}${s}.${d}`;
+  }
+
+  // Delta vs référence « dernière fois » (baseline mergée PB) pour la 1ère
+  // colonne de chaque segment — CUMULÉ au split, comme LiveSplit :
+  //   - passé : cumulRun[i] - ref[i]
+  //   - actif : tempsCourant - ref[i]  (live à chaque tick)
+  //   - non parcouru / skip / pas de référence : "0.0" neutre (compteurs à
+  //     zéro — premier run sans sauvegarde)
+  // sens : "ahead" (vert, devant) | "behind" (rouge, derrière) | "neutre".
+  function deltaInfo(i: number): { texte: string; sens: "ahead" | "behind" | "neutre" } {
     const idx = $indexSplitCourant;
-    if (idx === null || i > idx) return "--/--/--";
-    const seg = $segmentsLss[i];
-    if (!seg) return "--/--/--";
-    const pbI = seg.pbRealTime != null ? Number(seg.pbRealTime) : NaN;
-    if (isNaN(pbI)) return "--/--/--";
-    const pbPrev = (i > 0 && $segmentsLss[i - 1]?.pbRealTime != null)
-      ? Number($segmentsLss[i - 1]!.pbRealTime) : 0;
-    return formatSegment(pbI - pbPrev);
+    const ref = $referenceSplits[i];
+    if (idx === null || i > idx || ref == null) return { texte: "0.0", sens: "neutre" };
+    let cumul: number | null = null;
+    if (i < idx) {
+      // Split passé : temps enregistré (vide si le segment a été skippé).
+      const t = $splits[i];
+      if (t) cumul = parseTime(t);
+    } else {
+      cumul = parseTime(tempsAffiche);
+    }
+    if (cumul === null) return { texte: "0.0", sens: "neutre" };
+    // Classer sur la valeur ARRONDIE au dixième (cohérent avec l'affichage :
+    // un delta affiché "0.0"/"-0.0" ne bascule pas de couleur).
+    const d = Math.round((cumul - ref) * 10) / 10;
+    return { texte: formatDelta(d), sens: d < 0 ? "ahead" : d > 0 ? "behind" : "neutre" };
   }
 
   // Phase label court
@@ -191,15 +222,17 @@
     <div class="speedrun-erreur">⚠ {$erreurSpeedrun}</div>
   {/if}
 
-  <!-- En-tête : jeu + catégorie + statut connexion -->
+  <!-- En-tête : titre du jeu centré en haut, catégorie juste en dessous,
+       pastille de statut garée en coin (absolute). -->
   <div class="sr-header">
-    <div class="sr-titre-jeu">
-      {#if $nomJeuLss || $nomCategorieLss}
-        {$nomJeuLss}{#if $nomCategorieLss}<span class="sr-cat"> — {$nomCategorieLss}</span>{/if}
-      {:else}
-        <span class="sr-placeholder">Aucun splits chargé</span>
+    {#if $nomJeuLss || $nomCategorieLss}
+      <div class="sr-titre-jeu">{$nomJeuLss}</div>
+      {#if $nomCategorieLss}
+        <div class="sr-cat">{$nomCategorieLss}</div>
       {/if}
-    </div>
+    {:else}
+      <div class="sr-titre-jeu"><span class="sr-placeholder">Aucun splits chargé</span></div>
+    {/if}
     {#if $estConnecte}
       <span class="sr-status ok" title="{$nomProcessus ?? "connecté"}">●</span>
     {:else if $estActif}
@@ -233,14 +266,17 @@
   {#if $segmentsLss.length > 0}
     <div class="speedrun-segments" bind:this={segmentsEl}>
       {#each $segmentsLss as seg, i}
+        {@const delta = deltaInfo(i)}
         <div
           class="speedrun-segment"
           class:actif={$indexSplitCourant === i}
           class:done={$indexSplitCourant !== null && $indexSplitCourant > i}
+          class:seg-ahead={delta.sens === "ahead"}
+          class:seg-behind={delta.sens === "behind"}
         >
           <span class="seg-idx">{i + 1}</span>
           <span class="seg-nom">{seg.nom}</span>
-          <span class="seg-pb">{pbSegment(i)}</span>
+          <span class="seg-pb delta-{delta.sens}">{delta.texte}</span>
           <span class="seg-time">{tempsSegment(i)}</span>
         </div>
       {/each}
@@ -253,7 +289,10 @@
     display: flex;
     flex-direction: column;
     gap: 6px;
-    padding: 10px;
+    /* Marge verticale de sécurité : le cadre SVG (overlay z-index 5) peut
+       manger le haut/bas du contenu selon son épaisseur/inclinaison. En em
+       → suit srTaillePolice. */
+    padding: 0.8em 10px;
     color: var(--texte);
     overflow: hidden;
     height: 100%;
@@ -263,9 +302,12 @@
   /* ===== En-tête ===== */
   .sr-header {
     display: flex;
+    /* Titre centré tout en haut, catégorie empilée juste en dessous. */
+    flex-direction: column;
     align-items: center;
-    justify-content: space-between;
-    gap: 6px;
+    gap: 2px;
+    /* Ancre pour la pastille de statut (garée en coin, hors flux). */
+    position: relative;
   }
   .sr-titre-jeu {
     font-size: 0.75em;
@@ -274,12 +316,19 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    text-align: center;
+    /* En colonne centrée l'item shrink-wrappe son contenu : max-width pour
+       que les titres longs ellipsent au lieu de déborder. */
+    max-width: 100%;
     /* Ombre de lisibilité : le titre est clair sur fond sombre → ombre noire. */
     text-shadow: 0 1px 2px #000, 0 0 1px #000;
   }
+  /* Catégorie sur sa propre ligne (était un span inline « — cat » dans le
+     titre). Un peu plus petite que le titre. */
   .sr-cat {
     color: var(--gris);
     font-weight: 400;
+    font-size: 0.7em;
   }
   .sr-placeholder {
     color: var(--gris);
@@ -287,6 +336,10 @@
     font-weight: 400;
   }
   .sr-status {
+    /* Garée en coin haut-droit du header — hors du flux centré. */
+    position: absolute;
+    top: 0;
+    right: 0;
     font-size: 0.7em;
     flex-shrink: 0;
   }
@@ -299,10 +352,16 @@
      couche — lisible sur tout fond. */
   .sr-timer {
     text-align: center;
-    padding: 4px 0 2px;
+    /* Marges L/R : inset face aux cadres épais. Fond « glace » teinté de la
+       couleur du cadre (comme le glass des messages chat). */
+    margin: 0 0.8em;
+    padding: 0.15em 0.5em;
+    background: color-mix(in srgb, var(--sr-grad-from) 15%, transparent);
+    backdrop-filter: blur(8px);
+    border-radius: var(--rayon-petit);
   }
   .sr-timer-valeur {
-    font-size: 2.16em;
+    font-size: 1.9em;
     font-weight: 700;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.04em;
@@ -392,7 +451,7 @@
     display: flex;
     align-items: center;
     gap: 6px;
-    padding: 3px 6px;
+    padding: 6px;
     font-size: 0.78em;
     border: 1px solid transparent;
     border-radius: var(--rayon-petit);
@@ -437,12 +496,24 @@
     white-space: nowrap;
     text-shadow: 0 1px 2px #000, 0 0 1px #000;
   }
+  /* Colonne delta « dernière fois » (1ère colonne temps, ex-PB) : vert =
+     temps gagné (devant la référence), rouge = temps perdu, gris = neutre
+     ("0.0", pas de comparaison). Variables sémantiques — jamais d'hex. */
   .seg-pb {
     font-variant-numeric: tabular-nums;
     color: var(--gris);
     font-size: 0.9em;
     text-shadow: 0 1px 2px #000;
   }
+  .seg-pb.delta-ahead { color: var(--message-ok-color); }
+  .seg-pb.delta-behind { color: var(--message-error-color); }
+  .seg-pb.delta-ahead,
+  .seg-pb.delta-behind { font-weight: 700; }
+  /* Bordure du split entier colorée selon le résultat (demande utilisateur) :
+     verte si le split est gagné, rouge s'il est perdu. Déclaré APRÈS .actif
+     (même spécificité) → le résultat l'emporte aussi sur le split en cours. */
+  .speedrun-segment.seg-ahead { border-color: var(--message-ok-color); }
+  .speedrun-segment.seg-behind { border-color: var(--message-error-color); }
   /* Temps de run (split réalisé) — couleur du cadre pour le distinguer du
      PB (gris). Affiché pour les segments déjà passés. */
   .seg-time {

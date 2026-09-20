@@ -45,6 +45,10 @@
   let bgTeinte = $derived($sceneStore.bgTeinte ?? 0);
   let bgFlou = $derived($sceneStore.bgFlou ?? 0);
   let bgPixel = $derived($sceneStore.bgPixel ?? 0);
+  // Miroir du fond : flip H/V du média — scale ±1 combiné au zoom, dans
+  // l'espace local du média (après rotate dans la liste = flip de la source).
+  let bgMiroirH = $derived($sceneStore.bgMiroirH === true);
+  let bgMiroirV = $derived($sceneStore.bgMiroirV === true);
   let bgFilter = $derived(chaineFilter(bgLum, bgContraste, bgTeinte, bgFlou));
   let hasFond = $derived(bgMedia.length > 0);
   let bgIsVideo = $derived(bgKind === "video");
@@ -62,7 +66,7 @@
     etendre: "cover",
   };
   let bgFitCss = $derived(FIT_CSS[bgFit] ?? "cover");
-  let bgMediaTransform = $derived(`translate(${bgOx}px, ${bgOy}px) rotate(${bgRot}deg) scale(${bgZoom})`);
+  let bgMediaTransform = $derived(`translate(${bgOx}px, ${bgOy}px) rotate(${bgRot}deg) scale(${bgZoom * (bgMiroirH ? -1 : 1)}, ${bgZoom * (bgMiroirV ? -1 : 1)})`);
 
   // ===== Cadre de l'application (bord extérieur du canvas) =====
   let cadreApp = $derived($sceneStore.cadreApp ?? null);
@@ -188,6 +192,8 @@
     ctx.save();
     // Effets visuels (filter + pixelisation) appliqués AVANT le warp GL —
     // même ordre que dessinerContenuFond (diffusion.html) / Widget.dessinerOffscreen.
+    const bhs = bgMiroirH ? -1 : 1;
+    const bvs = bgMiroirV ? -1 : 1;
     if (bgPixel > 0) {
       const pf = Math.max(1, bgPixel);
       const pw = Math.max(1, Math.round(canvasW / pf));
@@ -202,7 +208,7 @@
         pctx.translate(pw / 2, ph / 2);
         pctx.translate(bgOx / pf, bgOy / pf);
         pctx.rotate((bgRot * Math.PI) / 180);
-        pctx.scale(bgZoom, bgZoom);
+        pctx.scale(bgZoom * bhs, bgZoom * bvs);
         pctx.translate(-pw / 2, -ph / 2);
         dessinerFitCanvas(pctx, src, sw, sh, pw, ph, bgFitCss);
         pctx.restore();
@@ -219,7 +225,7 @@
     ctx.translate(canvasW / 2, canvasH / 2);
     ctx.translate(bgOx, bgOy);
     ctx.rotate((bgRot * Math.PI) / 180);
-    ctx.scale(bgZoom, bgZoom);
+    ctx.scale(bgZoom * bhs, bgZoom * bvs);
     ctx.translate(-canvasW / 2, -canvasH / 2);
     dessinerFitCanvas(ctx, src, sw, sh, canvasW, canvasH, bgFitCss);
     ctx.filter = "none";
@@ -242,6 +248,8 @@
     void bgFitCss;
     void bgFilter;
     void bgPixel;
+    void bgMiroirH;
+    void bgMiroirV;
     rendreBgMorph();
   });
 
@@ -283,7 +291,7 @@
     pctx.translate(pw / 2, ph / 2);
     pctx.translate(bgOx / pf, bgOy / pf);
     pctx.rotate((bgRot * Math.PI) / 180);
-    pctx.scale(bgZoom, bgZoom);
+    pctx.scale(bgZoom * (bgMiroirH ? -1 : 1), bgZoom * (bgMiroirV ? -1 : 1));
     pctx.translate(-pw / 2, -ph / 2);
     dessinerFitCanvas(pctx, src, sw, sh, pw, ph, bgFitCss);
     pctx.restore();
@@ -308,6 +316,8 @@
     void bgFitCss;
     void bgFilter;
     void bgPixel;
+    void bgMiroirH;
+    void bgMiroirV;
     rendreBgPixel();
   });
 

@@ -12,11 +12,12 @@
     setMediaOffsetXLocal, setMediaOffsetYLocal, setMediaLumLocal,
     setMediaContrasteLocal, setMediaTeinteLocal, setMediaFlouLocal,
     setMediaPixelLocal, resetMedia, clearWidgetMedia, commitScene,
+    toggleMediaMiroir, toggleBgMiroir,
     importFond, setBgFit, setBgZoomLocal, setBgRotLocal, setBgOffsetXLocal,
     setBgOffsetYLocal, setBgLumLocal, setBgContrasteLocal, setBgTeinteLocal,
     setBgFlouLocal, setBgPixelLocal, resetFond, clearFond,
     setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime,
-    setWidgetTrou, deleteObsTrouSource,
+    setWidgetTrou, deleteObsTrouSource, dupliquerWidget, rotateWidgetLocal,
     setChatFiltre, setChatTaillePolice, setSpeedrunPolice, setSpeedrunConfig,
     setInputViewerConfig, setCameraDevice,
     resetMorphsWidget, resetMorphsFond,
@@ -79,12 +80,19 @@
     }
   });
 
-  // ===== Onglets horizontaux (Contenu / Transformation / Effets / Lecture) =====
-  let tabWidget = $state<"contenu" | "transformation" | "effets" | "lecture">("contenu");
+  // ===== Onglets horizontaux (Contenu / Transformation / Effets / Lecture / Dupliquer) =====
+  let tabWidget = $state<"contenu" | "transformation" | "effets" | "lecture" | "dupliquer">("contenu");
   let tabFond = $state<"contenu" | "transformation" | "effets" | "lecture">("contenu");
-  // Réinitialise à "contenu" quand on change de widget sélectionné.
+  // Réinitialise à "contenu" quand on change de widget sélectionné — SAUF juste
+  // après une duplication (la copie devient sélectionnée : rester dans l'onglet
+  // Dupliquer pour l'orienter via le gizmo miroir sans re-cliquer l'onglet).
+  let garderTab = false;
   $effect(() => {
     void selectedId;
+    if (garderTab) {
+      garderTab = false;
+      return;
+    }
     tabWidget = "contenu";
   });
 
@@ -146,6 +154,8 @@
   let currentTeinte = $derived(selectedWidget?.mediaTeinte ?? 0);
   let currentFlou = $derived(selectedWidget?.mediaFlou ?? 0);
   let currentPixel = $derived(selectedWidget?.mediaPixel ?? 0);
+  let currentMiroirH = $derived(selectedWidget?.mediaMiroirH === true);
+  let currentMiroirV = $derived(selectedWidget?.mediaMiroirV === true);
   let selectedKind = $derived(selectedWidget?.kind ?? "image");
   let selectedTrou = $derived(selectedWidget?.trou === true);
   let selectedObsSource = $derived(selectedWidget?.obsSource ?? null);
@@ -166,6 +176,8 @@
   let bgTeinte = $derived($sceneStore.bgTeinte ?? 0);
   let bgFlou = $derived($sceneStore.bgFlou ?? 0);
   let bgPixel = $derived($sceneStore.bgPixel ?? 0);
+  let bgMiroirH = $derived($sceneStore.bgMiroirH === true);
+  let bgMiroirV = $derived($sceneStore.bgMiroirV === true);
   let hasFond = $derived(bgMedia.length > 0);
   let hasBgTitre = $derived(($sceneStore.bgTitre ?? "").length > 0);
   let fondVideoEl = $derived($videoRegistry.get("fond"));
@@ -199,12 +211,29 @@
   function onFlouInput(e: Event) { if (selectedId) setMediaFlouLocal(selectedId, parseFloat((e.target as HTMLInputElement).value)); }
   function onPixelInput(e: Event) { if (selectedId) setMediaPixelLocal(selectedId, parseFloat((e.target as HTMLInputElement).value)); }
   async function onEffetChange() { await commitScene(); }
+  // Miroir média : toggle discret (commit dans le store, pas de slider).
+  async function onMiroirMedia(sens: "h" | "v") { if (selectedId) await toggleMediaMiroir(selectedId, sens); }
   async function onResetMedia() { if (selectedId) await resetMedia(selectedId); }
   async function onClearMedia() { if (selectedId) await clearWidgetMedia(selectedId); }
   function onWidgetTogglePlay() { if (selectedId) setWidgetMediaPaused(selectedId, !widgetMediaPaused); }
   function onWidgetSeek(t: number) { if (selectedId) setWidgetMediaTime(selectedId, t); }
   function onToggleTrou() { if (selectedId) setWidgetTrou(selectedId, !selectedTrou); }
   function onSupprimerClick() { confirmDeleteWidget.set(true); }
+
+  // ===== Onglet Dupliquer (copie + retournement via rotateX/rotateY ±180°) =====
+  // Le gizmo miroir pilote le widget SÉLECTIONNÉ — la copie juste après
+  // duplication, mais n'importe quel widget si on revient dans l'onglet.
+  async function onDupliquer() {
+    if (!selectedId) return;
+    garderTab = true;
+    const newId = await dupliquerWidget(selectedId);
+    if (!newId) garderTab = false;
+  }
+  async function onMiroir(sens: "h" | "v" | "reset") {
+    if (!selectedId) return;
+    rotateWidgetLocal(selectedId, sens === "v" ? 180 : 0, sens === "h" ? 180 : 0);
+    await commitScene();
+  }
 
   // ===== Handlers fond =====
   function onBgFitClick(fit: string) { setBgFit(fit); }
@@ -221,6 +250,8 @@
   function onBgFlouInput(e: Event) { setBgFlouLocal(parseFloat((e.target as HTMLInputElement).value)); }
   function onBgPixelInput(e: Event) { setBgPixelLocal(parseFloat((e.target as HTMLInputElement).value)); }
   async function onBgEffetChange() { await commitScene(); }
+  // Miroir fond : toggle discret (commit dans le store).
+  async function onBgMiroir(sens: "h" | "v") { await toggleBgMiroir(sens); }
   async function onBgReset() { await resetFond(); }
   async function onResetMorphsFond() { await resetMorphsFond(); }
   function onBgTogglePlay() { setBgPaused(!bgPaused); }
@@ -401,6 +432,7 @@
               <button class="tab" class:active={tabWidget === "contenu"} onclick={() => tabWidget = "contenu"}>Contenu</button>
               <button class="tab" class:active={tabWidget === "transformation"} onclick={() => tabWidget = "transformation"}>Transformation</button>
               <button class="tab" class:active={tabWidget === "effets"} onclick={() => tabWidget = "effets"}>Effets</button>
+              <button class="tab" class:active={tabWidget === "dupliquer"} onclick={() => tabWidget = "dupliquer"}>Dupliquer</button>
               {#if selectedKind === "video"}
                 <button class="tab" class:active={tabWidget === "lecture"} onclick={() => tabWidget = "lecture"}>Lecture</button>
               {/if}
@@ -552,6 +584,19 @@
               {@render controlesTransformation()}
             {:else if tabWidget === "effets"}
               {@render controlesEffetsWidget()}
+            {:else if tabWidget === "dupliquer"}
+              <button class="action" onclick={onDupliquer}>Dupliquer le widget</button>
+              <p class="hint">La copie apparaît en miroir sur l'axe vertical du canvas et devient le widget sélectionné — les guides symétriques aident à la caler.</p>
+              <Gizmo3D maxDeg={180} />
+              <div class="fit-group">
+                <span class="field-label">Retournement</span>
+                <div class="fit-buttons">
+                  <button class="fit-btn" onclick={() => onMiroir("h")}>Miroir →</button>
+                  <button class="fit-btn" onclick={() => onMiroir("v")}>Miroir ↓</button>
+                  <button class="fit-btn" onclick={() => onMiroir("reset")}>Reset</button>
+                </div>
+              </div>
+              <p class="hint">Le gizmo oriente le widget sélectionné : ±90° = inclinaison, ±180° = miroir.</p>
             {:else if tabWidget === "lecture"}
               {@render controlesLecture()}
             {/if}
@@ -598,6 +643,13 @@
               {@render sliderLigne("Teinte", bgTeinte, 0, 360, 1, onBgTeinteInput, onBgEffetChange, (v) => Math.round(v) + "°")}
               {@render sliderLigne("Flou", bgFlou, 0, 20, 0.5, onBgFlouInput, onBgEffetChange, (v) => v.toFixed(1) + "px")}
               {@render sliderLigne("Pixelisation", bgPixel, 0, 50, 1, onBgPixelInput, onBgEffetChange, (v) => String(Math.round(v)))}
+              <div class="fit-group">
+                <span class="field-label">Miroir fond</span>
+                <div class="fit-buttons">
+                  <button class="fit-btn" class:active={bgMiroirH} onclick={() => onBgMiroir("h")}>Miroir →</button>
+                  <button class="fit-btn" class:active={bgMiroirV} onclick={() => onBgMiroir("v")}>Miroir ↓</button>
+                </div>
+              </div>
               {#if bgKind === "image"}
                 <div class="fit-group">
                   <span class="field-label">Morphing</span>
@@ -673,6 +725,15 @@
   {@render sliderLigne("Teinte", currentTeinte, 0, 360, 1, onTeinteInput, onEffetChange, (v) => Math.round(v) + "°")}
   {@render sliderLigne("Flou", currentFlou, 0, 20, 0.5, onFlouInput, onEffetChange, (v) => v.toFixed(1) + "px")}
   {@render sliderLigne("Pixelisation", currentPixel, 0, 50, 1, onPixelInput, onEffetChange, (v) => String(Math.round(v)))}
+  {#if selectedWidget?.media}
+    <div class="fit-group">
+      <span class="field-label">Miroir média</span>
+      <div class="fit-buttons">
+        <button class="fit-btn" class:active={currentMiroirH} onclick={() => onMiroirMedia("h")}>Miroir →</button>
+        <button class="fit-btn" class:active={currentMiroirV} onclick={() => onMiroirMedia("v")}>Miroir ↓</button>
+      </div>
+    </div>
+  {/if}
   {#if isMediaWidget && selectedKind === "image" && selectedWidget?.media}
     <div class="fit-group">
       <span class="field-label">Morphing</span>
@@ -715,28 +776,27 @@
     box-shadow: 0 0 16px var(--accent-carte-glow), 0 8px 24px rgba(0, 0, 0, 0.4);
     overflow: hidden;
     flex-shrink: 0;
-    /* Tous les boutons internes héritent la teinte contextuelle de la carte
-       (bordeaux widget / orange fond / jaune input-viewer) via la recette
-       Aero --btn-*. */
-    --btn-tint: var(--accent-carte);
+    /* Les boutons internes gardent le fill glace neutre commun ; la couleur
+       de la carte (--accent-carte) vit dans les bordures/glows/états actifs
+       uniquement (IDEA02 — repère de cible conservé). */
   }
 
   /* Cible widget = bordeaux foncé (pointillés + glow, palette --dash-*) */
   .cible-widget {
     --accent-carte: var(--dash-danger);
-    --accent-carte-glow: rgba(127, 29, 29, 0.45);
+    --accent-carte-glow: color-mix(in srgb, var(--dash-danger) 45%, transparent);
   }
 
   /* Cible fond = orange foncé (pointillés + glow, palette --dash-*) */
   .cible-fond {
     --accent-carte: var(--dash-orange);
-    --accent-carte-glow: rgba(154, 52, 18, 0.4);
+    --accent-carte-glow: color-mix(in srgb, var(--dash-orange) 40%, transparent);
   }
 
   /* Cible input-viewer = jaune foncé (pointillés + glow, palette --dash-*) */
   .cible-input-viewer {
     --accent-carte: var(--dash-jaune);
-    --accent-carte-glow: rgba(161, 98, 7, 0.4);
+    --accent-carte-glow: color-mix(in srgb, var(--dash-jaune) 40%, transparent);
   }
 
   .carte-entete-row {
@@ -828,7 +888,7 @@
   .tab {
     background: var(--btn-surface);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     box-shadow: var(--btn-inset);
     opacity: 0.4;
     padding: 0.3rem 0.4rem;
@@ -842,7 +902,7 @@
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
     opacity: 0.7;
-    border-color: var(--bordure-active);
+    border-color: var(--bordure-ui-active);
   }
   .tab.active {
     opacity: 1;
@@ -883,36 +943,18 @@
     gap: 0.3rem;
     margin-top: 0.4rem;
     padding-top: 0.4rem;
-    border-top: 1px solid var(--bordure);
+    border-top: 1px solid var(--bordure-ui);
   }
 
   .action {
-    /* Recette « verre Aero HUD » — bordure + surface teintées par la couleur
-       contextuelle de la carte (--btn-tint = --accent-carte posé sur
-       .carte-edition) dès l'état repos, pas seulement au hover/active.
-       Bordure = couleur PLEINE de la carte (pas de mix avec --bordure qui la
-       rendrait indistincte). Surface renforcée localement pour que la teinte
-       soit visible (les --dash-* sont déjà assombries → le tint global 22% est
-       trop faible). Utilise --btn-tint (pas --accent-carte directement) pour
-       que les surcharges .speedrun-start/.speedrun-stop fonctionnent. */
-    --btn-border: linear-gradient(var(--btn-tint), var(--btn-tint));
-    --btn-surface:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--btn-tint) 38%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--btn-tint) 20%, var(--fond-controle)) 50%,
-        var(--fond-controle) 100%
-      );
-    --btn-surface-hover:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--btn-tint) 50%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--btn-tint) 28%, var(--fond-controle)) 50%,
-        var(--fond-controle) 100%
-      );
+    /* Recette « glace » — fill neutre commun ; la couleur de la carte vit
+       dans la bordure pleine --accent-carte (repère de cible, IDEA02) +
+       le glow hover. Les états sémantiques .speedrun-start/.speedrun-stop
+       gardent leur surcharge --btn-tint colorée. */
+    --btn-border: linear-gradient(var(--accent-carte), var(--accent-carte));
     background:
       var(--btn-surface) padding-box,
-      var(--btn-border) border-box;
+      var(--btn-border) border-box border-area;
     color: var(--texte);
     border: 1px solid transparent;
     box-shadow: var(--btn-inset);
@@ -933,14 +975,14 @@
     /* Hover : glow couleur contextuelle de la carte + surface illuminée. */
     background:
       var(--btn-surface-hover) padding-box,
-      var(--btn-border) border-box;
+      var(--btn-border) border-box border-area;
     box-shadow: var(--btn-inset-hover), 0 0 8px var(--accent-carte-glow), 0 0 0 1px color-mix(in srgb, var(--accent-carte) 30%, transparent);
   }
   .action:active {
     background:
-      linear-gradient(180deg, var(--fond-controle) 0%, color-mix(in srgb, var(--btn-tint) 8%, var(--fond-controle)) 100%) padding-box,
-      var(--btn-border) border-box;
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+      var(--btn-surface-active) padding-box,
+      var(--btn-border) border-box border-area;
+    box-shadow: var(--btn-inset-active);
   }
   .action:disabled {
     opacity: 0.35;
@@ -950,7 +992,7 @@
   .action:disabled:hover {
     background:
       var(--btn-surface) padding-box,
-      var(--btn-border) border-box;
+      var(--btn-border) border-box border-area;
     box-shadow: none;
   }
 
@@ -971,7 +1013,7 @@
   input {
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.35rem 0.5rem;
     font: inherit;
     font-size: 0.85rem;
@@ -988,7 +1030,7 @@
   select {
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.35rem 0.5rem;
     font: inherit;
     font-size: 0.85rem;
@@ -1011,7 +1053,7 @@
   .fit-btn {
     background: var(--btn-surface);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     box-shadow: var(--btn-inset);
     opacity: 0.4;
     padding: 0.3rem 0.4rem;
@@ -1025,7 +1067,7 @@
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
     opacity: 0.7;
-    border-color: var(--bordure-active);
+    border-color: var(--bordure-ui-active);
   }
   .fit-btn.active {
     opacity: 1;
@@ -1053,7 +1095,7 @@
     padding: 0.4rem 0.5rem;
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     font: inherit;
     font-size: 0.85rem;
     cursor: pointer;
@@ -1109,7 +1151,7 @@
     gap: 4px;
     padding: 2px 6px;
     border-radius: var(--rayon-petit);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     cursor: pointer;
@@ -1119,7 +1161,7 @@
   .setting-toggle:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--bordure-active);
+    border-color: var(--bordure-ui-active);
   }
   .setting-toggle.active {
     border-color: var(--accent-carte);

@@ -198,6 +198,13 @@ pub struct Widget {
     pub mediaOffsetX: f64,
     #[serde(default = "default_media_offset")]
     pub mediaOffsetY: f64,
+    /// Miroir du média : retournement horizontal/vertical du contenu
+    /// (scale ±1 combiné au zoom dans la chaîne transform du rendu).
+    /// false = pas de miroir (défaut, rétro-compat).
+    #[serde(default)]
+    pub mediaMiroirH: bool,
+    #[serde(default)]
+    pub mediaMiroirV: bool,
     /// Effets visuels du média (0 = neutre) : luminosité (-100..100),
     /// contraste (-100..100), teinte (0..360 deg), flou (0..20 px),
     /// pixelisation (0..50, 0 = désactivé).
@@ -352,6 +359,12 @@ pub struct Scene {
     pub bgOffsetX: f64,
     #[serde(default = "default_bg_offset")]
     pub bgOffsetY: f64,
+    /// Miroir du fond : retournement horizontal/vertical du média de fond
+    /// (scale ±1 combiné au zoom dans le rendu). false = pas de miroir.
+    #[serde(default)]
+    pub bgMiroirH: bool,
+    #[serde(default)]
+    pub bgMiroirV: bool,
     /// Effets visuels du fond (0 = neutre) : luminosité (-100..100),
     /// contraste (-100..100), teinte (0..360 deg), flou (0..20 px),
     /// pixelisation (0..50, 0 = désactivé).
@@ -421,6 +434,8 @@ impl Default for Scene {
             bgRot: DEFAULT_BG_ROT,
             bgOffsetX: DEFAULT_BG_OFFSET,
             bgOffsetY: DEFAULT_BG_OFFSET,
+            bgMiroirH: false,
+            bgMiroirV: false,
             bgLum: 0.0,
             bgContraste: 0.0,
             bgTeinte: 0.0,

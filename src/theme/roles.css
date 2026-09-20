@@ -1,0 +1,50 @@
+/* ===== StreamOS — rôles : contrat + recettes dérivées =====
+   Couche 2 (cf. IDEE/IDEA02.md). Contient les recettes calculées à partir
+   des variables de rôle assignées par le thème (theme/glace.css) :
+   --btn-tint (teinte du fill), --btn-base (substrat). Les boutons à
+   anneau coloré assignent leur --btn-border localement par contexte
+   (pas de défaut global).
+   Un thème n'assigne QUE des couleurs — jamais ces gradients.
+   Les composants consomment ces rôles, jamais des --t-* directement. */
+:root {
+  /* Recette « verre » des boutons : brillance moitié supérieure teintée
+     --btn-tint + relief interne (inset lumineux haut / sombre bas). */
+  --btn-surface:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--btn-tint) 22%, var(--btn-base)) 0%,
+      color-mix(in srgb, var(--btn-tint) 12%, var(--btn-base)) 50%,
+      var(--btn-base) 100%
+    );
+  --btn-surface-hover:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--btn-tint) 32%, var(--btn-base)) 0%,
+      color-mix(in srgb, var(--btn-tint) 16%, var(--btn-base)) 50%,
+      var(--btn-base) 100%
+    );
+  /* Relief interne + halo ambiant --accent-ui (couleur du cadre) : chaque
+     bouton porte une lueur douce au repos, renforcée au survol. */
+  --btn-inset:
+    inset 0 1px 0 0 color-mix(in srgb, var(--btn-tint) 35%, transparent),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.45),
+    0 0 9px color-mix(in srgb, var(--accent-ui) 16%, transparent);
+  --btn-inset-hover:
+    inset 0 1px 0 0 color-mix(in srgb, var(--btn-tint) 50%, transparent),
+    inset 0 -1px 0 0 rgba(0, 0, 0, 0.55),
+    0 0 14px color-mix(in srgb, var(--accent-ui) 30%, transparent);
+  /* Pressed : le verre s'enfonce — surface inversée (haut = substrat plein)
+     + ombre interne creusée. Recette unique pour tous les :active — les
+     boutons à anneau dégradé la consomment en couche padding-box. */
+  --btn-surface-active:
+    linear-gradient(
+      180deg,
+      var(--fond-controle) 0%,
+      color-mix(in srgb, var(--btn-tint) 8%, var(--fond-controle)) 100%
+    );
+  --btn-inset-active: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+  /* Arrondis — contrat structural. */
+  --rayon-petit: 5px; /* boutons, inputs, selects */
+  --rayon: 8px; /* blocs, barres, conteneurs */
+  --rayon-grand: 14px; /* modales */
+}

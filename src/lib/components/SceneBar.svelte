@@ -276,6 +276,7 @@
        extérieur, à Escape, ou après sélection d'une scène. -->
   <div class="vos-scenes-wrap">
     <button class="vos-scenes-btn" class:ouvert={scenesOuvert} onclick={toggleScenes}>
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2 2 7l10 5 10-5-10-5z"/><path d="m2 17 10 5 10-5"/><path d="m2 12 10 5 10-5"/></svg>
       Vos scènes <span class="fleche">{scenesOuvert ? "▾" : "▸"}</span>
     </button>
     {#if scenesOuvert}
@@ -342,8 +343,14 @@
 
   <div class="actions">
     <button class="action" onclick={onNouvelle}>+ Scène</button>
-    <button class="action" onclick={exportScene}>Exporter</button>
-    <button class="action" onclick={importScene}>Importer</button>
+    <button class="action" onclick={exportScene}>
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      Exporter
+    </button>
+    <button class="action" onclick={importScene}>
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Importer
+    </button>
   </div>
 </div>
 
@@ -392,25 +399,38 @@
     align-items: center;
     gap: 0.5rem;
     padding: 0.3rem 0.6rem;
-    border-bottom: 1px solid var(--bordure);
-    background: var(--fond-panneau);
+    border-bottom: 1px solid var(--bordure-ui);
+    background: transparent; /* laisse transparaître le fond d'ambiance */
     position: relative;
     z-index: 200;
-    /* SceneBar = zone identité néon (signature orange/magenta), contrairement
-       à la sidebar froide (--dash-*). Teinte orange pour la recette Aero. */
-    --btn-tint: var(--accent-orange);
+    /* SceneBar = zone identité néon (signature orange/magenta) : l'orange
+       vit dans les bordures/glows/états actifs et le texte — le fill des
+       boutons reste la glace neutre commune (IDEA02). */
   }
-  /* Bouton "Vos scènes" : ouvre un dropdown contenant la liste des
-     pastilles. Orange néon (variable --accent-orange, cf. AGENTS.md). */
+  /* Bouton "Vos scènes" : ouvre le dropdown des scènes. Couleur = celle du
+     cadre SVG de l'app (--cadre-couleur, poussée par App.svelte quand le
+     cadre est actif) — fallback accent primaire saumon (--accent-rose)
+     sinon. Seul bouton plein de la barre. Léger dégradé vertical + liseré
+     plus sombre pour détacher la pilule du fond au lieu d'un aplat brut. */
   .vos-scenes-wrap {
     position: relative;
     flex-shrink: 0;
   }
   .vos-scenes-btn {
-    background: var(--btn-surface);
+    --vos-scenes: var(--cadre-couleur, var(--accent-rose));
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--vos-scenes) 88%, white) 0%,
+        var(--vos-scenes) 100%
+      );
     box-shadow: var(--btn-inset);
-    color: var(--accent-orange);
-    border: 1px solid var(--bordure);
+    color: var(--texte);
+    /* Texte adaptatif : la couleur choisie peut être claire (blanc…) →
+       bascule sombre quand la luminosité oklch dépasse ~0.72 (relative
+       color syntax, Chromium ≥119 ; invalide → fallback var(--texte)). */
+    color: oklch(from var(--vos-scenes) clamp(0, (0.72 - l) * 100, 0.95) 0 0);
+    border: 1px solid color-mix(in srgb, var(--vos-scenes) 55%, var(--fond));
     border-radius: var(--rayon-petit);
     padding: 0.2rem 0.6rem;
     font: inherit;
@@ -419,23 +439,21 @@
     white-space: nowrap;
     display: flex;
     align-items: center;
-    gap: 0.3rem;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+    gap: 0.35rem;
+    transition: box-shadow 0.15s ease, background 0.15s ease, border-color 0.15s ease;
   }
-  .vos-scenes-btn:hover {
-    background: var(--btn-surface-hover);
-    border-color: var(--accent-orange);
-    box-shadow: var(--btn-inset-hover), 0 0 8px rgba(249, 115, 22, 0.3);
-  }
+  .vos-scenes-btn:hover,
   .vos-scenes-btn.ouvert {
-    border-color: transparent;
     background:
-      var(--btn-surface-hover) padding-box,
-      var(--gradient-sig) border-box;
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--vos-scenes) 72%, white) 0%,
+        color-mix(in srgb, var(--vos-scenes) 90%, white) 100%
+      );
+    border-color: color-mix(in srgb, var(--vos-scenes) 40%, white);
     box-shadow:
-      var(--btn-inset),
-      var(--glow-orange),
-      0 0 6px rgba(236, 72, 153, 0.3);
+      var(--btn-inset-hover),
+      0 0 10px color-mix(in srgb, var(--vos-scenes) 45%, transparent);
   }
   .vos-scenes-btn .fleche {
     font-size: 0.7rem;
@@ -449,9 +467,9 @@
     left: 0;
     z-index: 1000;
     background: var(--fond-panneau);
-    border: 1px solid var(--bordure-active);
+    border: 1px solid var(--bordure-ui-active);
     border-radius: var(--rayon-petit);
-    box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
+    box-shadow: 0 0 20px color-mix(in srgb, var(--accent-ui) 20%, transparent);
     padding: 0.3rem;
     min-width: 10rem;
     max-height: 60vh;
@@ -470,7 +488,7 @@
   .pastille-group {
     display: flex;
     align-items: stretch;
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui-active);
     border-radius: var(--rayon-petit);
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
@@ -483,18 +501,18 @@
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
     opacity: 0.8;
-    border-color: var(--bordure-active);
+    border-color: var(--bordure-ui-active);
   }
   .pastille-group.active {
     opacity: 1;
     border: 1px solid transparent;
     background:
       var(--btn-surface-hover) padding-box,
-      var(--gradient-sig) border-box;
+      var(--gradient-cadre) border-box border-area;
     box-shadow:
       var(--btn-inset),
       var(--glow-orange),
-      0 0 6px rgba(236, 72, 153, 0.3);
+      0 0 6px color-mix(in srgb, var(--accent-magenta) 30%, transparent);
   }
   .pastille-nom {
     background: transparent;
@@ -551,11 +569,11 @@
     border-radius: var(--rayon-petit);
     background:
       var(--btn-surface) padding-box,
-      linear-gradient(135deg, var(--surbrillance-orange), #ec4899) border-box;
+      var(--gradient-cadre) border-box border-area;
     box-shadow:
       var(--btn-inset),
-      0 0 8px rgba(255, 140, 26, 0.4),
-      0 0 4px rgba(236, 72, 153, 0.3);
+      0 0 8px color-mix(in srgb, var(--accent-orange) 40%, transparent),
+      0 0 4px color-mix(in srgb, var(--accent-magenta) 30%, transparent);
     /* Forcer l'opacité pour que l'orange reste visible même à l'état
        non-actif (opacity 0.5 par défaut atténuerait la bordure orange). */
     opacity: 0.95;
@@ -589,12 +607,12 @@
     white-space: nowrap;
   }
   .nom-span:hover {
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .nom-input {
     background: var(--fond-controle);
     color: var(--texte);
-    border: 1px solid var(--bordure-active);
+    border: 1px solid var(--bordure-ui-active);
     padding: 0.2rem 0.5rem;
     font: inherit;
     font-size: 0.85rem;
@@ -603,7 +621,7 @@
   }
   .nom-input:focus {
     outline: none;
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .actions {
     display: flex;
@@ -615,37 +633,40 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid transparent;
+    border: 1px solid var(--bordure-ui-active);
     border-radius: var(--rayon-petit);
     padding: 0.2rem 0.5rem;
     font: inherit;
     font-size: 0.8rem;
     cursor: pointer;
     white-space: nowrap;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
     transition: border-color 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
   }
   .action:hover {
     border: 1px solid transparent;
     background:
       var(--btn-surface-hover) padding-box,
-      var(--gradient-sig) border-box;
+      var(--gradient-cadre) border-box border-area;
     box-shadow:
       var(--btn-inset-hover),
       var(--glow-orange),
-      0 0 6px rgba(236, 72, 153, 0.3);
+      0 0 6px color-mix(in srgb, var(--accent-magenta) 30%, transparent);
   }
   .action:active {
     background:
-      linear-gradient(180deg, var(--fond-controle) 0%, color-mix(in srgb, var(--btn-tint) 8%, var(--fond-controle)) 100%) padding-box,
-      var(--gradient-sig) border-box;
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+      var(--btn-surface-active) padding-box,
+      var(--gradient-cadre) border-box border-area;
+    box-shadow: var(--btn-inset-active);
   }
   .ctx-menu {
     position: fixed;
     z-index: 9999;
     background: var(--fond-panneau);
-    border: 1px solid var(--bordure-active);
-    box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
+    border: 1px solid var(--bordure-ui-active);
+    box-shadow: 0 0 20px color-mix(in srgb, var(--accent-ui) 20%, transparent);
     display: flex;
     flex-direction: column;
     min-width: 6rem;
@@ -663,7 +684,7 @@
     white-space: nowrap;
   }
   .ctx-item:hover {
-    border-left-color: var(--accent-violet);
+    border-left-color: var(--accent-ui);
     background: var(--btn-surface-hover);
   }
   .ctx-item.danger:hover {

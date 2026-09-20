@@ -491,7 +491,10 @@
         display: flex;
         flex-direction: column;
         gap: 6px;
-        padding: 10px;
+        /* Marge verticale de sécurité : le cadre SVG (overlay z-index 5) peut
+           manger le haut/bas du contenu selon son épaisseur/inclinaison. En em
+           → suit srTaillePolice (font-size posée sur le widget). */
+        padding: 0.8em 10px;
         font-family: "Rajdhani", "Segoe UI", sans-serif;
         color: var(--texte);
         overflow: hidden;
@@ -543,10 +546,16 @@
          couche — lisible sur tout fond. */
       .sr-timer {
         text-align: center;
-        padding: 0.25em 0 0.15em;
+        /* Marges L/R : inset face aux cadres épais. Fond « glace » teinté de
+           la couleur du cadre (comme le glass des messages chat). */
+        margin: 0 0.8em;
+        padding: 0.15em 0.5em;
+        background: color-mix(in srgb, var(--sr-grad-from, #e0e0e0) 15%, transparent);
+        backdrop-filter: blur(8px);
+        border-radius: var(--rayon-petit);
       }
       .sr-timer .sr-timer-valeur {
-        font-size: 2.16em;
+        font-size: 1.9em;
         font-weight: 700;
         font-variant-numeric: tabular-nums;
         letter-spacing: 0.04em;
@@ -623,7 +632,7 @@
         display: flex;
         align-items: center;
         gap: 0.4em;
-        padding: 0.2em 0.4em;
+        padding: 0.4em;
         font-size: 0.78em;
         border: 1px solid transparent;
         border-radius: var(--rayon-petit);
@@ -675,6 +684,18 @@
         font-size: 0.9em;
         text-shadow: 0 1px 2px #000;
       }
+      /* Colonne delta « dernière fois » (1ère colonne temps) : vert = temps
+         gagné (devant la référence), rouge = temps perdu, gris = neutre.
+         Variables sémantiques — jamais d'hex en dur. */
+      .sr-seg-pb.delta-ahead { color: var(--message-ok-color); }
+      .sr-seg-pb.delta-behind { color: var(--message-error-color); }
+      .sr-seg-pb.delta-ahead,
+      .sr-seg-pb.delta-behind { font-weight: 700; }
+      /* Bordure du split entier selon le résultat : verte si gagné, rouge si
+         perdu. Déclaré après .sr-seg-actif (même spécificité) → l'emporte
+         aussi sur le split en cours. */
+      .sr-seg.sr-seg-ahead { border-color: var(--message-ok-color); }
+      .sr-seg.sr-seg-behind { border-color: var(--message-error-color); }
       /* Temps de run (split réalisé) — affiché à droite du segment pour les
          splits déjà passés. Couleur du cadre (gradient) pour le distinguer du
          PB (gris). Masqué tant que le split n'est pas passé (vide). */
@@ -708,7 +729,9 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        padding: 4%;
+        /* Marges latérales renforcées (8%) : les cadres épais/inclinés ne
+           mangent plus les touches des bords. */
+        padding: 4% 8%;
       }
       .widget.inputviewer[data-mode="manette"] .iv-section-manette { display: flex; }
       .iv-clavier {
@@ -934,7 +957,7 @@
         display: grid;
         grid-template-columns: repeat(4, 1fr);
         grid-auto-rows: 1fr;
-        gap: 0.7cqw;
+        gap: 1.2cqw;
         width: 100%;
         height: 100%;
         align-content: center;
@@ -1152,6 +1175,28 @@
         box-shadow: 0 0 14px 2px var(--inputviewer-couleur-presse, #8b5cf6);
       }
       .iv-manette-sticks .iv-manette-bouton { min-width: 9cqw; min-height: 5.5cqw; border-radius: 1.2cqw; font-size: 2.4cqw; }
+      /* ===== Skin rétro 8BitDo : touches « relevées » + espacement aéré =====
+         Pas de sticks → plus d'air disponible. Touches surélevées (ombre de
+         profondeur renforcée), gaps élargis (gâchettes L/ZL/ZR/R surtout) et
+         marges latérales pour les cadres épais. */
+      .iv-manette[data-skin="8bitdo"] { gap: 0.8cqw; padding: 0.8cqw 2cqw; }
+      .iv-manette[data-skin="8bitdo"] .iv-manette-gachettes { gap: 3cqw; }
+      .iv-manette[data-skin="8bitdo"] .iv-manette-principale { gap: 3.2cqw; }
+      .iv-manette[data-skin="8bitdo"] .iv-manette-dpad,
+      .iv-manette[data-skin="8bitdo"] .iv-manette-face,
+      .iv-manette[data-skin="8bitdo"] .iv-manette-face-rangee { gap: 0.7cqw; }
+      .iv-manette[data-skin="8bitdo"] .iv-manette-bouton {
+        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset,
+                    0 -1px 2px rgba(0, 0, 0, 0.3) inset,
+                    0 4px 8px rgba(0, 0, 0, 0.5);
+      }
+      /* .presse doit être re-scopé : sans ça la règle ci-dessus (spécificité
+         plus forte que .iv-manette-bouton.presse) écraserait le glow pressé. */
+      .iv-manette[data-skin="8bitdo"] .iv-manette-bouton.presse {
+        box-shadow: 0 0 18px 2px var(--inputviewer-couleur-presse, #8b5cf6),
+                    0 1px 0 rgba(255, 255, 255, 0.3) inset,
+                    0 -2px 4px rgba(0, 0, 0, 0.4) inset;
+      }
       /* ===== Skins manette (labels via ::after sur data-bouton) ===== */
       /* Xbox : A/B/X/Y, LB/LT/RT/RB, View/Menu */
       .iv-manette[data-skin="xbox"] [data-bouton="0"]::after { content: "A"; }
@@ -1553,6 +1598,10 @@
       // widget speedrun soit créé dans widgetMap (race condition resync).
       // Appliqué au widget dès sa création dans renderScene.
       let pendingLss = null;
+      // Dernière baseline reçue (référence delta « dernière fois », émise au
+      // started de chaque run) — rejouée si le widget est recréé en cours de
+      // run (race condition resync, comme pendingLss).
+      let pendingBaseline = null;
 
       // Messages chat reçus via WS (type "chat"). Borné à 200.
       let chatMessages = [];
@@ -1787,11 +1836,15 @@
         mediaEl.style.objectFit = FIT_CSS[fit] || "contain";
         mediaEl.style.objectPosition = fit === "centrer" ? "center" : "50% 50%";
         // Zoom + rotation 2D + offset du média (cadre widget fixe, overflow:hidden coupe).
+        // Miroir : scale ±1 combiné au zoom, dans l'espace local du média
+        // (après rotate dans la liste = flip de la source, sémantique OBS).
         const zoom = w.mediaZoom || 1;
         const rot = w.mediaRot || 0;
         const ox = w.mediaOffsetX || 0;
         const oy = w.mediaOffsetY || 0;
-        mediaEl.style.transform = "translate(" + ox + "px, " + oy + "px) rotate(" + rot + "deg) scale(" + zoom + ")";
+        const mH = w.mediaMiroirH === true ? -1 : 1;
+        const mV = w.mediaMiroirV === true ? -1 : 1;
+        mediaEl.style.transform = "translate(" + ox + "px, " + oy + "px) rotate(" + rot + "deg) scale(" + (zoom * mH) + ", " + (zoom * mV) + ")";
         mediaEl.style.transformOrigin = "center center";
         // Effets visuels (brightness/contrast/hue-rotate/blur). La pixelisation
         // n'est pas gérée en DOM (pas d'équivalent CSS pur) — elle est appliquée
@@ -2015,6 +2068,9 @@
         // Effets visuels du fond (brightness/contrast/hue-rotate/blur + pixel).
         var bgFilter = chaineFilter(scene.bgLum || 0, scene.bgContraste || 0, scene.bgTeinte || 0, scene.bgFlou || 0);
         var bgPixel = scene.bgPixel || 0;
+        // Miroir du fond : scale ±1 combiné au zoom (espace local du média).
+        var bgMH = scene.bgMiroirH === true ? -1 : 1;
+        var bgMV = scene.bgMiroirV === true ? -1 : 1;
         // Transform fond (zoom/rot/offset) + drawImage — factorisé pour le
         // chemin morphé (dessin redirigé vers l'offscreen avant warp GL).
         // Applique aussi les effets visuels (filter + pixelisation).
@@ -2036,7 +2092,7 @@
               pctx.save();
               pctx.translate(pw / 2 + ox / pf, ph / 2 + oy / pf);
               pctx.rotate(rot);
-              pctx.scale(zoom, zoom);
+              pctx.scale(zoom * bgMH, zoom * bgMV);
               pctx.translate(-pw / 2, -ph / 2);
               try {
                 pctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, r.dx / pf, r.dy / pf, r.dw / pf, r.dh / pf);
@@ -2053,7 +2109,7 @@
           ctx.filter = bgFilter;
           ctx.translate(cw / 2 + ox, ch / 2 + oy);
           ctx.rotate(rot);
-          ctx.scale(zoom, zoom);
+          ctx.scale(zoom * bgMH, zoom * bgMV);
           ctx.translate(-cw / 2, -ch / 2);
           try {
             ctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
@@ -2414,6 +2470,9 @@
         // Effets visuels (brightness/contrast/hue-rotate/blur) via ctx.filter.
         var mFilter = chaineFilter(w.mediaLum || 0, w.mediaContraste || 0, w.mediaTeinte || 0, w.mediaFlou || 0);
         var mPixel = w.mediaPixel || 0;
+        // Miroir média : scale ±1 combiné au zoom (espace local, après rotate).
+        var mH = w.mediaMiroirH === true ? -1 : 1;
+        var mV = w.mediaMiroirV === true ? -1 : 1;
         ctx.filter = mFilter;
         // Pixelisation : downscale→upscale sans lissage, puis le warp GL s'applique par-dessus.
         if (mPixel > 0) {
@@ -2430,7 +2489,7 @@
             pctx.translate(pw / 2, ph / 2);
             pctx.translate((w.mediaOffsetX || 0) / pf, (w.mediaOffsetY || 0) / pf);
             pctx.rotate(((w.mediaRot || 0) * Math.PI) / 180);
-            pctx.scale(w.mediaZoom || 1, w.mediaZoom || 1);
+            pctx.scale((w.mediaZoom || 1) * mH, (w.mediaZoom || 1) * mV);
             pctx.translate(-pw / 2, -ph / 2);
             morphDessinerFit(pctx, entry.mediaEl, sw, sh, pw, ph, FIT_CSS[w.mediaFit || "ajuster"] || "contain");
             pctx.restore();
@@ -2446,7 +2505,7 @@
         ctx.translate(cw / 2, ch / 2);
         ctx.translate((w.mediaOffsetX || 0), (w.mediaOffsetY || 0));
         ctx.rotate(((w.mediaRot || 0) * Math.PI) / 180);
-        ctx.scale(w.mediaZoom || 1, w.mediaZoom || 1);
+        ctx.scale((w.mediaZoom || 1) * mH, (w.mediaZoom || 1) * mV);
         ctx.translate(-cw / 2, -ch / 2);
         morphDessinerFit(ctx, entry.mediaEl, sw, sh, cw, ch, FIT_CSS[w.mediaFit || "ajuster"] || "contain");
         ctx.restore();
@@ -2815,7 +2874,26 @@
         return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") + "." + String(cs).padStart(2, "0");
       }
 
+      /// Formate un delta signé façon LiveSplit (colonne "+/−") : signe
+      /// toujours présent, précision au dixième — "-1.6", "+2.3", "-1:23.4".
+      function srFormatDelta(secs) {
+        var sign = secs < 0 ? "-" : "+";
+        var totalDs = Math.round(Math.abs(secs) * 10);
+        var h = Math.floor(totalDs / 36000);
+        var m = Math.floor((totalDs % 36000) / 600);
+        var s = Math.floor((totalDs % 600) / 10);
+        var d = totalDs % 10;
+        if (h > 0) {
+          return sign + h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") + "." + d;
+        }
+        if (m > 0) {
+          return sign + m + ":" + String(s).padStart(2, "0") + "." + d;
+        }
+        return sign + s + "." + d;
+      }
+
       /// Recrée le HTML de la liste des segments (quand le total change).
+      /// Ordre des colonnes aligné sur le dashboard : n° | nom | delta | temps.
       function srRecreerSplits(entry, segments) {
         var splitsEl = entry.el.querySelector(".sr-splits");
         if (!splitsEl) return;
@@ -2825,8 +2903,8 @@
           html += '<div class="sr-seg" data-idx="' + i + '">' +
             '<span class="sr-seg-idx">' + (i + 1) + '</span>' +
             '<span class="sr-seg-nom">' + (seg.nom || "") + '</span>' +
+            '<span class="sr-seg-pb"></span>' +
             '<span class="sr-seg-time"></span>' +
-            '<span class="sr-seg-pb">' + (seg.pbRealTime || seg.pbGameTime || "") + '</span>' +
             '</div>';
         }
         splitsEl.innerHTML = html;
@@ -2842,13 +2920,39 @@
         // Temps courant en secondes (pour le split actif en cours).
         var currentSecs = srParseTime(entry.srGameTime || entry.srRealTime || "00:00.00");
         for (var j = 0; j < segs.length; j++) {
-          if (idx !== null && j === idx) {
-            segs[j].className = "sr-seg sr-seg-actif";
-          } else if (idx !== null && j < idx) {
-            segs[j].className = "sr-seg sr-seg-done";
-          } else {
-            segs[j].className = "sr-seg";
+          // Delta vs référence « dernière fois » (entry.srBaseline = baseline
+          // mergée PB, figée au started du run) — CUMULÉ au split, comme
+          // LiveSplit : passé = temps enregistré, actif = temps courant live.
+          // "0.0" neutre si non parcouru / skippé / sans référence.
+          var deltaTxt = "0.0";
+          var deltaSens = "";
+          var ref = (entry.srBaseline && j < entry.srBaseline.length)
+            ? entry.srBaseline[j] : null;
+          if (idx !== null && j <= idx && ref !== null && ref !== undefined) {
+            var cumulDelta = null;
+            if (j < idx) {
+              var tSplit = (entry.srSplitTimes && j < entry.srSplitTimes.length)
+                ? entry.srSplitTimes[j] : "";
+              // Segment skippé : pas de temps enregistré → pas de delta.
+              if (tSplit) cumulDelta = srParseTime(tSplit);
+            } else {
+              cumulDelta = currentSecs;
+            }
+            if (cumulDelta !== null) {
+              // Classer sur la valeur arrondie au dixième (cohérent avec
+              // l'affichage : "0.0"/"-0.0" ne bascule pas de couleur).
+              var dd = Math.round((cumulDelta - ref) * 10) / 10;
+              deltaTxt = srFormatDelta(dd);
+              deltaSens = dd < 0 ? "ahead" : dd > 0 ? "behind" : "";
+            }
           }
+          // Classe de la ligne : actif/done + bordure résultat (ahead/behind).
+          var segCls = "sr-seg";
+          if (idx !== null && j === idx) segCls += " sr-seg-actif";
+          else if (idx !== null && j < idx) segCls += " sr-seg-done";
+          if (deltaSens === "ahead") segCls += " sr-seg-ahead";
+          else if (deltaSens === "behind") segCls += " sr-seg-behind";
+          if (segs[j].className !== segCls) segs[j].className = segCls;
           // Temps de run (segment = delta, pas cumulé) :
           //   - split passé : cumul[j] - cumul[j-1]
           //   - split actif : temps courant - cumul[idx-1] (en fluo via CSS)
@@ -2871,21 +2975,12 @@
             }
             if (timeEl.textContent !== segTime) timeEl.textContent = segTime;
           }
-          // PB (segment = delta cumulé PB) :
-          //   - non parcouru : "--/--/--"
-          //   - parcouru/actif : pbCumul[j] - pbCumul[j-1]
+          // Colonne delta (1ère colonne temps) : texte + couleur du résultat.
           var pbEl = segs[j].querySelector(".sr-seg-pb");
           if (pbEl) {
-            var pbTime = "--/--/--";
-            if (idx !== null && j <= idx && entry.srSegments && j < entry.srSegments.length) {
-              var pbJ = entry.srSegments[j].pbRealTime;
-              if (pbJ != null && !isNaN(Number(pbJ))) {
-                var pbPrev = (j > 0 && entry.srSegments[j - 1].pbRealTime != null)
-                  ? Number(entry.srSegments[j - 1].pbRealTime) : 0;
-                pbTime = srFormatSegment(Number(pbJ) - pbPrev);
-              }
-            }
-            if (pbEl.textContent !== pbTime) pbEl.textContent = pbTime;
+            if (pbEl.textContent !== deltaTxt) pbEl.textContent = deltaTxt;
+            var pbCls = "sr-seg-pb" + (deltaSens ? " delta-" + deltaSens : "");
+            if (pbEl.className !== pbCls) pbEl.className = pbCls;
           }
         }
         // Barre de progression
@@ -2976,6 +3071,10 @@
         if (etat.type === "lss") {
           pendingLss = etat;
         }
+        // Même chose pour la baseline (référence delta émise au started).
+        if (etat.type === "baseline") {
+          pendingBaseline = etat.splits || null;
+        }
 
         // Trouver le widget speedrun dans widgetMap.
         // widgetMap est une Map → itération par entries (for..of), PAS for..in
@@ -3062,14 +3161,23 @@
               entry.srProcessus = null;
               break;
             case "lss":
-              // Métadonnées LSS (jeu + catégorie + segments) — reçues quand le
-              // dashboard charge un .lss. On peuple l'en-tête + la liste des
-              // segments (mêmes données que le store dashboard).
+              // Métadonnées LSS (jeu + catégorie + segments + baseline) —
+              // reçues quand le dashboard charge un .lss. On peuple l'en-tête
+              // + la liste des segments + la référence delta (baseline mergée
+              // PB, calculée côté Rust).
               entry.srNomJeu = etat.nomJeu || "";
               entry.srNomCategorie = etat.nomCategorie || "";
               entry.srSegments = etat.segments || [];
+              entry.srBaseline = etat.baseline || [];
               entry.srTotalSplits = entry.srSegments.length;
               srRecreerSplits(entry, entry.srSegments);
+              break;
+            case "baseline":
+              // Référence delta « dernière fois » — émise au started de chaque
+              // run (fraîche : inclut les splits enregistrés au run précédent).
+              // Figée pour tout le run : les enregistrements en cours de run
+              // ne la modifient pas (c'est la référence du prochain run).
+              entry.srBaseline = etat.splits || [];
               break;
             default:
               break;
@@ -3389,7 +3497,7 @@
                 srTotalSplits: 0, srPhase: "NotRunning", srSegments: [],
                 srIndex: null, srGameTime: null, srRealTime: "00:00.00",
                 srNomJeu: "", srNomCategorie: "", srConnecte: false, srActif: false,
-                srProcessus: null, srSplitTimes: []
+                srProcessus: null, srSplitTimes: [], srBaseline: []
               };
               widgetMap.set(w.id, srNew);
               // Média de fond (premier enfant, sous le timer + les splits).
@@ -3400,6 +3508,11 @@
               // LSS peut arriver avant la création du widget).
               if (pendingLss) {
                 majSpeedrunEtat(pendingLss);
+              }
+              // Rejouer la dernière baseline si reçue (plus fraîche que celle
+              // du payload lss si un run a été démarré entre-temps).
+              if (pendingBaseline) {
+                majSpeedrunEtat({ type: "baseline", splits: pendingBaseline });
               }
             }
             continue;

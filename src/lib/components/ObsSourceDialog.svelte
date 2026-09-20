@@ -164,7 +164,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.4rem 0.6rem;
     font: inherit;
     font-size: 0.85rem;
@@ -176,7 +176,7 @@
   .row:hover:not(:disabled) {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-violet);
+    border-color: var(--accent-ui);
   }
   .row:disabled {
     opacity: 0.4;

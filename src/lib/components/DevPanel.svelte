@@ -21,9 +21,9 @@
     right: 0;
     z-index: 50;
     background: var(--fond-panneau);
-    border: 1px solid var(--bordure-active);
+    border: 1px solid var(--bordure-ui-active);
     border-top: none;
-    box-shadow: 0 0 20px rgba(139, 92, 246, 0.2);
+    box-shadow: 0 0 20px color-mix(in srgb, var(--accent-ui) 20%, transparent);
     padding: 0.5rem 0.6rem;
     display: flex;
     flex-direction: column;
@@ -42,7 +42,7 @@
     row-gap: 0.05rem;
     align-items: baseline;
     padding: 0.2rem 0;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
   }
   .dev-row:last-child {
     border-bottom: none;

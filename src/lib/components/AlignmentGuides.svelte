@@ -2,10 +2,15 @@
   // AlignmentGuides — Guides d'alignement type OBS (dashboard uniquement).
   // Dessine sur un <canvas> HTML :
   //   - 4 traits aux bords du widget (gauche, droite, haut, bas)
-  //   - Labels avec la distance en px canvas logique
+  //   - Labels avec la distance en px canvas logique — surlignés jaune
+  //     (--ctrl-centre) quand les marges opposées sont égales
   //   - Viseur central (croix + cercle) — vert --ctrl-refresh par défaut,
   //     JAUNE --ctrl-centre quand le widget est proche du centre (snap visuel)
   //   - Label "CENTRE" quand le widget est aligné au centre
+  //   - Fantôme miroir : contour pointillé à la position symétrique du widget
+  //     (axe vertical du canvas) — visible tant qu'elle diffère de la position
+  //   - Espacements égaux : segments entre widgets quand le gap créé par le
+  //     widget déplacé égale un gap existant entre deux autres widgets
   //
   // Rendu à l'intérieur du canvas (coordonnées canvas logiques).
   // pointer-events: none → ne bloque pas les interactions.
@@ -81,33 +86,41 @@
     const rightPx = Math.round(canvasW - wRight);
     const bottomPx = Math.round(canvasH - wBottom);
 
+    // Marges opposées égales (tolérance 0.5px — le snap produit l'égalité
+    // exacte) → labels surlignés --ctrl-centre au lieu de blanc.
+    const couleurEq = cssVar("--ctrl-centre", "#FFEE00");
+    const eqX = Math.abs(wLeft - (canvasW - wRight)) < 0.5;
+    const eqY = Math.abs(wTop - (canvasH - wBottom)) < 0.5;
+    const labX = eqX ? couleurEq : couleurLabel;
+    const labY = eqY ? couleurEq : couleurLabel;
+
     // Trait vertical gauche
     ctx.beginPath();
     ctx.moveTo(wLeft, 0);
     ctx.lineTo(wLeft, canvasH);
     ctx.stroke();
-    drawLabel(`${leftPx} px`, wLeft, pad + labelHeight / 2, couleurLabel, couleurFondLabel);
+    drawLabel(`${leftPx} px`, wLeft, pad + labelHeight / 2, labX, couleurFondLabel);
 
     // Trait vertical droit
     ctx.beginPath();
     ctx.moveTo(wRight, 0);
     ctx.lineTo(wRight, canvasH);
     ctx.stroke();
-    drawLabel(`${rightPx} px`, wRight, canvasH - pad - labelHeight / 2, couleurLabel, couleurFondLabel);
+    drawLabel(`${rightPx} px`, wRight, canvasH - pad - labelHeight / 2, labX, couleurFondLabel);
 
     // Trait horizontal haut
     ctx.beginPath();
     ctx.moveTo(0, wTop);
     ctx.lineTo(canvasW, wTop);
     ctx.stroke();
-    drawLabel(`${topPx} px`, pad + 36, wTop, couleurLabel, couleurFondLabel);
+    drawLabel(`${topPx} px`, pad + 36, wTop, labY, couleurFondLabel);
 
     // Trait horizontal bas
     ctx.beginPath();
     ctx.moveTo(0, wBottom);
     ctx.lineTo(canvasW, wBottom);
     ctx.stroke();
-    drawLabel(`${bottomPx} px`, canvasW - pad - 36, wBottom, couleurLabel, couleurFondLabel);
+    drawLabel(`${bottomPx} px`, canvasW - pad - 36, wBottom, labY, couleurFondLabel);
 
     // --- Viseur de centrage ---
     const cx = canvasW / 2;
@@ -159,6 +172,108 @@
       ctx.strokeText(texteCentre, tx, ty);
       ctx.fillText(texteCentre, tx, ty);
       ctx.restore();
+    }
+
+    // --- Fantôme miroir (axe vertical du canvas) ---
+    // Contour pointillé vert à la position symétrique du widget : montre « ce
+    // que ça enlève à marge » de l'autre côté. Masqué si centré (= même place).
+    const ghostX = canvasW - wLeft - widgetRect.width;
+    if (Math.abs(ghostX - wLeft) > 1) {
+      ctx.save();
+      ctx.strokeStyle = cssVar("--ctrl-refresh", "#22c55e");
+      ctx.globalAlpha = 0.5;
+      ctx.setLineDash([6, 4]);
+      ctx.strokeRect(ghostX, wTop, widgetRect.width, widgetRect.height);
+      ctx.setLineDash([]);
+      ctx.restore();
+    }
+
+    // --- Espacements égaux (cohérence entre widgets) ---
+    // Autres widgets = tous sauf celui déplacé (exclu par égalité de rect : le
+    // store reçoit les mêmes valeurs snappées que widgetRect pendant le drag).
+    const autres = $sceneStore.widgets.filter(
+      (o) =>
+        !(
+          Math.abs(o.x - wLeft) < 0.5 &&
+          Math.abs(o.y - wTop) < 0.5 &&
+          Math.abs(o.largeur - widgetRect.width) < 0.5 &&
+          Math.abs(o.hauteur - widgetRect.height) < 0.5
+        )
+    );
+    // Gaps de référence : paires d'autres widgets non chevauchants, avec
+    // recouvrement sur l'axe perpendiculaire (le gap n'a de sens qu'aligné).
+    type GapSeg = { x1: number; y1: number; x2: number; y2: number; g: number };
+    const refGapsX: GapSeg[] = [];
+    const refGapsY: GapSeg[] = [];
+    for (const a of autres) {
+      for (const b of autres) {
+        if (a === b) continue;
+        const gX = b.x - (a.x + a.largeur);
+        const ovTx = Math.max(a.y, b.y);
+        const ovBx = Math.min(a.y + a.hauteur, b.y + b.hauteur);
+        if (gX > 0 && ovBx - ovTx > 0) {
+          refGapsX.push({ x1: a.x + a.largeur, y1: (ovTx + ovBx) / 2, x2: b.x, y2: (ovTx + ovBx) / 2, g: gX });
+        }
+        const gY = b.y - (a.y + a.hauteur);
+        const ovLy = Math.max(a.x, b.x);
+        const ovRy = Math.min(a.x + a.largeur, b.x + b.largeur);
+        if (gY > 0 && ovRy - ovLy > 0) {
+          refGapsY.push({ x1: (ovLy + ovRy) / 2, y1: a.y + a.hauteur, x2: (ovLy + ovRy) / 2, y2: b.y, g: gY });
+        }
+      }
+    }
+    // Gap entre le widget déplacé et chaque autre widget : s'il égale un gap
+    // de référence (±0.5px), on dessine les DEUX segments en jaune + label.
+    const couleurGap = cssVar("--ctrl-centre", "#FFEE00");
+    const dessinerGap = (seg: GapSeg, ref: GapSeg) => {
+      if (!ctx) return;
+      ctx.save();
+      ctx.strokeStyle = couleurGap;
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4, 3]);
+      for (const s of [seg, ref]) {
+        ctx.beginPath();
+        ctx.moveTo(s.x1, s.y1);
+        ctx.lineTo(s.x2, s.y2);
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+      ctx.restore();
+      drawLabel(`${Math.round(seg.g)} px`, (seg.x1 + seg.x2) / 2, (seg.y1 + seg.y2) / 2, couleurGap, couleurFondLabel);
+    };
+    for (const o of autres) {
+      // o à gauche / à droite du déplacé (recouvrement vertical requis).
+      const ovT = Math.max(o.y, wTop);
+      const ovB = Math.min(o.y + o.hauteur, wBottom);
+      if (ovB - ovT > 0) {
+        const midY = (ovT + ovB) / 2;
+        const gGauche = wLeft - (o.x + o.largeur);
+        if (gGauche > 0) {
+          const ref = refGapsX.find((p) => Math.abs(p.g - gGauche) < 0.5);
+          if (ref) dessinerGap({ x1: o.x + o.largeur, y1: midY, x2: wLeft, y2: midY, g: gGauche }, ref);
+        }
+        const gDroite = o.x - wRight;
+        if (gDroite > 0) {
+          const ref = refGapsX.find((p) => Math.abs(p.g - gDroite) < 0.5);
+          if (ref) dessinerGap({ x1: wRight, y1: midY, x2: o.x, y2: midY, g: gDroite }, ref);
+        }
+      }
+      // o au-dessus / en dessous du déplacé (recouvrement horizontal requis).
+      const ovL = Math.max(o.x, wLeft);
+      const ovR = Math.min(o.x + o.largeur, wRight);
+      if (ovR - ovL > 0) {
+        const midX = (ovL + ovR) / 2;
+        const gHaut = wTop - (o.y + o.hauteur);
+        if (gHaut > 0) {
+          const ref = refGapsY.find((p) => Math.abs(p.g - gHaut) < 0.5);
+          if (ref) dessinerGap({ x1: midX, y1: o.y + o.hauteur, x2: midX, y2: wTop, g: gHaut }, ref);
+        }
+        const gBas = o.y - wBottom;
+        if (gBas > 0) {
+          const ref = refGapsY.find((p) => Math.abs(p.g - gBas) < 0.5);
+          if (ref) dessinerGap({ x1: midX, y1: wBottom, x2: midX, y2: o.y, g: gBas }, ref);
+        }
+      }
     }
   }
 

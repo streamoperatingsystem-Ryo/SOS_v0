@@ -54,6 +54,8 @@ export async function createWidget(): Promise<string> {
     mediaRot: 0,
     mediaOffsetX: 0,
     mediaOffsetY: 0,
+    mediaMiroirH: false,
+    mediaMiroirV: false,
     mediaPaused: true,
     mediaTime: 0,
   };
@@ -436,6 +438,22 @@ export function setMediaOffsetYLocal(id: string, oy: number): void {
   }));
 }
 
+/// Bascule le miroir du média (flip H/V du contenu, scale ±1 combiné au
+/// zoom dans le rendu). Changement discret → maj locale + commit immédiat.
+export async function toggleMediaMiroir(id: string, sens: "h" | "v"): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id
+        ? sens === "h"
+          ? { ...w, mediaMiroirH: !(w.mediaMiroirH ?? false) }
+          : { ...w, mediaMiroirV: !(w.mediaMiroirV ?? false) }
+        : w
+    ),
+  }));
+  await commitScene();
+}
+
 // ===== Effets visuels du média (luminosité/contraste/teinte/flou/pixel) =====
 // Maj locale seule (pendant le geste range). PAS d'invoke — UI fluide.
 // Clamp selon le type d'effet. Le commit se fait au pointerup (onchange).
@@ -457,7 +475,7 @@ export async function resetMedia(id: string): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
     widgets: s.widgets.map((w) =>
-      w.id === id ? { ...w, mediaZoom: 1, mediaRot: 0, mediaOffsetX: 0, mediaOffsetY: 0, mediaLum: 0, mediaContraste: 0, mediaTeinte: 0, mediaFlou: 0, mediaPixel: 0 } : w
+      w.id === id ? { ...w, mediaZoom: 1, mediaRot: 0, mediaOffsetX: 0, mediaOffsetY: 0, mediaMiroirH: false, mediaMiroirV: false, mediaLum: 0, mediaContraste: 0, mediaTeinte: 0, mediaFlou: 0, mediaPixel: 0 } : w
     ),
   }));
   await commitScene();
@@ -611,6 +629,38 @@ export async function deleteWidget(id: string): Promise<void> {
   }));
   selectedIdStore.set(null);
   await commitScene();
+}
+
+/// Duplique un widget : copie tous les champs sauf id (nouvel uuid), z
+/// (au-dessus des widgets non-caméra) et obsSource (une source OBS = un seul
+/// emplacement — la copie d'un trou lié reste un trou NON lié, l'utilisateur
+/// relie une autre source via « Lier une source OBS »).
+/// Position initiale : miroir sur l'axe vertical du canvas (marge gauche →
+/// marge droite égale). Si l'original est centré (miroir == même place),
+/// décalage +24px pour distinguer la copie.
+/// La copie devient le widget sélectionné. Commit immédiat → save + snapshot.
+/// Retourne l'id créé, null si widget introuvable ou caméra (singleton figé).
+export async function dupliquerWidget(id: string): Promise<string | null> {
+  const current = get(sceneStore);
+  const src = current.widgets.find((w) => w.id === id);
+  if (!src || src.type === "camera") return null;
+  const canvasW = current.canvasW ?? 1920;
+  const canvasH = current.canvasH ?? 1080;
+  const z =
+    current.widgets
+      .filter((w) => w.type !== "camera")
+      .reduce((m, w) => Math.max(m, w.z), -1) + 1;
+  let x = canvasW - src.x - src.largeur;
+  if (Math.abs(x - src.x) < 1) x += 24;
+  const copie: Widget = clampWidget(
+    { ...src, id: crypto.randomUUID(), x, y: src.y, z, obsSource: undefined },
+    canvasW,
+    canvasH
+  );
+  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, copie] }));
+  selectedIdStore.set(copie.id);
+  await commitScene();
+  return copie.id;
 }
 
 /// Déduit le kind ("image"|"video") d'un chemin relatif média.
@@ -802,6 +852,15 @@ export function setBgOffsetYLocal(oy: number): void {
   sceneStore.update((s) => ({ ...s, bgOffsetY: v }));
 }
 
+/// Bascule le miroir du fond (flip H/V du média de fond). Changement
+/// discret → maj locale + commit immédiat.
+export async function toggleBgMiroir(sens: "h" | "v"): Promise<void> {
+  sceneStore.update((s) =>
+    sens === "h" ? { ...s, bgMiroirH: !(s.bgMiroirH ?? false) } : { ...s, bgMiroirV: !(s.bgMiroirV ?? false) }
+  );
+  await commitScene();
+}
+
 // ===== Effets visuels du fond (luminosité/contraste/teinte/flou/pixel) =====
 // Maj locale seule (pendant le geste range). PAS d'invoke — UI fluide.
 // Clamp selon le type d'effet. Le commit se fait au pointerup (onchange).
@@ -817,7 +876,7 @@ export function setBgPixelLocal(v: number): void { setBgEffetLocal("bgPixel", v,
 
 /// Reset fond : zoom 1, rotation 0, offsets 0, effets 0. Maj locale + commit immédiat.
 export async function resetFond(): Promise<void> {
-  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0, bgOffsetX: 0, bgOffsetY: 0, bgLum: 0, bgContraste: 0, bgTeinte: 0, bgFlou: 0, bgPixel: 0 }));
+  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0, bgOffsetX: 0, bgOffsetY: 0, bgMiroirH: false, bgMiroirV: false, bgLum: 0, bgContraste: 0, bgTeinte: 0, bgFlou: 0, bgPixel: 0 }));
   await commitScene();
 }
 
@@ -969,11 +1028,21 @@ export async function createObsTrouFromPc(
 
 export const SNAP_PX = 6;
 
-type SnapSide = "left" | "center" | "right" | "top" | "bottom";
+type SnapSide =
+  | "left"
+  | "center"
+  | "right"
+  | "top"
+  | "bottom"
+  | "mirror"
+  | "gap";
 export type SnapTarget = { pos: number; side: SnapSide };
 
 /// Snapshot des cibles de snap pour un drag donné.
-/// Construit la liste des bords/centres des autres widgets + bords/centre canvas.
+/// Construit la liste des bords/centres des autres widgets + bords/centre canvas
+/// + positions MIROIR (symétrie axe central : marge opposée égale à celle d'un
+/// autre widget) + ESPACEMENTS ÉGAUX (le gap créé par le widget déplacé égale
+/// un gap existant entre deux autres widgets).
 /// Appelé UNE FOIS au pointerdown (pas par frame).
 export function buildSnapTargets(scene: Scene, draggedId: string): {
   xs: SnapTarget[];
@@ -991,14 +1060,48 @@ export function buildSnapTargets(scene: Scene, draggedId: string): {
     { pos: ch / 2, side: "center" },
     { pos: ch, side: "bottom" },
   ];
-  for (const o of scene.widgets) {
-    if (o.id === draggedId) continue;
+  const autres = scene.widgets.filter((o) => o.id !== draggedId);
+  const dragged = scene.widgets.find((w) => w.id === draggedId);
+  const dw = dragged?.largeur ?? 0;
+  const dh = dragged?.hauteur ?? 0;
+  for (const o of autres) {
     xs.push({ pos: o.x, side: "left" });
     xs.push({ pos: o.x + o.largeur / 2, side: "center" });
     xs.push({ pos: o.x + o.largeur, side: "right" });
     ys.push({ pos: o.y, side: "top" });
     ys.push({ pos: o.y + o.hauteur / 2, side: "center" });
     ys.push({ pos: o.y + o.hauteur, side: "bottom" });
+    // Miroir axe vertical : bord droit du déplacé → marge droite = marge
+    // gauche de o ; bord gauche du déplacé → marge gauche = marge droite de o.
+    xs.push({ pos: cw - o.x, side: "mirror" });
+    xs.push({ pos: cw - o.x - o.largeur, side: "mirror" });
+    // Miroir axe horizontal : idem en haut/bas.
+    ys.push({ pos: ch - o.y, side: "mirror" });
+    ys.push({ pos: ch - o.y - o.hauteur, side: "mirror" });
+  }
+  // Espacements égaux (smart guides) : pour chaque paire non chevauchante,
+  // le widget déplacé peut prolonger la série au même gap, ou se centrer
+  // entre les deux si la paire l'encadre.
+  for (const a of autres) {
+    for (const b of autres) {
+      if (a === b) continue;
+      const gapX = b.x - (a.x + a.largeur);
+      if (gapX > 0) {
+        xs.push({ pos: a.x - gapX, side: "gap" });
+        xs.push({ pos: b.x + b.largeur + gapX, side: "gap" });
+        if (dw > 0 && gapX > dw) {
+          xs.push({ pos: a.x + a.largeur + (gapX - dw) / 2, side: "gap" });
+        }
+      }
+      const gapY = b.y - (a.y + a.hauteur);
+      if (gapY > 0) {
+        ys.push({ pos: a.y - gapY, side: "gap" });
+        ys.push({ pos: b.y + b.hauteur + gapY, side: "gap" });
+        if (dh > 0 && gapY > dh) {
+          ys.push({ pos: a.y + a.hauteur + (gapY - dh) / 2, side: "gap" });
+        }
+      }
+    }
   }
   return { xs, ys };
 }

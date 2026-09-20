@@ -1,7 +1,7 @@
 // Store OBS côté dashboard. État de connexion + champs formulaire + fonction connect.
 // La commande Rust obs_connect est one-shot : connecte, configure scène/source,
 // refresh la source, se déconnecte. Le statut "connected" signifie "configuration réussie".
-import { writable, type Writable } from "svelte/store";
+import { writable, get, type Writable } from "svelte/store";
 import { tauri } from "../tauri";
 import { openSectionExplicit } from "./ui";
 
@@ -9,6 +9,12 @@ export type ObsStatus = "idle" | "connecting" | "connected" | "error";
 
 export const obsStatus = writable<ObsStatus>("idle");
 export const obsError = writable<string | null>(null);
+
+// État des sorties OBS (stream / record). PAS de polling : lu au connect +
+// mis à jour après chaque toggle (le retour de obs_toggle_* donne le nouvel
+// état). Peut être désynchronisé si l'utilisateur agit directement dans OBS.
+export const obsStreaming = writable<boolean>(false);
+export const obsRecording = writable<boolean>(false);
 
 // Champs formulaire partagés (défauts 127.0.0.1 / 4455).
 // Persistés en localStorage (secret local machine-only, pas un token cloud)
@@ -79,6 +85,9 @@ export async function obsConnect(
   try {
     await tauri.obsConnect(host, portNum, password);
     obsStatus.set("connected");
+    // Lire l'état des sorties dans la foulée (non-fatal : les boutons toggle
+    // restent utilisables, l'état s'alignera au premier toggle).
+    void rafraichirOutputs();
   } catch (e) {
     obsStatus.set("error");
     const msg = messageClair(e);
@@ -91,6 +100,56 @@ export async function obsConnect(
     }
     // Propager l'échec : les appelants (bootObs, onConnect) skip les appels
     // OBS suivants (refreshDiffusion, sceneSyncCaptures) quand OBS offline.
+    throw e;
+  }
+}
+
+// ===== Sorties OBS : stream & record =====
+// Chaque action = une connexion OBS one-shot (connect → RPC → close), comme
+// toutes les commandes OBS du backend.
+
+function obsCreds(): { host: string; port: number; password: string } {
+  return {
+    host: get(obsHost),
+    port: parseInt(get(obsPort), 10) || 4455,
+    password: get(obsPassword),
+  };
+}
+
+/// Lit l'état des deux sorties (une connexion). Non-fatal : en cas d'erreur
+/// les stores restent sur leur dernière valeur connue.
+export async function rafraichirOutputs(): Promise<void> {
+  const { host, port, password } = obsCreds();
+  try {
+    const s = await tauri.obsOutputsStatus(host, port, password);
+    obsStreaming.set(s.stream);
+    obsRecording.set(s.record);
+  } catch (e) {
+    console.warn("obs outputs_status:", e);
+  }
+}
+
+/// Toggle stream. Retourne le nouvel état (via la réponse ToggleStream).
+/// Lève l'erreur traduite pour l'affichage (obsError).
+export async function toggleStreamObs(): Promise<void> {
+  const { host, port, password } = obsCreds();
+  try {
+    obsStreaming.set(await tauri.obsToggleStream(host, port, password));
+    obsError.set(null);
+  } catch (e) {
+    obsError.set(messageClair(e));
+    throw e;
+  }
+}
+
+/// Toggle record. Même contrat que toggleStreamObs.
+export async function toggleRecordObs(): Promise<void> {
+  const { host, port, password } = obsCreds();
+  try {
+    obsRecording.set(await tauri.obsToggleRecord(host, port, password));
+    obsError.set(null);
+  } catch (e) {
+    obsError.set(messageClair(e));
     throw e;
   }
 }

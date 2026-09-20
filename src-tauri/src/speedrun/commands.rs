@@ -7,6 +7,9 @@
 //   - speedrun_maj_settings(start, split, reset) → met à jour les settings
 //   - speedrun_est_actif()            → retourne true si le splitter tourne
 //   - speedrun_action_manuelle(action) → start/split/skip/undo/reset/pause
+//   - speedrun_baseline_lire(chemin_lss) → baseline sauvegardée du .lss
+//   - speedrun_baseline_enregistrer(chemin_lss, index, cumul_secs) → enregistre
+//     le temps cumulé d'un split réalisé (référence « dernière fois »)
 //
 // Events émis vers le frontend :
 //   - Tauri "speedrun:event" → store Svelte dashboard (écoute app.listen)
@@ -70,6 +73,10 @@ fn emit_ws_lss(run: &lss::LssRun) {
 /// Émet les métadonnées LSS vers le WS sans toucher au slot (évite le
 /// re-lock du Mutex — appelé par reemit_lss qui détient déjà le lock).
 fn emit_ws_lss_json(run: &lss::LssRun) {
+    // Baseline lue UNE fois dans son propre statement (piège Mutex non
+    // réentrant — AGENTS.md). Elle voyage avec le payload lss pour que la
+    // diffusion puisse calculer les deltas dès le chargement des segments.
+    let baseline = baseline_slot().lock().unwrap().clone();
     if let Ok(guard) = chat_tx_slot().lock() {
         if let Some(tx) = guard.as_ref() {
             let json = serde_json::json!({
@@ -83,6 +90,7 @@ fn emit_ws_lss_json(run: &lss::LssRun) {
                         "pbRealTime": s.pb_real_time,
                         "pbGameTime": s.pb_game_time,
                     })).collect::<Vec<_>>(),
+                    "baseline": baseline,
                 },
             })
             .to_string();
@@ -95,6 +103,77 @@ fn emit_ws_lss_json(run: &lss::LssRun) {
 fn last_lss_slot() -> &'static Mutex<Option<lss::LssRun>> {
     static T: OnceLock<Mutex<Option<lss::LssRun>>> = OnceLock::new();
     T.get_or_init(|| Mutex::new(None))
+}
+
+/// Chemin du dernier .lss chargé — clé de la baseline dans
+/// speedrun_baselines.json (config.rs).
+fn last_lss_path_slot() -> &'static Mutex<Option<String>> {
+    static T: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(None))
+}
+
+/// Baseline de comparaison courante (temps de split cumulés en secondes par
+/// segment) = sauvegarde « dernière fois » mergée avec les PB du .lss. C'est
+/// la référence FIGÉE de la colonne delta pour le run en cours : rechargée au
+/// chargement du .lss et à chaque event `started`. Les enregistrements de
+/// splits en cours de run (speedrun_baseline_enregistrer) écrivent le fichier
+/// sans toucher ce slot — ils préparent la référence du run SUIVANT.
+fn baseline_slot() -> &'static Mutex<Vec<Option<f64>>> {
+    static T: OnceLock<Mutex<Vec<Option<f64>>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Fusionne la baseline sauvegardée (« dernière fois ») avec les PB du LSS :
+/// priorité au temps enregistré, fallback PB cumulé du segment (real time
+/// d'abord — même sémantique que l'ancienne colonne PB — puis game time).
+fn merge_baseline(run: &lss::LssRun, saved: &[Option<f64>]) -> Vec<Option<f64>> {
+    run.segments
+        .iter()
+        .enumerate()
+        .map(|(i, s)| {
+            saved
+                .get(i)
+                .copied()
+                .flatten()
+                .or(s.pb_real_time)
+                .or(s.pb_game_time)
+        })
+        .collect()
+}
+
+/// Recharge la baseline mergée (fichier + PB du .lss courant) au départ d'un
+/// run, la fige dans le slot (référence du run) et la pousse vers la
+/// diffusion via WS. No-op si aucun .lss chargé.
+fn rafraichir_et_emit_baseline(app: &AppHandle) {
+    let path = last_lss_path_slot().lock().unwrap().clone();
+    let run = last_lss_slot().lock().unwrap().clone();
+    let (Some(path), Some(run)) = (path, run) else {
+        return;
+    };
+    let saved = crate::config::lire_speedrun_baselines(app)
+        .ok()
+        .and_then(|cfg| cfg.par_lss.get(&path).cloned())
+        .unwrap_or_default();
+    let merged = merge_baseline(&run, &saved);
+    *baseline_slot().lock().unwrap() = merged.clone();
+    emit_ws_baseline(&merged);
+}
+
+/// Pousse la baseline (référence de la colonne delta) vers la diffusion via
+/// WS :4321. Message `{"type":"speedrun-etat","etat":{"type":"baseline",
+/// "splits":[...]}}` — émis au `started` du run : la diffusion la fige telle
+/// quelle pendant tout le run.
+fn emit_ws_baseline(baseline: &[Option<f64>]) {
+    if let Ok(guard) = chat_tx_slot().lock() {
+        if let Some(tx) = guard.as_ref() {
+            let json = serde_json::json!({
+                "type": "speedrun-etat",
+                "etat": { "type": "baseline", "splits": baseline },
+            })
+            .to_string();
+            let _ = tx.send(json);
+        }
+    }
 }
 
 /// Re-émet la dernière run LSS vers la diffusion (resync à la reconnexion WS).
@@ -120,6 +199,11 @@ fn get_or_init_engine(app_handle: &AppHandle) -> &'static Mutex<Option<AslEngine
             let _ = ah.emit("speedrun:event", &event);
             // 2. WS :4321 → diffusion.html (maj DOM directe)
             emit_ws(&event);
+            // 3. Départ d'un run → figer + pousser la baseline de comparaison
+            //    (référence de la colonne delta « dernière fois »).
+            if matches!(event, SpeedrunEvent::Started) {
+                rafraichir_et_emit_baseline(&ah);
+            }
         });
         Mutex::new(Some(engine))
     })
@@ -144,10 +228,18 @@ pub fn speedrun_charger_asl(
 /// commandes Tauri, elle reçoit l'état uniquement par WS.
 #[tauri::command]
 pub fn speedrun_charger_lss(app_handle: AppHandle, path: String) -> Result<super::asl::LssRun, String> {
-    let _ = &app_handle; // AppHandle auto-injecté (non utilisé directement — emit via chat_tx).
     let source = std::fs::read_to_string(&path)
         .map_err(|e| format!("Lecture fichier .lss: {}", e))?;
     let run = lss::parse(&source).map_err(|e| e.to_string())?;
+    // Baseline « dernière fois » mergée avec les PB → référence de la colonne
+    // delta. Fige les slots (baseline + chemin) avant l'emit : le payload lss
+    // transporte la baseline vers la diffusion.
+    let saved = crate::config::lire_speedrun_baselines(&app_handle)
+        .ok()
+        .and_then(|cfg| cfg.par_lss.get(&path).cloned())
+        .unwrap_or_default();
+    *baseline_slot().lock().unwrap() = merge_baseline(&run, &saved);
+    *last_lss_path_slot().lock().unwrap() = Some(path);
     emit_ws_lss(&run);
     Ok(run)
 }
@@ -257,4 +349,36 @@ pub fn speedrun_maj_settings_asl(
     let guard = lock.lock().unwrap();
     let engine = guard.as_ref().ok_or("Moteur non initialisé")?;
     engine.maj_settings_asl(valeurs)
+}
+
+/// Lit la baseline sauvegardée d'un fichier .lss (temps de split cumulés en
+/// secondes par segment). Tableau vide si aucune run n'a encore été
+/// enregistrée pour ce .lss — le frontend merge alors avec les PB du .lss.
+#[tauri::command]
+pub fn speedrun_baseline_lire(
+    app_handle: AppHandle,
+    chemin_lss: String,
+) -> Result<Vec<Option<f64>>, String> {
+    let cfg = crate::config::lire_speedrun_baselines(&app_handle)?;
+    Ok(cfg.par_lss.get(&chemin_lss).cloned().unwrap_or_default())
+}
+
+/// Enregistre le temps cumulé (secondes) d'un segment dans la baseline du
+/// .lss. Appelé par le frontend à chaque split réalisé : la baseline devient
+/// la référence « dernière fois » du prochain run. Ne touche PAS le slot de
+/// comparaison — la référence affichée reste figée pendant le run en cours.
+#[tauri::command]
+pub fn speedrun_baseline_enregistrer(
+    app_handle: AppHandle,
+    chemin_lss: String,
+    index: usize,
+    cumul_secs: f64,
+) -> Result<(), String> {
+    let mut cfg = crate::config::lire_speedrun_baselines(&app_handle)?;
+    let splits = cfg.par_lss.entry(chemin_lss).or_default();
+    while splits.len() <= index {
+        splits.push(None);
+    }
+    splits[index] = Some(cumul_secs);
+    crate::config::sauver_speedrun_baselines(&app_handle, &cfg)
 }

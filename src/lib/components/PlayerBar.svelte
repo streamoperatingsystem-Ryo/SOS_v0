@@ -86,8 +86,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
-    /* Teinte contextuelle héritée de la carte d'édition (--accent-carte).
-       Si PlayerBar est rendu hors carte (fallback), --btn-tint = indigo dash. */
+    /* Boutons = recette « glace » commune (fill neutre translucide). La
+       couleur de la carte d'édition vit sur sa bordure, pas dans le fill. */
   }
   .player-row {
     display: grid;
@@ -95,11 +95,11 @@
     gap: 0.25rem;
   }
   .action {
-    /* Recette « verre Aero HUD » — teinte héritée du parent (carte d'édition). */
-    background: var(--btn-surface, var(--fond-controle));
-    box-shadow: var(--btn-inset, none);
+    /* Recette « glace » (theme/roles.css) — fill neutre partout. */
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     padding: 0.3rem 0.4rem;
     font: inherit;
     font-size: 0.8rem;
@@ -108,13 +108,13 @@
     transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   }
   .action:hover {
-    background: var(--btn-surface-hover, var(--fond-controle));
-    box-shadow: var(--btn-inset-hover, none);
-    border-color: var(--bordure-active);
+    background: var(--btn-surface-hover);
+    box-shadow: var(--btn-inset-hover);
+    border-color: var(--bordure-ui-active);
   }
   .action:active {
-    background: linear-gradient(180deg, var(--fond-controle) 0%, color-mix(in srgb, var(--btn-tint, var(--dash-accent)) 8%, var(--fond-controle)) 100%);
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+    background: var(--btn-surface-active);
+    box-shadow: var(--btn-inset-active);
   }
   .player-time {
     font-size: 0.75rem;
@@ -124,7 +124,7 @@
   }
   .range {
     width: 100%;
-    accent-color: var(--accent-violet);
+    accent-color: var(--accent-ui);
     background: var(--fond);
     color: var(--texte);
   }

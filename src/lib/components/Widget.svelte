@@ -75,11 +75,15 @@
   let mTeinte = $derived(w.mediaTeinte ?? 0);
   let mFlou = $derived(w.mediaFlou ?? 0);
   let mPixel = $derived(w.mediaPixel ?? 0);
+  // Miroir média : flip H/V du contenu — scale ±1 combiné au zoom, dans
+  // l'espace local du média (après rotate dans la liste = flip de la source).
+  let mMiroirH = $derived(w.mediaMiroirH === true);
+  let mMiroirV = $derived(w.mediaMiroirV === true);
   let mediaFilter = $derived(chaineFilter(mLum, mContraste, mTeinte, mFlou));
   // Transform centré sur l'élément média (img/video). Le cadre widget et le
   // gizmo 3D ne bougent pas — overflow:hidden coupe le débordement.
   // translate en premier (gauche) = décalage dans l'espace écran (intuitif).
-  let mediaTransform = $derived(`translate(${ox}px, ${oy}px) rotate(${rot}deg) scale(${zoom})`);
+  let mediaTransform = $derived(`translate(${ox}px, ${oy}px) rotate(${rot}deg) scale(${zoom * (mMiroirH ? -1 : 1)}, ${zoom * (mMiroirV ? -1 : 1)})`);
 
   // Kind : depuis le champ, sinon déduit de l'extension (widgets existants).
   const VIDEO_EXT = ["mp4", "webm"];
@@ -233,11 +237,14 @@
     // Effets CSS filter (brightness/contrast/hue-rotate/blur). Vide = neutre.
     ctx.filter = mediaFilter;
     ctx.save();
-    // Même ordre que le transform CSS : translate(offset) rotate scale, origin centre.
+    // Même ordre que le transform CSS : translate(offset) rotate scale(zoom*±1
+    // miroir), origin centre.
+    const mhs = mMiroirH ? -1 : 1;
+    const mvs = mMiroirV ? -1 : 1;
     ctx.translate(cw / 2, ch / 2);
     ctx.translate(ox * dpr, oy * dpr);
     ctx.rotate((rot * Math.PI) / 180);
-    ctx.scale(zoom, zoom);
+    ctx.scale(zoom * mhs, zoom * mvs);
     ctx.translate(-cw / 2, -ch / 2);
     // Pixelisation : si mediaPixel > 0, on dessine dans un petit canvas
     // intermédiaire puis on l'upscale sans lissage. Le facteur de pixelisation
@@ -256,7 +263,7 @@
         pctx.translate(pw / 2, ph / 2);
         pctx.translate((ox * dpr) / pf, (oy * dpr) / pf);
         pctx.rotate((rot * Math.PI) / 180);
-        pctx.scale(zoom, zoom);
+        pctx.scale(zoom * mhs, zoom * mvs);
         pctx.translate(-pw / 2, -ph / 2);
         dessinerFitCanvas(pctx, src, sw, sh, pw, ph, fitCss);
         pctx.restore();
@@ -301,6 +308,8 @@
     void mTeinte;
     void mFlou;
     void mPixel;
+    void mMiroirH;
+    void mMiroirV;
     rendreMorph();
   });
 

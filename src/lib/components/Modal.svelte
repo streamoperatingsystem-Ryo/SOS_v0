@@ -81,16 +81,16 @@
   .modal-shell {
     background: var(--fond-panneau);
     color: var(--texte);
-    border: 1px solid var(--bordure-active);
+    border: 1px solid var(--bordure-ui-active);
     border-radius: var(--rayon-grand);
-    box-shadow: 0 0 40px rgba(139, 92, 246, 0.15);
+    box-shadow: 0 0 40px color-mix(in srgb, var(--accent-ui) 15%, transparent);
     display: flex;
     flex-direction: column;
     width: 90vw;
     max-height: 85vh;
     overflow: hidden;
-    /* Teinte néon pour tous les boutons internes des modales (recette Aero). */
-    --btn-tint: var(--accent-violet);
+    /* Boutons internes = fill glace neutre commun ; le violet néon vit en
+       bordure/glow/hover uniquement (IDEA02). */
   }
   .modal-header {
     display: flex;
@@ -98,7 +98,7 @@
     justify-content: space-between;
     gap: 0.5rem;
     padding: 0.75rem 1rem;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
   }
   h2 {
     font-size: 1rem;
@@ -116,7 +116,7 @@
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui);
     font-size: 0.85rem;
     cursor: pointer;
     padding: 0.2rem 0.5rem;
@@ -134,7 +134,7 @@
     font-size: 0.78rem;
     opacity: 0.75;
     padding: 0.45rem 1rem;
-    border-bottom: 1px solid var(--bordure);
+    border-bottom: 1px solid var(--bordure-ui);
     margin: 0;
     line-height: 1.3;
   }

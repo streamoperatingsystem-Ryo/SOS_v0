@@ -77,8 +77,9 @@
 </div>
 
 <style>
-  /* Bandeau horizontal pleine largeur, bordure pointillée. Hauteur bornée :
-     la liste wrappe puis scrolle verticalement si beaucoup de fichiers. */
+  /* Bandeau horizontal pleine largeur, bordure fine discrète. Hauteur
+     bornée : la liste wrappe puis scrolle verticalement si beaucoup de
+     fichiers. */
   .drop-bar {
     flex-shrink: 0;
     display: flex;
@@ -86,8 +87,8 @@
     flex-wrap: wrap;
     gap: 0.25rem 0.6rem;
     padding: 0.3rem 0.6rem;
-    border: 1px dashed var(--bordure);
-    background: var(--fond-panneau);
+    border: 1px solid var(--bordure-ui);
+    background: transparent; /* laisse transparaître le fond d'ambiance */
     font-size: 0.82rem;
     color: var(--texte);
     opacity: 0.8;
@@ -98,8 +99,8 @@
   /* .hover = curseur Tauri DANS la zone (pas un hover CSS — la position
      physique de l'event drop est comparée au rect de l'élément). */
   .drop-bar.hover {
-    border-color: var(--dash-accent);
-    box-shadow: var(--dash-glow);
+    border-color: var(--accent-ui);
+    box-shadow: var(--glow-ui);
     opacity: 1;
   }
   .drop-label {
@@ -144,7 +145,7 @@
     --btn-border: linear-gradient(var(--dash-danger), var(--dash-danger));
     background:
       var(--btn-surface) padding-box,
-      var(--btn-border) border-box;
+      var(--btn-border) border-box border-area;
     color: var(--dash-danger);
     border: 1px solid transparent;
     box-shadow: var(--btn-inset);
@@ -159,13 +160,13 @@
   .action.danger:hover {
     background:
       var(--btn-surface-hover) padding-box,
-      var(--btn-border) border-box;
+      var(--btn-border) border-box border-area;
     box-shadow: var(--btn-inset-hover), var(--dash-glow-danger);
   }
   .action.danger:active {
     background:
-      linear-gradient(180deg, var(--fond-controle) 0%, color-mix(in srgb, var(--btn-tint) 8%, var(--fond-controle)) 100%) padding-box,
-      var(--btn-border) border-box;
-    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+      var(--btn-surface-active) padding-box,
+      var(--btn-border) border-box border-area;
+    box-shadow: var(--btn-inset-active);
   }
 </style>

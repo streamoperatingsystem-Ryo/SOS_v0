@@ -1,0 +1,40 @@
+/* ===== StreamOS — tokens : primitives brutes =====
+   Couche 1 du système de thème (cf. IDEE/IDEA02.md). Ne contient QUE des
+   valeurs hex/composites brutes — aucune sémantique. Partagé par tous les
+   thèmes futurs : un thème (theme/glace.css) assigne ces tokens aux rôles.
+   Les composants ne consomment JAMAIS un --t-* directement. */
+:root {
+  /* Palette fondations (noir bleuté + gris). */
+  --t-fond: #08080f;
+  --t-texte: #e5e7eb;
+  --t-gris: #8b8fa3;
+  --t-gris-fonce: #12121e;
+  --t-bordure: #1e1e30;
+  --t-bordure-active: #2a2a40;
+  --t-fond-panneau: #0d0d16;
+  --t-fond-controle: #15151f;
+  /* Accents néon. */
+  --t-violet: #8b5cf6;
+  --t-orange: #f97316;
+  --t-magenta: #ec4899;
+  --t-rose: #d4888f; /* saumon — accent primaire (« Vos scènes ») */
+  /* Palette dashboard froide (signaux de contexte). */
+  --t-bordeaux-900: #7f1d1d;
+  --t-emeraude-700: #047857;
+  --t-orange-800: #9a3412;
+  --t-jaune-700: #a16207;
+  /* Sémantique (états, signaux — non thémables). */
+  --t-ambre: #f59e0b;
+  --t-vert: #22c55e;
+  --t-rouge: #c0392b;
+  --t-jaune-centre: #ffee00;
+  /* Marques plateformes (décoratif). */
+  --t-twitch: #a855f7;
+  --t-youtube: #f43f5e;
+  --t-tiktok: #ec4899;
+  --t-obs: #d1d5db;
+  /* Composites (dégradés + glows). */
+  --t-gradient-sig: linear-gradient(135deg, #f97316, #ec4899, #8b5cf6);
+  --t-glow-orange: 0 0 8px rgba(249, 115, 22, 0.4);
+  --t-dash-glow-danger: 0 0 8px rgba(127, 29, 29, 0.45);
+}

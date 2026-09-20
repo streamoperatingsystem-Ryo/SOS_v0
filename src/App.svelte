@@ -4,7 +4,7 @@
   import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene } from "./lib/stores/scenes";
   import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, openSectionExplicit } from "./lib/stores/ui";
-  import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword } from "./lib/stores/obs";
+  import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "./lib/stores/obs";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
   import { connecterKick, deconnecterKick, lireSlugSauve } from "./lib/stores/kick";
   import { connecterYoutube, deconnecterYoutube } from "./lib/stores/youtube";
@@ -34,6 +34,8 @@
   import { chargerAlertes, demarrerDiffFollows } from "./lib/stores/alertes";
   import { initPositionOverlay, chargerPositionOverlay } from "./lib/stores/positionOverlay";
   import { initPad, chargerPad } from "./lib/stores/padNumerique";
+  import { fondSidebar } from "./lib/stores/fondSidebar";
+  import { gradientCadre } from "./lib/cadres/registre";
 
   let serverError = $state<string | null>(null);
   let serverOk = $state(false);
@@ -54,6 +56,40 @@
   let ttUser = $derived($tiktokUsername);
   let obsSt = $derived($obsStatus);
   let obsErr = $derived($obsError);
+  let obsStream = $derived($obsStreaming);
+  let obsRecord = $derived($obsRecording);
+
+  // Couleur EFFECTIVE du cadre SVG → tout le chrome la suit : poussée dans
+  // --cadre-couleur / --cadre-couleur-fin sur :root, consommée par
+  // --accent-ui (bordures/hovers/focus), --fond-ambiance, .fond-decor et
+  // le bouton « Vos scènes ». Résolue via gradientCadre() — le même
+  // resolver que le rendu : cadre personnalisable → couleur/couleurFin ;
+  // preset → palette de la variante (le champ couleur n'y est PAS la
+  // source de vérité). Fallback cadreWidget puis accents du thème.
+  // Image de fond du dashboard (Personnalisation → « Image de fond ») —
+  // servie par :4321 comme les médias de scène, sous tout le décor.
+  let fondSidebarUrl = $derived($fondSidebar ? "http://127.0.0.1:4321/" + $fondSidebar : null);
+
+  let cadreActif = $derived(
+    $sceneStore.cadreApp?.actif
+      ? $sceneStore.cadreApp
+      : $sceneStore.cadreWidget?.actif
+        ? $sceneStore.cadreWidget
+        : null
+  );
+  let cadreCouleur = $derived(cadreActif ? gradientCadre(cadreActif).from : null);
+  let cadreCouleurFin = $derived(cadreActif ? gradientCadre(cadreActif).to : null);
+  $effect(() => {
+    const root = document.documentElement.style;
+    if (cadreCouleur) root.setProperty("--cadre-couleur", cadreCouleur);
+    else root.removeProperty("--cadre-couleur");
+    if (cadreCouleurFin) root.setProperty("--cadre-couleur-fin", cadreCouleurFin);
+    else root.removeProperty("--cadre-couleur-fin");
+    return () => {
+      root.removeProperty("--cadre-couleur");
+      root.removeProperty("--cadre-couleur-fin");
+    };
+  });
 
   // ===== Communauté : chargement réactif =====
   // $effect réactif : charge la communauté quand Twitch passe connecté,
@@ -138,6 +174,14 @@
         } catch {
         }
         break;
+      case "obs-stream":
+        // Toggle sortie OBS stream (one-shot : connect → ToggleStream → close).
+        // Erreur traduite dans obsError par le store — pas de throw ici.
+        try { await toggleStreamObs(); } catch {}
+        break;
+      case "obs-record":
+        try { await toggleRecordObs(); } catch {}
+        break;
       case "modale-interactions": interactionModalOpen.set(true); break;
       case "modale-moderation": moderationModalOpen.set(true); break;
       case "modale-cadres": cadreModalOpen.set("widget"); break;
@@ -157,6 +201,9 @@
       kick: c.kick,
       tiktok: c.tiktok,
       obs: get(obsStatus) === "connected",
+      // Sorties OBS : pastilles stream/record de la barre (data-plat homonymes).
+      stream: get(obsStreaming),
+      record: get(obsRecording),
     }).catch(() => {});
   }
 
@@ -164,6 +211,8 @@
     // Référence réactive : relire les stores à chaque changement.
     void cx;
     void obsSt;
+    void obsStream;
+    void obsRecord;
     pushRaccourcisConnexions();
   });
 
@@ -352,8 +401,39 @@
 <svelte:window onclick={closeDev} onkeydown={onSupprKey} />
 
 <main>
+  <!-- Décor aurora : arcs orbitaux derrière tout le chrome (cf. app.css). -->
+  <div class="fond-decor" aria-hidden="true">
+    {#if fondSidebarUrl}
+      <div class="fond-image" style="background-image: url('{fondSidebarUrl}')"></div>
+    {/if}
+    <div class="orb orb-droite"></div>
+    <div class="orb orb-gauche-a"></div>
+    <div class="orb orb-gauche-b"></div>
+    <div class="ligne"></div>
+    <div class="boule b1"></div>
+    <div class="boule b2"></div>
+    <div class="boule b3"></div>
+    <div class="boule b4"></div>
+    <div class="boule b5"></div>
+    <div class="boule b6"></div>
+    <div class="boule b7"></div>
+    <div class="boule b8"></div>
+  </div>
   <header>
-    <span class="title">StreamOS <span class="v0">v0</span></span>
+    <span class="title">
+      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
+        <defs>
+          <linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0" style="stop-color: var(--accent-orange)" />
+            <stop offset="0.5" style="stop-color: var(--accent-magenta)" />
+            <stop offset="1" style="stop-color: var(--accent-violet)" />
+          </linearGradient>
+        </defs>
+        <rect x="1.6" y="1.6" width="20.8" height="20.8" rx="6" fill="none" stroke="url(#logo-grad)" stroke-width="1.7" />
+        <path d="M9.5 7.4v9.2l7.6-4.6z" fill="url(#logo-grad)" />
+      </svg>
+      StreamOS <span class="v0">v0</span>
+    </span>
     <div class="right">
       <!-- Bandeau unique : Twitch / Kick / YouTube / TikTok / OBS / Diffusion (lecture seule) -->
       <span class="bandeau">
@@ -413,9 +493,15 @@
       <!-- Boutons contrôle : Arrêter / Redémarrer / Refresh OBS -->
       <span class="bandeau-sep"></span>
       <div class="ctrl-buttons">
-        <button class="ctrl-btn ctrl-arreter" onclick={onArreter} title="Arrêter l'application">■</button>
-        <button class="ctrl-btn ctrl-redemarrer" onclick={onRedemarrer} title="Redémarrer l'application">↻</button>
-        <button class="ctrl-btn ctrl-refresh" onclick={onRefreshObs} title="Refresh OBS / SOS-Diffusion">⟳</button>
+        <button class="ctrl-btn ctrl-arreter" onclick={onArreter} title="Arrêter l'application" aria-label="Arrêter l'application">
+          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+        </button>
+        <button class="ctrl-btn ctrl-redemarrer" onclick={onRedemarrer} title="Redémarrer l'application" aria-label="Redémarrer l'application">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>
+        </button>
+        <button class="ctrl-btn ctrl-refresh" onclick={onRefreshObs} title="Refresh OBS / SOS-Diffusion" aria-label="Refresh OBS / SOS-Diffusion">
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+        </button>
       </div>
       <!-- TEMPORAIRE — bouton Dev. Retirer avant release. -->
       <div
@@ -492,18 +578,26 @@
     align-items: center;
     justify-content: space-between;
     padding: 0.35rem 0.75rem;
-    border-bottom: 1px solid var(--bordure);
-    background: var(--fond-panneau);
+    border-bottom: 1px solid var(--bordure-ui);
+    background: transparent; /* laisse transparaître le fond d'ambiance */
     font-size: 0.85rem;
   }
-  /* Logo « StreamOS v0 » : dégradé signature sur « StreamOS » (sans asset image),
-     « v0 » en gris secondaire. */
+  /* Logo « StreamOS v0 » : marque SVG (carré arrondi + play) en dégradé
+     signature + « StreamOS » dégradé, « v0 » en gris secondaire. */
   .title {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4rem;
     font-weight: 700;
     background: var(--gradient-sig);
     -webkit-background-clip: text;
     background-clip: text;
     color: transparent;
+  }
+  .title .logo {
+    width: 1.05rem;
+    height: 1.05rem;
+    flex-shrink: 0;
   }
   .title .v0 {
     background: none;
@@ -525,7 +619,7 @@
   .bandeau-sep {
     width: 1px;
     height: 0.9rem;
-    background: var(--bordure-active);
+    background: var(--bordure-ui-active);
     opacity: 0.6;
     flex-shrink: 0;
   }
@@ -539,36 +633,15 @@
     opacity: 0.4;
     color: var(--gris);
   }
-  /* Pastille statut : hors-ligne = gris neutre (décoratif, pas rouge erreur).
-     Connectée = couleur de marque de la plateforme (--plat-*). OBS/Diffusion
-     gardent le vert sémantique (--message-ok-color) via .plat-obs/.plat-diffusion. */
-  .dot {
-    display: inline-block;
-    width: 0.5rem;
-    height: 0.5rem;
-    border-radius: 50%;
-    background: var(--gris);
-    flex-shrink: 0;
-    transition: background-color 0.15s ease, box-shadow 0.15s ease;
-  }
-  .dot.on {
-    background: var(--message-ok-color);
-  }
-  .dot.plat-twitch.on { background: var(--plat-twitch); box-shadow: 0 0 6px rgba(168, 85, 247, 0.6); }
-  .dot.plat-kick.on { background: var(--plat-kick); box-shadow: 0 0 6px rgba(34, 197, 94, 0.6); }
-  .dot.plat-youtube.on { background: var(--plat-youtube); box-shadow: 0 0 6px rgba(244, 63, 94, 0.6); }
-  .dot.plat-tiktok.on { background: var(--plat-tiktok); box-shadow: 0 0 6px rgba(236, 72, 153, 0.6); }
-  .dot.plat-obs.on { background: var(--plat-obs); }
-  .dot.plat-diffusion.on { background: var(--plat-diffusion); box-shadow: 0 0 6px rgba(34, 197, 94, 0.6); }
+  /* .dot (pastille statut) : classe partagée définie dans app.css. */
   .dev-wrap {
     position: relative;
   }
   .dev-btn {
-    --btn-tint: var(--accent-violet);
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--texte);
-    border: 1px solid var(--bordure);
+    border: 1px solid var(--bordure-ui-active);
     padding: 0.15rem 0.5rem;
     font: inherit;
     font-size: 0.8rem;
@@ -577,62 +650,62 @@
   }
   .dev-btn:hover {
     background: var(--btn-surface-hover);
-    border-color: var(--accent-violet);
-    box-shadow: var(--btn-inset-hover), var(--glow-violet);
+    border-color: var(--accent-ui);
+    box-shadow: var(--btn-inset-hover), var(--glow-ui);
   }
   .ctrl-buttons {
     display: flex;
     align-items: center;
     gap: 0.25rem;
   }
+  /* Boutons contrôle app (stop/restart/refresh OBS) : icônes SVG neutres au
+     repos — la couleur --ctrl-* n'apparaît qu'au survol (icône + teinte du
+     verre + bordure + glow assorti), comme sur la maquette. Spécificité
+     .ctrl-btn.ctrl-X:hover (0,3,0) > .ctrl-btn:hover (0,2,0) → override le
+     glow violet générique. */
   .ctrl-btn {
-    --btn-tint: var(--accent-violet);
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure);
-    padding: 0.1rem 0.4rem;
+    color: var(--gris);
+    border: 1px solid var(--bordure-ui-active);
+    padding: 0.15rem 0.45rem;
     font: inherit;
-    font-size: 0.85rem;
     line-height: 1;
     cursor: pointer;
-    opacity: 0.7;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+    opacity: 0.85;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  }
+  .ctrl-btn .ico {
+    width: 0.8rem;
+    height: 0.8rem;
   }
   .ctrl-btn:hover {
     background: var(--btn-surface-hover);
-    border-color: var(--accent-violet);
-    box-shadow: var(--btn-inset-hover), var(--glow-violet);
+    border-color: var(--accent-ui);
+    box-shadow: var(--btn-inset-hover), var(--glow-ui);
+    color: var(--texte);
     opacity: 1;
   }
-  /* Arrêter : rouge danger (quitte l'app). La teinte colore le verre +
-     la bordure au survol. Spécificité .ctrl-btn.ctrl-arreter (0,3,0) >
-     .ctrl-btn:hover (0,2,0) → override le glow violet générique. */
-  .ctrl-btn.ctrl-arreter {
+  .ctrl-btn.ctrl-arreter:hover {
     --btn-tint: var(--ctrl-arreter);
     color: var(--ctrl-arreter);
-  }
-  .ctrl-btn.ctrl-arreter:hover {
     border-color: var(--ctrl-arreter);
-    box-shadow: var(--btn-inset-hover), 0 0 8px rgba(192, 57, 43, 0.4);
-  }
-  /* Redémarrer : orange action utilisateur (relance). */
-  .ctrl-btn.ctrl-redemarrer {
-    --btn-tint: var(--ctrl-redemarrer);
-    color: var(--ctrl-redemarrer);
+    box-shadow: var(--btn-inset-hover), 0 0 8px color-mix(in srgb, var(--ctrl-arreter) 40%, transparent);
   }
   .ctrl-btn.ctrl-redemarrer:hover {
+    --btn-tint: var(--ctrl-redemarrer);
+    color: var(--ctrl-redemarrer);
     border-color: var(--ctrl-redemarrer);
     box-shadow: var(--btn-inset-hover), var(--glow-orange);
   }
-  /* Refresh OBS : vert succès (refresh diffusion). */
-  .ctrl-btn.ctrl-refresh {
+  .ctrl-btn.ctrl-refresh:hover {
     --btn-tint: var(--ctrl-refresh);
     color: var(--ctrl-refresh);
-  }
-  .ctrl-btn.ctrl-refresh:hover {
     border-color: var(--ctrl-refresh);
-    box-shadow: var(--btn-inset-hover), 0 0 8px rgba(34, 197, 94, 0.4);
+    box-shadow: var(--btn-inset-hover), 0 0 8px color-mix(in srgb, var(--ctrl-refresh) 40%, transparent);
   }
   .row {
     flex: 1;
@@ -648,8 +721,8 @@
     flex-shrink: 0;
     padding: 0.5rem;
     gap: 0.5rem;
-    border-right: 1px solid var(--bordure);
-    background: var(--fond-panneau);
+    border-right: 1px solid var(--bordure-ui);
+    background: transparent; /* laisse transparaître le fond d'ambiance */
   }
   .canvas-col {
     flex: 1;

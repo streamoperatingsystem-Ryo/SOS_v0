@@ -186,6 +186,8 @@ PAS "StreamOS" ; `config.rs` → `app_data_dir()`) :
 - `followers_snapshot.json` — snapshot des followers Twitch (user_id, login, followed_at + timestamp). Sert à détecter les unfollows au démarrage suivant.
 - `unfollows.json` — historique append-only des unfollows détectés (user_id, login, date_unfollow). Dédupliqué par user_id.
 - `raccourcis.json` — `{ "visible": bool, "bord": "gauche|droite|haut|bas", "monitor_index": n }` (barre de raccourcis)
+- `telemetrie/events.jsonl` — journal append-only des événements télémétrie (schéma v1, voir section dédiée)
+- `speedrun_baselines.json` — référence « dernière fois » du splitter : temps de split **cumulés** (secondes) par segment, keyed par chemin .lss. Mis à jour à chaque split réalisé ; mergé avec les PB du .lss pour la colonne delta (voir section Speedrun).
 - `scenes/` — scènes SOS (JSON)
 - `medias/` — médias importés
 
@@ -617,35 +619,115 @@ morphs: [{ x, y, rayon, intensite, mode }]  (normalisés 0-1, ordre = cumul)
 > (`--ok`, `--connexion-ok`, `#3c3`, `#5c5`, `#c0392b`, `#e0a060` en dur dans
 > 5 composants). Unification du 2026-09-12. **NE PAS RECRÉER ce qui existe.**
 
-### Les 3 variables (source unique : `src/app.css`, bloc `:root`)
+### Les 3 variables (source unique : `src/theme/glace.css` → tokens `--t-*`)
 
 | Variable | Couleur | Sémantique | Usages |
 |---|---|---|---|
 | `--message-user-action-color` | `#f59e0b` (orange) | Action requise de l'utilisateur | Toolbar `.obs-status.erreur` (mot de passe OBS invalide, OBS injoignable), ObsSourceDialog `.hint.warn` |
-| `--message-ok-color` | `#22c55e` (vert) | Succès / état connecté | Toolbar `.obs-status.ok` + `.header.etat-ok` (en-tête section OBS) + `.dot.on`, App.svelte `.dot.on` (bandeau top), DevPanel `.check` |
-| `--message-error-color` | `#c0392b` (rouge) | Erreur / danger | Toolbar `.header.etat-erreur` (en-tête section OBS non connecté : idle/error → texte + bordure rouges, couleur préservée au hover), App.svelte `.dot` (bandeau top, état off), boutons destructifs au survol (ConfirmDeleteWidgetModal `.action.danger:hover`, SceneBar `.ctx-item.danger:hover`) |
+| `--message-ok-color` | `#22c55e` (vert) | Succès / état connecté | Toolbar `.obs-status.ok` + `.header.etat-ok` (en-tête section OBS connecté : texte vert), `.dot.on` partagée (bandeau top App.svelte + lignes Connexions), DevPanel `.check` |
+| `--message-error-color` | `#c0392b` (rouge) | Erreur / danger | Toolbar `.header.etat-erreur` (en-tête section OBS non connecté : texte + liseré gauche rouges), boutons destructifs au survol (ConfirmDeleteWidgetModal `.action.danger:hover`, SceneBar `.ctx-item.danger:hover`), `.ctrl-btn.ctrl-arreter:hover` (topbar) |
 
-### Palette & arrondis — thème HUD sci-fi (source unique : `src/app.css`)
+### Système de thème `src/theme/` — 3 couches (2026-09-20, spec IDEE/IDEA02.md)
 
-> Thème HUD sci-fi (2026-09-15) — remplace le thème sobre noir/blanc/gris.
-> Palette noir bleuté + accents néon violet/orange + dégradé signature
-> `135deg #f97316→#ec4899→#8b5cf6`. Toute la palette passe par ces variables
-> pour qu'un futur thème = réécrire `app.css` uniquement.
+> Le thème du chrome dashboard vit dans `src/theme/`, importé par `main.ts`
+> dans cet ordre : `tokens.css` → `roles.css` → `glace.css` → `app.css`.
+> **UN SEUL THÈME (décision 2026-09-20) : `glace` est la base définitive —
+> la « variante » est la couleur utilisateur `--accent-ui` (couleur du
+> cadre SVG), qui re-thème tout le chrome à chaud. Pas de sélecteur de
+> thème. Si un jour un 2e thème est nécessaire : nouveau fichier
+> `theme-*.css` + changer l'import dans `main.ts`, zéro touch aux
+> composants.**
+
+- **`tokens.css`** : primitives brutes `--t-*` (hex + composites : dégradés,
+  glows). Seule source de `#hex` — un composant ne contient JAMAIS de hex.
+- **`roles.css`** : le contrat — recettes dérivées `--btn-surface`,
+  `--btn-surface-hover`, `--btn-surface-active` + reliefs `--btn-inset`,
+  `--btn-inset-hover`, `--btn-inset-active` + arrondis `--rayon-*`.
+  Calculées en fonction des rôles assignés par le thème ; un thème
+  n'assigne QUE des couleurs.
+- **`glace.css`** : LE THÈME — assigne chaque rôle (`--fond`, `--btn-tint`,
+  `--accent-*`, `--dash-*`, `--message-*`…) à un token.
+- **`app.css`** : structure uniquement (reset, shine/gloss `button::before`/
+  `::after`, scrollbars, `.modal-*`, `.msg-pill`, couche décor `.fond-decor`
+  + classes partagées `.ico` et `.dot`). Les composants consomment les
+  rôles — JAMAIS un `--t-*` directement.
+
+**Règles du thème « glace » :**
+- **Pas de fill de bouton coloré au repos** : `--btn-tint: transparent`,
+  `--btn-base` = verre sombre translucide (`--fond-controle` à 80%). La
+  couleur vit dans les bordures, glows, textes et états actifs.
+- **Exceptions sémantiques** (reposent leur `--btn-tint` coloré) :
+  `.action.danger`, `.modal-action.danger`, `.speedrun-start`/`-stop` ;
+  `.ctrl-arreter`/`-redemarrer`/`-refresh` (topbar) le reposent **au
+  survol uniquement** — icônes neutres au repos, couleur `--ctrl-*` au
+  hover (icône + teinte + bordure + glow).
+- **Bordures en dégradé** : technique `background: <gradient> border-box
+  border-area` — `border-area` clippe la couche à l'anneau de bordure
+  (requis depuis que les fills sont translucides ; sans ça le dégradé
+  transparaît sous tout le bouton). Chrome/WebView2 ≥ 128.
+- **Fond d'ambiance** : `--fond-ambiance` (aurora en radial-gradients) est
+  le fond de `.fond-decor` — PAS sur `body` (un fond body, bloc in-flow,
+  se peindrait par-dessus le calque z-index -1 et le masquerait). `body`
+  n'a aucun fond ; le fond plat `--fond` reste sur `:root`. `.fond-decor`
+  (`position: fixed; z-index: -1; pointer-events: none`, définie dans
+  `app.css`, montée dans `App.svelte`)
+  contenant, dans l'ordre de peinture : `.fond-image` (image utilisateur
+  pleine fenêtre + voile assombrissant/lavé `--cadre-couleur`), les orbs
+  (arcs orbitaux — cercles géants hors-champ), `.ligne` (diagonale fine) et
+  les `.boule` (points variés 3–17px remontant le bord gauche). Tout est
+  SOUS le contenu : rien ne masque le texte. Les panneaux fixes (header,
+  `.sidebar-col`, `.scene-bar`, `.drop-bar`) sont `transparent`.
+  `--fond-panneau` reste pour les panneaux flottants (modales, dropdowns,
+  carte d'édition).
+- **Accent utilisateur (couleur du cadre)** : `App.svelte` pousse la
+  couleur EFFECTIVE du cadre actif (`cadreApp`, fallback `cadreWidget`)
+  dans `--cadre-couleur` / `--cadre-couleur-fin` sur `:root`, résolue via
+  `gradientCadre()` de `lib/cadres/registre` — le même resolver que le
+  rendu : cadre personnalisable → `couleur`/`couleurFin` ; preset →
+  palette de la `variante` (le champ `couleur` n'y est PAS la vérité).
+  `--accent-ui` = `var(--cadre-couleur, var(--accent-violet))` + dérivés
+  `--glow-ui`, `--bordure-ui`, `--bordure-ui-active`, `--gradient-cadre`
+  (glace.css).
+  Tout le chrome les consomme (bordures de boutons, hovers, focus,
+  anneaux, modales). `--bordure`/`--bordure-active` RESTENT neutres —
+  consommés aussi par le canvas (outline de sélection widget), hors
+  périmètre. Les signaux sémantiques (`--accent-carte`, `--dash-*`,
+  `--ctrl-*`, `--plat-*`, `--message-*`) ne suivent PAS `--accent-ui`.
+  `--accent-violet` reste la marque (logo, `--gradient-sig`).
+- **Image de fond dashboard** : `stores/fondSidebar.ts` (localStorage
+  `sidebarFond` + `tauri.importAlerteMedia("image")` — pipeline média
+  commun, zéro Rust ajouté) ; boutons dans Personnalisation.
+- **Sidebar** = liste plate : icône SVG `.ico` + label + chevron `›` ;
+  lignes **transparentes au repos**, pilule verre au survol ; section
+  ouverte = pilule neutre discrète `color-mix(--texte 7%)` ; chaque
+  `.section` porte un encadré `--bordure-ui` (accent cadre), renforcé
+  `--bordure-ui-active` quand ouverte (le contenu déplié reste dans le
+  cadre) ; section OBS non connectée = texte `--message-error-color` +
+  liseré rouge `inset 3px 0 0` à gauche.
+- **Accent primaire** : `--accent-rose` (`#d4888f`) — bouton « Vos scènes »
+  (pilule pleine : dégradé vertical léger + liseré sombre, glow au survol).
+  Quand le cadre SVG de l'app est actif, la pilule suit `--cadre-couleur`
+  (via `var(--cadre-couleur, var(--accent-rose))`, comme le décor).
 
 | Variable | Valeur | Rôle |
 |---|---|---|
 | `--fond` / `--texte` | `#08080f` / `#e5e7eb` | Fond app (noir bleuté) + texte principal |
 | `--gris` | `#8b8fa3` | Texte secondaire : placeholders, hints, outline canvas (Canvas.svelte) |
 | `--gris-fonce` | `#12121e` | Fonds secondaires : hover subtil, inputs |
-| `--bordure` | `#1e1e30` | Bordures UI passives (gris-violet foncé) |
-| `--bordure-active` | `#2a2a40` | Bordures hover/contrôles (plus visible) |
-| `--fond-panneau` | `#0d0d16` | Fond sidebar/panneaux (légèrement + clair que `--fond`) |
-| `--fond-controle` | `#15151f` | Fond boutons/inputs (encore + clair) |
-| `--accent-violet` | `#8b5cf6` | Accent néon principal (bordures actives, glows) |
-| `--accent-orange` | `#f97316` | Accent néon secondaire (cornières, scène active) |
+| `--bordure` | `#1e1e30` | Bordures NEUTRES — canvas (outline sélection widget) + base des variantes teintées |
+| `--bordure-active` | `#2a2a40` | Bordure neutre renforcée — idem, canvas uniquement |
+| `--bordure-ui` / `--bordure-ui-active` | `color-mix(--accent-ui 35%/65%, --bordure*)` | Bordures du CHROME teintées couleur cadre (boutons, sections, séparateurs) |
+| `--fond-panneau` | `#0d0d16` | Fond des panneaux FLOTTANTS (modales, dropdowns, carte d'édition) — les panneaux fixes sont transparents |
+| `--fond-controle` | `#15151f` | Substrat du verre boutons (`--btn-base`) + fonds inputs |
+| `--fond-ambiance` | composite radial-gradients | Fond aurora — fond de `.fond-decor` (PAS sur `body`) |
+| `--accent-ui` | `var(--cadre-couleur, --accent-violet)` | Accent du chrome entier : bordures, focus, glows, anneaux — suit la couleur du cadre |
+| `--glow-ui` | `0 0 8px color-mix(--accent-ui 40%)` | Glow externe teinté cadre (hovers, dropdowns) |
+| `--gradient-cadre` | `linear-gradient(135deg, --cadre-couleur, --cadre-couleur-fin)` | Anneaux de boutons SceneBar — dégradé exact du cadre |
+| `--accent-violet` | `#8b5cf6` | Marque (logo) + fallback de `--accent-ui` sans cadre |
+| `--accent-orange` | `#f97316` | Accent néon secondaire (scène active, glows SceneBar) + fallback décor |
 | `--accent-magenta` | `#ec4899` | Milieu du dégradé signature |
-| `--gradient-sig` | `linear-gradient(135deg, #f97316, #ec4899, #8b5cf6)` | Dégradé signature (logo, bordures actives) |
-| `--glow-violet` | `0 0 12px rgba(139,92,246,0.35)` | Glow externe section/bouton actif |
+| `--accent-rose` | `#d4888f` | Fallback de « Vos scènes » quand aucun cadre n'est actif |
+| `--gradient-sig` | `linear-gradient(135deg, #f97316, #ec4899, #8b5cf6)` | Dégradé signature — marque uniquement (logo, titre) |
 | `--glow-orange` | `0 0 8px rgba(249,115,22,0.4)` | Glow pastille scène active |
 | `--rayon-petit` | `5px` | Boutons, inputs, selects (appliqué globalement dans app.css) |
 | `--rayon` | `8px` | Blocs, barres, conteneurs |
@@ -654,9 +736,9 @@ morphs: [{ x, y, rayon, intensite, mode }]  (normalisés 0-1, ordre = cumul)
 ### Carte d'édition contextuelle — 3 cartes colorées (2026-09-15)
 
 > La carte d'édition (`CarteEdition.svelte`, panneau latéral gauche) adopte une
-> couleur selon la cible sélectionnée. Les boutons internes `.action` suivent
-> cette couleur dès l'état repos (bordure + surface teintée via `--btn-tint` =
-> `--accent-carte`), pas seulement au hover/active.
+> couleur selon la cible sélectionnée. La couleur vit dans la bordure des
+> boutons `.action` (`--btn-border` = `--accent-carte` plein) + le glow
+> hover/active — le fill reste le verre sombre neutre commun (IDEA02).
 
 | Cible | Classe CSS | Couleur | Variable | Condition |
 |---|---|---|---|---|
@@ -668,41 +750,51 @@ morphs: [{ x, y, rayon, intensite, mode }]  (normalisés 0-1, ordre = cumul)
   `cible === "widget" && isInputViewerWidget` → `cible-input-viewer`, sinon
   `cible-${cible}`. La cible du store reste `"widget"` (pas de nouveau type) —
   seul le rendu CSS change.
-- Variables `--dash-orange` / `--dash-jaune` définies dans `app.css` (palette
-  `--dash-*`, couleurs froides assombries — cohérent avec `--dash-danger`).
+- Variables `--dash-orange` / `--dash-jaune` définies dans `theme/glace.css`
+  (palette `--dash-*`, couleurs froides assombries — cohérent avec
+  `--dash-danger`).
 
-### Boutons — recette « verre Aero HUD » + reflet animé (2026-09-15)
+### Boutons — recette « verre sombre » + reflet animé (thème glace, 2026-09-20)
 
-> Surface interne des boutons du chrome dashboard. Brillance moitié
-> supérieure teintée `--btn-tint` (signature Aero) + relief interne (inset
-> lumineux haut / sombre bas = verre bombé) + **reflet animé** : un sweep
-> lumineux diagonal traverse le bouton une fois au `:hover` (one-shot 0.7s,
-> pas de boucle → pas énergivore). Recette partagée par toute l'UI — un
-> contexte = surcharger `--btn-tint` (et `--btn-border` si besoin), jamais
-> copier le CSS. Source unique : `src/app.css` (tokens + `@keyframes` +
-> `button::before` global).
+> Recette partagée par toute l'UI — un contexte = surcharger les rôles
+> (`--btn-tint`, `--btn-border` local), jamais copier le CSS.
+> Recettes dérivées : `src/theme/roles.css` ; valeurs : `src/theme/glace.css` ;
+> keyframes + `button::before` global : `src/app.css`.
 
-| Variable | Valeur | Rôle |
+| Variable | Valeur (glace) | Rôle |
 |---|---|---|
-| `--btn-tint` | `var(--dash-accent)` (indigo) | Teinte du verre + du reflet. Surchargé par contexte |
-| `--btn-border` | `var(--dash-gradient)` | Bordure border-box (dégradé dash) |
-| `--btn-surface` | dégradé 180° teinté | Surface Aero (padding-box) — repos |
-| `--btn-surface-hover` | dégradé 180° teinté + intense | Surface Aero — survol |
-| `--btn-inset` | inset haut lumineux + bas sombre | Relief verre bombé — repos |
-| `--btn-inset-hover` | inset + intense | Relief — survol |
+| `--btn-tint` | `transparent` | Teinte du verre + du reflet. `transparent` par défaut — PAS de fill coloré au repos ; surchargé UNIQUEMENT par les états sémantiques |
+| `--btn-base` | `--fond-controle` à 80% | Substrat translucide du verre (le fond ambiant transparaît) |
+| `--btn-border` | pas de défaut global | Anneau de bordure — assigné localement par contexte (porte la couleur d'identité) |
+| `--btn-surface` | dégradé 180° tint→base | Surface verre — repos |
+| `--btn-surface-hover` | dégradé + intense | Surface — survol |
+| `--btn-surface-active` | dégradé inversé (substrat plein en haut) | Surface — pression (`:active`) |
+| `--btn-inset` / `--btn-inset-hover` | inset haut lumineux + bas sombre + halo `color-mix(--accent-ui 16%/30%)` | Relief verre bombé + lueur cadre — repos / survol |
+| `--btn-inset-active` | `inset 0 2px 4px rgba(0,0,0,.4)` | Relief creusé — pression (`:active`) |
 
-**Teintes par contexte (surchargent `--btn-tint`) :**
-- Sidebar (Toolbar) : `--dash-accent` (indigo) — défaut
-- En-tête OBS erreur : `--dash-danger` (bordeaux)
-- CarteEdition : `--accent-carte` (bordeaux widget / orange fond / jaune input-viewer) — posé sur `.carte-edition`
-- SceneBar : `--accent-orange` (néon) — posé sur `.scene-bar`
-- Modales : `--accent-violet` (néon) — posé sur `.modal-shell`
-- ctrl-btn Arrêter/Redémarrer/Refresh : `--ctrl-arreter`/`--ctrl-redemarrer`/`--ctrl-refresh`
+**Qui surcharge `--btn-tint` (sémantique, exhaustif) :**
+`.speedrun-start`/`.speedrun-stop` (CarteEdition), `.action.danger`
+(DropBar), `.modal-action.danger:hover` (app.css) ; `.ctrl-arreter`/
+`.ctrl-redemarrer`/`.ctrl-refresh` (topbar) **au `:hover` seulement**. Tout
+autre usage = bug à corriger.
+
+**Couleur de contexte sans fill** : `--btn-border` porte l'identité
+(`--accent-carte` sur CarteEdition `.action`, `--dash-danger` sur DropBar
+danger, `--gradient-cadre` sur les anneaux SceneBar). Technique anneau :
+`<gradient> border-box border-area` (clip à la bordure — voir règle
+`border-area` ci-dessus).
+
+**Verre dépoli** : `button { backdrop-filter: blur(6px) }` (global dans
+`app.css`) — le décor (aurora, image, boules) transparaît flouté derrière
+chaque bouton. La lueur cadre au repos vit dans `--btn-inset` (halo
+`--accent-ui`, cf. table ci-dessus).
 
 **Reflet animé** : `button::before` (global dans `app.css`) en `z-index: -1`
 (au-dessus du fond, sous le texte), `isolation: isolate` sur le bouton pour
 contenir le z-index négatif. `@keyframes btn-shine` = sweep `translateX` +
 `skewX(-18deg)`, 0.7s ease-out, one-shot au `:hover:not(:disabled)`.
+Invisible par défaut (teinté `--btn-tint` = transparent) ; réapparaît sur
+les boutons sémantiques qui reposent un `--btn-tint` coloré.
 
 ### Pastille de message centré — recette `.msg-pill` (2026-09-19)
 
@@ -955,10 +1047,11 @@ Dashboard (WidgetSpeedrun.svelte)
   (ReadProcessMemory), `Win32_System_Diagnostics_ToolHelp` (CreateToolhelp32Snapshot),
   `Win32_System_ProcessStatus` (EnumProcessModulesEx, GetModuleBaseNameW).
 
-### Commandes Tauri (9)
+### Commandes Tauri (11)
 
 - `speedrun_charger_asl(path)` → charge .asl, retourne settings
-- `speedrun_charger_lss(path)` → charge .lss, retourne segments + PB
+- `speedrun_charger_lss(path)` → charge .lss, retourne segments + PB ; fige
+  aussi la baseline mergée (slot Rust) poussée dans le payload WS `lss`
 - `speedrun_demarrer(totalSplits, start, split, reset)` → démarre boucle polling
 - `speedrun_arreter()` → arrête boucle
 - `speedrun_maj_settings(start, split, reset)` → met à jour settings
@@ -966,6 +1059,11 @@ Dashboard (WidgetSpeedrun.svelte)
 - `speedrun_action_manuelle(action)` → start/split/skip/undo/reset/pause
 - `speedrun_lire_config()` → lit speedrun.json (chemins + settings)
 - `speedrun_sauver_config(config)` → sauve speedrun.json
+- `speedrun_baseline_lire(chemin_lss)` → baseline sauvegardée du .lss
+  (`Vec<Option<f64>>`, cumul secondes/segment ; vide si jamais enregistrée)
+- `speedrun_baseline_enregistrer(chemin_lss, index, cumul_secs)` → écrit le
+  temps cumulé d'un split réalisé dans speedrun_baselines.json (ne touche PAS
+  la référence affichée — figée pour le run en cours)
 
 ### Events
 
@@ -973,7 +1071,30 @@ Dashboard (WidgetSpeedrun.svelte)
   ended, gameTime, time, connected, disconnected, error, stopped, loaded, paused,
   resumed, splitSkipped, splitUndone, settings-list).
 - WS `speedrun-etat` → diffusion.html `majSpeedrunEtat` (maj DOM directe,
-  pattern input-viewer : textContent/classList, zéro re-render).
+  pattern input-viewer : textContent/classList, zéro re-render). Sous-types
+  spéciaux : `lss` (segments + champ `baseline` mergée) et `baseline`
+  (référence delta fraîche, émise à chaque `started` — figée pour le run).
+
+### Colonne delta « dernière fois » (2026-09-19)
+
+> 1ère colonne temps de chaque ligne de split = **delta cumulé vs la référence**
+> (baseline `speedrun_baselines.json` « dernière fois », fallback PB du .lss) —
+> convention LiveSplit (colonne « +/− », signe toujours affiché, dixième).
+
+- **Format** : `-1.6` / `+2.3` / `-1:23.4` (cumulé au split : temps courant −
+  référence cumulée). `0.0` neutre (gris) si non parcouru / skippé / sans
+  référence (premier run : « compteurs à zéro »).
+- **Couleurs** : vert `--message-ok-color` si négatif (gagné), rouge
+  `--message-error-color` si positif (perdu) — sur la valeur ET la **bordure
+  de la ligne entière** (`.seg-ahead`/`.seg-behind` dashboard,
+  `.sr-seg-ahead`/`.sr-seg-behind` diffusion ; déclarées après `.actif` →
+  l'emportent aussi sur le split en cours).
+- **Cycle de vie de la référence** : figée à chaque `started` (slot Rust +
+  emit WS `baseline` + store `referenceSplits`) — les enregistrements en
+  cours de run préparent la référence du run SUIVANT sans modifier l'affiché.
+- **Ordre des colonnes aligné** dashboard/diffusion : n° | nom | delta | temps.
+- **Dernier split** : émis via `ended` (pas `split`) → son temps est stocké
+  dans `splits` et enregistré en baseline dans le handler `ended`.
 
 ### Bugs corrigés (portés depuis le legacy, déjà fixés dans le code source)
 
@@ -1079,6 +1200,36 @@ Dashboard (WidgetSpeedrun.svelte)
    `.media-ctrl`, …) sont scopées à Toolbar.svelte et ne s'appliqueraient pas
    à un composant enfant sans duplication.
 
+## Effet miroir média — flip H/V (2026-09-20)
+
+> Retournement horizontal/vertical du contenu média (sémantique OBS « Flip »).
+> `mediaMiroirH`/`mediaMiroirV` sur `Widget`, `bgMiroirH`/`bgMiroirV` sur
+> `Scene` — booléens `serde(default)` (false = pas de miroir, rétro-compat).
+
+- **Rendu** : `scale(±1)` **combiné au zoom** dans la chaîne transform
+  existante, **après `rotate`** dans la liste → le flip s'applique à la source
+  dans son espace local (« flipper l'image puis la tourner »). Formule unique
+  partout : `scale(zoom·mH, zoom·mV)` avec `mH/mV ∈ {−1, 1}`.
+- **Chemins couverts (tous doivent rester synchrones)** :
+  - Widget média : `mediaTransform` (Widget.svelte) + `dessinerOffscreen`
+    (chemin morph, 2 sous-chemins normal/pixel) ; `applyMediaStyle` +
+    `morphRendreWidget` (diffusion.html).
+  - Media-fond des widgets à contenu (chat/input-viewer/speedrun) : automatique
+    via `applyMediaStyle` (diffusion) et le snippet `mediaFond` (dashboard).
+  - Fond : `bgMediaTransform` + `rendreBgMorph` + `rendreBgPixel`
+    (Canvas.svelte) ; `dessinerContenuFond` dans `peindreFond` (diffusion.html
+    — couvre le chemin morphé via l'offscreen).
+- **UI** : onglet **Effets** de CarteEdition — groupe « Miroir média »
+  (gated `selectedWidget?.media`) et « Miroir fond » ; boutons toggle
+  `fit-btn` « Miroir → » / « Miroir ↓ » → `toggleMediaMiroir` /
+  `toggleBgMiroir` (stores/scene.ts, commit immédiat).
+- **Reset** : `resetMedia` / `resetFond` remettent les flags à false.
+- **Exclusions** : widget caméra (source OBS `SOS-Caméra`, pipeline
+  `camera_sync` — un flip caméra serait un transform OBS séparé) et widgets
+  trou/captures OBS (pas de média rendu — flags inertes, comme zoom/rot).
+- Ne pas confondre avec le « Retournement » de l'onglet Dupliquer
+  (`rotateX`/`rotateY` ±180° = flip du widget ENTIER en 3D, pas du média).
+
 ## Barre de raccourcis — fenêtre TOPMOST dockée à un bord d'écran (2026-09-19)
 
 > Fenêtre `WebviewWindow` dédiée (label `raccourcis`, `raccourcis.rs` +
@@ -1147,3 +1298,138 @@ Dashboard (WidgetSpeedrun.svelte)
 Frontend : `stores/raccourcis.ts` (visible/bord/monitorIndex/moniteurs +
 init/appliquer/masquer), section accordéon « Raccourcis » dans Toolbar
 (show/hide, 4 bords, `<select>` moniteurs, hint borderless).
+
+## Sorties OBS — stream & record (2026-09-20)
+
+> Boutons « Démarrer/Arrêter » le stream ET l'enregistrement OBS : 2 toggles
+> dans la section OBS de la Toolbar + 2 icônes dans la barre de raccourcis.
+> **La connexion OBS reste one-shot** (connect → RPC → close) comme toutes les
+> commandes OBS — aucune connexion persistante, **aucun polling**.
+
+### Contrats
+
+- `obs.rs` : `toggle_stream` / `toggle_record` (ToggleStream / ToggleRecord,
+  retournent `outputActive` de la réponse = nouvel état, zéro requête en plus)
+  et `outputs_status` (GetStreamStatus + GetRecordStatus dans UNE connexion →
+  `(stream, record)`). Réutilisent `connect()` + `rpc()` comme
+  `refresh_diffusion`.
+- Commandes Tauri : `obs_toggle_stream` / `obs_toggle_record` → `bool`,
+  `obs_outputs_status` → `{ stream, record }` — signature `(host, port,
+  password)` comme les autres.
+- `stores/obs.ts` : `obsStreaming` / `obsRecording` (writable bool),
+  `rafraichirOutputs()` (non-fatal, appelé à la fin d'`obsConnect` réussi),
+  `toggleStreamObs()` / `toggleRecordObs()` (le booléen retourné alimente le
+  store directement ; erreur traduite via `messageClair` → `obsError`).
+- **PAS de polling** (choix validé) : l'état est lu au connect + après chaque
+  toggle. Si l'utilisateur agit directement dans OBS, le dashboard et la barre
+  restent désynchronisés jusqu'au prochain toggle dans StreamOS.
+- Toolbar : `.action output-btn` + `<span class="dot">` (vert
+  `--message-ok-color` quand actif) + `.output-btn.actif` (bordure/texte
+  `--accent-ui`, recette `.action.small.actif`). `disabled` si OBS non
+  connecté ou toggle en vol (`outputBusy` — chaque toggle = 1 connexion).
+- Barre raccourcis : icônes `data-id="obs-stream"` / `data-plat="stream"` et
+  `data-id="obs-record"` / `data-plat="record"` — la pastille `.dot` existante
+  suffit, `setConnexions` itère tous les `[data-plat]` (zéro JS ajouté).
+  Payload `raccourcis:connexions` étendu : `stream` / `record` (bools),
+  poussés par le même `$effect`/`pushRaccourcisConnexions` d'App.svelte.
+
+## Télémétrie multiplateforme — collecte passive JSONL (2026-09-19)
+
+> Module `telemetrie/` : observateur **PASSIF** des flux existants — zéro
+> modification des émetteurs. Listeners Tauri `*:connecte` / `*:deconnecte`
+> (bornes de session, uuid par fenêtre connexion→déconnexion) + subscription
+> `chat_tx` (même canal broadcast que le WS :4321) avec whitelist fermée.
+
+### Contrat d'événement (schéma v1 — `telemetrie/events.jsonl`)
+
+```
+{"v":1,"ts":"<ISO8601 UTC>","plateforme":"...","kind":"...",
+ "session_id"?,"titre_stream"?,"jeu"?,"jeu_id"?,"pseudo"?,"data":{...}}
+```
+
+- `plateforme` : `twitch` | `youtube` | `kick` | `tiktok` | **`multi`**
+  (commande/welcome — la frame ne porte pas la plateforme d'origine) |
+  **`local`** (pad numérique) | `systeme`.
+- `kind` : `connexion` | `deconnexion` | `chat` | `viewers` | `alerte` |
+  `commande` | `welcome` | `bandeau` | `pad`.
+- **Whitelist frames** : `chat`, `viewers`, `alerte-play`, `commande-play`,
+  `welcome-clip-play`, `bandeau-premier-message-play`, `pad-play`. Les frames
+  de synchro UI (`*-config`, `*-stop`, `input-viewer-etat` 30 Hz,
+  `speedrun-etat`, `position-overlay-config`, `snapshot`) ne sont **PAS**
+  enregistrées — ajouter un type = décision documentée dans `collecte.rs`.
+- `titre_stream` / `jeu` / `jeu_id` : champs réservés — remplis par
+  l'enrichissement stream_info (LOT 2), ignorés à la sérialisation tant
+  qu'absents.
+- Attribution plateforme des overlays : `alerte`→`twitch` (seul émetteur
+  actuel), `bandeau`→`viewer.plateforme` (réel, porté par la frame),
+  `commande`/`welcome`→`multi` (attribution exacte = hooks explicites dans
+  les émetteurs, LOT ultérieur si besoin).
+
+### Architecture
+
+| Fichier | Rôle |
+|---|---|
+| `src-tauri/src/telemetrie/mod.rs` | `TelemetrieState` (compteurs, sessions courantes, anneau 500 events) + `record()` non bloquant (mpsc non borné → writer) |
+| `src-tauri/src/telemetrie/modele.rs` | `EventTelemetrie` schéma v1 + `maintenant_iso()` |
+| `src-tauri/src/telemetrie/stockage.rs` | Writer JSONL thread dédié — flush 500 ms / 64 lignes, dégradé mémoire-only si fichier inouvrable |
+| `src-tauri/src/telemetrie/collecte.rs` | Whitelist + extraction plateforme/pseudo/data + listeners `*:connecte`/`*:deconnecte` + subscriber `chat_tx` |
+| `src-tauri/src/telemetrie/commands.rs` | `telemetrie_etat` (compteurs + sessions + fichier), `telemetrie_derniers(limit)` (anneau, ≤500) |
+
+Init dans `lib.rs` setup : `TelemetrieState::new` + `demarrer` **avant** les
+auto-resume (pour capter leurs connexions) — non-fatal si le fichier est
+inaccessible. `chat:message`/`viewers:update`/etc. continuent d'aller au
+frontend et à :4321 exactement comme avant — le tap est un abonné de plus.
+
+## Grille magnétique + guides symétriques + duplication miroir (2026-09-19)
+
+> Guides visuels pendant drag/resize — **dashboard UNIQUEMENT, jamais en
+> diffusion**. Le snap existait depuis le 2026-08-29 (dev-log #29) ; cette
+> passe ajoute symétrie axe central, espacements égaux et duplication de
+> widget avec gizmo miroir.
+
+### Snap (`scene.ts` — `buildSnapTargets` / `computeSnap`, seuil `SNAP_PX = 6`)
+
+Cibles par axe (`xs`/`ys`, `SnapTarget {pos, side}`), figées au pointerdown
+(snapshot — pas de `get()` par frame), bypass **Alt** = free-drag, actif en
+drag ET resize :
+
+- bords + centre du canvas, bords + centres des autres widgets (existant)
+- `side: "mirror"` : positions miroir des autres widgets (`cw − o.x`,
+  `cw − o.x − o.largeur`, idem en y) → la marge opposée du widget déplacé
+  égale la marge d'un autre widget
+- `side: "gap"` : pour chaque paire non chevauchante, prolongation de la série
+  au même espacement + centrage entre les deux (si le widget déplacé tient
+  dans le gap — ses dims sont lues depuis la scène au snapshot)
+
+### Visuels (`AlignmentGuides.svelte`, `<canvas>` pointer-events:none z-50)
+
+- 4 traits aux bords + labels distance px — passés en jaune `--ctrl-centre`
+  quand les marges opposées sont égales (±0.5 px ; le snap produit l'égalité
+  exacte)
+- Viseur central + label « CENTRE » (existant)
+- **Fantôme miroir** : rect pointillé vert `--ctrl-refresh` à la position
+  symétrique (axe vertical du canvas), masqué si centré (= même place)
+- **Espacements égaux** : segments pointillés jaunes sur le gap créé ET le
+  gap de référence + label « N px ». Les autres widgets sont lus depuis
+  `sceneStore` ; le widget déplacé est exclu par égalité de rect (le store
+  reçoit exactement les valeurs snappées poussées dans `guidesEtat`)
+
+### Duplication (`dupliquerWidget` + onglet « Dupliquer » de CarteEdition)
+
+- Onglet « Dupliquer » dans la carte d'édition — branche widgets non-caméra
+  (la caméra reste exclue : singleton figé, `createCameraWidget` refuse).
+- Bouton → copie : uuid neuf, z au-dessus (max non-caméra + 1), `obsSource`
+  **strippé** (une source OBS = un seul emplacement ; le trou copié reste non
+  lié), position initiale = miroir axe vertical du canvas (+24 px si
+  l'original est centré). Copie sélectionnée + `commitScene` (save + snapshot).
+- Flag `garderTab` (CarteEdition) : la copie devient sélectionnée SANS reset
+  de l'onglet vers « Contenu ».
+- **Gizmo miroir** : `Gizmo3D` réutilisé avec prop `maxDeg={180}` (défaut 90 =
+  inclinaison seule). `rotateY = ±180°` = miroir horizontal, `rotateX = ±180°`
+  = miroir vertical — `perspective(800px)` sans `backface-visibility` : le
+  widget montre son dos. Aimant bord ±maxDeg (8°), label « Miroir H / V /
+  H+V » (`--ctrl-centre`) dès |angle| > 90°. Raccourcis « Miroir → » /
+  « Miroir ↓ » / « Reset » (`rotateWidgetLocal` + `commitScene`).
+- **Zéro nouveau champ `Widget`** : `rotateX`/`rotateY` existants, rendus
+  identiques dashboard (`Widget.svelte`) et diffusion (`diffusion.html`),
+  persistés dans la scène JSON comme avant.

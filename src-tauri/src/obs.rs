@@ -398,6 +398,70 @@ pub async fn refresh_diffusion(host: &str, port: u16, password: &str) -> Result<
     refresh_result.map(|_| ())
 }
 
+/// Bascule le streaming OBS (ToggleStream). One-shot : connect → request →
+/// close. Retourne le nouvel état (outputActive de la réponse).
+pub async fn toggle_stream(host: &str, port: u16, password: &str) -> Result<bool, String> {
+    let (mut write, mut read) = connect(host, port, password).await?;
+    let result = rpc(
+        &mut write,
+        &mut read,
+        "ToggleStream",
+        "toggle_stream",
+        json!({}),
+    )
+    .await;
+    let _ = write.close().await;
+    result.map(|data| data["outputActive"].as_bool().unwrap_or(false))
+}
+
+/// Bascule l'enregistrement OBS (ToggleRecord). One-shot : connect → request →
+/// close. Retourne le nouvel état (outputActive de la réponse).
+pub async fn toggle_record(host: &str, port: u16, password: &str) -> Result<bool, String> {
+    let (mut write, mut read) = connect(host, port, password).await?;
+    let result = rpc(
+        &mut write,
+        &mut read,
+        "ToggleRecord",
+        "toggle_record",
+        json!({}),
+    )
+    .await;
+    let _ = write.close().await;
+    result.map(|data| data["outputActive"].as_bool().unwrap_or(false))
+}
+
+/// Lit l'état des sorties OBS (GetStreamStatus + GetRecordStatus) en UNE
+/// connexion. One-shot : connect → 2 requests → close.
+/// Retourne (stream_actif, record_actif). outputPaused n'est pas exposé :
+/// le dashboard n'affiche que actif/inactif.
+pub async fn outputs_status(
+    host: &str,
+    port: u16,
+    password: &str,
+) -> Result<(bool, bool), String> {
+    let (mut write, mut read) = connect(host, port, password).await?;
+    let stream = rpc(
+        &mut write,
+        &mut read,
+        "GetStreamStatus",
+        "stream_status",
+        json!({}),
+    )
+    .await
+    .map(|d| d["outputActive"].as_bool().unwrap_or(false));
+    let record = rpc(
+        &mut write,
+        &mut read,
+        "GetRecordStatus",
+        "record_status",
+        json!({}),
+    )
+    .await
+    .map(|d| d["outputActive"].as_bool().unwrap_or(false));
+    let _ = write.close().await;
+    Ok((stream?, record?))
+}
+
 // --- Helpers WebSocket (pub(crate) pour obs_trou) ---
 
 pub(crate) async fn send_msg<W>(write: &mut W, msg: &Value) -> Result<(), String>

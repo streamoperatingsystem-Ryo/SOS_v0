@@ -2,12 +2,15 @@
   import { sceneStore, selectedIdStore, rotateWidgetLocal, commitScene } from "../stores/scene";
   import { get } from "svelte/store";
 
-  // Carré 120×120. Boule positionnée par rotateX/rotateY (±90°).
-  // cx = 60 + (ry/90)*60  (droite = rotateY positif)
-  // cy = 60 - (rx/90)*60  (haut   = rotateX positif)
+  // Carré 120×120. Boule positionnée par rotateX/rotateY (±maxDeg).
+  // maxDeg=90 (défaut) = inclinaison seule ; maxDeg=180 = mode miroir
+  // (passé ±90° le widget montre son dos → miroir H à rotateY=±180,
+  //  miroir V à rotateX=±180 — perspective(800px), pas de backface:hidden).
+  // cx = 60 + (ry/maxDeg)*60  (droite = rotateY positif)
+  // cy = 60 - (rx/maxDeg)*60  (haut   = rotateX positif)
+  let { maxDeg = 90 }: { maxDeg?: number } = $props();
   const SIZE = 120;
   const HALF = SIZE / 2;
-  const MAX_DEG = 90;
   const AXIS_SNAP_DEG = 8; // aimant indépendant par axe (rx=0 ou ry=0)
   const CENTER_SNAP_DEG = 12; // zone plus large au centre (intersection des deux)
 
@@ -26,8 +29,13 @@
   let snappedX = $derived(Math.abs(ry) < 0.5); // boule sur l'axe horizontal (ry=0)
   let snappedY = $derived(Math.abs(rx) < 0.5); // boule sur l'axe vertical (rx=0)
 
-  let ballCx = $derived(HALF + (ry / MAX_DEG) * HALF);
-  let ballCy = $derived(HALF - (rx / MAX_DEG) * HALF);
+  let ballCx = $derived(HALF + (ry / maxDeg) * HALF);
+  let ballCy = $derived(HALF - (rx / maxDeg) * HALF);
+
+  // Retournement (uniquement possible si maxDeg > 90) : |angle| > 90 → le
+  // widget montre son dos = miroir. Indication textuelle sous le gizmo.
+  let miroirH = $derived(Math.abs(ry) > 90);
+  let miroirV = $derived(Math.abs(rx) > 90);
 
   let dragging = $state(false);
   let gizmoEl = $state<HTMLDivElement | undefined>(undefined);
@@ -37,10 +45,10 @@
     const r = gizmoEl.getBoundingClientRect();
     const x = e.clientX - r.left; // 0..SIZE
     const y = e.clientY - r.top; // 0..SIZE
-    let nry = ((x - HALF) / HALF) * MAX_DEG;
-    let nrx = ((HALF - y) / HALF) * MAX_DEG;
-    nrx = Math.max(-MAX_DEG, Math.min(MAX_DEG, nrx));
-    nry = Math.max(-MAX_DEG, Math.min(MAX_DEG, nry));
+    let nry = ((x - HALF) / HALF) * maxDeg;
+    let nrx = ((HALF - y) / HALF) * maxDeg;
+    nrx = Math.max(-maxDeg, Math.min(maxDeg, nrx));
+    nry = Math.max(-maxDeg, Math.min(maxDeg, nry));
     // Aimant axes : chaque axe snap indépendamment à 0.
     if (Math.abs(nrx) < AXIS_SNAP_DEG) nrx = 0;
     if (Math.abs(nry) < AXIS_SNAP_DEG) nry = 0;
@@ -49,6 +57,9 @@
       nrx = 0;
       nry = 0;
     }
+    // Aimant bord : snap à ±maxDeg (miroir exact à 180° en mode miroir).
+    if (Math.abs(Math.abs(nrx) - maxDeg) < AXIS_SNAP_DEG) nrx = Math.sign(nrx) * maxDeg;
+    if (Math.abs(Math.abs(nry) - maxDeg) < AXIS_SNAP_DEG) nry = Math.sign(nry) * maxDeg;
     return { rx: nrx, ry: nry };
   }
 
@@ -139,6 +150,11 @@
     <div class="labels">
       <span>Haut/bas : {Math.round(rx)}°</span>
       <span>Gauche/droite : {Math.round(ry)}°</span>
+      {#if miroirH || miroirV}
+        <span class="label-miroir">
+          Miroir {miroirH && miroirV ? "H+V" : miroirH ? "horizontal" : "vertical"}
+        </span>
+      {/if}
     </div>
   </div>
 {/if}
@@ -169,5 +185,10 @@
     font-size: 0.75rem;
     opacity: 0.8;
     font-variant-numeric: tabular-nums;
+  }
+  .label-miroir {
+    color: var(--ctrl-centre);
+    font-weight: 600;
+    opacity: 1;
   }
 </style>
