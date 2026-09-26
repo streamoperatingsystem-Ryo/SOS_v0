@@ -304,4 +304,10 @@ export const devLog: DevEntry[] = [
     date: "2026-09-19",
     note: "Snap étendu (buildSnapTargets, scene.ts) : cibles mirror (marge opposée égale à celle d'un autre widget, axes vertical+horizontal) et gap (prolongation d'une série au même espacement + centrage entre deux widgets), seuil 6px, figées au pointerdown, bypass Alt. AlignmentGuides : labels de marge en jaune --ctrl-centre quand marges opposées égales (±0.5px), fantôme miroir pointillé vert à la position symétrique (axe vertical), segments pointillés jaunes quand le gap créé égale un gap existant (widget déplacé exclu par égalité de rect). Duplication : dupliquerWidget (uuid neuf, z au-dessus, obsSource strippé — une source OBS = un seul emplacement, position initiale miroir axe vertical +24px si centré, copie sélectionnée + commit). Onglet « Dupliquer » dans CarteEdition (non-caméra — singleton figé) : bouton + Gizmo3D réutilisé avec prop maxDeg={180} (rotateY/X ±180° = miroir H/V réel via perspective 800px sans backface-visibility — zéro nouveau champ Widget) + raccourcis Miroir →/↓/Reset + flag garderTab (l'onglet survit à la sélection de la copie). Label « Miroir H/V/H+V » dans le gizmo si |angle| > 90°.",
   },
+  {
+    id: 50,
+    titre: "Dupliquer une scène (menu contextuel)",
+    date: "2026-09-26",
+    note: "Clic droit pastille → « Dupliquer » (SceneBar, entre Renommer et Masquer le titre) → DupliquerSceneModal (pattern titreModalOpen : store dupliquerSceneModalOpen = id source, montée dans App.svelte) pré-remplie « Nom 2 » incrémenté tant que pris, Enter/Annuler, vide → suggestion. scenes::dupliquer (Rust) : load_scene_file + uuids widgets régénérés (politique presets::instancier — deux scènes ne partagent jamais leurs ids) + obsSource CONSERVÉ (source OBS partagée entre scènes, comme SOS-Caméra — kind/cible non stockés dans le JSON, recréation impossible) → creer_avec (sauvegarde courante + fin de liste + bascule RAM + snapshot). Commande scene_dupliquer + wrapper tauri.ts + duplicateScene (chaîne openScene : reload index/courante/scène + sceneSyncCaptures).",
+  },
 ];

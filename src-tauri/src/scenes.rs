@@ -338,6 +338,29 @@ pub fn creer_avec(
     Ok(entry)
 }
 
+/// Duplique une scène : charge <id>.json, régénère les uuid des widgets
+/// (politique presets::instancier — deux scènes ne partagent jamais leurs
+/// ids), CONSERVE obsSource (la source OBS est partagée entre les deux
+/// scènes, comme « SOS-Caméra » — kind/cible de capture non stockés dans le
+/// JSON de scène, la source ne peut pas être recréée), applique le canvas
+/// OBS, puis crée la copie via creer_avec (sauvegarde courante + fin de
+/// liste + bascule RAM + snapshot).
+pub fn dupliquer(
+    app: &AppHandle,
+    state: &ScenesState,
+    id: &str,
+    nom: &str,
+) -> Result<SceneIndex, String> {
+    let mut scene = load_scene_file(app, id)?;
+    for w in &mut scene.widgets {
+        w.id = uuid::Uuid::new_v4().to_string();
+    }
+    appliquer_canvas_obs(app, &mut scene);
+    let entry = creer_avec(app, state, nom, scene)?;
+    log::info!("Scène dupliquée : {} → « {} » (id={})", id, nom, entry.id);
+    Ok(entry)
+}
+
 /// ONBOARDING : initialise la scène de départ depuis un preset.
 ///
 /// ⚠️ GARDE DE SÉCURITÉ « scène vierge » (2026-09-20) : le remplacement +

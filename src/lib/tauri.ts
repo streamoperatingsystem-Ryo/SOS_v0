@@ -694,6 +694,12 @@ export const tauri = {
     await invoke("scene_supprimer", { id });
   },
 
+  /// Duplique une scène (ids widgets régénérés, obsSource conservé — source
+  /// OBS partagée). Copie ajoutée en fin de liste, bascule dessus.
+  async sceneDupliquer(id: string, nom: string): Promise<SceneIndex> {
+    return invoke<SceneIndex>("scene_dupliquer", { id, nom });
+  },
+
   /// Retourne l'entrée courante ({ id, nom }).
   async sceneCourante(): Promise<SceneIndex> {
     return invoke<SceneIndex>("scene_courante");

@@ -98,3 +98,8 @@ export const speedrunConfigModalOpen = writable(false);
 /// choix de la scène de départ au premier lancement (initialise la courante
 /// vide). Même pattern que cadreModalOpen (mode porté par la valeur).
 export const presetsModalOpen = writable<"creation" | "onboarding" | null>(null);
+
+/// Modale de duplication d'une scène : null = fermée, sinon id de la scène
+/// source (clic droit pastille → « Dupliquer »). Même pattern que
+/// titreModalOpen (cible portée par la valeur).
+export const dupliquerSceneModalOpen = writable<string | null>(null);

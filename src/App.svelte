@@ -3,7 +3,7 @@
   import { listen, emitTo } from "@tauri-apps/api/event";
   import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene } from "./lib/stores/scenes";
-  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit } from "./lib/stores/ui";
+  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "./lib/stores/obs";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
   import { connecterKick, deconnecterKick, lireSlugSauve } from "./lib/stores/kick";
@@ -32,6 +32,7 @@
   import SpeedrunConfigModal from "./lib/components/SpeedrunConfigModal.svelte";
   import PresetsModal from "./lib/components/PresetsModal.svelte";
   import ConsoModal from "./lib/components/ConsoModal.svelte";
+  import DupliquerSceneModal from "./lib/components/DupliquerSceneModal.svelte";
   import { chargerPresets } from "./lib/stores/presets";
   import { initWelcome, chargerWelcome } from "./lib/stores/welcome";
   import { initBandeau, chargerBandeau } from "./lib/stores/bandeau";
@@ -661,6 +662,11 @@
 <!-- Modale galerie de presets de scènes (bouton « + Scène » / 1er lancement) -->
 {#if $presetsModalOpen}
   <PresetsModal mode={$presetsModalOpen} />
+{/if}
+
+<!-- Modale de duplication d'une scène (clic droit pastille → « Dupliquer ») -->
+{#if $dupliquerSceneModalOpen}
+  <DupliquerSceneModal />
 {/if}
 
 <!-- Modale Diagnostic (consommation : CPU/RAM par processus + sous-systèmes +

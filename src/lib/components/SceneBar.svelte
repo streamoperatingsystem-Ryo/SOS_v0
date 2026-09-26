@@ -22,7 +22,7 @@
     deplacerScene,
     masquerNomScene,
   } from "../stores/scenes";
-  import { presetsModalOpen } from "../stores/ui";
+  import { presetsModalOpen, dupliquerSceneModalOpen } from "../stores/ui";
   import type { SceneIndex } from "../tauri";
 
   let index = $derived($scenesIndexStore);
@@ -257,6 +257,15 @@
     void masquerNomScene(id, masque);
   }
 
+  // ===== Dupliquer (option du menu contextuel) =====
+  // Ouvre la modale de nommage (DupliquerSceneModal, montée dans App.svelte)
+  // avec l'id de la scène source — la création se fait au Valider.
+  function onDupliquer(id: string) {
+    fermerMenu();
+    scenesOuvert = false;
+    dupliquerSceneModalOpen.set(id);
+  }
+
   function onNouvelle() {
     // Ouvre la galerie de presets (page vierge + modèles embarqués) — la
     // création elle-même se fait dans PresetsModal (mode "creation").
@@ -367,6 +376,9 @@
   >
     <button class="ctx-item" role="menuitem" onclick={() => demarrerRename(menuSceneId!)}>
       Renommer
+    </button>
+    <button class="ctx-item" role="menuitem" onclick={() => onDupliquer(menuSceneId!)}>
+      Dupliquer
     </button>
     {#if index.find((s) => s.id === menuSceneId)?.nomMasque}
       <button class="ctx-item" role="menuitem" onclick={() => onMasquerNom(menuSceneId!, false)}>

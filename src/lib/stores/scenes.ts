@@ -118,6 +118,27 @@ export async function deleteScene(id: string): Promise<void> {
   }
 }
 
+/// Duplique une scène sous un nouveau nom, bascule sur la copie (fin de
+/// liste). Même chaîne de rechargement que openScene : la copie peut avoir
+/// un widget caméra / des trous liés → sync captures OBS après bascule.
+export async function duplicateScene(id: string, nom: string): Promise<void> {
+  try {
+    await tauri.sceneDupliquer(id, nom);
+    await loadScenesIndex();
+    await loadCurrentScene();
+    await loadScene();
+    selectWidget(null);
+    try {
+      await tauri.sceneSyncCaptures(
+        get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
+      );
+    } catch {
+    }
+  } catch (e) {
+    alert("Duplication refusée : " + e);
+  }
+}
+
 /// Exporte la scène courante comme pack dossier portable.
 /// Demande le nom du pack (input, défaut = nom de scène courante).
 /// Dialog = dossier PARENT. Crée <parent>/<nom-pack>/scene.json + medias/.

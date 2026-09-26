@@ -106,6 +106,13 @@ fn scene_supprimer(app: AppHandle, state: tauri::State<ScenesState>, id: String)
     scenes::supprimer(&app, &state, &id)
 }
 
+/// Duplique une scène : <id>.json → copie (ids widgets régénérés, obsSource
+/// conservé — source OBS partagée), ajoutée en fin de liste, bascule dessus.
+#[tauri::command]
+fn scene_dupliquer(app: AppHandle, state: tauri::State<ScenesState>, id: String, nom: String) -> Result<SceneIndex, String> {
+    scenes::dupliquer(&app, &state, &id, &nom)
+}
+
 #[tauri::command]
 fn scene_courante(app: AppHandle, state: tauri::State<ScenesState>) -> Result<SceneIndex, String> {
     scenes::courante(&app, &state)
@@ -3037,6 +3044,7 @@ pub fn run() {
             scene_deplacer,
             scene_masquer_nom,
             scene_supprimer,
+            scene_dupliquer,
             scene_courante,
             presets_lister,
             scene_creer_depuis_preset,
