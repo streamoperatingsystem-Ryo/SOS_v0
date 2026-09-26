@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore } from "../stores/scene";
+  import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, sceneStore } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "../stores/obs";
-  import { openSection, toggleSection, cadreModalOpen, interactionModalOpen, moderationModalOpen } from "../stores/ui";
+  import { openSection, toggleSection, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen } from "../stores/ui";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
   import { connecterKick, deconnecterKick, kickErreur as kickErreurStore, lireSlugSauve } from "../stores/kick";
   import { connecterYoutube, deconnecterYoutube, demarrerChatYoutube, arreterChatYoutube } from "../stores/youtube";
@@ -168,6 +168,7 @@
         >Créer un widget caméra</button>
         <button class="action" onclick={createInputViewerWidget}>Créer un widget input viewer</button>
         <button class="action" onclick={createSpeedrunWidget}>Créer un widget speedrun</button>
+        <button class="action" onclick={createGoalWidget}>Créer un widget objectif</button>
         <p class="hint">Cliquer un widget ou le fond pour l'éditer</p>
       </div>
     {/if}
@@ -266,6 +267,21 @@
     >
       <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
       <span>Modération & Rôles</span>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
+  <!-- Section Diagnostic : LANCEUR DIRECT (pas un accordéon — le clic ouvre
+       la modale de consommation : courbes CPU/RAM par processus et par
+       fonction StreamOS + compteurs d'activité, mesures réelles 1 Hz). -->
+  <div class="section">
+    <button
+      class="header"
+      onclick={() => consoModalOpen.set(true)}
+      title="Ouvrir le diagnostic de consommation (CPU, RAM, activité…)"
+    >
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
+      <span>Diagnostic</span>
       <span class="chevron">›</span>
     </button>
   </div>

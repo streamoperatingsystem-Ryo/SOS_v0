@@ -8,6 +8,7 @@ mod kick;
 mod obs;
 mod obs_trou;
 mod pc_enum;
+mod presets;
 mod scene;
 mod scenes;
 mod server;
@@ -26,9 +27,11 @@ mod position_overlay;
 mod raccourcis;
 mod speedrun;
 mod telemetrie;
+mod conso;
 // Les commandes speedrun sont définies dans speedrun::commands (réelles sur
 // Windows, stubs sur les autres plateformes). Importées dans le scope pour
 // generate_handler!.
+use conso::conso_etat;
 use raccourcis::{
     raccourcis_appliquer, raccourcis_etat, raccourcis_masquer, raccourcis_moniteurs,
 };
@@ -106,6 +109,54 @@ fn scene_supprimer(app: AppHandle, state: tauri::State<ScenesState>, id: String)
 #[tauri::command]
 fn scene_courante(app: AppHandle, state: tauri::State<ScenesState>) -> Result<SceneIndex, String> {
     scenes::courante(&app, &state)
+}
+
+// ===== Commandes presets de scènes (modèles embarqués) =====
+
+/// Liste les métadonnées des presets embarqués (galerie). Parse non-fatal :
+/// un JSON cassé est loggé + absent de la liste.
+#[tauri::command]
+fn presets_lister() -> Vec<presets::PresetInfo> {
+    presets::lister()
+}
+
+/// Crée une NOUVELLE scène depuis un preset embarqué (bouton « + Scène » →
+/// galerie). L'existante n'est jamais touchée. Ids régénérés + canvas OBS.
+#[tauri::command]
+fn scene_creer_depuis_preset(
+    app: AppHandle,
+    state: tauri::State<ScenesState>,
+    nom: String,
+    preset_id: String,
+) -> Result<SceneIndex, String> {
+    let preset = presets::charger(&preset_id)?;
+    let scene = presets::instancier(&app, &preset);
+    scenes::creer_avec(&app, &state, &nom, scene)
+}
+
+/// ONBOARDING : initialise la scène de départ (courante, vide au 1er boot)
+/// depuis un preset — remplace son contenu + renomme. Contrat : appelée
+/// uniquement au premier lancement (voir scenes::initialiser_depuis_preset).
+#[tauri::command]
+fn scene_initialiser_preset(
+    app: AppHandle,
+    state: tauri::State<ScenesState>,
+    preset_id: String,
+) -> Result<SceneIndex, String> {
+    let preset = presets::charger(&preset_id)?;
+    scenes::initialiser_depuis_preset(&app, &state, &preset)
+}
+
+/// État de l'onboarding : true = déjà fait (ne pas montrer la galerie).
+#[tauri::command]
+fn onboarding_etat(app: AppHandle) -> bool {
+    config::lire_onboarding_fait(&app)
+}
+
+/// Marque l'onboarding comme fait (choix preset OU page vierge).
+#[tauri::command]
+fn onboarding_marquer_fait(app: AppHandle) -> Result<(), String> {
+    config::marquer_onboarding_fait(&app)
 }
 
 #[tauri::command]
@@ -297,38 +348,20 @@ fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String, String
 
 /// Importe un média (image OU vidéo) pour un widget : dialog → validation
 /// (extension + taille + magic bytes) → copie (ou remux MKV→MP4) vers
-/// AppData/StreamOS/medias/<uuid>.<ext> → mutate scène (media + kind) →
-/// save → snapshot. Retourne `Some(media_rel_path)` si importé, `None` si
-/// dialog annulé.
+/// AppData/StreamOS/medias/<uuid>.<ext>. Retourne `Some((media_rel_path, nom))`
+/// si importé, `None` si dialog annulé. AUCUNE mutation de scène ici : le
+/// frontend pose le média dans son store puis commit via update_scene (un
+/// seul écrivain — l'ancienne mutation RAM + save créait une course avec
+/// update_scene : une duplication pendant l'import en vol sauvait la copie
+/// SANS son média, perdu au redémarrage).
 /// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm/mkv ≤ 80 Mo
 /// (mkv remuxé en mp4 via sidecar ffmpeg).
 #[tauri::command]
-fn import_media(
-    app: AppHandle,
-    state: tauri::State<ScenesState>,
-    widget_id: String,
-) -> Result<Option<(String, String)>, String> {
-    // 1. Helper commun : dialog + validation + copie (pas de mutation scène).
-    let Some((rel, kind, nom)) = pick_and_copy_media(&app)? else {
+fn import_media(app: AppHandle, _widget_id: String) -> Result<Option<(String, String)>, String> {
+    // Helper commun : dialog + validation + copie (pas de mutation scène).
+    let Some((rel, _kind, nom)) = pick_and_copy_media(&app)? else {
         return Ok(None); // dialog annulé
     };
-
-    // 2. Mutate scène : set media + kind + mediaNom sur le widget ciblé
-    {
-        let mut current = state.scene.lock().unwrap();
-        let w = current
-            .widgets
-            .iter_mut()
-            .find(|w| w.id == widget_id)
-            .ok_or_else(|| format!("Widget {} introuvable", widget_id))?;
-        w.media = Some(rel.clone());
-        w.kind = kind;
-        w.mediaNom = Some(nom.clone());
-    }
-
-    // 3. Save <current_id>.json + push snapshot (chaîne unique)
-    scenes::save_current(&app, &state)?;
-
     Ok(Some((rel, nom)))
 }
 
@@ -369,29 +402,16 @@ fn import_media_from_paths(
 }
 
 /// Importe un média (image OU vidéo) comme fond de scène : dialog → validation
-/// → copie vers medias/ → mutate scène (bgMedia + bgKind) → save → snapshot.
-/// Retourne `Some(media_rel_path)` si importé, `None` si dialog annulé.
+/// → copie vers medias/. Retourne `Some(media_rel_path)` si importé, `None` si
+/// dialog annulé. AUCUNE mutation de scène : le frontend pose bgMedia dans son
+/// store puis commit via update_scene (un seul écrivain, cf. import_media).
 /// Mêmes limites que import_media (helper commun pick_and_copy_media).
 #[tauri::command]
-fn import_fond(
-    app: AppHandle,
-    state: tauri::State<ScenesState>,
-) -> Result<Option<String>, String> {
-    // 1. Helper commun : dialog + validation + copie (pas de mutation scène).
-    let Some((rel, kind, _nom)) = pick_and_copy_media(&app)? else {
+fn import_fond(app: AppHandle) -> Result<Option<String>, String> {
+    // Helper commun : dialog + validation + copie (pas de mutation scène).
+    let Some((rel, _kind, _nom)) = pick_and_copy_media(&app)? else {
         return Ok(None); // dialog annulé
     };
-
-    // 2. Mutate scène : set bgMedia + bgKind
-    {
-        let mut current = state.scene.lock().unwrap();
-        current.bgMedia = rel.clone();
-        current.bgKind = kind;
-    }
-
-    // 3. Save <current_id>.json + push snapshot (chaîne unique)
-    scenes::save_current(&app, &state)?;
-
     Ok(Some(rel))
 }
 
@@ -677,9 +697,10 @@ fn app_redemarrer(app: AppHandle) -> Result<(), String> {
 
 // ===== Captures liées à la sauvegarde (Lot C) =====
 
-/// Synchronise les captures SOS-Trou-* d'OBS avec la scène chargée.
-/// Active + sync transform les items liés à un widget.obsSource de la scène.
-/// Cache (SetSceneItemEnabled false) les items SOS-Trou-* sans widget.
+/// Synchronise les captures SOS-Trou-* et SOS-Fond-* d'OBS avec la scène
+/// chargée. Active + sync transform les items liés à un widget.obsSource de
+/// la scène + la capture de fond (bgObsSource, plein canvas). Cache
+/// (SetSceneItemEnabled false) les items orphelins des autres scènes.
 /// Non-fatal : si OBS offline → erreur remontée (pas de crash).
 #[tauri::command]
 async fn scene_sync_captures(
@@ -688,11 +709,12 @@ async fn scene_sync_captures(
     port: u16,
     password: String,
 ) -> Result<(), String> {
-    let widgets: Vec<scene::Widget> = {
+    // Scène COMPLÈTE (widgets + bgObsSource + canvas) — un seul lock, clone.
+    let scene: scene::Scene = {
         let s = state.scene.lock().unwrap();
-        s.widgets.clone()
+        s.clone()
     };
-    obs_trou::sync_scene_captures(&host, port, &password, &widgets).await
+    obs_trou::sync_scene_captures(&host, port, &password, &scene).await
 }
 
 // ===== Sources OBS "trou" (Lot 2) =====
@@ -1718,14 +1740,13 @@ async fn kick_connecter(
     state.stop_ws();
     state.reset_cancel();
 
-    // 1. Résoudre slug → chatroom ID
-    let chatroom_id = kick::resolve_chatroom(&slug).await?;
+    // 1. Résoudre slug → (channel ID, chatroom ID)
+    let (channel_id, chatroom_id) = kick::resolve_channel(&slug).await?;
 
-    // 2. Démarrer le WS Pusher cloud en arrière-plan
-    //    (pas besoin de viewer token ni cookies — le cloud Pusher public
-    //    n'a pas de protection Cloudflare)
+    // 2. Démarrer le WS Centrifuge en arrière-plan
+    //    (connexion anonyme : UUID éphémère, jeton « guest » — pas de compte)
     let cancel = state.cancel_clone();
-    let handle = kick::run_ws(app.clone(), chatroom_id, cancel);
+    let handle = kick::run_ws(app.clone(), channel_id, chatroom_id, cancel);
 
     {
         let mut h = state.ws_handle.lock().unwrap();
@@ -2831,6 +2852,12 @@ pub fn run() {
                 Err(e) => eprintln!("[Telemetrie] ERR init: {}", e),
             }
 
+            // Diagnostic consommation (1Hz) — CPU par sous-système (threads
+            // nommés : splitter, input viewer…), par processus (WebView2,
+            // OBS, jeu), compteurs d'activité. Tap passif sur chat_tx +
+            // échantillonneur dédié — non énergivore, historique en mémoire.
+            conso::demarrer(chat_tx.clone());
+
             // Auto-resume : si token valide en coffre → IRC + point vert.
             // Pas de modal. Si token absent/invalide → reste déconnecté.
             let resume_app = handle.clone();
@@ -2858,11 +2885,12 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 match crate::config::lire_kick_slug(&kick_app) {
                     Ok(Some(slug)) => {
-                        match kick::resolve_chatroom(&slug).await {
-                            Ok(chatroom_id) => {
+                        match kick::resolve_channel(&slug).await {
+                            Ok((channel_id, chatroom_id)) => {
                                 kick_state_clone.reset_cancel();
                                 let cancel = kick_state_clone.cancel_clone();
-                                let handle = kick::run_ws(kick_app.clone(), chatroom_id, cancel);
+                                let handle =
+                                    kick::run_ws(kick_app.clone(), channel_id, chatroom_id, cancel);
                                 {
                                     let mut h = kick_state_clone.ws_handle.lock().unwrap();
                                     *h = Some(handle);
@@ -3010,6 +3038,11 @@ pub fn run() {
             scene_masquer_nom,
             scene_supprimer,
             scene_courante,
+            presets_lister,
+            scene_creer_depuis_preset,
+            scene_initialiser_preset,
+            onboarding_etat,
+            onboarding_marquer_fait,
             scene_exporter,
             scene_importer,
             obs_enumerate_targets,
@@ -3123,7 +3156,8 @@ pub fn run() {
             speedrun_baseline_lire,
             speedrun_baseline_enregistrer,
             telemetrie_etat,
-            telemetrie_derniers
+            telemetrie_derniers,
+            conso_etat
         ])
         .run(tauri::generate_context!())
         .expect("erreur lors du lancement de StreamOS v0");

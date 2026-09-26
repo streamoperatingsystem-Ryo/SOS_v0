@@ -3,7 +3,7 @@
   import { listen, emitTo } from "@tauri-apps/api/event";
   import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene } from "./lib/stores/scenes";
-  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, openSectionExplicit } from "./lib/stores/ui";
+  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "./lib/stores/obs";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
   import { connecterKick, deconnecterKick, lireSlugSauve } from "./lib/stores/kick";
@@ -12,6 +12,7 @@
   import { initRaccourcis, masquerRaccourcis } from "./lib/stores/raccourcis";
   import { chargerCommunaute, resetCommunaute, chargerCommunauteYoutube } from "./lib/stores/communaute";
   import { initSpeedrun, chargerPreferencesSpeedrun } from "./lib/stores/speedrun";
+  import { initObjectifs } from "./lib/stores/objectifs";
   import { tauri } from "./lib/tauri";
   import { injecterFontsCSS } from "./lib/fonts";
   import { get } from "svelte/store";
@@ -29,6 +30,9 @@
   import TitreModal from "./lib/components/TitreModal.svelte";
   import TitreFondModal from "./lib/components/TitreFondModal.svelte";
   import SpeedrunConfigModal from "./lib/components/SpeedrunConfigModal.svelte";
+  import PresetsModal from "./lib/components/PresetsModal.svelte";
+  import ConsoModal from "./lib/components/ConsoModal.svelte";
+  import { chargerPresets } from "./lib/stores/presets";
   import { initWelcome, chargerWelcome } from "./lib/stores/welcome";
   import { initBandeau, chargerBandeau } from "./lib/stores/bandeau";
   import { chargerAlertes, demarrerDiffFollows } from "./lib/stores/alertes";
@@ -216,6 +220,33 @@
     pushRaccourcisConnexions();
   });
 
+  // ===== Boutons topbar : sorties OBS (stream / record) =====
+  // busy par bouton = anti double-clic (chaque toggle = UNE connexion OBS
+  // one-shot). L'erreur est traduite dans obsError par le store → catch
+  // silencieux ici (même pattern que dispatchRaccourcis obs-stream/record).
+  let streamBusy = $state(false);
+  let recordBusy = $state(false);
+  async function onToggleStreamTop() {
+    if (streamBusy) return;
+    streamBusy = true;
+    try {
+      await toggleStreamObs();
+    } catch {
+    } finally {
+      streamBusy = false;
+    }
+  }
+  async function onToggleRecordTop() {
+    if (recordBusy) return;
+    recordBusy = true;
+    try {
+      await toggleRecordObs();
+    } catch {
+    } finally {
+      recordBusy = false;
+    }
+  }
+
   // ===== Boutons topbar : Arrêter / Redémarrer / Refresh OBS =====
   async function onArreter() {
     try {
@@ -322,6 +353,10 @@
     await initSpeedrun();
     await chargerPreferencesSpeedrun();
 
+    // 3f. Objectifs : listeners communaute:update + viewers:update (valeurs
+    //     live pour la carte d'édition et l'aperçu dashboard des widgets goal).
+    await initObjectifs();
+
     // 3e. Squelette de position unifié (clip de bienvenue + alertes) :
     //     init listener + charge la config initiale depuis Rust.
     await initPositionOverlay();
@@ -368,6 +403,19 @@
     await loadScene();
     await loadScenesIndex();
     await loadCurrentScene();
+
+    // 5b. Onboarding presets : au PREMIER lancement (onboarding.json absent),
+    //     ouvre la galerie de scènes modèles en mode "onboarding" — le user
+    //     lambda démarre avec une scène prête au lieu d'un canvas vide.
+    //     Non-bloquant : erreur de lecture = onboarding considéré fait (Rust).
+    try {
+      if (!(await tauri.onboardingEtat())) {
+        await chargerPresets();
+        presetsModalOpen.set("onboarding");
+      }
+    } catch {
+      // Erreur invoke → ne pas bloquer le boot
+    }
 
     // 6. Sync captures OBS : géré par bootObs() après obsConnect réussi (via
     //    server_ready / fallback fetch / auto-reconnect 20s). L'ancien appel
@@ -490,6 +538,50 @@
           {/if}
         </span>
       </span>
+      <!-- Sorties OBS : stream + record (vert = prêt à démarrer, rouge = actif) -->
+      <span class="bandeau-sep"></span>
+      <div class="output-buttons">
+        <button
+          class="output-btn"
+          class:actif={obsStream}
+          onclick={onToggleStreamTop}
+          disabled={obsSt !== "connected" || streamBusy}
+          title={obsSt !== "connected"
+            ? "Connectez OBS d'abord (section OBS de la barre latérale)"
+            : obsStream
+              ? "Arrêter le streaming"
+              : "Démarrer le streaming"}
+          aria-label={obsStream ? "Arrêter le streaming" : "Démarrer le streaming"}
+        >
+          {#if obsStream}
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+            Arrêter le streaming
+          {:else}
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
+            Démarrer le streaming
+          {/if}
+        </button>
+        <button
+          class="output-btn"
+          class:actif={obsRecord}
+          onclick={onToggleRecordTop}
+          disabled={obsSt !== "connected" || recordBusy}
+          title={obsSt !== "connected"
+            ? "Connectez OBS d'abord (section OBS de la barre latérale)"
+            : obsRecord
+              ? "Arrêter l'enregistrement"
+              : "Démarrer l'enregistrement"}
+          aria-label={obsRecord ? "Arrêter l'enregistrement" : "Démarrer l'enregistrement"}
+        >
+          {#if obsRecord}
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+            Arrêter l'enregistrement
+          {:else}
+            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="5.5"/></svg>
+            Démarrer l'enregistrement
+          {/if}
+        </button>
+      </div>
       <!-- Boutons contrôle : Arrêter / Redémarrer / Refresh OBS -->
       <span class="bandeau-sep"></span>
       <div class="ctrl-buttons">
@@ -564,6 +656,17 @@
 <!-- Modale de configuration ASL (auto-splitter) — s'ouvre auto au chargement ASL -->
 {#if $speedrunConfigModalOpen}
   <SpeedrunConfigModal onFermer={() => speedrunConfigModalOpen.set(false)} />
+{/if}
+
+<!-- Modale galerie de presets de scènes (bouton « + Scène » / 1er lancement) -->
+{#if $presetsModalOpen}
+  <PresetsModal mode={$presetsModalOpen} />
+{/if}
+
+<!-- Modale Diagnostic (consommation : CPU/RAM par processus + sous-systèmes +
+     activité — polling 1 Hz uniquement tant qu'elle est montée) -->
+{#if $consoModalOpen}
+  <ConsoModal onFermer={() => consoModalOpen.set(false)} />
 {/if}
 
 <style>
@@ -706,6 +809,60 @@
     color: var(--ctrl-refresh);
     border-color: var(--ctrl-refresh);
     box-shadow: var(--btn-inset-hover), 0 0 8px color-mix(in srgb, var(--ctrl-refresh) 40%, transparent);
+  }
+  /* Sorties OBS (stream/record) : recette verre sombre (même base que
+     .ctrl-btn) mais proéminente — texte + icône. Vert --message-ok-color au
+     repos = « prêt à démarrer » ; rouge --message-error-color quand .actif.
+     Surcharge locale de --btn-tint (pattern .speedrun-start CarteEdition). */
+  .output-buttons {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+  }
+  .output-btn {
+    --btn-tint: color-mix(in srgb, var(--message-ok-color) 12%, transparent);
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
+    color: var(--message-ok-color);
+    border: 1px solid var(--message-ok-color);
+    border-radius: var(--rayon-petit);
+    padding: 0.3rem 0.75rem;
+    font: inherit;
+    font-size: 0.8rem;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
+  }
+  .output-btn .ico {
+    width: 0.9rem;
+    height: 0.9rem;
+  }
+  .output-btn:hover:not(:disabled) {
+    background: var(--btn-surface-hover);
+    box-shadow: var(--btn-inset-hover), 0 0 8px color-mix(in srgb, var(--message-ok-color) 40%, transparent);
+  }
+  .output-btn.actif {
+    --btn-tint: color-mix(in srgb, var(--message-error-color) 12%, transparent);
+    color: var(--message-error-color);
+    border-color: var(--message-error-color);
+    box-shadow: var(--btn-inset), 0 0 8px color-mix(in srgb, var(--message-error-color) 40%, transparent);
+  }
+  .output-btn.actif:hover:not(:disabled) {
+    background: var(--btn-surface-hover);
+    box-shadow: var(--btn-inset-hover), 0 0 10px color-mix(in srgb, var(--message-error-color) 50%, transparent);
+  }
+  /* Grisé neutre (pas de teinte verte/rouge résiduelle) quand OBS déconnecté
+     ou toggle en vol. */
+  .output-btn:disabled {
+    --btn-tint: transparent;
+    color: var(--gris);
+    border-color: var(--bordure-ui-active);
+    box-shadow: var(--btn-inset);
+    opacity: 0.5;
+    cursor: default;
   }
   .row {
     flex: 1;

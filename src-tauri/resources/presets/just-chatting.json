@@ -1,0 +1,41 @@
+{
+  "id": "just-chatting",
+  "nom": "Just Chatting",
+  "description": "Grande caméra à gauche et chat à droite — l'équilibre classique des discussions.",
+  "scene": {
+    "widgets": [
+      {
+        "id": "preset-chatting-chat",
+        "type": "chat",
+        "x": 1536,
+        "y": 140,
+        "largeur": 320,
+        "hauteur": 600,
+        "z": 0,
+        "chatFiltre": "unifie",
+        "taillePolice": 16
+      },
+      {
+        "id": "preset-chatting-camera",
+        "type": "camera",
+        "x": 160,
+        "y": 180,
+        "largeur": 640,
+        "hauteur": 720,
+        "z": 5000,
+        "obsSource": "SOS-Caméra"
+      }
+    ],
+    "canvasW": 1920,
+    "canvasH": 1080,
+    "cadreWidget": {
+      "style": "story",
+      "variante": "pink",
+      "strokeWidth": 5,
+      "couleur": "#ff4d8d",
+      "couleurFin": "#e63973",
+      "gradientAngle": 135,
+      "actif": true
+    }
+  }
+}

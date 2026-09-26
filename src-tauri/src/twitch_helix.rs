@@ -445,6 +445,34 @@ pub async fn subs(broadcaster_id: &str, access: &str) -> Result<SubsResp, HelixE
     })
 }
 
+/// Total followers SEUL (1 appel, first=1 — aucune pagination, pas de liste).
+/// Pour le polling objectifs/communauté (viewers.rs, cadence 60s) : la liste
+/// complète paginée reste pour la modale Modération (fonction `followers`).
+pub async fn followers_total(broadcaster_id: &str, access: &str) -> Result<u64, HelixError> {
+    let body = helix_get(
+        "/channels/followers",
+        &[("broadcaster_id", broadcaster_id), ("first", "1")],
+        access,
+    )
+    .await?;
+    Ok(body["total"].as_u64().unwrap_or(0))
+}
+
+/// (total subs, sub points) SEULS — 1 appel, first=1, même raison que
+/// `followers_total`. Les points : Tier1=1, Tier2=2, Tier3=6 (doc Twitch).
+pub async fn subs_totaux(broadcaster_id: &str, access: &str) -> Result<(u64, u64), HelixError> {
+    let body = helix_get(
+        "/subscriptions",
+        &[("broadcaster_id", broadcaster_id), ("first", "1")],
+        access,
+    )
+    .await?;
+    Ok((
+        body["total"].as_u64().unwrap_or(0),
+        body["points"].as_u64().unwrap_or(0),
+    ))
+}
+
 /// Viewers live : GET /streams?user_id=... — si data vide → None (hors-ligne),
 /// sinon Some(viewer_count).
 pub async fn stream_viewers(broadcaster_id: &str, access: &str) -> Result<Option<u32>, HelixError> {

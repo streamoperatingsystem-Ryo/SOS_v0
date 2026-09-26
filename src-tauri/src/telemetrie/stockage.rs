@@ -35,6 +35,8 @@ pub fn fichier_events(app: &AppHandle) -> Result<PathBuf, String> {
 pub fn demarrer_writer(path: PathBuf) -> mpsc::Sender<String> {
     let (tx, rx) = mpsc::channel::<String>();
     std::thread::spawn(move || {
+        // Visible dans la modale Diagnostic (registre TID→label).
+        crate::conso::nommer_thread("Télémétrie (écriture)");
         let file = match OpenOptions::new().create(true).append(true).open(&path) {
             Ok(f) => f,
             Err(e) => {

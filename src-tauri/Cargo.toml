@@ -1,6 +1,6 @@
 [package]
 name = "streamos-v0"
-version = "0.1.4"
+version = "0.1.5"
 description = "StreamOS v0 — dashboard + diffusion"
 edition = "2021"
 rust-version = "1.77"
@@ -25,6 +25,17 @@ uuid = { version = "1", features = ["v4"] }
 log = "0.4"
 futures-util = { version = "0.3", features = ["sink"] }
 tokio-tungstenite = { version = "0.26", features = ["rustls-tls-native-roots"] }
+# TLS Schannel — Kick UNIQUEMENT (Cloudflare bloque l'empreinte rustls sur
+# kick.com ; Schannel, comme curl, passe). Dépendances isolées exprès :
+# activer la feature native-tls de reqwest ou tokio-tungstenite changerait le
+# connecteur TLS PAR DEFAUT de tout le backend (Twitch/YouTube/OBS — régression
+# constatée 2026-09-22). kick.rs utilise ces crates directement à la place.
+hyper = { version = "1", features = ["http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client-legacy", "tokio"] }
+hyper-tls = "0.6"
+http-body-util = "0.1"
+tokio-native-tls = "0.3"
+native-tls = "0.2"
 sha2 = "0.10"
 base64 = "0.22"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
@@ -51,6 +62,11 @@ windows = { version = "0.58", features = [
     "Win32_System_Diagnostics_Debug",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_ProcessStatus",
+    # Diagnostic — consommation CPU/RAM (GetSystemTimes, GlobalMemoryStatusEx)
+    "Win32_System_SystemInformation",
+    # Diagnostic — GPU par processus via compteurs PDH « GPU Engine »
+    # (vendor-agnostic Intel/AMD/NVIDIA, WDDM — PdhAddEnglishCounterW)
+    "Win32_System_Performance",
 ] }
 
 [features]

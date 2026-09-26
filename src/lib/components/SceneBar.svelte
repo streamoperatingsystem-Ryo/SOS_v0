@@ -14,7 +14,6 @@
     scenesIndexStore,
     currentSceneIdStore,
     currentSceneNomStore,
-    createScene,
     openScene,
     exportScene,
     importScene,
@@ -23,6 +22,7 @@
     deplacerScene,
     masquerNomScene,
   } from "../stores/scenes";
+  import { presetsModalOpen } from "../stores/ui";
   import type { SceneIndex } from "../tauri";
 
   let index = $derived($scenesIndexStore);
@@ -258,8 +258,9 @@
   }
 
   function onNouvelle() {
-    const n = index.length + 1;
-    createScene("Scène " + n);
+    // Ouvre la galerie de presets (page vierge + modèles embarqués) — la
+    // création elle-même se fait dans PresetsModal (mode "creation").
+    presetsModalOpen.set("creation");
   }
 </script>
 

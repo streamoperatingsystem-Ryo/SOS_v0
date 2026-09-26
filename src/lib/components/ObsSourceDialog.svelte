@@ -1,13 +1,22 @@
 <script lang="ts">
   import { tauri } from "../tauri";
-  import { createObsTrouFromPc } from "../stores/scene";
+  import { createObsTrouFromPc, lierFondCapture } from "../stores/scene";
   import Modal from "./Modal.svelte";
 
-  let { widgetId, onClose }: { widgetId: string; onClose: () => void } = $props();
+  // mode "widget" (défaut) : source liée au widget trou sélectionné (widgetId).
+  // mode "fond" : capture plein canvas comme FOND de la scène (pas de
+  // widgetId — source "SOS-Fond-<sceneId8>" gérée par lierFondCapture). La
+  // caméra n'est PAS proposée en mode fond : conflit d'accès exclusif dshow
+  // avec un éventuel widget caméra sur le même device.
+  let {
+    widgetId,
+    mode = "widget",
+    onClose,
+  }: { widgetId?: string; mode?: "widget" | "fond"; onClose: () => void } = $props();
 
-  // 2 étapes : "type" (3 boutons) → "liste" (cibles PC vivantes) → "working".
-  type Mode = "type" | "liste" | "working";
-  let mode = $state<Mode>("type");
+  // 2 étapes : "type" (boutons) → "liste" (cibles PC vivantes) → "working".
+  type Etape = "type" | "liste" | "working";
+  let etape = $state<Etape>("type");
   let kind = $state<"camera" | "window" | "game" | null>(null);
 
   // Caméra : nom device (String). Fenêtre/Jeu : { title, exe, obs_value }.
@@ -21,7 +30,7 @@
   // Étape 1 → Étape 2 : charge la liste vivante PC (pas GetInputList).
   async function pickType(k: "camera" | "window" | "game") {
     kind = k;
-    mode = "liste";
+    etape = "liste";
     loading = true;
     error = null;
     liste = [];
@@ -43,28 +52,33 @@
     }
   }
 
-  // Clic item → créer la source OBS (CreateInput ou SetInputSettings si existe).
+  // Clic item → créer la source OBS du widget, ou lier la capture de fond.
   async function onPick(item: CamItem | WinItem) {
     if (!kind) return;
     // target : caméra = nom device, fenêtre/jeu = obs_value ("title:class:exe").
     const target = "obs_value" in item ? item.obs_value : item.nom;
-    mode = "working";
+    etape = "working";
     working = true;
     error = null;
     try {
-      await createObsTrouFromPc(widgetId, kind, target);
+      if (mode === "fond") {
+        await lierFondCapture(kind, target);
+      } else {
+        if (!widgetId) return;
+        await createObsTrouFromPc(widgetId, kind, target);
+      }
       onClose();
     } catch (e) {
       const msg = String((e as Error)?.message ?? e);
       error = msg;
-      mode = "liste";
+      etape = "liste";
     } finally {
       working = false;
     }
   }
 
   function onBack() {
-    mode = "type";
+    etape = "type";
     kind = null;
     liste = [];
     error = null;
@@ -72,21 +86,25 @@
 </script>
 
 <Modal
-  title="Lier une source OBS"
+  title={mode === "fond" ? "Mettre une app ou un jeu en fond" : "Lier une source OBS"}
   onClose={onClose}
   maxWidth="460px"
-  hint="La capture (caméra, fenêtre ou jeu) sera placée derrière l'overlay et visible à travers la fenêtre de capture du widget."
+  hint={mode === "fond"
+    ? "La capture remplira tout l'arrière-plan de la scène, derrière vos widgets. Vous pourrez la changer ou la retirer à tout moment."
+    : "La capture (caméra, fenêtre ou jeu) sera placée derrière l'overlay et visible à travers la fenêtre de capture du widget."}
 >
   <div class="dialog-body">
-    {#if mode === "type"}
+    {#if etape === "type"}
       <p class="note">Choisir le type de source :</p>
       <div class="type-buttons">
-        <button class="modal-action" onclick={() => pickType("camera")}>Caméra</button>
+        {#if mode !== "fond"}
+          <button class="modal-action" onclick={() => pickType("camera")}>Caméra</button>
+        {/if}
         <button class="modal-action" onclick={() => pickType("window")}>Fenêtre</button>
         <button class="modal-action" onclick={() => pickType("game")}>Jeu</button>
       </div>
 
-    {:else if mode === "liste" || mode === "working"}
+    {:else if etape === "liste" || etape === "working"}
       <div class="list-header">
         <button class="modal-action small" onclick={onBack} disabled={working}>← Retour</button>
         <span class="list-title">{kind}</span>

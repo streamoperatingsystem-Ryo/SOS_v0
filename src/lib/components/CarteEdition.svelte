@@ -11,15 +11,17 @@
     importMedia, setMediaFit, setMediaZoomLocal, setMediaRotLocal,
     setMediaOffsetXLocal, setMediaOffsetYLocal, setMediaLumLocal,
     setMediaContrasteLocal, setMediaTeinteLocal, setMediaFlouLocal,
-    setMediaPixelLocal, resetMedia, clearWidgetMedia, commitScene,
+    setMediaPixelLocal, resetMediaTransformation, resetMediaEffets,
+    clearWidgetMedia, commitScene,
     toggleMediaMiroir, toggleBgMiroir,
     importFond, setBgFit, setBgZoomLocal, setBgRotLocal, setBgOffsetXLocal,
     setBgOffsetYLocal, setBgLumLocal, setBgContrasteLocal, setBgTeinteLocal,
-    setBgFlouLocal, setBgPixelLocal, resetFond, clearFond,
+    setBgFlouLocal, setBgPixelLocal, resetFondTransformation, resetFondEffets,
+    clearFond, retirerFondCapture,
     setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime,
     setWidgetTrou, deleteObsTrouSource, dupliquerWidget, rotateWidgetLocal,
     setChatFiltre, setChatTaillePolice, setSpeedrunPolice, setSpeedrunConfig,
-    setInputViewerConfig, setCameraDevice,
+    setInputViewerConfig, setCameraDevice, setGoalConfig,
     resetMorphsWidget, resetMorphsFond,
   } from "../stores/scene";
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
@@ -34,6 +36,11 @@
     actionManuelle, sauverPreferencesSpeedrun,
   } from "../stores/speedrun";
   import { tauri } from "../tauri";
+  import {
+    GOAL_METRIQUES, GOAL_METRIQUE_LABELS, goalSuggestion,
+    type GoalPlateforme, type GoalMetrique,
+  } from "../tauri";
+  import { valeursGoals } from "../stores/objectifs";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -95,6 +102,12 @@
     }
     tabWidget = "contenu";
   });
+  // Onglets fond : reset à "contenu" à chaque (re)ouverture de la carte fond —
+  // symétrique au reset de tabWidget à chaque changement de widget.
+  $effect(() => {
+    void cible;
+    if (cible === "fond") tabFond = "contenu";
+  });
 
   // ===== Type du widget sélectionné =====
   let selectedType = $derived(selectedWidget?.type ?? "media");
@@ -110,9 +123,45 @@
     cible === "widget" && isInputViewerWidget ? "cible-input-viewer" : `cible-${cible}`
   );
   let isSpeedrunWidget = $derived(selectedType === "speedrun");
+  let isGoalWidget = $derived(selectedType === "goal");
   let isMediaWidget = $derived(selectedType === "media");
   let chatFiltreVal = $derived(selectedWidget?.chatFiltre ?? "unifie");
   let chatTaille = $derived(selectedWidget?.taillePolice ?? 16);
+
+  // ===== Widget goal : config dérivée + valeur live =====
+  const GOAL_PLATEFORMES: { id: GoalPlateforme; label: string }[] = [
+    { id: "twitch", label: "Twitch" },
+    { id: "youtube", label: "YouTube" },
+    { id: "kick", label: "Kick" },
+    { id: "tiktok", label: "TikTok" },
+  ];
+  let goalPlat = $derived<GoalPlateforme>(selectedWidget?.goalPlateforme ?? "twitch");
+  let goalMet = $derived<GoalMetrique>(selectedWidget?.goalMetrique ?? "followers");
+  let goalCibleVal = $derived(selectedWidget?.goalCible ?? 0);
+  // Valeur live poussée par les events communaute:update / viewers:update.
+  let goalActuel = $derived(
+    goalPlat ? $valeursGoals[goalPlat]?.[goalMet] : undefined
+  );
+  let goalSuggere = $derived(
+    goalActuel === undefined ? undefined : goalSuggestion(goalPlat, goalMet, goalActuel)
+  );
+
+  function onGoalPlateforme(p: GoalPlateforme): void {
+    if (!selectedId) return;
+    // Métrique absente de la nouvelle plateforme → bascule sur la 1re dispo
+    // (pas de valeur fabriquée : seules les métriques réellement mesurées).
+    const patch: Parameters<typeof setGoalConfig>[1] = { goalPlateforme: p };
+    if (!GOAL_METRIQUES[p].includes(goalMet)) {
+      patch.goalMetrique = GOAL_METRIQUES[p][0];
+    }
+    void setGoalConfig(selectedId, patch);
+  }
+
+  function onGoalCibleChange(e: Event): void {
+    if (!selectedId) return;
+    const v = Math.max(1, Math.round(Number((e.target as HTMLInputElement).value) || 0));
+    void setGoalConfig(selectedId, { goalCible: v });
+  }
 
   // id court = 8 premiers caractères
   let shortId = $derived(selectedId ? selectedId.slice(0, 8) : "");
@@ -129,6 +178,7 @@
     "welcome-clip": "Clip de bienvenue",
     "input-viewer": "Input Viewer",
     speedrun: "Splitter",
+    goal: "Objectif",
   };
   let widgetLabel = $derived.by(() => {
     // Titre perso prioritaire.
@@ -179,6 +229,9 @@
   let bgMiroirH = $derived($sceneStore.bgMiroirH === true);
   let bgMiroirV = $derived($sceneStore.bgMiroirV === true);
   let hasFond = $derived(bgMedia.length > 0);
+  // Fond = capture OBS (app/jeu plein canvas) : PRIORITAIRE sur le média —
+  // bgMedia reste stocké mais n'est pas peint tant que la capture est active.
+  let bgObsSource = $derived($sceneStore.bgObsSource ?? null);
   let hasBgTitre = $derived(($sceneStore.bgTitre ?? "").length > 0);
   let fondVideoEl = $derived($videoRegistry.get("fond"));
   let bgPaused = $derived($sceneStore.bgPaused ?? true);
@@ -213,7 +266,8 @@
   async function onEffetChange() { await commitScene(); }
   // Miroir média : toggle discret (commit dans le store, pas de slider).
   async function onMiroirMedia(sens: "h" | "v") { if (selectedId) await toggleMediaMiroir(selectedId, sens); }
-  async function onResetMedia() { if (selectedId) await resetMedia(selectedId); }
+  async function onResetMediaTransformation() { if (selectedId) await resetMediaTransformation(selectedId); }
+  async function onResetMediaEffets() { if (selectedId) await resetMediaEffets(selectedId); }
   async function onClearMedia() { if (selectedId) await clearWidgetMedia(selectedId); }
   function onWidgetTogglePlay() { if (selectedId) setWidgetMediaPaused(selectedId, !widgetMediaPaused); }
   function onWidgetSeek(t: number) { if (selectedId) setWidgetMediaTime(selectedId, t); }
@@ -252,7 +306,8 @@
   async function onBgEffetChange() { await commitScene(); }
   // Miroir fond : toggle discret (commit dans le store).
   async function onBgMiroir(sens: "h" | "v") { await toggleBgMiroir(sens); }
-  async function onBgReset() { await resetFond(); }
+  async function onBgReset() { await resetFondTransformation(); }
+  async function onBgResetEffets() { await resetFondEffets(); }
   async function onResetMorphsFond() { await resetMorphsFond(); }
   function onBgTogglePlay() { setBgPaused(!bgPaused); }
   function onBgSeek(t: number) { setBgTime(t); }
@@ -373,6 +428,10 @@
   function onCloseObsDialog() { obsDialogOpen = false; }
   async function onDeleteObsSource() { if (!selectedId) return; await deleteObsTrouSource(selectedId); }
 
+  // ===== Fond de scène = capture OBS (app/jeu plein canvas) =====
+  // ObsSourceDialog mode "fond" → lierFondCapture/retirerFondCapture (store).
+  let obsFondDialogOpen = $state(false);
+
   function onMorphKeydown(e: KeyboardEvent) {
     if (e.key !== "Escape" || !$morphMode) return;
     const t = e.target as HTMLElement;
@@ -432,10 +491,10 @@
               <button class="tab" class:active={tabWidget === "contenu"} onclick={() => tabWidget = "contenu"}>Contenu</button>
               <button class="tab" class:active={tabWidget === "transformation"} onclick={() => tabWidget = "transformation"}>Transformation</button>
               <button class="tab" class:active={tabWidget === "effets"} onclick={() => tabWidget = "effets"}>Effets</button>
-              <button class="tab" class:active={tabWidget === "dupliquer"} onclick={() => tabWidget = "dupliquer"}>Dupliquer</button>
               {#if selectedKind === "video"}
                 <button class="tab" class:active={tabWidget === "lecture"} onclick={() => tabWidget = "lecture"}>Lecture</button>
               {/if}
+              <button class="tab" class:active={tabWidget === "dupliquer"} onclick={() => tabWidget = "dupliquer"}>Dupliquer</button>
             </div>
 
             {#if tabWidget === "contenu"}
@@ -446,9 +505,9 @@
                 </label>
               {/if}
               {#if !isCameraWidget}
-                <button class="action" onclick={importMedia}>Importer un média</button>
+                <button class="action" onclick={importMedia}>{selectedWidget?.media ? "Remplacer le média" : "Importer un média"}</button>
                 {#if selectedWidget?.media}
-                  <button class="action" onclick={onClearMedia}>Retirer le média</button>
+                  <button class="action" onclick={onClearMedia}>Supprimer le média</button>
                 {/if}
               {/if}
               {#if isChatWidget}
@@ -566,6 +625,34 @@
                   </select>
                 </div>
                 {@render sliderLigne("Taille police", srTailleVal, 8, 48, 1, onSrTailleInput, () => {}, (v) => v + "px")}
+              {:else if isGoalWidget}
+                <div class="fit-group">
+                  <span class="field-label">Plateforme</span>
+                  <div class="fit-buttons">
+                    {#each GOAL_PLATEFORMES as p (p.id)}
+                      <button class="fit-btn" class:active={goalPlat === p.id} onclick={() => onGoalPlateforme(p.id)}>{p.label}</button>
+                    {/each}
+                  </div>
+                </div>
+                <div class="fit-group">
+                  <span class="field-label">Métrique</span>
+                  <div class="fit-buttons">
+                    {#each GOAL_METRIQUES[goalPlat] as m (m)}
+                      <button class="fit-btn" class:active={goalMet === m} onclick={() => selectedId && setGoalConfig(selectedId, { goalMetrique: m })}>{GOAL_METRIQUE_LABELS[m]}</button>
+                    {/each}
+                  </div>
+                </div>
+                <div class="field">
+                  <span class="field-label">Cible</span>
+                  <input type="number" min="1" step="1" value={goalCibleVal} onchange={onGoalCibleChange} />
+                </div>
+                <p class="hint">
+                  Actuel : {goalActuel === undefined ? "N/A (plateforme non connectée ou jamais mesurée)" : goalActuel.toLocaleString("fr-FR")}
+                </p>
+                <button class="action" disabled={goalSuggere === undefined} onclick={() => selectedId && goalSuggere !== undefined && setGoalConfig(selectedId, { goalCible: goalSuggere })}>
+                  Suggérer : {goalSuggere === undefined ? "N/A" : goalSuggere.toLocaleString("fr-FR")}
+                </button>
+                <p class="hint">Palier « prochain chiffre reconnaissable » (algo Creator Goals : 10/100/1000 ; Path to Affiliate 25). La célébration se joue dans le widget en diffusion à l'atteinte.</p>
               {:else}
                 <!-- Widget média : fenêtre de capture + source OBS -->
                 <button class="action" onclick={onToggleTrou}>
@@ -604,9 +691,19 @@
           {/if}
         {:else}
           <!-- ====== ÉDITION FOND ====== -->
-          {#if !hasFond}
+          {#if bgObsSource}
+            <!-- Fond = capture app/jeu (prioritaire sur le média — le média
+                 stocké n'est pas peint tant que la capture est active). -->
+            <p class="hint">Fond = capture app/jeu, rendue par OBS plein canvas.</p>
+            <button class="action" onclick={() => (obsFondDialogOpen = true)}>Changer l'app/jeu capturé</button>
+            <button class="action" onclick={() => { void retirerFondCapture(); }}>Retirer la capture</button>
+            <button class="action" onclick={() => titreFondModalOpen.set(true)}>
+              {hasBgTitre ? "Modifier le titre du fond" : "Ajouter un titre au fond"}
+            </button>
+          {:else if !hasFond}
             <button class="action" onclick={importFond}>Importer un fond</button>
-            <p class="hint">Aucun fond. Cliquer « Importer un fond ».</p>
+            <button class="action" onclick={() => (obsFondDialogOpen = true)}>Mettre une app/jeu en fond</button>
+            <p class="hint">Aucun fond. Importer une image/vidéo, ou lier une app/jeu.</p>
           {:else}
             <div class="tabs">
               <button class="tab" class:active={tabFond === "contenu"} onclick={() => tabFond = "contenu"}>Contenu</button>
@@ -620,6 +717,7 @@
             {#if tabFond === "contenu"}
               <button class="action" onclick={importFond}>Remplacer le fond</button>
               <button class="action" onclick={() => clearFond()}>Supprimer le fond</button>
+              <button class="action" onclick={() => (obsFondDialogOpen = true)}>Mettre une app/jeu en fond</button>
               <button class="action" onclick={() => titreFondModalOpen.set(true)}>
                 {hasBgTitre ? "Modifier le titre du fond" : "Ajouter un titre au fond"}
               </button>
@@ -650,6 +748,7 @@
                   <button class="fit-btn" class:active={bgMiroirV} onclick={() => onBgMiroir("v")}>Miroir ↓</button>
                 </div>
               </div>
+              <button class="action" onclick={onBgResetEffets}>Reset effets</button>
               {#if bgKind === "image"}
                 <div class="fit-group">
                   <span class="field-label">Morphing</span>
@@ -686,6 +785,11 @@
   <ObsSourceDialog widgetId={selectedId} onClose={onCloseObsDialog} />
 {/if}
 
+<!-- Fond de scène = capture app/jeu (ObsSourceDialog mode "fond") -->
+{#if obsFondDialogOpen}
+  <ObsSourceDialog mode="fond" onClose={() => (obsFondDialogOpen = false)} />
+{/if}
+
 {#if bindingModalOpen && selectedId}
   <InputBindingModal
     widgetId={selectedId}
@@ -716,7 +820,7 @@
   {@render sliderLigne("Rotation", currentRot, -180, 180, 5, onRotInput, onRotChange, (v) => Math.round(v) + "°")}
   {@render sliderLigne("Offset X", currentOffsetX, -2000, 2000, 1, onOffsetXInput, onOffsetChange, (v) => Math.round(v) + "px")}
   {@render sliderLigne("Offset Y", currentOffsetY, -2000, 2000, 1, onOffsetYInput, onOffsetChange, (v) => Math.round(v) + "px")}
-  <button class="action" onclick={onResetMedia}>Reset transformation</button>
+  <button class="action" onclick={onResetMediaTransformation}>Reset transformation</button>
 {/snippet}
 
 {#snippet controlesEffetsWidget()}
@@ -734,6 +838,7 @@
       </div>
     </div>
   {/if}
+  <button class="action" onclick={onResetMediaEffets}>Reset effets</button>
   {#if isMediaWidget && selectedKind === "image" && selectedWidget?.media}
     <div class="fit-group">
       <span class="field-label">Morphing</span>
@@ -878,19 +983,28 @@
     scrollbar-color: var(--accent-carte-glow) transparent;
   }
 
-  /* ===== Onglets ===== */
+  /* ===== Onglets + boutons de groupe (recette unique) ===== */
   .tabs {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex;
+    flex-wrap: wrap;
     gap: 0.2rem;
     margin-bottom: 0.2rem;
   }
-  .tab {
+  /* Flex-wrap : chaque rangée se remplit entièrement (l'ancienne grille
+     2 colonnes fixe laissait une rangée orpheline dès 5 onglets/filtres).
+     Repos = bordure neutre + texte lisible (0.75 — l'ancien 0.4 se lisait
+     comme un état désactivé) ; actif = identité de la carte : bordure
+     --accent-carte + soulignement bas + teinte (l'accent ne vit que dans
+     l'état actif, cohérent avec .action — IDEA02). */
+  .tab,
+  .fit-btn {
+    flex: 1 1 auto;
+    min-width: 4.2rem;
     background: var(--btn-surface);
     color: var(--texte);
-    border: 1px solid var(--bordure-ui);
+    border: 1px solid var(--bordure);
     box-shadow: var(--btn-inset);
-    opacity: 0.4;
+    opacity: 0.75;
     padding: 0.3rem 0.4rem;
     font: inherit;
     font-size: 0.78rem;
@@ -898,15 +1012,19 @@
     text-align: center;
     transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
   }
-  .tab:hover {
+  .tab:hover,
+  .fit-btn:hover {
     background: var(--btn-surface-hover);
     box-shadow: var(--btn-inset-hover);
-    opacity: 0.7;
-    border-color: var(--bordure-ui-active);
+    opacity: 0.9;
+    border-color: var(--bordure-active);
   }
-  .tab.active {
+  .tab.active,
+  .fit-btn.active {
     opacity: 1;
+    font-weight: 600;
     border-color: var(--accent-carte);
+    box-shadow: var(--btn-inset-hover), inset 0 -2px 0 var(--accent-carte);
     background:
       linear-gradient(
         180deg,
@@ -1045,39 +1163,12 @@
     flex-direction: column;
     gap: 0.2rem;
   }
+  /* Conteneur des groupes de boutons — la recette des boutons vit avec
+     .tab ci-dessus (sélecteurs partagés .tab, .fit-btn). */
   .fit-buttons {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
+    display: flex;
+    flex-wrap: wrap;
     gap: 0.25rem;
-  }
-  .fit-btn {
-    background: var(--btn-surface);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    box-shadow: var(--btn-inset);
-    opacity: 0.4;
-    padding: 0.3rem 0.4rem;
-    font: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-    text-align: center;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-  }
-  .fit-btn:hover {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    opacity: 0.7;
-    border-color: var(--bordure-ui-active);
-  }
-  .fit-btn.active {
-    opacity: 1;
-    border-color: var(--accent-carte);
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--accent-carte) 18%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-carte) 8%, var(--fond-controle)) 100%
-      );
   }
   .media-val {
     font-size: 0.75rem;

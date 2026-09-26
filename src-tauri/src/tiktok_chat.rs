@@ -138,6 +138,16 @@ pub fn demarrer(
                             "viewers:update",
                             serde_json::json!({"plateforme": "tiktok", "count": viewers}),
                         );
+                        // Objectifs (widgets goal métrique viewers) : même
+                        // détection partagée que viewers.rs (crossing ≥ cible).
+                        if let Some(state) = app.try_state::<ScenesState>() {
+                            crate::viewers::verifier_objectifs(
+                                &app,
+                                &state.chat_tx,
+                                "tiktok",
+                                &[("viewers", viewers as u64)],
+                            );
+                        }
                     }
                 }
 

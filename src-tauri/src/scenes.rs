@@ -185,7 +185,7 @@ fn load_current_id_config(app: &AppHandle) -> Result<Option<String>, String> {
 /// 1920×1080 alors qu'OBS est en (ex.) 1842×1036 rend une page :4321 plus
 /// large que la source navigateur → bords droit/bas coupés dans OBS.
 /// Les widgets ne sont jamais rescalés.
-fn appliquer_canvas_obs(app: &AppHandle, scene: &mut Scene) {
+pub(crate) fn appliquer_canvas_obs(app: &AppHandle, scene: &mut Scene) {
     match crate::config::lire_obs_canvas(app) {
         Ok(Some((w, h))) => {
             if scene.canvasW != w || scene.canvasH != h {
@@ -296,13 +296,26 @@ fn trouver_entree<'a>(idx: &'a [SceneIndex], id: &str) -> Option<&'a SceneIndex>
 /// Crée une nouvelle scène vide (1920×1080, 0 widget, pas de fond), bascule
 /// dessus. Sauve la courante d'abord. Retourne l'entrée créée.
 pub fn creer(app: &AppHandle, state: &ScenesState, nom: &str) -> Result<SceneIndex, String> {
+    let mut scene = Scene::new();
+    appliquer_canvas_obs(app, &mut scene);
+    creer_avec(app, state, nom, scene)
+}
+
+/// Crée une nouvelle scène depuis une scène fournie (preset embarqué — ids
+/// déjà régénérés + canvas OBS déjà appliqués par presets::instancier),
+/// bascule dessus. Sauve la courante d'abord. Retourne l'entrée créée.
+/// L'existante n'est jamais touchée.
+pub fn creer_avec(
+    app: &AppHandle,
+    state: &ScenesState,
+    nom: &str,
+    scene: Scene,
+) -> Result<SceneIndex, String> {
     // 1. Sauver la courante
     save_current(app, state)?;
 
-    // 2. Nouvelle scène vide + id unique (canvas = résolution OBS connue)
+    // 2. Id unique
     let id = nouvel_id();
-    let mut scene = Scene::new();
-    appliquer_canvas_obs(app, &mut scene);
     let entry = SceneIndex { id: id.clone(), nom: nom.to_string(), nomMasque: false };
 
     // 3. Écriture disque : <id>.json + index += + config.json
@@ -323,6 +336,102 @@ pub fn creer(app: &AppHandle, state: &ScenesState, nom: &str) -> Result<SceneInd
 
     log::info!("Scène créée : « {} » (id={})", nom, id);
     Ok(entry)
+}
+
+/// ONBOARDING : initialise la scène de départ depuis un preset.
+///
+/// ⚠️ GARDE DE SÉCURITÉ « scène vierge » (2026-09-20) : le remplacement +
+/// renommage n'a lieu QUE si la scène courante est provably vide (aucun
+/// widget, fond, cadre, titre, morph). Sinon — utilisateur EXISTANT qui voit
+/// l'onboarding au premier boot après mise à jour (flag onboarding.json
+/// absent) avec une scène en cours — la commande NE TOUCHE À RIEN et crée
+/// une NOUVELLE scène (même comportement que le bouton « + Scène »).
+/// L'onboarding ne peut ainsi jamais détruire du travail.
+pub fn initialiser_depuis_preset(
+    app: &AppHandle,
+    state: &ScenesState,
+    preset: &crate::presets::PresetFichier,
+) -> Result<SceneIndex, String> {
+    // 0. Garde : scène courante non vierge → NOUVELLE scène, rien n'est touché.
+    let courante_vierge = {
+        let s = state.scene.lock().unwrap();
+        scene_vierge(&s)
+    };
+    let scene = crate::presets::instancier(app, preset);
+    if !courante_vierge {
+        log::info!(
+            "Onboarding preset « {} » : scène courante non vierge → nouvelle scène (rien n'est écrasé)",
+            preset.nom
+        );
+        return creer_avec(app, state, &preset.nom, scene);
+    }
+
+    // 1. Remplacer la scène courante VIERGE en RAM (ordre des locks : scene
+    //    PUIS current_id — même convention que push_snapshot/ouvrir).
+    let current_id = {
+        let mut s = state.scene.lock().unwrap();
+        *s = scene;
+        state.current_id.lock().unwrap().clone()
+    };
+
+    // 2. Persister le contenu + renommer l'entrée d'index au nom du preset
+    save_current(app, state)?;
+    renommer(app, &current_id, &preset.nom)?;
+
+    // 3. Snapshot + retour
+    push_snapshot(state);
+    log::info!(
+        "Scène de départ initialisée depuis le preset « {} » (id={})",
+        preset.nom,
+        current_id
+    );
+    Ok(SceneIndex {
+        id: current_id,
+        nom: preset.nom.clone(),
+        nomMasque: false,
+    })
+}
+
+/// Une scène est « vierge » si elle ne contient AUCUN contenu utilisateur :
+/// pas de widget, pas de média de fond, pas de cadre (widget/app), pas de
+/// titre de fond, pas de morphs de fond. Les dims canvas ne comptent pas
+/// (miroir de la résolution OBS). Garde de initialiser_depuis_preset.
+fn scene_vierge(s: &Scene) -> bool {
+    s.widgets.is_empty()
+        && s.bgMedia.is_empty()
+        && s.cadreWidget.is_none()
+        && s.cadreApp.is_none()
+        && s.bgTitre.is_none()
+        && s.bgMorphs.as_ref().map_or(true, |m| m.is_empty())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// La garde « scène vierge » doit détecter TOUT contenu utilisateur —
+    /// c'est elle qui empêche l'onboarding d'écraser une scène existante.
+    #[test]
+    fn scene_vierge_detecte_contenu() {
+        let s = Scene::new();
+        assert!(scene_vierge(&s), "scène neuve = vierge");
+
+        let mut s = Scene::new();
+        s.bgMedia = "medias/x.png".to_string();
+        assert!(!scene_vierge(&s), "fond média = pas vierge");
+
+        let mut s = Scene::new();
+        s.cadreWidget = Some(crate::scene::CadreConfig::default());
+        assert!(!scene_vierge(&s), "cadre widget = pas vierge");
+
+        let mut s = Scene::new();
+        s.bgTitre = Some("Titre".to_string());
+        assert!(!scene_vierge(&s), "titre de fond = pas vierge");
+
+        let mut s = Scene::new();
+        s.bgMorphs = Some(vec![crate::scene::MorphPoint::default()]);
+        assert!(!scene_vierge(&s), "morph de fond = pas vierge");
+    }
 }
 
 /// Ouvre une scène : sauve la courante, charge <id>.json, bascule, snapshot.

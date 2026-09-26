@@ -1243,6 +1243,52 @@ impl ScriptContext {
         // cours de run via majSettings).
         let _ = ctx.eval(Source::from_bytes("globalThis.__asl_settings = null;"));
 
+        // --- Invoker pré-compilé (perf — le vrai nœud du splitter) ---
+        // Avant : call_method reconstruisait un wrapper JS par format! puis
+        // ctx.eval à CHAQUE appel (2-6×/tick à 15Hz) → le parse+compile
+        // dominait l'exécution. __asl_invoke est installé UNE FOIS ici ;
+        // call_method l'appelle via l'API native JsObject::call avec les
+        // JSON passés en vraies chaînes JS (args, pas interpolés dans le code
+        // → plus d'échappement de quotes, plus de parse par appel).
+        let _ = ctx.eval(Source::from_bytes(
+            r#"
+            globalThis.__asl_invoke = function(name, derefOn, timerJson, oldJson, currentJson, procJson, settingsJson) {
+                // Pont mémoire : le callback natif __rust_deref est enregistré
+                // une fois pour toutes dans ScriptContext::new(). null sans
+                // processus attaché.
+                globalThis.__deref_callback = derefOn
+                    ? function(module, base, offsets, type, game, extra) {
+                        return __rust_deref(module, base, offsets, type, extra || 0);
+                    }
+                    : null;
+                var __timer = JSON.parse(timerJson);
+                var __old = JSON.parse(oldJson);
+                var __current = JSON.parse(currentJson);
+                var __vars = globalThis.__asl_vars;
+                var __game = procJson === null ? null : JSON.parse(procJson);
+                var __reader = JSON.parse(settingsJson);
+                // settings persistant (même pattern que __asl_vars — LOT 1) :
+                // création paresse au 1er appel, muté en place par le script,
+                // Reader rafraîchi à chaque appel (toggles majSettings).
+                if (!globalThis.__asl_settings) {
+                    globalThis.__asl_settings = (typeof __creerSettings === 'function')
+                        ? __creerSettings(__reader)
+                        : { Reader: __reader };
+                } else {
+                    globalThis.__asl_settings.Reader = __reader;
+                }
+                var __fn = globalThis["__asl_" + name];
+                var __result = (typeof __fn === "function")
+                    ? __fn(__timer, __old, __current, __vars, __game, globalThis.__asl_settings)
+                    : null;
+                // vars et settings sont mutés en place dans globalThis — pas
+                // de re-sérialisation (fonctions/instances ne survivent pas
+                // au round-trip JSON). On ne renvoie que le résultat.
+                return JSON.stringify({ result: __result });
+            };
+            "#,
+        ));
+
         Self {
             ctx,
             vars_json: "{}".to_string(),
@@ -1332,87 +1378,42 @@ impl ScriptContext {
             return Ok("null".to_string());
         }
 
-        let proc_arg = process_json.unwrap_or("null");
         let settings_json = format!(
             r#"{{"start":{},"split":{},"reset":{}}}"#,
             settings.start, settings.split, settings.reset
         );
 
-        // Échapper les single quotes dans les JSON (les strings peuvent
-        // contenir des ' — on les remplace par \x27 pour rester valide en JS).
-        let esc_timer = echapper_single_quote(timer_json);
-        let esc_old = echapper_single_quote(old_json);
-        let esc_current = echapper_single_quote(current_json);
-        let esc_settings = echapper_single_quote(&settings_json);
+        // Appel via l'invoker pré-compilé __asl_invoke (installé dans new()) —
+        // zéro eval par appel : les JSON passent en vrais args JS (chaînes
+        // natives, pas interpolées dans du code source → plus d'échappement
+        // de quotes). procJson : chaîne JSON ou null (le game object).
+        let proc_val = match process_json {
+            Some(p) => JsValue::String(boa_engine::string::JsString::from(p)),
+            None => JsValue::null(),
+        };
+        let args: Vec<JsValue> = vec![
+            JsValue::String(boa_engine::string::JsString::from(name)),
+            JsValue::new(self.current_pid.is_some()),
+            JsValue::String(boa_engine::string::JsString::from(timer_json)),
+            JsValue::String(boa_engine::string::JsString::from(old_json)),
+            JsValue::String(boa_engine::string::JsString::from(current_json)),
+            proc_val,
+            JsValue::String(boa_engine::string::JsString::from(settings_json.as_str())),
+        ];
 
-        // Le callback natif __rust_deref est enregistré une fois pour toutes
-        // dans ScriptContext::new(). Le wrapper JS __deref_callback délègue
-        // directement (pas de JSON.parse — __rust_deref retourne une valeur JS).
-        // __file_exists / __file_read sont aussi natifs (enregistrés à l'init).
-        let deref_setup = if self.current_pid.is_some() {
-            r#"
-            globalThis.__deref_callback = function(module, base, offsets, type, game, extra) {
-                return __rust_deref(module, base, offsets, type, extra || 0);
-            };
-            "#.to_string()
-        } else {
-            "globalThis.__deref_callback = null;".to_string()
+        let invoke_val = self
+            .ctx
+            .global_object()
+            .get(
+                boa_engine::string::JsString::from("__asl_invoke"),
+                &mut self.ctx,
+            )
+            .map_err(|e| format!("Lookup __asl_invoke: {}", e))?;
+        let Some(invoke) = invoke_val.as_callable() else {
+            return Err("__asl_invoke absent (init échouée)".to_string());
         };
 
-        // E8 Bug A — vars vivant en mémoire Boa (globalThis.__asl_vars).
-        // Avant ce fix, vars était sérialisé en JSON (self.vars_json) puis
-        // re-JSON.parse à chaque appel → les fonctions et instances stockées
-        // dans vars (ex: vars.D.Funcs, vars.D.Mem MemoryWatcherList du script
-        // MGS) étaient détruites après startup. On passe maintenant la référence
-        // directe à globalThis.__asl_vars ; le script la mute en place.
-        //
-        // LOT 1 — splits bloqués : même fix pour settings (globalThis.__asl_settings).
-        // Avant ce fix, settings était recréé à chaque appel depuis {start,split,
-        // reset} → les codes split enregistrés pendant init via settings.Add(...)
-        // étaient perdus → F.SettingEnabled(code) retournait false → aucun split.
-        // L'objet settings est créé paresse au premier appel (via __creerSettings),
-        // puis muté en place par le script (settings.Add pendant init). Le Reader
-        // {start,split,reset} est rafraîchi à chaque appel (l'utilisateur peut
-        // toggler en cours de run via majSettings).
-        let call = format!(
-            r#"
-            (function() {{
-                {deref_setup}
-                var __timer = JSON.parse('{esc_timer}');
-                var __old = JSON.parse('{esc_old}');
-                var __current = JSON.parse('{esc_current}');
-                var __vars = globalThis.__asl_vars;
-                var __game = {proc_arg};
-                var __reader = JSON.parse('{esc_settings}');
-                // LOT 1 — settings persistant (même pattern que __asl_vars).
-                // Création paresse au premier appel ; réutilisation ensuite.
-                // Le Reader est rafraîchi à chaque appel (start/split/reset
-                // booléens peuvent changer en cours de run via majSettings).
-                if (!globalThis.__asl_settings) {{
-                    globalThis.__asl_settings = (typeof __creerSettings === 'function')
-                        ? __creerSettings(__reader)
-                        : {{ Reader: __reader }};
-                }} else {{
-                    globalThis.__asl_settings.Reader = __reader;
-                }}
-                var __settings = globalThis.__asl_settings;
-                var __result = globalThis.__asl_{name}(__timer, __old, __current, __vars, __game, __settings);
-                // vars et settings sont mutés en place dans globalThis — pas de
-                // re-sérialisation (les fonctions/instances ne survivent pas au
-                // round-trip JSON). On ne renvoie que le résultat.
-                return JSON.stringify({{ result: __result }});
-            }})()
-            "#,
-            deref_setup = deref_setup,
-            esc_timer = esc_timer,
-            esc_old = esc_old,
-            esc_current = esc_current,
-            proc_arg = proc_arg,
-            esc_settings = esc_settings,
-            name = name,
-        );
-
-        match self.ctx.eval(Source::from_bytes(&call)) {
+        match invoke.call(&JsValue::undefined(), &args, &mut self.ctx) {
             Ok(val) => {
                 let result_str = val
                     .as_string()
@@ -1895,13 +1896,6 @@ fn lire_array_bool(obj: &boa_engine::object::JsObject, prop: &str, ctx: &mut Con
         out.push(val.and_then(|v| v.as_boolean()).unwrap_or(false));
     }
     out
-}
-
-/// Échappe les single quotes et backslashes dans une string JSON pour
-/// l'insérer entre single quotes en JS (sécurité : les strings JSON peuvent
-/// contenir des ' dans les valeurs, ex: noms de splits).
-fn echapper_single_quote(s: &str) -> String {
-    s.replace('\\', "\\\\").replace('\'', "\\'")
 }
 
 // =============================================================================

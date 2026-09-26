@@ -1104,22 +1104,27 @@ pub async fn camera_hide(host: &str, port: u16, password: &str) -> Result<(), St
     Ok(())
 }
 
-/// Synchronise les captures SOS-Trou-* avec les widgets de la scène chargée.
+/// Synchronise les captures SOS-Trou-* et SOS-Fond-* avec la scène chargée.
 /// Au chargement d'une scène :
 ///   - items SOS dont le nom commence par "SOS-Trou-" ET n'est dans AUCUN
 ///     widget.obsSource → SetSceneItemEnabled false (cacher, pas DeleteInput).
 ///   - items SOS-Trou-* qui SONT dans un widget.obsSource → enable true + sync
 ///     transform (position + taille = widget).
+///   - items SOS-Fond-* : == scene.bgObsSource → enable true + transform
+///     PLEIN CANVAS (fond de scène = capture app/jeu) ; sinon (autres
+///     scènes) → cacher. Prend la Scene complète (widgets + bgObsSource
+///     + canvasW/H).
 ///
-/// One-shot : connect → scene_sos() → pour chaque item SOS-Trou-* →
+/// One-shot : connect → scene_sos() → pour chaque item SOS-Trou-* / SOS-Fond-* →
 /// SetSceneItemEnabled (+ SetSceneItemTransform si lié) → close.
 /// Non-fatal : si OBS offline ou scène SOS absente → Ok silencieux.
 pub async fn sync_scene_captures(
     host: &str,
     port: u16,
     password: &str,
-    widgets: &[crate::scene::Widget],
+    scene: &crate::scene::Scene,
 ) -> Result<(), String> {
+    let widgets = &scene.widgets;
     let (mut write, mut read) = connect(host, port, password).await?;
 
     let Some(sos) = scene_sos(&mut write, &mut read).await? else {
@@ -1244,9 +1249,69 @@ pub async fn sync_scene_captures(
         }
     }
 
+    // ===== Fond capture (SOS-Fond-<sceneId8>) =====
+    // Item lié au bgObsSource de la scène chargée → enable + transform PLEIN
+    // CANVAS (0,0,canvasW,canvasH, STRETCH, alignment 5 = top-left — même
+    // convention que le sync des SOS-Trou-*). Les SOS-Fond-* des AUTRES
+    // scènes → cacher (orphan hiding, même logique que SOS-Trou-*).
+    let bg_cw = scene.canvasW as f64;
+    let bg_ch = scene.canvasH as f64;
+    for item in &sos.items {
+        let Some(name) = item["sourceName"].as_str() else { continue };
+        if !name.starts_with("SOS-Fond-") { continue; }
+        let Some(item_id) = item["sceneItemId"].as_i64() else { continue };
+
+        if scene.bgObsSource.as_deref() == Some(name) {
+            let _ = rpc(
+                &mut write,
+                &mut read,
+                "SetSceneItemEnabled",
+                &format!("sync_bg_enable_{}", item_id),
+                json!({
+                    "sceneUuid": scene_uuid,
+                    "sceneItemId": item_id,
+                    "sceneItemEnabled": true
+                }),
+            )
+            .await;
+            let _ = rpc(
+                &mut write,
+                &mut read,
+                "SetSceneItemTransform",
+                &format!("sync_bg_transform_{}", item_id),
+                json!({
+                    "sceneUuid": scene_uuid,
+                    "sceneItemId": item_id,
+                    "sceneItemTransform": {
+                        "positionX": 0,
+                        "positionY": 0,
+                        "boundsWidth": bg_cw,
+                        "boundsHeight": bg_ch,
+                        "boundsType": "OBS_BOUNDS_STRETCH",
+                        "alignment": 5
+                    }
+                }),
+            )
+            .await;
+        } else {
+            let _ = rpc(
+                &mut write,
+                &mut read,
+                "SetSceneItemEnabled",
+                &format!("sync_bg_disable_{}", item_id),
+                json!({
+                    "sceneUuid": scene_uuid,
+                    "sceneItemId": item_id,
+                    "sceneItemEnabled": false
+                }),
+            )
+            .await;
+        }
+    }
+
     // ===== Vérification/Maj ordre des sources au démarrage =====
-    // Ordre visuel souhaité (bas → haut) : SOS-Trou-* < SOS-Caméra-Fond <
-    // SOS-Caméra < SOS-Diffusion.
+    // Ordre visuel souhaité (bas → haut) : SOS-Fond-* < SOS-Trou-* <
+    // SOS-Caméra-Fond < SOS-Caméra < SOS-Diffusion.
     // Reorder one-shot : GetSceneItemList → SetSceneItemIndex (bottom-up).
     reorder_sos_sources(&mut write, &mut read, scene_uuid).await;
 
@@ -1255,7 +1320,8 @@ pub async fn sync_scene_captures(
 }
 
 /// Force l'ordre visuel des sources SOS dans la scène :
-///   Index 0..T-1 (BAS) : SOS-Trou-* (tous les trous, ordre relatif conservé)
+///   Index 0..F-1 (BAS) : SOS-Fond-* (captures de fond app/jeu plein canvas)
+///   Index F..T-1       : SOS-Trou-* (tous les trous, ordre relatif conservé)
 ///   Index T            : SOS-Caméra-Fond (plaque noire)
 ///   Index T+1          : SOS-Caméra
 ///   Index T+2 (HAUT)   : SOS-Diffusion
@@ -1267,7 +1333,9 @@ pub async fn sync_scene_captures(
 /// qu'une capture qui recouvre son rectangle ne masque pas le flux. La
 /// plaque sous la caméra (mais au-dessus des trous) montre du noir quand
 /// le capteur est off. Les trous fenêtre/jeu restent SOUS Diffusion
-/// (destination-out inchangé).
+/// (destination-out inchangé). Les SOS-Fond-* (fond de scène = capture)
+/// sont TOUT EN BAS : un widget trou qui recouvre le fond gagne dans son
+/// rect, la plaque caméra reste au-dessus du fond capturé.
 ///
 /// Dans OBS 32.x, index 0 = bas visuel, index max = haut visuel.
 /// SetSceneItemIndex du HAUT vers le BAS pour éviter de déplacer les items
@@ -1298,6 +1366,8 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
     let mut trou_ids: Vec<i64> = Vec::new();
     let mut camera_id: Option<i64> = None;
     let mut fond_id: Option<i64> = None;
+    // Captures de FOND de scène (SOS-Fond-<sceneId8>) — tout en bas.
+    let mut bg_capture_ids: Vec<i64> = Vec::new();
 
     for it in arr {
         let name = it["sourceName"].as_str().unwrap_or("");
@@ -1311,6 +1381,8 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
             fond_id = Some(id);
         } else if name.starts_with("SOS-Trou-") {
             trou_ids.push(id);
+        } else if name.starts_with("SOS-Fond-") {
+            bg_capture_ids.push(id);
         }
     }
 
@@ -1334,6 +1406,8 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
         top_to_bottom.push(id);
     }
     top_to_bottom.extend(trou_ids.iter().copied());
+    // SOS-Fond-* en DERNIER = index le plus bas (fond de scène, sous tout).
+    top_to_bottom.extend(bg_capture_ids.iter().copied());
 
     let mut idx = top_to_bottom.len() as i64 - 1; // index le plus haut = Diffusion
     for id in top_to_bottom {

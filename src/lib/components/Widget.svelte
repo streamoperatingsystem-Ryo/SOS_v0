@@ -22,6 +22,8 @@
   import { genererClipPathCadre, couleurCadre, gradientCadre } from "../cadres/registre";
   import { titreModalOpen } from "../stores/ui";
   import { POLICE_TITRE_DEFAUT, TAILLE_TITRE_DEFAUT, ESPACEMENT_TITRE_DEFAUT } from "../fonts";
+  import { GOAL_METRIQUE_LABELS } from "../tauri";
+  import { valeursGoals } from "../stores/objectifs";
   import WidgetSpeedrun from "./WidgetSpeedrun.svelte";
 
   let { w, scale }: { w: Widget; scale: number } = $props();
@@ -34,6 +36,22 @@
   let isWelcomeClip = $derived(widgetType === "welcome-clip");
   let isInputViewer = $derived(widgetType === "input-viewer");
   let isSpeedrun = $derived(widgetType === "speedrun");
+  let isGoal = $derived(widgetType === "goal");
+
+  // ===== Widget goal (aperçu dashboard) =====
+  // Valeur live depuis le store objectifs (events communaute:update /
+  // viewers:update). Le rendu complet (progression + célébration) est dans
+  // diffusion.html — ici c'est une vignette de config.
+  let goalActuel = $derived(
+    w.goalPlateforme && w.goalMetrique
+      ? $valeursGoals[w.goalPlateforme]?.[w.goalMetrique]
+      : undefined
+  );
+  let goalPct = $derived(
+    goalActuel !== undefined && w.goalCible
+      ? Math.min(100, Math.round((goalActuel / w.goalCible) * 100))
+      : null
+  );
 
   // Mini widget — jamais en dessous.
   const MIN = 80;
@@ -564,6 +582,21 @@
       <div class="contenu-dessus">
         <WidgetSpeedrun contenu={w} gradient={titreGradient} />
       </div>
+    {:else if isGoal}
+      <!-- Widget objectif (dashboard) : vignette live actuel/cible + barre.
+           Le rendu complet + la célébration à l'atteinte sont dans
+           diffusion.html (OBS :4321) via WS communaute/viewers/goal-atteint. -->
+      {@render mediaFond()}
+      <div class="goal-preview">
+        <span class="goal-preview-label">{GOAL_METRIQUE_LABELS[w.goalMetrique ?? "followers"]} · {w.goalPlateforme ?? "twitch"}</span>
+        <span class="goal-preview-count">
+          {goalActuel === undefined ? "N/A" : goalActuel.toLocaleString("fr-FR")}
+          {#if w.goalCible}<span class="goal-preview-cible">/ {w.goalCible.toLocaleString("fr-FR")}</span>{/if}
+        </span>
+        {#if goalPct !== null}
+          <div class="goal-preview-bar"><div class="goal-preview-fill" style="width:{goalPct}%"></div></div>
+        {/if}
+      </div>
     {:else if w.media && !isVideo}
       {#if aMorphs}
         <!-- Rendu morphé : canvas GL (le warp inclut fit + transforms) -->
@@ -862,6 +895,47 @@
      .msg-pill (recette app.css), teinte orange action utilisateur. */
   .input-viewer-obs {
     color: var(--message-user-action-color);
+  }
+  /* Vignette objectif (dashboard) : métrique·plateforme + actuel/cible +
+     barre de progression — variables du thème uniquement. */
+  .goal-preview {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.3rem;
+    padding: 0.5rem;
+    pointer-events: none;
+    color: var(--texte);
+  }
+  .goal-preview-label {
+    font-size: 0.72rem;
+    color: var(--gris);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+  .goal-preview-count {
+    font-size: 1.15rem;
+    font-weight: 700;
+  }
+  .goal-preview-cible {
+    color: var(--gris);
+    font-weight: 500;
+  }
+  .goal-preview-bar {
+    width: 80%;
+    height: 5px;
+    border-radius: 999px;
+    background: var(--btn-inset);
+    overflow: hidden;
+  }
+  .goal-preview-fill {
+    height: 100%;
+    background: var(--accent-ui);
+    border-radius: 999px;
+    transition: width 0.4s ease;
   }
   /* Fond du widget input viewer (dashboard) : voile opaque sombre + halo
      orange doux au centre — signale visuellement l'overlay OBS. */

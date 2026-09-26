@@ -1,4 +1,4 @@
-; StreamOS v0 — Hooks NSIS pour l'installer (setup-base0005).
+; StreamOS v0 — Hooks NSIS pour l'installer (setup-base0006).
 ;
 ; NSIS_HOOK_PREINSTALL : runs before copying files, after the PageReinstall
 ; page (which already offered to uninstall the old app version).

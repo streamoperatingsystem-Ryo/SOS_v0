@@ -50,7 +50,9 @@
   let bgMiroirH = $derived($sceneStore.bgMiroirH === true);
   let bgMiroirV = $derived($sceneStore.bgMiroirV === true);
   let bgFilter = $derived(chaineFilter(bgLum, bgContraste, bgTeinte, bgFlou));
-  let hasFond = $derived(bgMedia.length > 0);
+  // Fond = capture OBS (app/jeu plein canvas) : prioritaire sur le média.
+  let bgObsSource = $derived($sceneStore.bgObsSource ?? null);
+  let hasFond = $derived(bgMedia.length > 0 || !!bgObsSource);
   let bgIsVideo = $derived(bgKind === "video");
   // Badge « en lecture dans OBS » (fond) : bgPaused === false = la vidéo de
   // fond joue réellement côté diffusion (:4321) — vignette dashboard figée.
@@ -350,7 +352,7 @@
   {#if scale > 0}
     <div
       class="canvas"
-      class:morphable={$morphMode && hasFond && !bgIsVideo}
+      class:morphable={$morphMode && hasFond && !bgIsVideo && !bgObsSource}
       style="width:{canvasW}px; height:{canvasH}px; transform: scale({scale});"
       onpointerdown={onCanvasPointerDown}
       onpointermove={onCanvasPointerMove}
@@ -359,7 +361,17 @@
     >
       {#if hasFond}
         <div class="bg-layer">
-          {#if bgAMorphs}
+          {#if bgObsSource}
+            <!-- Fond = capture OBS (app/jeu plein canvas) : rien n'est rendu
+                 côté dashboard (la diffusion :4321 ne peint pas le fond non
+                 plus — page transparente → la source SOS-Fond-* en bas de
+                 pile OBS apparaît). Pastille informative (recette .msg-pill,
+                 pattern .lecture-obs-fond). -->
+            <div class="lecture-obs-fond msg-pill" style="color: {bgLectureCouleur};">
+              <span class="msg-pill-icon">▶</span>
+              <span class="msg-pill-text">Capture app/jeu en fond — rendue par OBS</span>
+            </div>
+          {:else if bgAMorphs}
             <!-- Rendu morphé : canvas GL (le warp inclut fit + transforms fond) -->
             <canvas bind:this={bgMorphCanvasEl} class="bg-media morph-canvas" draggable="false"></canvas>
             {#if bgIsVideo}

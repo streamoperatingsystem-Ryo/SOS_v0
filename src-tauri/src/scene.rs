@@ -286,6 +286,19 @@ pub struct Widget {
     /// Toutes les tailles internes du splitter sont en em → suit cette base.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub srTaillePolice: Option<u32>,
+    /// Plateforme suivie par un widget type "goal" :
+    /// "twitch" | "youtube" | "kick" | "tiktok". None = non configuré.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goalPlateforme: Option<String>,
+    /// Métrique suivie par un widget type "goal" : "followers" | "subs" |
+    /// "sub_points" | "abonnes" | "viewers". Les métriques indisponibles pour
+    /// la plateforme choisie sont ignorées (affichage « N/A » en diffusion).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goalMetrique: Option<String>,
+    /// Valeur cible du widget type "goal". None = pas de cible (compteur
+    /// seul, jamais de frame goal-atteint).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goalCible: Option<u64>,
     /// Chaîne de morphs (bulge/pinch) appliquée au média, dans l'ordre.
     /// None/vide = rendu natif (img/video), zéro coût GL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -382,6 +395,13 @@ pub struct Scene {
     pub bgPaused: bool,
     #[serde(default = "default_zero_f64")]
     pub bgTime: f64,
+    /// Nom de la source OBS de capture liée au FOND (fenêtre/jeu plein canvas,
+    /// ex: "SOS-Fond-ab12cd34" — une par scène). None = fond normal (bgMedia
+    /// ou transparent). Présence = PRIORITAIRE sur bgMedia : la diffusion ne
+    /// peint PAS le fond (page transparente → la capture en bas de pile OBS
+    /// apparaît). Retirer la capture restaure le média stocké.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgObsSource: Option<String>,
     /// Cadre appliqué à chaque widget (clip-path + overlay SVG). None = aucun.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cadreWidget: Option<CadreConfig>,
@@ -443,6 +463,7 @@ impl Default for Scene {
             bgPixel: 0.0,
             bgPaused: true,
             bgTime: 0.0,
+            bgObsSource: None,
             cadreWidget: None,
             cadreApp: None,
             bgMorphs: None,

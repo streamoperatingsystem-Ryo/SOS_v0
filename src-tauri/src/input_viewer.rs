@@ -423,6 +423,8 @@ fn poll_xinput() -> Option<(Vec<bool>, Vec<f32>)> {
 /// Émet l'état dans manette_slot() → publier_etat() le diffuse via WS.
 pub fn demarrer_thread_manette(actif: Arc<AtomicBool>) {
     thread::spawn(move || {
+        // Visible dans la modale Diagnostic (registre TID→label).
+        crate::conso::nommer_thread("Input viewer (manette)");
         // gilrs init (fallback pour manettes non-XInput comme DualSense).
         // Sur Windows, XInput est prioritaire — gilrs peut échouer sans impact.
         let mut gilrs: Option<gilrs::Gilrs> = match gilrs::Gilrs::new() {
@@ -479,6 +481,15 @@ pub fn demarrer_thread_manette(actif: Arc<AtomicBool>) {
                 }
             };
 
+            // Quantifier les axes (résolution 1/1000 de course). Fix 2026-09-21
+            // (crash thermique PC) : les axes f32 bruts jitter en continu sur
+            // DInput (pas de deadzone matérielle — ex: DualSense au repos) ou
+            // sur stick qui drift → l'état change à CHAQUE poll 60Hz →
+            // publication WS 30Hz permanente + re-blur backdrop-filter du
+            // widget dans le CEF d'OBS, même manette immobile. Quantifiés, on
+            // ne publie que sur un vrai mouvement (0,1% de course :
+            // imperceptible au rendu, sans effet sur le seuil D-pad à 0,5).
+            let axes: Vec<f32> = axes.iter().map(|a| (a * 1000.0).round() / 1000.0).collect();
             let nouvel_etat = EtatManette { connectee, boutons, axes };
             let mut m = manette_slot().lock().unwrap();
             if *m != nouvel_etat {
@@ -661,6 +672,8 @@ impl InputViewerState {
             // Détaché — sort proprement quand ACTIF passe à false.
             let actif_flag = self.actif.clone();
             thread::spawn(move || {
+                // Visible dans la modale Diagnostic (registre TID→label).
+                crate::conso::nommer_thread("Input viewer (clavier)");
                 let mut etat_precedent = [false; 256];
                 let mut derniere_publication = Instant::now() - Duration::from_secs(1);
                 let mut derniere_signature = String::new();
@@ -697,6 +710,8 @@ impl InputViewerState {
                 let actif_flag = self.actif.clone();
                 thread::spawn(move || {
                     use windows::Win32::System::Threading::GetCurrentThreadId;
+                    // Visible dans la modale Diagnostic (registre TID→label).
+                    crate::conso::nommer_thread("Input viewer (souris)");
                     // Mémoriser l'ID du thread courant (pour le WM_QUIT d'arrêt).
                     let id = unsafe { GetCurrentThreadId() };
                     THREAD_SOURIS_ID.store(id, Ordering::Relaxed);

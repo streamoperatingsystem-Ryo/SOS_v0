@@ -284,6 +284,37 @@ pub fn sauver_raccourcis_config(app: &AppHandle, cfg: &RaccourcisConfig) -> Resu
         .map_err(|e| format!("Écrire raccourcis.json: {}", e))
 }
 
+// ===== Persistance onboarding presets =====
+
+/// Lit le flag « onboarding fait » (onboarding.json). Absent = false (premier
+/// lancement → montrer la galerie de presets). Sémantique « sûr » en cas
+/// d'erreur de lecture (fichier illisible, data_dir KO) : true = ne pas
+/// re-afficher l'onboarding à chaque boot si on ne peut pas le lire.
+pub fn lire_onboarding_fait(app: &AppHandle) -> bool {
+    let Ok(dir) = data_dir(app) else {
+        return true;
+    };
+    let path = dir.join("onboarding.json");
+    if !path.exists() {
+        return false;
+    }
+    let Ok(content) = fs::read_to_string(&path) else {
+        return true;
+    };
+    serde_json::from_str::<serde_json::Value>(&content)
+        .ok()
+        .and_then(|v| v.get("fait").and_then(|f| f.as_bool()))
+        .unwrap_or(true)
+}
+
+/// Écrit onboarding.json { "fait": true } (écrase si existe).
+pub fn marquer_onboarding_fait(app: &AppHandle) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("onboarding.json");
+    let json = serde_json::json!({ "fait": true }).to_string();
+    fs::write(&path, json).map_err(|e| format!("Écrire onboarding.json: {}", e))
+}
+
 // ===== Persistance snapshot followers (détection unfollows) =====
 
 /// Entrée minimale d'un follower pour le snapshot (comparaison au démarrage).

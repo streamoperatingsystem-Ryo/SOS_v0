@@ -123,6 +123,14 @@ struct ChatMessage {
 }
 ```
 
+**Rendu diffusion incrémental (2026-09-22)** : un nouveau message n'ajoute
+qu'UN nœud DOM par widget (`appendChatMessage` → `creerNoeudChat`), plus
+rebuild des 200 messages à chaque message. Le trim du buffer (MAX_CHAT=200)
+retire les nœuds correspondants dans chaque widget filtré. `fillChatBody`
+(rebuild complet) reste le chemin des changements rares : création du widget,
+changement de filtre/taille/cadre (le border-image inline suit le gradient
+du cadre — CEF ne recalcule pas les var() en dynamique).
+
 ## Compteur viewers — widget chat en diffusion (2026-XX)
 
 > UNE seule tâche centralisée (`viewers.rs`) pour toutes les plateformes — PAS
@@ -150,6 +158,64 @@ chat (flex column : barre + `.chat-body` flex:1). `:empty` → `display:none`
 la plateforme filtrée. `viewersParPlateforme` + `fillViewersBar` +
 `rerenderViewersBars` (handler WS `type==="viewers"`).
 
+## Widgets objectif (goal) — compteurs live + célébration (2026-09-22)
+
+> Objectifs streamer façon Creator Goals/Streamlabs : compteur réel + cible
+> choisie par l'utilisateur + célébration à l'atteinte. **Zéro tâche de
+> polling ajoutée** — tout passe par la tâche centralisée `viewers.rs`
+> (tick 15s, fetch 60s live / 180s offline par plateforme, déjà existante).
+
+### Données (frames WS `chat_tx` → diffusion :4321, additive aux frames viewers)
+
+- `{"type":"communaute","plateforme":p,...}` — compteurs réels dédupliqués
+  par tuple complet (1/plateforme/fetch max). Champs **uniquement si
+  disponibles** (jamais de valeur fabriquée) :
+  - Twitch : `followers` (`followers_total`, 1 GET `first=1`→`total`),
+    `subs` + `sub_points` (`subs_totaux`, 1 GET `first=1`) — twitch_helix.rs.
+  - YouTube : `abonnes` (`channel_info` existant). Members = **N/A**
+    (scope `channel-memberships.creator` absent du Device Flow).
+  - Kick : `followers` (`followersCount` — mutualisé dans le GET
+    `api/v2/channels/<slug>` des viewers, `fetch_channel_stats`, zéro GET
+    supplémentaire).
+  - TikTok : rien (pas de total public fiable) — viewers via RoomUserSeq.
+- Emit frontend miroir : `communaute:update` → `stores/objectifs.ts`
+  (`valeursGoals`, carte d'édition + aperçu dashboard).
+- `{"type":"goal-atteint","widget_id","plateforme","metrique","count","cible"}`
+  — émis par `viewers::verifier_objectifs` au **crossing ≥ cible, une fois** ;
+  réarmé quand le compteur redescend sous la cible (unfollows/sub expiré —
+  les objectifs Twitch redescendent aussi, doc officielle). Aussi appelé
+  depuis `tiktok_chat.rs` (RoomUserSeq → métrique viewers). + `app.emit`.
+
+### Widget `type: "goal"` (scene.rs / tauri.ts — champs Option, camelCase)
+
+`goalPlateforme` ("twitch"|"youtube"|"kick"|"tiktok"), `goalMetrique`
+("followers"|"subs"|"sub_points"|"abonnes"|"viewers"), `goalCible` (u64,
+None = compteur seul sans atteinte). `titre` existant = label encadré.
+Disponibilité réelle des métriques : `GOAL_METRIQUES` (tauri.ts) — la config
+ne propose que ce qui est mesuré.
+
+### Algo de suggestion (vérifié doc officielle Twitch Creator Goals)
+
+`goalPalierSuivant(n)` : <100 → +10, <1000 → +100, <10000 → +1000
+(exemples officiels : 11→20, 260→300). `goalSuggestion()` ajoute le cas
+twitch/followers <25 → **25** (Path to Affiliate).
+
+### Diffusion (`diffusion.html`)
+
+`.widget.goal` (container-type + cqw comme .inputviewer) : entête logo
+(`logoPlateforme`) + métrique, chiffres `actuel/cible`, barre gradient
+`--sr-grad-*` (couleur du cadre SVG). `majGoalValeur`/`majGoalWidgets` =
+textContent/width uniquement (zéro re-render). Célébration : voile
+`.goal-celebration` + pulse `goalGlow` ~6s, **contenue au widget** — ne
+touche pas la file d'alertes globale.
+
+### Dashboard
+
+`Widget.svelte` : vignette live (label + actuel/cible + mini-barre, store
+`valeursGoals`). `CarteEdition.svelte` : selects plateforme/métrique (filtrés
+par `GOAL_METRIQUES`), champ Cible, bouton **Suggérer** (palier sur valeur
+live, `N/A` si non mesurée). `Toolbar` → « Créer un widget objectif ».
+
 ## État partagé (tauri::State)
 
 | State         | Champs clés                          | Commandes associées |
@@ -169,6 +235,7 @@ la plateforme filtrée. `viewersParPlateforme` + `fillViewersBar` +
 | `kick.ts`     | `connecterKick`, `deconnecterKick`, `lireSlugSauve` |
 | `tiktok.ts`   | `connecterTiktok`, `deconnecterTiktok`, `lireUsernameSauve` |
 | `communaute.ts`| Followers/subs/viewers (Twitch Helix + YouTube Data API). Affichage intégré dans la modale Modération & Rôles (onglet Twitch → section « Communauté » lecture seule ; onglet YouTube activé). Chargement réactif dans `App.svelte` ($effect sur `connexions.twitch`/`connexions.youtube`). |
+| `presets.ts`   | Galerie de scènes modèles : `presetsStore`, `chargerPresets`, `creerSceneDepuisPreset` (NOUVELLE scène), `initialiserSceneDepuisPreset` (onboarding + recharge UI + sceneSyncCaptures). |
 
 ## Persistance (config.rs)
 
@@ -186,6 +253,7 @@ PAS "StreamOS" ; `config.rs` → `app_data_dir()`) :
 - `followers_snapshot.json` — snapshot des followers Twitch (user_id, login, followed_at + timestamp). Sert à détecter les unfollows au démarrage suivant.
 - `unfollows.json` — historique append-only des unfollows détectés (user_id, login, date_unfollow). Dédupliqué par user_id.
 - `raccourcis.json` — `{ "visible": bool, "bord": "gauche|droite|haut|bas", "monitor_index": n }` (barre de raccourcis)
+- `onboarding.json` — `{ "fait": true }` (présence de la galerie de presets au 1er lancement ; absent = premier démarrage)
 - `telemetrie/events.jsonl` — journal append-only des événements télémétrie (schéma v1, voir section dédiée)
 - `speedrun_baselines.json` — référence « dernière fois » du splitter : temps de split **cumulés** (secondes) par segment, keyed par chemin .lss. Mis à jour à chaque split réalisé ; mergé avec les PB du .lss pour la colonne delta (voir section Speedrun).
 - `scenes/` — scènes SOS (JSON)
@@ -234,6 +302,89 @@ twitch_communaute_followers (lib.rs)
   seulement).
 - `enrichir_avatars` est non-fatal : si le batch /users échoue (rate limit,
   réseau), les followers sont retournés sans avatar (profile_image_url vide).
+
+## Presets de scènes embarqués — parcours « tout prêt » (2026-09-20)
+
+> Scènes modèles prêtes à l'emploi pour le user lambda : widgets positionnés
+> + cadre actif, AUCUN média à importer (chat fonctionne dès qu'une
+> plateforme est connectée, caméra via SOS-Caméra). Proposées au PREMIER
+> lancement (onboarding) et à chaque création de scène (bouton « + Scène »).
+
+### Données
+
+- 4 presets JSON dans `src-tauri/resources/presets/` — `gaming`,
+  `just-chatting`, `speedrun`, `minimal` — embarqués via `include_str!`
+  (pattern diffusion.html / chat-popout.html : pas de ressource à bundler,
+  recompile si changement).
+- Format : `{ id, nom, description, scene: Scene complète }`. Widgets
+  uniquement de types fonctionnels sans import (chat / camera / input-viewer /
+  speedrun) + `cadreWidget` actif (règle figée cadres : s'applique à tous).
+  Conçus 1920×1080 ; `appliquer_canvas_obs` ajuste le canvas sans rescaler
+  les widgets (comportement des scènes importées).
+
+### Flux
+
+```
+resources/presets/*.json ──include_str!──→ presets.rs
+  ├─ presets_lister() → Vec<PresetInfo {id, nom, description}>  (galerie)
+  │    parse NON-FATAL : JSON cassé → log::error + absent de la liste
+  ├─ charger(id) + instancier(app) → Scene (uuid régénérés par widget
+  │    + appliquer_canvas_obs)
+  ├─ scene_creer_depuis_preset(nom, preset_id) → scenes::creer_avec →
+  │    NOUVELLE scène (l'existante jamais touchée)
+  └─ scene_initialiser_preset(preset_id) → ONBOARDING : si la scène courante
+       est VIERGE (garde scene_vierge — le « Défaut » auto-créé au 1er boot),
+       remplace son contenu + renomme l'entrée d'index ; SINON crée une
+       NOUVELLE scène (rien n'est jamais écrasé)
+```
+
+Commandes Tauri (lib.rs) : `presets_lister`, `scene_creer_depuis_preset`,
+`scene_initialiser_preset`, `onboarding_etat`, `onboarding_marquer_fait`.
+
+### Onboarding (1er lancement)
+
+- Flag `%APPDATA%\com.streamos.v0\onboarding.json` `{ "fait": true }`
+  (pattern raccourcis.json — `lire_onboarding_fait` / `marquer_onboarding_fait`
+  dans config.rs). Sémantique « sûr » : erreur de lecture = fait (on ne
+  ré-affiche pas la modale à chaque boot si le fichier est illisible).
+- `App.svelte` onMount (step 5b, APRÈS loadScene/loadScenesIndex/
+  loadCurrentScene) : `onboarding_etat()` false → `chargerPresets()` +
+  `presetsModalOpen.set("onboarding")`. Non-bloquant (try/catch).
+- Choix preset → `initialiserSceneDepuisPreset` (store) : invoke +
+  rechargement complet (index + courante + scène) + `sceneSyncCaptures`
+  (caméra — même chaîne que openScene) + onboarding marqué fait.
+- Fermer sans choisir (✕ / Escape / overlay / « Partir d'une page vierge »)
+  → onboarding marqué fait, scène « Défaut » vide conservée.
+
+### UI
+
+- `PresetsModal.svelte` (montée dans App.svelte, pattern CadresModal) :
+  mode porté par le store `presetsModalOpen` (`"creation" | "onboarding"`,
+  ui.ts). Cards = icône SVG + nom + description (PAS de preview image en v1).
+  - mode creation : champ nom (vide → nom du preset, ou « Scène N » pour la
+    vierge) + card « Page vierge » (comportement historique `createScene`)
+    en première position + cards presets.
+  - mode onboarding : cards presets + footer « Partir d'une page vierge ».
+- SceneBar bouton « + Scène » : ouvre la modale (`presetsModalOpen.set
+  ("creation")`) — plus de création directe dans `onNouvelle`.
+
+### Contrats
+
+- ⚠️ `scene_initialiser_preset` (onboarding) ne remplace la scène courante
+  QUE si elle est **vierge** (garde `scene_vierge` : 0 widget, pas de fond,
+  cadre, titre ni morph — test `scene_vierge_detecte_contenu`). Un
+  utilisateur EXISTANT (onboarding.json absent à la mise à jour → la modale
+  s'affiche une fois) qui clique un preset obtient une NOUVELLE scène, son
+  travail n'est JAMAIS touché. Pour toute création utilisateur :
+  TOUJOURS `scene_creer_depuis_preset` (nouvelle scène).
+- Widget caméra dans les presets : `obsSource: "SOS-Caméra"` (constante
+  singleton), 1 max par preset, z=5000 (plage réservée). La source est créée
+  par `ensure_camera` au `scene_sync_captures` (boot/openScene/connexion OBS)
+  — le store presets appelle sceneSyncCaptures après application.
+- Ids des widgets régénérés à chaque instanciation : 2 scènes issues du
+  même preset ne partagent jamais leurs ids (propre pour duplication etc.).
+- `appliquer_canvas_obs` est `pub(crate)` (utilisée par scenes.rs et
+  presets.rs).
 
 ## Import média — MKV remuxé en MP4 via sidecar ffmpeg (2026-09-14)
 
@@ -317,6 +468,67 @@ chevauchant le rect caméra clippés via clipPath SVG evenodd (#sos-cam-clip).
 3. ❌ `SetInputSettings` au boot (sync_scene_captures) — restart du capteur dshow à chaque ouverture de scène.
 4. ❌ Exclure le widget caméra du cadre SVG ou du trou `peindreFond` — il suit la règle figée des cadres.
 5. ❌ Créer un second input si "SOS-Caméra" existe déjà — CreateSceneItem / SetInputSettings sur l'existant.
+
+## Fond de scène = capture OBS (app/jeu) — SOS-Fond-* (2026-09-21)
+
+> Le fond de l'application peut être une CAPTURE OBS (fenêtre ou jeu) plein
+> canvas au lieu d'un média — « comme un widget trou, mais pour le fond ».
+
+### Mécanisme
+
+```
+CarteEdition (fond) → ObsSourceDialog mode "fond" (fenêtre/jeu seulement)
+  → lierFondCapture(kind, target) (scene.ts)
+      → obsCreateTrouFromPc("SOS-Fond-<sceneId8>", kind, target, 0,0,canvasW,canvasH)
+        (create_trou_from_pc REUTILISÉ tel quel : CreateInput/reuse + transform + reorder)
+  → scene.bgObsSource = <nom> + commitScene
+        → obsSyncTrous : item plein canvas (fit "etirer")
+OBS pile (bas → haut) : SOS-Fond-* < SOS-Trou-* < SOS-Caméra-Fond < SOS-Caméra < SOS-Diffusion
+diffusion.html : renderBg — bgObsSource PRIORITAIRE sur bgMedia → même chemin
+  que « pas de fond » (page transparente → la capture apparaît)
+```
+
+- La page :4321 est transparente (`html, body { background: transparent }`) —
+  le canvas `#bg-canvas` est la seule couche opaque. Ne pas peindre = voir la
+  capture en bas de pile. `peindreFond` n'a PAS besoin de changement (early
+  return via `!bgState.mediaEl`).
+- **Résolution adaptative + skip-frame (perf, 2026-09-22)** : le backing
+  store de `#bg-canvas` suit la taille réelle de la Browser Source
+  (`window.innerWidth/Height`, plafonné à 1×) — `bgScaleX/Y` projettent les
+  coords scène via `setTransform` dans `peindreFond` (tous les calculs restent
+  en pixels scène : fit, offsets, trous, clip-paths). La boucle rAF ne
+  repeint que si `mediaEl.currentTime` a changé (pause/stall = zéro coût ;
+  les changements de paramètres repeignent via le chemin snapshot).
+- **Champ scène `bgObsSource`** (scene.rs + tauri.ts, serde default —
+  rétro-compat) : présence = fond capture, PRIORITAIRE sur bgMedia (le média
+  reste stocké, non peint ; « Retirer la capture » le restaure).
+- **Source PAR SCÈNE** `SOS-Fond-<sceneId8>` (pas singleton — 2 scènes = 2
+  fenêtres capturées différentes). `sync_scene_captures` (signature `&Scene`)
+  : item == scene.bgObsSource → enable + transform plein canvas
+  (0,0,canvasW,canvasH, STRETCH, alignment 5) ; les SOS-Fond-* des autres
+  scènes → SetSceneItemEnabled false (orphan hiding).
+- **Suppression** : `retirerFondCapture` → RemoveInput (pattern widget trou —
+  window/game n'ont pas de conflit d'accès exclusif). La caméra n'est PAS
+  proposée en mode fond (conflit dshow avec un éventuel widget caméra).
+- **Dashboard** : `Canvas.svelte` — `hasFond` inclut bgObsSource, pastille
+  `.lecture-obs-fond` « Capture app/jeu en fond — rendue par OBS » (recette
+  .msg-pill), morphable fond désactivé (rien à morpher).
+- `commitScene` (scene.ts) : l'item fond plein canvas est poussé dans
+  obsSyncTrous (x=0, y=0, fit "etirer" — sync_trous travaille en alignment
+  centre, cx = canvasW/2 → couvre exactement le canvas).
+
+### Fichiers
+
+| Fichier | Rôle |
+|---|---|
+| `src-tauri/src/scene.rs` | Champ `bgObsSource: Option<String>` |
+| `src-tauri/src/obs_trou.rs` | `reorder_sos_sources` (SOS-Fond-* bottom) + `sync_scene_captures` (&Scene, boucle SOS-Fond-*) |
+| `src-tauri/src/lib.rs` | `scene_sync_captures` clone la scène complète |
+| `src/lib/stores/scene.ts` | `lierFondCapture` / `retirerFondCapture` + item fond dans commitScene |
+| `src/lib/components/ObsSourceDialog.svelte` | Prop `mode: "widget" \| "fond"` (état interne renommé `etape`) |
+| `src/lib/components/CarteEdition.svelte` | Fond : boutons « Mettre une app/jeu en fond » / Changer / Retirer |
+| `src/lib/components/Canvas.svelte` | `bgObsSource` derived + pastille + gate morphable |
+| `src-tauri/resources/diffusion.html` | `renderBg` : `!rel \|\| scene.bgObsSource` → chemin transparent |
 
 ## Alertes Twitch — follow/raid/sub/resub/subgift/bits (2026-09-12)
 
@@ -1040,6 +1252,15 @@ Dashboard (WidgetSpeedrun.svelte)
   └─ Contrôles manuels → speedrun_action_manuelle("start"|"split"|"skip"|"undo"|"reset"|"pause")
 ```
 
+**Invoker Boa pré-compilé (perf, 2026-09-22)** : `call_method` n'interpole
+plus les JSON dans un wrapper JS re-`ctx.eval`-ué à chaque appel (2-6
+parse+compile/tick à 15Hz). `globalThis.__asl_invoke(name, derefOn,
+timerJson, oldJson, currentJson, procJson|null, settingsJson)` est installé
+UNE FOIS dans `ScriptContext::new()` et appelé via `JsObject::call` avec les
+JSON en vraies chaînes JS (plus d'échappement de quotes — args natifs, pas
+du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
+(mutés en place) inchangés.
+
 ### Dépendances
 
 - `boa_engine = "0.20"` — moteur JS pur Rust (remplace Roslyn C#). ~5MB.
@@ -1327,6 +1548,12 @@ init/appliquer/masquer), section accordéon « Raccourcis » dans Toolbar
   `--message-ok-color` quand actif) + `.output-btn.actif` (bordure/texte
   `--accent-ui`, recette `.action.small.actif`). `disabled` si OBS non
   connecté ou toggle en vol (`outputBusy` — chaque toggle = 1 connexion).
+- Topbar (App.svelte) : `.output-buttons` (2 boutons texte+icône ▶/● → ■,
+  proéminents, avant `.ctrl-buttons`). Vert `--message-ok-color` au repos,
+  rouge `--message-error-color` + glow quand `.actif` ; `--btn-tint` local
+  (pattern `.speedrun-start`). Busy PAR bouton (`streamBusy`/`recordBusy`),
+  `disabled` + grisé neutre quand OBS non connecté. Aucun polling : état =
+  stores `obsStreaming`/`obsRecording`.
 - Barre raccourcis : icônes `data-id="obs-stream"` / `data-plat="stream"` et
   `data-id="obs-record"` / `data-plat="record"` — la pastille `.dot` existante
   suffit, `setConnexions` itère tous les `[data-plat]` (zéro JS ajouté).
@@ -1379,6 +1606,54 @@ Init dans `lib.rs` setup : `TelemetrieState::new` + `demarrer` **avant** les
 auto-resume (pour capter leurs connexions) — non-fatal si le fichier est
 inaccessible. `chat:message`/`viewers:update`/etc. continuent d'aller au
 frontend et à :4321 exactement comme avant — le tap est un abonné de plus.
+
+## Diagnostic consommation — modale « Diagnostic » (2026-09-22)
+
+> Module `conso.rs` : échantillonneur **1 Hz** de la consommation réelle
+> (crash thermique 2026-09-21 — rend mesurable « qui consomme quoi »).
+> ⚠️ **Le module s'appelle `conso`, pas `diagnostic`** : un module racine
+> nommé `diagnostic` masque le namespace built-in rustc `#[diagnostic::*]`
+> que la macro `tauri::command` génère → E0433 sur TOUTES les commandes.
+
+### Ce qui est mesuré (Windows, échec = 0, jamais de crash)
+
+- **Processus** (snapshot ToolHelp32) : StreamOS, WebView2 dashboard
+  (enfants `msedgewebview2` agrégés), OBS, jeu (nom suivi via les events
+  speedrun `connected`/`disconnected` du tap `chat_tx`), Système (total
+  `GetSystemTimes` + `GlobalMemoryStatusEx`). CPU % du total + RAM Mo.
+- **Sous-systèmes** (snapshot threads) : CPU % **d'un cœur** agrégé par
+  label. Les threads s'enregistrent au spawn via
+  `crate::conso::nommer_thread("Label")` (registre TID→label — pas de
+  `SetThreadDescription`). Non enregistrés → bucket
+  « App + runtime (chat, WS, serveur) ». Threads nommés actuels :
+  Splitter (moteur ASL), Input viewer (manette/clavier/souris),
+  Télémétrie (écriture).
+- **GPU par processus** : compteurs PDH `\GPU Engine(*)\Utilization
+  Percentage` (PdhAddEnglishCounterW — vendor-agnostic Intel/AMD/NVIDIA/
+  ARM, WDDM 2.x). Instance `pid_<PID>_...` → somme des moteurs par PID.
+  Requête échouée (VM/vieux Windows) → `gpu_pct: null` → « N/A » UI.
+- **Compteurs d'activité** : tap passif `chat_tx` (même pattern télémétrie)
+  — `chat` msgs/s, `speedrun-etat`/s, `input-viewer-etat`/s.
+
+### Contrats
+
+- **Non énergivore** : 1 snapshot processus + 1 snapshot threads + 1
+  collecte PDH par seconde. Historique roulant **300 pts en mémoire**
+  (`TAILLE_HISTORIQUE`), jamais sur disque.
+- **Commande `conso_etat()` → `ConsoEtat { nb_coeurs, historique }`** :
+  le frontend la pole **uniquement** quand la modale est ouverte (store
+  `conso.ts` : `demarrerPollingConso`/`arreterPollingConso`, 1 Hz).
+- **Init** : `conso::demarrer(chat_tx.clone())` dans `lib.rs` setup
+  (après la télémétrie, avant les auto-resume).
+
+### Fichiers
+
+| Fichier | Rôle |
+|---|---|
+| `src-tauri/src/conso.rs` | Échantillonneur 1 Hz, registre threads, PDH GPU, commande `conso_etat`, tests du tap |
+| `src/lib/stores/conso.ts` | Store `consoEtat` + polling 1 Hz borné à la modale |
+| `src/lib/components/ConsoModal.svelte` | Modale : lignes nom + % + RAM/GPU + sparkline SVG (survol = point précis « il y a N s ») — variables thème uniquement |
+| `src/lib/stores/ui.ts` | Flag `consoModalOpen` ; lanceur Toolbar « Diagnostic » ; montage `App.svelte` |
 
 ## Grille magnétique + guides symétriques + duplication miroir (2026-09-19)
 

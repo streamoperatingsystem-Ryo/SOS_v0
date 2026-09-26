@@ -149,6 +149,10 @@ impl AslEngine {
         let (tx, rx) = mpsc::channel::<EngineCommand>();
 
         let handle = thread::spawn(move || {
+            // Visible dans la modale Diagnostic (CPU % d'un cœur — cf.
+            // crash thermique 2026-09-21 : c'est CE thread qui grillait le PC
+            // à 66Hz). Registre TID→label, aucun coût.
+            crate::conso::nommer_thread("Splitter (moteur ASL)");
             engine_thread_main(rx, callback);
         });
 
@@ -244,8 +248,11 @@ struct EngineInner {
     init_completed: bool,
     running: bool,
     script_ctx: ScriptContext,
-    /// Compteur de ticks d'attente d'attach (pour throttle du log "en attente").
-    /// Remis à 0 à chaque attach réussi. Log tous les ~15 ticks (~1s à 15Hz).
+    /// Compteur de ticks d'attente d'attach. Double usage : throttle du log
+    /// "en attente" ET throttle du scan de processus (1 scan/s — le scan est
+    /// un CreateToolhelp32Snapshot complet, coûteux en kernel, et il y a un
+    /// snapshot PAR nom de state() : le script MGS en a 9). Remis à 0 à chaque
+    /// attach réussi. Période ~15 ticks (~1s à 15Hz).
     ticks_attente_attach: u32,
 }
 
@@ -257,7 +264,13 @@ impl EngineInner {
             settings: AslSettings::default(),
             process: None,
             watchers: MemoryWatcherList::new(),
-            refresh_rate: 1000.0 / 15.0,
+            // ⚠️ En HERTZ (le thread moteur dort 1000/refresh_rate ms).
+            // Bug 2026-09-21 (crash thermique PC) : la valeur était 1000.0/15.0
+            // (= 66,67 : une période en ms) lue comme une fréquence → sleep
+            // 1000/66,67 = 15ms → ~66 Hz réels au lieu de 15 (4,4× trop rapide
+            // : evals Boa + events Time + maj DOM bombardées à 66Hz, un cœur
+            // CPU à 100%). Ne JAMAIS stocker une période ici.
+            refresh_rate: 15.0,
             init_completed: false,
             running: false,
             script_ctx: ScriptContext::new(),
@@ -372,6 +385,9 @@ impl EngineInner {
         self.init_completed = false;
         self.process = None;
         self.running = true;
+        // Compteur de scan à 0 → le premier tick scanne immédiatement (si le
+        // jeu tourne déjà, l'attach est instantané au démarrage du splitter).
+        self.ticks_attente_attach = 0;
         log::info!("[ASL] Moteur démarré ({} splits)", total_splits);
     }
 
@@ -393,44 +409,54 @@ impl EngineInner {
 
         // 1. Connexion au processus
         if self.process.is_none() {
-            let process_names: Vec<String> = script.states.keys().cloned().collect();
-            for name in &process_names {
-                if let Some(proc) = Process::find_by_name(name) {
-                    log::info!(
-                        "[ASL] Connecté au processus '{}' (PID {})",
-                        proc.name,
-                        proc.id
-                    );
-                    // Partager le Process via Rc entre EngineInner (is_alive,
-                    // serialize_process, watchers.update_all) et le pont mémoire
-                    // (lectures JS via __rust_deref). E8 Bug A : avant ce fix,
-                    // le Process était move-d dans le pont → self.process restait
-                    // None → init/update/start n'étaient jamais appelés.
-                    let proc = Rc::new(proc);
-                    let pid = proc.id;
-                    let proc_name = proc.name.clone();
-                    self.process = Some(Rc::clone(&proc));
-                    // Construire les watchers mémoire depuis les state() du script
-                    // pour le processus connecté (première state def correspondante).
-                    self.construire_watchers(name, &script);
-                    // Connecter le processus au pont mémoire (thread_local) pour
-                    // que les callbacks natifs __rust_deref puissent lire la mémoire.
-                    pont_memoire::connecter_lecteur(proc as Rc<dyn crate::speedrun::memory::LecteurMemoire>);
-                    self.init_completed = false;
-                    self.script_ctx.set_pid(Some(pid));
-                    self.ticks_attente_attach = 0;
-                    return Some(SpeedrunEvent::Connected {
-                        process: proc_name,
-                        pid,
-                    });
-                }
-            }
-            // E8 Bug A — log throttle : aucun process trouvé ce tick. On log
-            // tous les ~15 ticks (~1s à 15Hz) pour ne pas spammer. Avant ce
-            // fix, le matching échouait silencieusement car find_by_name
-            // comparait "mgsi.exe" (Windows) == "mgsi" (ASL) → toujours false.
+            // Throttle du scan (fix 2026-09-21, crash thermique PC) :
+            // find_by_name fait un CreateToolhelp32Snapshot COMPLET (énumère
+            // tous les processus du système) et on en fait un PAR nom de
+            // state() — le script MGS en a 9 → 9 snapshots système par tick.
+            // À 15Hz ça restait 135 snapshots/s pour rien ; 1 scan/s suffit
+            // largement (le jeu met toujours >1s à démarrer après activation
+            // du splitter). ticks_attente_attach démarre à 0 → le PREMIER
+            // tick scanne immédiatement (pas de latence d'attach à l'activation
+            // ni au relancement du jeu après fermeture).
+            let scanner_ce_tick = self.ticks_attente_attach % 15 == 0;
             self.ticks_attente_attach = self.ticks_attente_attach.wrapping_add(1);
-            if self.ticks_attente_attach % 15 == 0 {
+            if scanner_ce_tick {
+                let process_names: Vec<String> = script.states.keys().cloned().collect();
+                for name in &process_names {
+                    if let Some(proc) = Process::find_by_name(name) {
+                        log::info!(
+                            "[ASL] Connecté au processus '{}' (PID {})",
+                            proc.name,
+                            proc.id
+                        );
+                        // Partager le Process via Rc entre EngineInner (is_alive,
+                        // serialize_process, watchers.update_all) et le pont mémoire
+                        // (lectures JS via __rust_deref). E8 Bug A : avant ce fix,
+                        // le Process était move-d dans le pont → self.process restait
+                        // None → init/update/start n'étaient jamais appelés.
+                        let proc = Rc::new(proc);
+                        let pid = proc.id;
+                        let proc_name = proc.name.clone();
+                        self.process = Some(Rc::clone(&proc));
+                        // Construire les watchers mémoire depuis les state() du script
+                        // pour le processus connecté (première state def correspondante).
+                        self.construire_watchers(name, &script);
+                        // Connecter le processus au pont mémoire (thread_local) pour
+                        // que les callbacks natifs __rust_deref puissent lire la mémoire.
+                        pont_memoire::connecter_lecteur(proc as Rc<dyn crate::speedrun::memory::LecteurMemoire>);
+                        self.init_completed = false;
+                        self.script_ctx.set_pid(Some(pid));
+                        self.ticks_attente_attach = 0;
+                        return Some(SpeedrunEvent::Connected {
+                            process: proc_name,
+                            pid,
+                        });
+                    }
+                }
+                // E8 Bug A — log throttle : aucun process trouvé ce scan. On
+                // log à chaque scan (~1s) pour ne pas spammer. Avant ce fix,
+                // le matching échouait silencieusement car find_by_name
+                // comparait "mgsi.exe" (Windows) == "mgsi" (ASL) → toujours false.
                 log::debug!(
                     "[ASL] En attente du processus (scan: {})",
                     process_names.join(", ")

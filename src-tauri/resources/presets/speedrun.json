@@ -1,0 +1,56 @@
+{
+  "id": "speedrun",
+  "nom": "Speedrun",
+  "description": "Splitter à gauche, chat à droite et clavier en bas — pour les runs chronométrés.",
+  "scene": {
+    "widgets": [
+      {
+        "id": "preset-speedrun-splitter",
+        "type": "speedrun",
+        "x": 64,
+        "y": 80,
+        "largeur": 320,
+        "hauteur": 560,
+        "z": 0,
+        "speedrunSettings": { "start": true, "split": true, "reset": true },
+        "srPolice": "Rajdhani",
+        "srTaillePolice": 27
+      },
+      {
+        "id": "preset-speedrun-chat",
+        "type": "chat",
+        "x": 1536,
+        "y": 80,
+        "largeur": 320,
+        "hauteur": 560,
+        "z": 1,
+        "chatFiltre": "unifie",
+        "taillePolice": 16
+      },
+      {
+        "id": "preset-speedrun-input",
+        "type": "input-viewer",
+        "x": 700,
+        "y": 830,
+        "largeur": 520,
+        "hauteur": 220,
+        "z": 2,
+        "inputMode": "clavier",
+        "inputLayout": "azerty",
+        "inputSkin": "xbox",
+        "inputCouleur": "#8b5cf6"
+      }
+    ],
+    "canvasW": 1920,
+    "canvasH": 1080,
+    "cadreWidget": {
+      "style": "thin-line",
+      "variante": "graphite",
+      "strokeWidth": 4,
+      "couleur": "#2d2d2d",
+      "couleurFin": "#4a4a4a",
+      "gradientAngle": 135,
+      "actif": true
+    }
+  }
+}

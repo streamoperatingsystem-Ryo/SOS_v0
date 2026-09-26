@@ -717,6 +717,95 @@
           0 0 0.4em var(--sr-grad-from, #e0e0e0),
           0 1px 2px #000;
       }
+      /* ===== Widget objectif (goal) =====
+         Compteur live actuel/cible + barre de progression. cqw = container
+         query units (container-type sur .widget.goal — même convention que
+         .inputviewer). Accent = gradient du cadre SVG (--sr-grad-from/to),
+         comme le speedrun. La célébration est contenue au widget (voile
+         interne + pulse ~6s sur frame goal-atteint) — elle ne touche PAS la
+         file d'alertes globale. */
+      .widget.goal {
+        container-type: inline-size;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 4cqw;
+        padding: 6cqw 8cqw;
+        box-sizing: border-box;
+        color: var(--texte);
+        font-family: "Segoe UI", system-ui, sans-serif;
+      }
+      .widget.goal > *:not(.media-fond):not(.cadre-overlay) {
+        position: relative;
+        z-index: 1;
+      }
+      .goal-entete {
+        display: flex;
+        align-items: center;
+        gap: 2cqw;
+        font-size: 7cqw;
+        color: var(--gris);
+        text-transform: uppercase;
+        letter-spacing: 0.06em;
+      }
+      .goal-entete .logo { width: 6cqw; height: 6cqw; }
+      .goal-entete .plat-badge { font-size: 6.5cqw; }
+      .goal-chiffres {
+        font-size: 14cqw;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        text-shadow: 0 1px 2px #000;
+      }
+      .goal-chiffres .goal-sep,
+      .goal-chiffres .goal-cible {
+        color: var(--gris);
+        font-weight: 500;
+      }
+      .goal-bar {
+        width: 100%;
+        height: 3cqw;
+        min-height: 4px;
+        border-radius: 999px;
+        background: rgba(224, 224, 224, 0.18);
+        overflow: hidden;
+      }
+      .goal-fill {
+        height: 100%;
+        width: 0%;
+        border-radius: 999px;
+        background: linear-gradient(90deg,
+          var(--sr-grad-from, #e0e0e0), var(--sr-grad-to, #9a9a9a));
+        transition: width 0.5s ease;
+      }
+      /* Compteur ≥ cible (état persistant) : liseré lumineux sur la barre —
+         distinct de la célébration one-shot ci-dessous. */
+      .widget.goal.goal-plein .goal-fill {
+        box-shadow: 0 0 1.5cqw var(--sr-grad-from, #e0e0e0);
+      }
+      .goal-celebration {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9cqw;
+        font-weight: 700;
+        color: var(--sr-grad-from, #fff);
+        background: rgba(0, 0, 0, 0.55);
+        opacity: 0;
+        pointer-events: none;
+        z-index: 2;
+        transition: opacity 250ms ease;
+        text-shadow: 0 0 1cqw var(--sr-grad-from, #fff), 0 1px 2px #000;
+      }
+      .goal-celebration.visible { opacity: 1; }
+      .widget.goal.goal-fete { animation: goalGlow 600ms ease-in-out 5; }
+      @keyframes goalGlow {
+        0%, 100% { filter: none; }
+        50% { filter: brightness(1.35) drop-shadow(0 0 2cqw var(--sr-grad-from, #fff)); }
+      }
       .iv-section {
         display: none;
         flex: 1;
@@ -1562,14 +1651,32 @@
       // Timer du rendu différé (au milieu du fondu, quand l'écran est noir).
       let fonduTimer = null;
 
+      // Échelle backing→scène du canvas de fond (résolution adaptative).
+      // Tout le dessin de peindreFond se fait en coords SCÈNE ; le transform
+      // global bgCtx les projette dans le backing store réduit.
+      let bgScaleX = 1;
+      let bgScaleY = 1;
+
       function applyCanvasDims(scene) {
         const w = (scene && scene.canvasW) || 1920;
         const h = (scene && scene.canvasH) || 1080;
         rootStyle.setProperty("--canvas-w", w + "px");
         rootStyle.setProperty("--canvas-h", h + "px");
-        // Canvas physique = résolution scène (pas de scale CSS).
-        if (bgCanvas.width !== w) bgCanvas.width = w;
-        if (bgCanvas.height !== h) bgCanvas.height = h;
+        // Résolution adaptative : le backing store suit la taille RÉELLE de la
+        // Browser Source (window.innerWidth/Height). Source plus petite que le
+        // canvas → drawImage travaille sur d'autant moins de pixels. La taille
+        // CSS reste la résolution scène (le crop/rendu visible est identique,
+        // juste moins dense — exactement ce qu'affiche OBS).
+        var rw = window.innerWidth || w;
+        var rh = window.innerHeight || h;
+        var s = Math.min(1, rw / w, rh / h);
+        if (!(s > 0)) s = 1;
+        const bw = Math.max(1, Math.round(w * s));
+        const bh = Math.max(1, Math.round(h * s));
+        if (bgCanvas.width !== bw) bgCanvas.width = bw;
+        if (bgCanvas.height !== bh) bgCanvas.height = bh;
+        bgScaleX = bw / w;
+        bgScaleY = bh / h;
       }
 
       const FIT_CSS = {
@@ -1670,6 +1777,67 @@
         return "";
       }
 
+      // ===== Widgets objectif (goal) =====
+      // Dernières métriques communauté par plateforme (frames "communaute" de
+      // viewers.rs — déjà dédupliquées côté Rust). viewers → barre existante.
+      let communauteParPlateforme = {};
+      const GOAL_MET_LABELS = {
+        followers: "Followers", subs: "Subs", sub_points: "Points de subs",
+        abonnes: "Abonnés", viewers: "Viewers"
+      };
+
+      // Valeur live d'une métrique pour une plateforme. undefined = jamais
+      // mesurée / plateforme hors-ligne → affichage « N/A » (jamais de
+      // valeur fabriquée).
+      function goalValeur(plat, met) {
+        if (met === "viewers") return viewersParPlateforme[plat];
+        var c = communauteParPlateforme[plat];
+        return c ? c[met] : undefined;
+      }
+
+      // Maj DOM d'un widget goal : chiffres + barre + état « plein ».
+      // Appelée sur frames communaute/viewers ET à la création/update.
+      function majGoalValeur(entry, w) {
+        if (!entry.goalActuelEl) return;
+        var actuel = goalValeur(w.goalPlateforme || "twitch", w.goalMetrique || "followers");
+        var cible = w.goalCible || 0;
+        entry.goalActuelEl.textContent =
+          typeof actuel === "number" ? actuel.toLocaleString("fr-FR") : "N/A";
+        entry.goalCibleEl.textContent = cible ? cible.toLocaleString("fr-FR") : "—";
+        var pct = cible && typeof actuel === "number"
+          ? Math.min(100, Math.round((actuel / cible) * 100)) : 0;
+        entry.goalFillEl.style.width = pct + "%";
+        entry.el.classList.toggle("goal-plein", cible > 0 && pct >= 100);
+      }
+
+      // Re-maj tous les widgets goal d'une plateforme (après frame reçue).
+      function majGoalWidgets(plat) {
+        if (!currentScene || !currentScene.widgets) return;
+        for (var i = 0; i < currentScene.widgets.length; i++) {
+          var w = currentScene.widgets[i];
+          if ((w.type || "media") !== "goal") continue;
+          if ((w.goalPlateforme || "twitch") !== plat) continue;
+          var entry = widgetMap.get(w.id);
+          if (entry) majGoalValeur(entry, w);
+        }
+      }
+
+      // Célébration one-shot sur frame "goal-atteint" (émise par viewers.rs
+      // au crossing ≥ cible, une fois puis réarmée sous la cible). Contenue
+      // dans le widget : voile + pulse ~6s, zéro interaction avec la file
+      // d'alertes globale.
+      function goalCelebrer(widgetId) {
+        var entry = widgetMap.get(widgetId);
+        if (!entry || entry.kind !== "goal" || !entry.goalCelebEl) return;
+        entry.goalCelebEl.classList.add("visible");
+        entry.el.classList.add("goal-fete");
+        clearTimeout(entry.goalTimer);
+        entry.goalTimer = setTimeout(function () {
+          entry.goalCelebEl.classList.remove("visible");
+          entry.el.classList.remove("goal-fete");
+        }, 6000);
+      }
+
       // Badges emoji — style ASH (ancienne app).
       // Mod = 🗡️, VIP = 💎, Sub = ⭐, Broadcaster = 👑.
       var BADGES_EMOJI = {
@@ -1754,46 +1922,76 @@
         return html;
       }
 
+      // Construit le nœud DOM d'UN message (partagé par fillChatBody rebuild
+      // et appendChatMessage incrémental). borderImg/avatarRing inline — le
+      // CEF d'OBS ne recalcule pas border-image quand une var() change.
+      function creerNoeudChat(m, taillePolice, borderImg, avatarRing) {
+        var div = document.createElement("div");
+        div.className = "chat-msg";
+        div.style.borderImage = borderImg;
+        div.innerHTML = renderChatMsg(m, 0, taillePolice);
+        var av = div.querySelector(".avatar");
+        if (av) av.style.boxShadow = avatarRing;
+        return div;
+      }
+
       function fillChatBody(bodyEl, filtre, taillePolice, gradFrom, gradTo) {
         var msgs = filtre === "unifie"
           ? chatMessages
           : chatMessages.filter(function (m) { return m.plateforme === filtre; });
         bodyEl.style.fontSize = taillePolice + "px";
-        // Vider + reconstruire (simple, peu de messages).
+        // Rebuild complet (rare : création, changement filtre/taille/cadre).
         bodyEl.innerHTML = "";
-        // Couleurs du cadre SVG passées en inline sur chaque message — le CEF
-        // d'OBS ne recalcule pas border-image quand une var() change dynamiquement.
         var gf = gradFrom || "#e0e0e0";
         var gt = gradTo || "#9a9a9a";
         var borderImg = "linear-gradient(135deg, " + gf + ", " + gt + ") 1";
         var avatarRing = "0 0 0 1px " + gf + ", 0 0 6px rgba(255,255,255,0.25)";
         for (var i = 0; i < msgs.length; i++) {
-          var m = msgs[i];
-          var div = document.createElement("div");
-          div.className = "chat-msg";
-          div.style.borderImage = borderImg;
-          div.innerHTML = renderChatMsg(m, i, taillePolice);
-          // Avatar : anneau couleur cadre en inline (suit le border-radius).
-          var av = div.querySelector(".avatar");
-          if (av) av.style.boxShadow = avatarRing;
-          bodyEl.appendChild(div);
+          bodyEl.appendChild(creerNoeudChat(msgs[i], taillePolice, borderImg, avatarRing));
         }
-        // Auto-scroll en bas.
         bodyEl.scrollTop = bodyEl.scrollHeight;
       }
 
-      // Re-rend les widgets chat existants (appelé sur nouveau message).
-      function rerenderChatWidgets() {
-        if (!currentScene || !currentScene.widgets) {
-          return;
-        }
+      // Push incrémental d'UN message dans les widgets chat — O(1) par widget
+      // au lieu de reconstruire 200 messages (le spam de bots ne saccade
+      // plus). Le DOM suit exactement le buffer : les messages retirés du
+      // buffer (trim MAX_CHAT) retirent leurs noeuds correspondants dans
+      // chaque widget filtré.
+      function appendChatMessage(m) {
+        chatMessages.push(m);
+        var overflow = chatMessages.length - MAX_CHAT;
+        var retired = overflow > 0 ? chatMessages.splice(0, overflow) : null;
+        if (!currentScene || !currentScene.widgets) return;
         var chatGrad = gradientCadre(currentScene.cadreWidget);
+        var gf = chatGrad.from || "#e0e0e0";
+        var gt = chatGrad.to || "#9a9a9a";
+        var borderImg = "linear-gradient(135deg, " + gf + ", " + gt + ") 1";
+        var avatarRing = "0 0 0 1px " + gf + ", 0 0 6px rgba(255,255,255,0.25)";
         for (var i = 0; i < currentScene.widgets.length; i++) {
           var w = currentScene.widgets[i];
           if ((w.type || "media") !== "chat") continue;
           var entry = widgetMap.get(w.id);
-          if (entry && entry.chatBody) {
-            fillChatBody(entry.chatBody, w.chatFiltre || "unifie", w.taillePolice || 16, chatGrad.from, chatGrad.to);
+          if (!entry || !entry.chatBody) continue;
+          var filtre = w.chatFiltre || "unifie";
+          var taille = w.taillePolice || 16;
+          entry.chatBody.style.fontSize = taille + "px";
+          // Retirer les noeuds dont le message source a quitté le buffer.
+          if (retired) {
+            var aRetirer = 0;
+            for (var r = 0; r < retired.length; r++) {
+              if (filtre === "unifie" || retired[r].plateforme === filtre) {
+                aRetirer++;
+              }
+            }
+            while (aRetirer > 0 && entry.chatBody.firstElementChild) {
+              entry.chatBody.removeChild(entry.chatBody.firstElementChild);
+              aRetirer--;
+            }
+          }
+          // Append uniquement si le message passe le filtre du widget.
+          if (filtre === "unifie" || m.plateforme === filtre) {
+            entry.chatBody.appendChild(creerNoeudChat(m, taille, borderImg, avatarRing));
+            entry.chatBody.scrollTop = entry.chatBody.scrollHeight;
           }
         }
       }
@@ -2039,8 +2237,12 @@
       // Peint le fond sur #bg-canvas avec les trous (destination-out).
       // Appelée à chaque snapshot (image) ou via rAF (vidéo).
       function peindreFond(scene) {
-        const cw = bgCanvas.width;
-        const ch = bgCanvas.height;
+        // Coords LOGIQUES scène — le transform global projette dans le
+        // backing store adaptatif (applyCanvasDims). Tous les calculs
+        // (fit, offsets, trous, clip-paths) restent en pixels scène.
+        const cw = (scene && scene.canvasW) || 1920;
+        const ch = (scene && scene.canvasH) || 1080;
+        bgCtx.setTransform(bgScaleX, 0, 0, bgScaleY, 0, 0);
         bgCtx.clearRect(0, 0, cw, ch);
 
         if (!bgState.mediaEl) return;
@@ -2252,11 +2454,18 @@
       }
 
       // Boucle rAF pour le fond vidéo (sinon frame figée sans trou).
+      // Skip-frame : currentTime inchangé (pause, seek posé, buffer stall)
+      // → aucun repaint — la frame peinte est identique. Les changements de
+      // paramètres (zoom/rot/trous/morphs) repeignent via le chemin snapshot
+      // (renderBg/appliquerSnapshot → peindreFond), pas via cette boucle.
       let rafId = 0;
+      let bgDernierT = -1;
       function startBgLoop() {
         if (rafId) return;
         function tick() {
-          if (bgState.kind === "video" && bgState.mediaEl) {
+          var v = bgState.mediaEl;
+          if (bgState.kind === "video" && v && v.currentTime !== bgDernierT) {
+            bgDernierT = v.currentTime;
             peindreFond(currentScene);
           }
           rafId = requestAnimationFrame(tick);
@@ -2292,7 +2501,11 @@
       // mediaEl est display:none — le rendu visuel est sur #bg-canvas).
       function renderBg(scene) {
         const rel = scene.bgMedia || "";
-        if (!rel) {
+        // Fond capture OBS (bgObsSource) : PRIORITAIRE sur le média — même
+        // chemin que « pas de fond » (mediaEl retiré + canvas transparent) :
+        // la page étant transparente, la source SOS-Fond-* en bas de pile OBS
+        // apparaît plein canvas. Retirer la capture restaure le média stocké.
+        if (!rel || scene.bgObsSource) {
           if (bgState.mediaEl) {
             bgEl.removeChild(bgState.mediaEl);
             bgState.mediaEl = null;
@@ -2300,8 +2513,12 @@
             bgState.kind = "";
             bgState.mediaTime = 0;
           }
-          // Pas de fond → canvas transparent (OBS visible partout).
+          // Pas de fond (ou fond capture) → canvas transparent (OBS visible).
+          // Transform neutre : clearRect en pixels backing (le transform
+          // adaptatif posé par peindreFond persisterait sinon).
+          bgCtx.setTransform(1, 0, 0, 1, 0, 0);
           bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+          bgDernierT = -1;
           stopBgLoop();
           return;
         }
@@ -2316,6 +2533,7 @@
           bgState.mediaKey = key;
           bgState.kind = kind;
           bgState.mediaTime = scene.bgTime || 0;
+          bgDernierT = -1; // nouveau média → forcer le 1er repaint du tick.
           applyBgState(bgState, scene);
           // Image : peindre quand loaded. Vidéo : rAF loop.
           if (kind === "video") {
@@ -3062,7 +3280,16 @@
         } else if (entry.srActif) {
           html += '<span class="sr-status attente" title="en attente…">○</span>';
         }
-        header.innerHTML = html;
+        // Fix 2026-09-21 (crash thermique PC) : majSpeedrunEtat s'exécute à
+        // CHAQUE event WS speedrun (Time à 15Hz par tick quand le timer
+        // court) et srMajHeader re-settait innerHTML inconditionnellement →
+        // re-parse HTML inutile en continu dans le CEF d'OBS. L'entry (et
+        // son élément .sr-header) n'est recréée qu'au rendu de scène : si le
+        // HTML n'a pas changé, on ne touche pas au DOM.
+        if (entry.srHeaderHtml !== html) {
+          entry.srHeaderHtml = html;
+          header.innerHTML = html;
+        }
       }
 
       function majSpeedrunEtat(etat) {
@@ -3514,6 +3741,82 @@
               if (pendingBaseline) {
                 majSpeedrunEtat({ type: "baseline", splits: pendingBaseline });
               }
+            }
+            continue;
+          }
+
+          // ===== Widget objectif (goal) =====
+          // Compteur live + cible + barre de progression. Markup créé UNE
+          // FOIS ; les valeurs arrivent par frames WS communaute/viewers →
+          // majGoalValeur (textContent + width, zéro re-render). Célébration
+          // interne sur goal-atteint (goalCelebrer). Cadre/titre = infra
+          // partagée (applyCadreWidget/applyTitreWidget).
+          if (wtype === "goal") {
+            seen.add(w.id);
+            var gEntry = widgetMap.get(w.id);
+            if (gEntry && gEntry.kind !== "goal") {
+              gEntry.wrapEl.remove();
+              widgetMap.delete(w.id);
+              gEntry = null;
+            }
+            var gGrad = gradientCadre(scene.cadreWidget);
+            var gKey = (w.goalPlateforme || "twitch") + "|" + (w.goalMetrique || "followers");
+            if (gEntry) {
+              // UPDATE : style + z + cadre + entête si plat/métrique changé.
+              applyWidgetStyle(gEntry.el, w);
+              gEntry.el.style.setProperty("--sr-grad-from", gGrad.from);
+              gEntry.el.style.setProperty("--sr-grad-to", gGrad.to);
+              gEntry.wrapEl.style.zIndex = w.z;
+              if (gEntry.goalKey !== gKey) {
+                gEntry.goalKey = gKey;
+                gEntry.goalEnteteEl.innerHTML =
+                  logoPlateforme(w.goalPlateforme || "twitch") +
+                  '<span class="goal-met">' + (GOAL_MET_LABELS[w.goalMetrique || "followers"] || "Objectif") + '</span>';
+              }
+              majGoalValeur(gEntry, w);
+              // Média de fond (sous le contenu, recréé si changé).
+              syncMediaFond(gEntry, w);
+              applyCadreWidget(gEntry.el, gEntry, w, scene.cadreWidget);
+              applyTitreWidget(gEntry, w, scene.cadreWidget);
+            } else {
+              // CREATE : conteneur + entête (logo+métrique) + chiffres + barre.
+              var gWrap = document.createElement("div");
+              gWrap.className = "widget-wrap";
+              gWrap.style.zIndex = w.z;
+              var gEl = document.createElement("div");
+              gEl.className = "widget goal";
+              applyWidgetStyle(gEl, w);
+              gEl.style.setProperty("--sr-grad-from", gGrad.from);
+              gEl.style.setProperty("--sr-grad-to", gGrad.to);
+              gEl.innerHTML =
+                '<div class="goal-entete">' +
+                  logoPlateforme(w.goalPlateforme || "twitch") +
+                  '<span class="goal-met">' + (GOAL_MET_LABELS[w.goalMetrique || "followers"] || "Objectif") + '</span>' +
+                '</div>' +
+                '<div class="goal-chiffres"><span class="goal-actuel">N/A</span>' +
+                  '<span class="goal-sep">/</span><span class="goal-cible">—</span></div>' +
+                '<div class="goal-bar"><div class="goal-fill"></div></div>' +
+                '<div class="goal-celebration">🎉 Objectif atteint !</div>';
+              gWrap.appendChild(gEl);
+              stageEl.appendChild(gWrap);
+              var gNew = {
+                el: gEl, wrapEl: gWrap, mediaEl: null, mediaKey: "",
+                kind: "goal", mediaTime: 0,
+                goalKey: gKey,
+                goalEnteteEl: gEl.querySelector(".goal-entete"),
+                goalActuelEl: gEl.querySelector(".goal-actuel"),
+                goalCibleEl: gEl.querySelector(".goal-cible"),
+                goalFillEl: gEl.querySelector(".goal-fill"),
+                goalCelebEl: gEl.querySelector(".goal-celebration"),
+                goalTimer: null,
+                cadreOverlayEl: null, cadreKey: "", titreEl: null
+              };
+              widgetMap.set(w.id, gNew);
+              majGoalValeur(gNew, w);
+              // Média de fond (premier enfant, sous le contenu).
+              syncMediaFond(gNew, w);
+              applyCadreWidget(gEl, gNew, w, scene.cadreWidget);
+              applyTitreWidget(gNew, w, scene.cadreWidget);
             }
             continue;
           }
@@ -4510,17 +4813,25 @@
                 if (nouveauId !== null) currentSceneId = nouveauId;
               }
             } else if (msg.type === "chat" && msg.message) {
-              // Message chat IRC → push + trim + re-rendre les widgets chat.
-              chatMessages.push(msg.message);
-              if (chatMessages.length > MAX_CHAT) {
-                chatMessages = chatMessages.slice(chatMessages.length - MAX_CHAT);
-              }
-              rerenderChatWidgets();
+              // Message chat → append incrémental (O(1)/widget, trim DOM
+              // synchronisé avec le buffer — voir appendChatMessage).
+              appendChatMessage(msg.message);
             } else if (msg.type === "viewers") {
               // Count viewers d'une plateforme (déjà dédupliqué côté Rust) :
               // number = live, null = hors-ligne/déconnecté → maj des barres.
               viewersParPlateforme[msg.plateforme] = msg.count;
               rerenderViewersBars();
+              // Widgets goal métrique "viewers" de cette plateforme.
+              majGoalWidgets(msg.plateforme);
+            } else if (msg.type === "communaute") {
+              // Compteurs communauté (followers/subs/sub_points/abonnes) —
+              // déjà dédupliqués côté Rust. Maj des widgets goal concernés.
+              communauteParPlateforme[msg.plateforme] = msg;
+              majGoalWidgets(msg.plateforme);
+            } else if (msg.type === "goal-atteint") {
+              // Objectif franchi (viewers.rs — une fois par crossing ≥ cible,
+              // réarmé sous la cible). Célébration contenue dans le widget.
+              goalCelebrer(msg.widget_id);
             } else if (msg.type === "welcome-clip-play") {
               // Clip de bienvenue : afficher l'overlay autonome + jouer la vidéo.
               playWelcomeClip(msg);

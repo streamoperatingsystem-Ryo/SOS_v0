@@ -73,6 +73,10 @@ export const interactionModalOpen = writable(false);
 /// Seul l'onglet Twitch est fonctionnel ; les autres affichent "Bientôt disponible".
 export const moderationModalOpen = writable(false);
 
+/// Modale Diagnostic (consommation) : true = ouverte. Le polling 1 Hz de
+/// `conso_etat` ne tourne que pendant qu'elle est montée (ConsoModal).
+export const consoModalOpen = writable(false);
+
 /// Modale d'édition du titre d'un widget : null = fermée, sinon contient
 /// l'id du widget à éditer. Ouverte par double-clic sur le haut/bas d'un
 /// widget (Widget.svelte ondblclick).
@@ -88,3 +92,9 @@ export const titreFondModalOpen = writable(false);
 /// settings individuels (120+ pour MGS). Permet de cocher/décocher les splits
 /// comme dans LiveSplit, avec auto-mapping depuis les segments LSS.
 export const speedrunConfigModalOpen = writable(false);
+
+/// Modale galerie de presets de scènes : null = fermée, "creation" = choix
+/// d'un modèle au bouton « + Scène » (crée une NOUVELLE scène), "onboarding" =
+/// choix de la scène de départ au premier lancement (initialise la courante
+/// vide). Même pattern que cadreModalOpen (mode porté par la valeur).
+export const presetsModalOpen = writable<"creation" | "onboarding" | null>(null);

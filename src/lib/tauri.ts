@@ -3,7 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 
 export interface Widget {
   id: string;
-  type: "media" | "chat" | "camera" | "welcome-clip" | "input-viewer" | "speedrun";
+  type: "media" | "chat" | "camera" | "welcome-clip" | "input-viewer" | "speedrun" | "goal";
   x: number;
   y: number;
   largeur: number;
@@ -77,6 +77,15 @@ export interface Widget {
   /// Taille de police de base (px) pour les widgets type "speedrun". undefined = 16.
   /// Toutes les tailles internes du splitter sont en em → suit cette base.
   srTaillePolice?: number;
+  /// Plateforme suivie par un widget type "goal" :
+  /// "twitch" | "youtube" | "kick" | "tiktok". undefined = non configuré.
+  goalPlateforme?: GoalPlateforme;
+  /// Métrique suivie par un widget type "goal". Les métriques indisponibles
+  /// pour la plateforme choisie affichent « N/A » en diffusion.
+  goalMetrique?: GoalMetrique;
+  /// Valeur cible du widget type "goal". undefined = compteur seul
+  /// (pas de frame goal-atteint).
+  goalCible?: number;
   /// Chaîne de morphs (bulge/pinch) appliquée au média, dans l'ordre.
   /// undefined/vide = rendu natif (img/video), zéro coût GL.
   morphs?: MorphPoint[];
@@ -99,6 +108,62 @@ export interface Widget {
   titreSouligne?: boolean;
   /// Espacement des lettres en px (-2 à 20). Défaut 0.
   titreEspacement?: number;
+}
+
+/// Plateformes supportées par les widgets type "goal" (miroir Rust scene.rs).
+export type GoalPlateforme = "twitch" | "youtube" | "kick" | "tiktok";
+
+/// Métriques de goal — disponibilité réelle par plateforme (frames
+/// "communaute" / "viewers" de viewers.rs + tiktok_chat.rs) :
+///   twitch  = followers, subs, sub_points, viewers
+///   youtube = abonnes, viewers  (members = N/A, scope Device Flow absent)
+///   kick    = followers, viewers
+///   tiktok  = viewers uniquement
+/// Les métriques non listées pour une plateforme affichent « N/A ».
+export type GoalMetrique =
+  | "followers"
+  | "subs"
+  | "sub_points"
+  | "abonnes"
+  | "viewers";
+
+/// Métriques réellement mesurées par plateforme — la config n'en propose
+/// que celles-là (pas de valeur fabriquée).
+export const GOAL_METRIQUES: Record<GoalPlateforme, GoalMetrique[]> = {
+  twitch: ["followers", "subs", "sub_points", "viewers"],
+  youtube: ["abonnes", "viewers"],
+  kick: ["followers", "viewers"],
+  tiktok: ["viewers"],
+};
+
+/// Libellés FR des métriques (UI config + fallback de titre du widget).
+export const GOAL_METRIQUE_LABELS: Record<GoalMetrique, string> = {
+  followers: "Followers",
+  subs: "Subs",
+  sub_points: "Points de subs",
+  abonnes: "Abonnés",
+  viewers: "Viewers",
+};
+
+/// Suggestion de palier « prochain chiffre reconnaissable » — aligné sur
+/// l'algo officiel Twitch Creator Goals vérifié (11→20, 260→300) :
+/// <100 → +10, <1000 → +100, <10000 → +1000, sinon +10000.
+export function goalPalierSuivant(n: number): number {
+  const pas = n < 100 ? 10 : n < 1000 ? 100 : n < 10000 ? 1000 : 10000;
+  return (Math.floor(n / pas) + 1) * pas;
+}
+
+/// Suggestion contextuelle : palier générique, sauf le cas « Path to
+/// Affiliate » — twitch/followers sous 25 → 25 (palier officiel).
+export function goalSuggestion(
+  plateforme: GoalPlateforme,
+  metrique: GoalMetrique,
+  actuel: number,
+): number {
+  if (plateforme === "twitch" && metrique === "followers" && actuel < 25) {
+    return 25;
+  }
+  return goalPalierSuivant(actuel);
 }
 
 /// Mapping des touches manette pour un widget input-viewer.
@@ -240,6 +305,10 @@ export interface Scene {
   bgPixel?: number;
   bgPaused?: boolean;
   bgTime?: number;
+  /// Nom de la source OBS de capture du FOND ("SOS-Fond-<sceneId8>").
+  /// Présence = fond capture (prioritaire sur bgMedia — le média n'est pas
+  /// peint tant que la capture est active).
+  bgObsSource?: string;
   cadreWidget?: CadreConfig;
   cadreApp?: CadreConfig;
   /// Chaîne de morphs appliquée au FOND de scène (bulge/pinch), dans l'ordre.
@@ -273,6 +342,13 @@ export interface SceneIndex {
   /// Titre masqué dans la pastille de la barre « Vos scènes » (œil) —
   /// l'onglet devient orange. Absent des anciens index.json → false.
   nomMasque?: boolean;
+}
+
+/// Métadonnées d'un preset de scène embarqué (galerie — sans le contenu).
+export interface PresetInfo {
+  id: string;
+  nom: string;
+  description: string;
 }
 
 /// Un point de morphing (bulge/pinch radial) — coordonnées normalisées (0-1)
@@ -406,6 +482,48 @@ export interface PadConfig {
   plage_actuelle: number;
   /// Clé "NumpadX_plage" → config de la touche.
   touches: Record<string, ToucheConfig>;
+}
+
+// ===== Types Diagnostic conso (mirroir des structs Rust conso.rs) =====
+
+/// Un processus mesuré (section « PC » de la modale Diagnostic).
+export interface ConsoProcessus {
+  nom: string;
+  /// % du CPU total (tous cœurs confondus), 0-100.
+  cpu_pct: number;
+  /// Mémoire de travail, en Mo.
+  ram_mo: number;
+  /// % GPU (compteurs « GPU Engine » WDDM). null = non mesurable → « N/A ».
+  gpu_pct: number | null;
+}
+
+/// Un sous-système StreamOS (threads agrégés par label).
+export interface ConsoThread {
+  nom: string;
+  /// % D'UN cœur (un thread saturé = 100 %).
+  cpu_pct: number;
+}
+
+/// Compteurs d'activité sur la dernière seconde (tap passif chat_tx).
+export interface ConsoActivite {
+  chat_msgs: number;
+  speedrun_events: number;
+  input_viewer_pubs: number;
+}
+
+/// Un échantillon d'une seconde.
+export interface ConsoEchantillon {
+  /// Epoch millisecondes.
+  ts: number;
+  processus: ConsoProcessus[];
+  threads: ConsoThread[];
+  activite: ConsoActivite;
+}
+
+/// Réponse de `conso_etat` : historique roulant (≤300 pts, ~5 min à 1 Hz).
+export interface ConsoEtat {
+  nb_coeurs: number;
+  historique: ConsoEchantillon[];
 }
 
 export const tauri = {
@@ -592,6 +710,37 @@ export const tauri = {
   /// copie en <nouvel-id>.json, bascule. Retourne l'entrée ou null si annulé.
   async sceneImporter(): Promise<SceneIndex | null> {
     return invoke<SceneIndex | null>("scene_importer");
+  },
+
+  // ===== Presets de scènes embarqués =====
+
+  /// Liste les métadonnées des presets embarqués (galerie). Parse non-fatal
+  /// côté Rust : un JSON cassé est loggé + absent de la liste.
+  async presetsLister(): Promise<PresetInfo[]> {
+    return invoke<PresetInfo[]>("presets_lister");
+  },
+
+  /// Crée une NOUVELLE scène depuis un preset embarqué (l'existante jamais
+  /// touchée). Ids régénérés + canvas OBS appliqués côté Rust.
+  async sceneCreerDepuisPreset(nom: string, presetId: string): Promise<SceneIndex> {
+    return invoke<SceneIndex>("scene_creer_depuis_preset", { nom, presetId });
+  },
+
+  /// ONBOARDING : initialise la scène de départ (courante, vide au 1er boot)
+  /// depuis un preset — remplace son contenu + renomme. Contrat : uniquement
+  /// au premier lancement.
+  async sceneInitialiserPreset(presetId: string): Promise<SceneIndex> {
+    return invoke<SceneIndex>("scene_initialiser_preset", { presetId });
+  },
+
+  /// État de l'onboarding : true = déjà fait (ne pas montrer la galerie).
+  async onboardingEtat(): Promise<boolean> {
+    return invoke<boolean>("onboarding_etat");
+  },
+
+  /// Marque l'onboarding comme fait (choix preset OU page vierge).
+  async onboardingMarquerFait(): Promise<void> {
+    await invoke("onboarding_marquer_fait");
   },
 
   // ===== Sources OBS "trou" (Lot 2) =====
@@ -1428,6 +1577,14 @@ export const tauri = {
     cumulSecs: number
   ): Promise<void> {
     await invoke("speedrun_baseline_enregistrer", { cheminLss, index, cumulSecs });
+  },
+
+  // ===== Diagnostic consommation (modale Diagnostic — polling 1 Hz) =====
+
+  /// État courant du diagnostic : historique roulant (≤300 pts, ~5 min) +
+  /// nb cœurs. À poller UNIQUEMENT quand la modale Diagnostic est ouverte.
+  async consoEtat(): Promise<ConsoEtat> {
+    return invoke<ConsoEtat>("conso_etat");
   },
 };
 

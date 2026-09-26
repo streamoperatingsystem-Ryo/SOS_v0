@@ -139,6 +139,33 @@ export async function createSpeedrunWidget(): Promise<void> {
   await commitScene();
 }
 
+/// Ajoute un widget objectif (280×90, type goal). Compteur live + cible
+/// rendus dans diffusion.html via les frames WS "communaute"/"viewers" +
+/// célébration interne au widget sur "goal-atteint" (emit viewers.rs).
+/// Défaut : twitch/followers cible 10 — reconfiguré dans la carte d'édition
+/// (plateforme, métrique, cible, suggestion de palier sur la valeur live).
+/// Commit immédiat → save + snapshot WS.
+export async function createGoalWidget(): Promise<void> {
+  const current = get(sceneStore);
+  const z = current.widgets.filter((w) => w.type !== "camera").reduce((m, w) => Math.max(m, w.z), -1) + 1;
+  const w: Widget = {
+    id: crypto.randomUUID(),
+    type: "goal",
+    x: 100,
+    y: 100,
+    largeur: 280,
+    hauteur: 90,
+    z,
+    rotateX: 0,
+    rotateY: 0,
+    goalPlateforme: "twitch",
+    goalMetrique: "followers",
+    goalCible: 10,
+  };
+  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  await commitScene();
+}
+
 /// Ajoute un widget caméra (320×240, type camera, z=5000 plage réservée).
 /// SINGLETON : refuse si un widget caméra existe déjà. La caméra est rendue
 /// par OBS : source dshow_input "SOS-Caméra" sous SOS-Diffusion, calée sur
@@ -284,6 +311,21 @@ export async function setInputViewerConfig(
 export async function setSpeedrunConfig(
   id: string,
   patch: Partial<Pick<Widget, "speedrunCheminAsl" | "speedrunCheminLss" | "speedrunSettings">>
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, ...patch } : w)),
+  }));
+  await commitScene();
+}
+
+/// Change la config d'un widget goal (plateforme, métrique, cible).
+/// Merge partiel + commit → snapshot WS → la diffusion met à jour le rendu.
+/// Passer goalCible: undefined dans le patch ne supprime pas la clé (merge
+/// {...w, ...patch}) — utiliser la forme { goalCible: <nombre> }.
+export async function setGoalConfig(
+  id: string,
+  patch: Partial<Pick<Widget, "goalPlateforme" | "goalMetrique" | "goalCible">>
 ): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
@@ -470,21 +512,46 @@ export function setMediaTeinteLocal(id: string, v: number): void { setMediaEffet
 export function setMediaFlouLocal(id: string, v: number): void { setMediaEffetLocal(id, "mediaFlou", v, 0, 20); }
 export function setMediaPixelLocal(id: string, v: number): void { setMediaEffetLocal(id, "mediaPixel", v, 0, 50); }
 
-/// Reset média : zoom 1, rotation 0, offsets 0, effets 0. Maj locale + commit immédiat.
-export async function resetMedia(id: string): Promise<void> {
+/// Reset transformation média : zoom 1, rotation 0, offsets 0. Maj locale +
+/// commit. NE touche PAS les effets (onglet Effets, cf. resetMediaEffets) —
+/// l'ancien reset tout-en-un effaçait les effets depuis l'onglet
+/// Transformation sans prévenir.
+export async function resetMediaTransformation(id: string): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
     widgets: s.widgets.map((w) =>
-      w.id === id ? { ...w, mediaZoom: 1, mediaRot: 0, mediaOffsetX: 0, mediaOffsetY: 0, mediaMiroirH: false, mediaMiroirV: false, mediaLum: 0, mediaContraste: 0, mediaTeinte: 0, mediaFlou: 0, mediaPixel: 0 } : w
+      w.id === id ? { ...w, mediaZoom: 1, mediaRot: 0, mediaOffsetX: 0, mediaOffsetY: 0 } : w
     ),
   }));
   await commitScene();
 }
 
+/// Reset effets média : luminosité/contraste/teinte/flou/pixel 0 + miroir
+/// désactivé (contenu de l'onglet Effets — morphs exclus, bouton dédié).
+/// Maj locale + commit.
+export async function resetMediaEffets(id: string): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, mediaLum: 0, mediaContraste: 0, mediaTeinte: 0, mediaFlou: 0, mediaPixel: 0, mediaMiroirH: false, mediaMiroirV: false } : w
+    ),
+  }));
+  await commitScene();
+}
+
+// Chaîne de commits : UNE SEULE update_scene en vol à la fois (voir
+// commitScene ci-dessous).
+let commitEnVol: Promise<void> = Promise.resolve();
+
 /// Pousse la scène vers Rust → save config.json + snapshot WS.
 /// Appelé au create et au pointerup (fin du drag).
+/// SÉRIALISÉ : une seule update_scene en vol à la fois, le store lu DANS la
+/// tâche (au moment de l'envoi) — deux actions rapides (import résolu +
+/// duplication, double-clic Dupliquer) ne peuvent pas s'écraser avec une
+/// scène obsolète : le dernier état part toujours en dernier.
 /// Après updateScene : sync OBS des sources trou (one-shot reconnect) si ≥1
-/// widget a obsSource. Erreur OBS → log discret, pas de crash.
+/// widget a obsSource (hors chaîne — ne retarde pas les commits suivants).
+/// Erreur OBS → log discret, pas de crash.
 export async function commitScene(): Promise<void> {
   // Guard : ne pas commiter tant que la scène n'est pas chargée depuis Rust.
   // Sinon on risque d'écraser la scène RAM (vraie scène chargée par boot_scenes)
@@ -492,8 +559,11 @@ export async function commitScene(): Promise<void> {
   if (!get(loadedStore)) {
     return;
   }
+  const envoi = commitEnVol.then(() => tauri.updateScene(get(sceneStore)));
+  // La chaîne ne casse jamais : une erreur est isolée au seul appel concerné.
+  commitEnVol = envoi.catch(() => {});
   try {
-    await tauri.updateScene(get(sceneStore));
+    await envoi;
   } catch (e) {
     console.error("commitScene:", e);
     return;
@@ -533,6 +603,22 @@ export async function commitScene(): Promise<void> {
         offsetY: w.mediaOffsetY ?? 0,
       };
     });
+  // Fond capture : source plein canvas (sync_trous travaille en alignment
+  // centre : cx = x + w/2 → 0 + canvasW/2 → couvre exactement le canvas).
+  if (scene.bgObsSource) {
+    items.push({
+      sourceName: scene.bgObsSource,
+      x: 0,
+      y: 0,
+      w: scene.canvasW ?? 1920,
+      h: scene.canvasH ?? 1080,
+      fit: "etirer",
+      zoom: 1,
+      rot: 0,
+      offsetX: 0,
+      offsetY: 0,
+    });
+  }
   if (items.length > 0) {
     try {
       await tauri.obsSyncTrous(
@@ -670,9 +756,10 @@ function kindFromMedia(rel: string): string {
   return VIDEO_EXT.includes(ext) ? "video" : "image";
 }
 
-/// Importe un média (image OU vidéo) pour le widget sélectionné. Met à jour
-/// le store local avec le chemin relatif retourné par Rust + le kind déduit
-/// de l'extension. Affiche une alerte en cas de refus (taille/format).
+/// Importe un média (image OU vidéo) pour le widget sélectionné : met à jour
+/// le store local (chemin relatif retourné par Rust + kind déduit de
+/// l'extension) puis COMMIT — l'import ne mute plus la scène côté Rust (un
+/// seul écrivain). Affiche une alerte en cas de refus (taille/format).
 export async function importMedia(): Promise<void> {
   const id = get(selectedIdStore);
   if (!id) return;
@@ -687,6 +774,10 @@ export async function importMedia(): Promise<void> {
           w.id === id ? { ...w, media: rel, kind, mediaNom: nom } : w
         ),
       }));
+      // Commit immédiat : l'import ne mute plus la scène côté Rust (un seul
+      // écrivain — le store). Sans ça, le média ne serait persisté qu'au
+      // prochain commit d'une autre action (perte si redémarrage avant).
+      await commitScene();
     }
   } catch (e) {
     alert("Import refusé : " + e);
@@ -802,15 +893,18 @@ export async function clearWidgetMedia(id: string): Promise<void> {
   await commitScene();
 }
 
-/// Importe un média (image OU vidéo) comme fond de scène. Met à jour le store
-/// local (bgMedia + bgKind déduit de l'extension). Affiche une alerte en cas
-/// de refus (taille/format). Mêmes limites que importMedia (helper commun Rust).
+/// Importe un média (image OU vidéo) comme fond de scène : met à jour le
+/// store local (bgMedia + bgKind déduit de l'extension) puis COMMIT (un seul
+/// écrivain, comme importMedia). Affiche une alerte en cas de refus
+/// (taille/format). Mêmes limites que importMedia (helper commun Rust).
 export async function importFond(): Promise<void> {
   try {
     const rel = await tauri.importFond();
     if (rel) {
       const kind = kindFromMedia(rel);
       sceneStore.update((s) => ({ ...s, bgMedia: rel, bgKind: kind }));
+      // Commit immédiat (même règle que importMedia — un seul écrivain).
+      await commitScene();
     }
   } catch (e) {
     alert("Import refusé : " + e);
@@ -874,9 +968,18 @@ export function setBgTeinteLocal(v: number): void { setBgEffetLocal("bgTeinte", 
 export function setBgFlouLocal(v: number): void { setBgEffetLocal("bgFlou", v, 0, 20); }
 export function setBgPixelLocal(v: number): void { setBgEffetLocal("bgPixel", v, 0, 50); }
 
-/// Reset fond : zoom 1, rotation 0, offsets 0, effets 0. Maj locale + commit immédiat.
-export async function resetFond(): Promise<void> {
-  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0, bgOffsetX: 0, bgOffsetY: 0, bgMiroirH: false, bgMiroirV: false, bgLum: 0, bgContraste: 0, bgTeinte: 0, bgFlou: 0, bgPixel: 0 }));
+/// Reset transformation fond : zoom 1, rotation 0, offsets 0. Maj locale +
+/// commit. NE touche PAS les effets (cf. resetFondEffets) — même découpage
+/// que les widgets média.
+export async function resetFondTransformation(): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0, bgOffsetX: 0, bgOffsetY: 0 }));
+  await commitScene();
+}
+
+/// Reset effets fond : luminosité/contraste/teinte/flou/pixel 0 + miroir
+/// désactivé (contenu de l'onglet Effets). Maj locale + commit.
+export async function resetFondEffets(): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgLum: 0, bgContraste: 0, bgTeinte: 0, bgFlou: 0, bgPixel: 0, bgMiroirH: false, bgMiroirV: false }));
   await commitScene();
 }
 
@@ -884,6 +987,51 @@ export async function resetFond(): Promise<void> {
 /// bgRot). Maj locale + commit. Ne supprime PAS le fichier dans medias/.
 export async function clearFond(): Promise<void> {
   sceneStore.update((s) => ({ ...s, bgMedia: "" }));
+  await commitScene();
+}
+
+// ===== Fond de scène = capture OBS (app/jeu plein canvas) =====
+
+/// Lie une capture (fenêtre/jeu) comme FOND de la scène : crée/réutilise la
+/// source OBS "SOS-Fond-<sceneId8>" PLEIN CANVAS via le pipeline trou
+/// (obsCreateTrouFromPc = create_trou_from_pc : CreateInput/reuse + transform
+/// + reorder tout en bas de pile). bgObsSource est PRIORITAIRE sur bgMedia —
+/// le média stocké n'est pas peint tant que la capture est active. Store +
+/// commit (resync transform + snapshot).
+export async function lierFondCapture(
+  kind: "camera" | "window" | "game",
+  target: string | null
+): Promise<string> {
+  const s = get(sceneStore);
+  // Id de la scène courante → nom de source PAR SCÈNE (2 scènes = 2 fenêtres
+  // capturées différentes ; la sync active la bonne, cache les autres).
+  const entry = await tauri.sceneCourante();
+  const sourceName = "SOS-Fond-" + entry.id.slice(0, 8);
+  const name = await tauri.obsCreateTrouFromPc(
+    get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+    sourceName, kind, target, 0, 0, s.canvasW ?? 1920, s.canvasH ?? 1080
+  );
+  sceneStore.update((st) => ({ ...st, bgObsSource: name }));
+  await commitScene();
+  return name;
+}
+
+/// Retire la capture du fond : supprime la source OBS liée (RemoveInput —
+/// pattern widget trou, pas de conflit d'accès exclusif pour fenêtre/jeu)
+/// puis clear bgObsSource + commit. Le fond média stocké (s'il existe)
+/// redevient actif.
+export async function retirerFondCapture(): Promise<void> {
+  const src = get(sceneStore).bgObsSource;
+  if (src) {
+    try {
+      await tauri.obsDeleteTrouSource(
+        get(obsHost), parseInt(get(obsPort), 10), get(obsPassword), src
+      );
+    } catch {
+      // OBS offline → on clear quand même côté scène (pattern setWidgetTrou).
+    }
+  }
+  sceneStore.update((s) => ({ ...s, bgObsSource: undefined }));
   await commitScene();
 }
 
