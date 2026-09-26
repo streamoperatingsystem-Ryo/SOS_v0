@@ -149,9 +149,9 @@
         line-height: 1.1;
         font-weight: 400;
         text-align: center;
-        /* Contour blanc 2px : paint-order:stroke sous le gradient (dashboard
+        /* Contour des lettres (couleur + épaisseur réglables) : inline via
+           applyTitreWidget. paint-order:stroke sous le gradient (dashboard
            parité — sinon le contour mange les glyphes). */
-        -webkit-text-stroke: 2px #fff;
         paint-order: stroke fill;
       }
       /* Titre du fond de l'application (intérieur haut/bas) — hors #bg (non
@@ -166,8 +166,8 @@
         line-height: 1.1;
         font-weight: 400;
         text-align: center;
-        /* Contour blanc 2px : paint-order:stroke sous le gradient. */
-        -webkit-text-stroke: 2px #fff;
+        /* Contour des lettres (couleur + épaisseur réglables) : inline via
+           applyTitreFond. paint-order:stroke sous le gradient. */
         paint-order: stroke fill;
       }
       /* Overlay cadre app : bord extérieur du canvas, au-dessus des widgets. */
@@ -1500,6 +1500,141 @@
       @keyframes pad-zoom {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.15); }
+      }
+
+      /* ===== Écran d'attente (BRB) — overlay plein écran =====
+         Porté de l'ancienne app (features/ecran-attente). z 9990 : recouvre
+         toute la scène mais RESTE SOUS les overlays éphémères (pad 9995,
+         commandes 9996, alertes 9997, bandeau 9998, welcome/voile 9999) qui
+         popent par-dessus pendant l'attente — comportement validé.
+         Média plein cadre (cover, vidéo en boucle) ; sans média → dégradé
+         animé teinté par les couleurs du cadre widget (--ea-rgb-prim/sec,
+         résolues via bpmResoudreCouleurs). La carte minuteur porte le cadre
+         SVG de la scène (appliquerCadreOverlay) ; le titre est en dégradé
+         de texte aux mêmes couleurs (--ea-prim/--ea-sec). */
+      .ecran-attente-root {
+        position: absolute;
+        inset: 0;
+        z-index: 9990;
+        pointer-events: none;
+        overflow: hidden;
+        opacity: 0;
+        transition: opacity 0.45s ease;
+        background: #05050a;
+      }
+      .ecran-attente-root.visible { opacity: 1; }
+      .ecran-attente-fond {
+        position: absolute;
+        inset: 0;
+        background:
+          radial-gradient(ellipse 80% 60% at 20% 18%,
+            rgba(var(--ea-rgb-prim, 139, 92, 246), 0.20), transparent 62%),
+          radial-gradient(ellipse 70% 55% at 80% 78%,
+            rgba(var(--ea-rgb-sec, 59, 130, 246), 0.16), transparent 65%),
+          linear-gradient(160deg, #06060c 0%, #0b0b16 55%, #06060c 100%);
+      }
+      /* Halo dérivant lentement — animation CSS pure, coût quasi nul en CEF. */
+      .ecran-attente-fond::before {
+        content: "";
+        position: absolute;
+        inset: -18%;
+        background:
+          radial-gradient(circle at 32% 32%,
+            rgba(var(--ea-rgb-prim, 139, 92, 246), 0.16), transparent 46%),
+          radial-gradient(circle at 68% 62%,
+            rgba(var(--ea-rgb-sec, 59, 130, 246), 0.13), transparent 52%);
+        animation: ea-derive 22s ease-in-out infinite alternate;
+      }
+      @keyframes ea-derive {
+        from { transform: translate3d(-4%, -3%, 0) scale(1); }
+        to { transform: translate3d(4%, 3%, 0) scale(1.08); }
+      }
+      .ecran-attente-media {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      /* Voile de lisibilité au-dessus du média (titre/minuteur détachés). */
+      .ecran-attente-voile {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(
+          180deg,
+          rgba(0, 0, 0, 0.45) 0%,
+          transparent 30%,
+          transparent 68%,
+          rgba(0, 0, 0, 0.5) 100%
+        );
+      }
+      .ecran-attente-titre {
+        position: absolute;
+        top: 7%;
+        left: 0;
+        right: 0;
+        padding: 0 5%;
+        text-align: center;
+        font-size: 84px;
+        font-weight: 800;
+        letter-spacing: 0.04em;
+        line-height: 1.1;
+        background: linear-gradient(135deg, var(--ea-prim, #e0e0e0), var(--ea-sec, #9a9a9a));
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 4px 24px rgba(0, 0, 0, 0.65));
+      }
+      /* Carte minuteur — position/échelle inline (minuteur_x/y/echelle de la
+         config, drag/resize dans la modale dashboard ; left/top = centre).
+         absolute = containing block pour le .cadre-overlay injecté par
+         appliquerCadreOverlay. Padding en PX (pas d'em — ils se résoudraient
+         contre les ~16px hérités, pas contre les chiffres 84px) : marges
+         généreuses entre les chiffres et la bordure du cadre (consigne
+         utilisateur — large marge gauche/droite, modérée haut/bas). */
+      .ecran-attente-minuteur {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        transform-origin: center center;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 8px;
+        padding: 24px 64px;
+        background: rgba(8, 8, 14, 0.88);
+        border: 2px solid rgba(224, 224, 224, 0.85); /* recouvert par le cadre SVG quand actif */
+        border-radius: 14px;
+        box-shadow: 0 10px 48px rgba(0, 0, 0, 0.6);
+      }
+      .ecran-attente-minuteur-label {
+        font-size: 20px;
+        font-weight: 600;
+        color: #bdbdbd;
+        text-transform: uppercase;
+        letter-spacing: 0.22em;
+      }
+      /* Chiffres : dégradé de texte aux couleurs du cadre utilisateur
+         (--ea-prim/--ea-sec = bpmResoudreCouleurs), nuancées de blanc pour
+         la lisibilité — même mécanique que le titre, en plus doux. */
+      .ecran-attente-temps {
+        font-size: 84px;
+        font-weight: 800;
+        font-variant-numeric: tabular-nums;
+        line-height: 1;
+        background: linear-gradient(
+          135deg,
+          color-mix(in srgb, var(--ea-prim, #e0e0e0) 82%, #ffffff),
+          color-mix(in srgb, var(--ea-sec, #9a9a9a) 60%, #ffffff)
+        );
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 3px 18px rgba(0, 0, 0, 0.6));
+      }
+      .ecran-attente-minuteur.en-pause .ecran-attente-temps {
+        opacity: 0.6;
       }
 
       .bandeau-pm-barre {
@@ -4618,6 +4753,10 @@
         var italique = w.titreItalique || false;
         var souligne = w.titreSouligne || false;
         var espacement = w.titreEspacement || 0;
+        // Contour des lettres : 0 = désactivé (0 stocké ≠ champ absent).
+        var contourCouleur = w.titreContourCouleur || "#fff";
+        var contourEpaisseur = w.titreContourEpaisseur;
+        if (contourEpaisseur === undefined || contourEpaisseur === null) contourEpaisseur = 2;
         // w.sansCadre = pas de cadre sur ce widget → gradient fallback
         // blanc→gris (parité dashboard : titreGradient gâté par cadreActif).
         var grad = gradientCadre(w.sansCadre === true ? null : cadre);
@@ -4636,6 +4775,7 @@
         el.style.fontWeight = gras ? "700" : "400";
         el.style.textDecoration = souligne ? "underline" : "none";
         el.style.letterSpacing = espacement + "px";
+        el.style.webkitTextStroke = contourEpaisseur + "px " + contourCouleur;
         el.style.background = "linear-gradient(135deg, " + grad.from + ", " + grad.to + ")";
         el.style.webkitBackgroundClip = "text";
         el.style.backgroundClip = "text";
@@ -4704,6 +4844,10 @@
         var italique = scene.bgTitreItalique || false;
         var souligne = scene.bgTitreSouligne || false;
         var espacement = scene.bgTitreEspacement || 0;
+        // Contour des lettres : 0 = désactivé (0 stocké ≠ champ absent).
+        var contourCouleur = scene.bgTitreContourCouleur || "#fff";
+        var contourEpaisseur = scene.bgTitreContourEpaisseur;
+        if (contourEpaisseur === undefined || contourEpaisseur === null) contourEpaisseur = 2;
         var grad = gradientCadre(scene.cadreApp);
         if (!bgTitreEl) {
           var el = document.createElement("div");
@@ -4719,6 +4863,7 @@
         el.style.fontWeight = gras ? "700" : "400";
         el.style.textDecoration = souligne ? "underline" : "none";
         el.style.letterSpacing = espacement + "px";
+        el.style.webkitTextStroke = contourEpaisseur + "px " + contourCouleur;
         el.style.background = "linear-gradient(135deg, " + grad.from + ", " + grad.to + ")";
         el.style.webkitBackgroundClip = "text";
         el.style.backgroundClip = "text";
@@ -4753,6 +4898,12 @@
         if (welcomeRoot && welcomeRoot.style.display === "block" && welcomeClipEl) {
           appliquerCadreOverlay(welcomeClipEl, "welcome");
         }
+        // Écran d'attente : cadre minuteur + couleurs suivent le cadre
+        // widget de la nouvelle scène (BRB affiché pendant le changement).
+        if (eaVisible && eaMinuteurEl) {
+          appliquerCadreOverlay(eaMinuteurEl, "ecran-attente");
+          eaAppliquerCouleurs();
+        }
       }
 
       function connect() {
@@ -4764,6 +4915,10 @@
           // se (re)connecter après le chargement du .lss côté dashboard, auquel
           // cas elle a manqué l'event WS. Le serveur re-émet la dernière run.
           ws.send(JSON.stringify({ type: "speedrun-resync" }));
+          // Resync de l'écran d'attente aussi — les frames tick 1 Hz
+          // couvrent la course, mais en pause il n'y a pas de tick :
+          // re-push de la dernière frame par le serveur.
+          ws.send(JSON.stringify({ type: "ecran-attente-resync" }));
         };
         ws.onclose = () => {
           setTimeout(connect, 2000);
@@ -4877,6 +5032,10 @@
               // État du timer speedrun (moteur Rust → WS direct). Maj DOM
               // directe du timer + phase + splits (pas de re-render).
               majSpeedrunEtat(msg.etat || {});
+            } else if (msg.type === "ecran-attente-etat") {
+              // Écran d'attente BRB : frame auto-réparatrice (config + chrono
+              // complets à chaque tick Rust 1 Hz + transitions).
+              majEcranAttente(msg.etat);
             } else if (msg.type === "position-overlay-config") {
               // Squelette de position unifié (clip de bienvenue + alertes +
               // commandes). Applique la même position/taille aux trois.
@@ -5868,6 +6027,228 @@
 
       // Initialiser l'overlay pad dès le démarrage.
       initPadOverlay();
+
+      // ===== Écran d'attente (BRB) — overlay plein écran =====
+      //
+      // Porté de l'ancienne app (features/ecran-attente). z 9990 : recouvre
+      // toute la scène mais RESTE SOUS les overlays éphémères (pad 9995,
+      // commandes 9996, alertes 9997, bandeau 9998, welcome 9999) qui popent
+      // par-dessus pendant l'attente — comportement validé par l'utilisateur.
+      //
+      // Le chrono est détenu par Rust (tâche tokio 1 Hz) : la diffusion se
+      // contente d'afficher `temps_restant` reçu dans les frames
+      // `ecran-attente-etat` — auto-réparatrice (config + runtime complets à
+      // chaque tick → un client reconnecté se réaligne à la frame suivante ;
+      // `ecran-attente-resync` couvre les pauses sans tick).
+      //
+      // Le média (image/vidéo plein cadre cover, vidéo en boucle) n'est
+      // RECONSTRUIT que si media|kind change — signature eaMediaSig — pour
+      // ne pas recharger la vidéo à chaque tick. Le son est porté par la
+      // vidéo (muted = !son, volume appliqué à chaque frame). Sans média →
+      // dégradé animé teinté par les couleurs du cadre widget de la scène.
+      // Le minuteur est une carte centrée portant le cadre SVG de la scène
+      // (appliquerCadreOverlay) ; le titre est en dégradé de texte aux
+      // couleurs du cadre (bpmResoudreCouleurs → --ea-prim/--ea-sec).
+
+      var eaRoot = null;        // div racine plein écran
+      var eaFondEl = null;      // dégradé animé (visible si pas de média)
+      var eaVoileEl = null;     // voile de lisibilité au-dessus du média
+      var eaMediaEl = null;     // <img> ou <video> courant
+      var eaTitreEl = null;
+      var eaMinuteurEl = null;  // carte minuteur (cadre SVG de la scène)
+      var eaLabelEl = null;     // "Début dans" / "En pause"
+      var eaTempsEl = null;     // "9:58" / "1:02:33"
+      var eaMediaSig = "";      // signature "media|kind" de l'élément courant
+      var eaVisible = false;
+
+      /// Crée l'overlay écran d'attente une fois. Idempotent.
+      function initEcranAttenteOverlay() {
+        if (eaRoot) return;
+        eaRoot = document.createElement("div");
+        eaRoot.className = "ecran-attente-root";
+        eaRoot.style.display = "none";
+
+        eaFondEl = document.createElement("div");
+        eaFondEl.className = "ecran-attente-fond";
+
+        eaVoileEl = document.createElement("div");
+        eaVoileEl.className = "ecran-attente-voile";
+
+        eaTitreEl = document.createElement("div");
+        eaTitreEl.className = "ecran-attente-titre";
+        eaTitreEl.style.display = "none";
+
+        eaMinuteurEl = document.createElement("div");
+        eaMinuteurEl.className = "ecran-attente-minuteur";
+        eaLabelEl = document.createElement("span");
+        eaLabelEl.className = "ecran-attente-minuteur-label";
+        eaTempsEl = document.createElement("span");
+        eaTempsEl.className = "ecran-attente-temps";
+        eaMinuteurEl.appendChild(eaLabelEl);
+        eaMinuteurEl.appendChild(eaTempsEl);
+
+        // Ordre de couche : fond → média (inséré avant le voile) → voile →
+        // titre → minuteur (le plus haut dans l'overlay).
+        eaRoot.appendChild(eaFondEl);
+        eaRoot.appendChild(eaVoileEl);
+        eaRoot.appendChild(eaTitreEl);
+        eaRoot.appendChild(eaMinuteurEl);
+        stageEl.appendChild(eaRoot);
+      }
+
+      /// Teinte le fond + le titre aux couleurs du cadre widget de la scène
+      /// (même résolution que le bandeau : cadre perso → couleur/couleurFin,
+      /// preset → palette de la variante, fallback neutre).
+      function eaAppliquerCouleurs() {
+        if (!eaRoot) return;
+        var col = bpmResoudreCouleurs();
+        eaRoot.style.setProperty("--ea-prim", col.p);
+        eaRoot.style.setProperty("--ea-sec", col.s);
+        eaRoot.style.setProperty("--ea-rgb-prim", bpmHexVersRgb(col.p));
+        eaRoot.style.setProperty("--ea-rgb-sec", bpmHexVersRgb(col.s));
+      }
+
+      /// Formate des secondes → "M:SS" ou "H:MM:SS" (comme l'ancienne app).
+      function eaFormatTemps(total) {
+        var t = Math.max(0, Math.floor(total || 0));
+        var h = Math.floor(t / 3600);
+        var m = Math.floor((t % 3600) / 60);
+        var s = t % 60;
+        if (h > 0) {
+          return h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+        }
+        return m + ":" + String(s).padStart(2, "0");
+      }
+
+      /// Construit/remplace l'élément média plein écran (img ou vidéo cover,
+      /// vidéo en boucle). src = "/" + rel — même mécanique que playPad.
+      function eaSetMedia(media, kind) {
+        if (eaMediaEl) {
+          if (eaMediaEl.tagName === "VIDEO") {
+            eaMediaEl.pause();
+            eaMediaEl.removeAttribute("src");
+            eaMediaEl.load();
+          }
+          eaMediaEl.remove();
+          eaMediaEl = null;
+        }
+        if (!media) {
+          eaFondEl.style.display = "";
+          return;
+        }
+        var el;
+        if (kind === "video") {
+          el = document.createElement("video");
+          el.autoplay = true;
+          el.loop = true; // la vidéo boucle tant que l'écran est actif
+          el.setAttribute("playsinline", "");
+        } else {
+          el = document.createElement("img");
+          el.alt = "";
+        }
+        el.className = "ecran-attente-media";
+        el.src = "/" + media;
+        eaMediaEl = el;
+        // Entre le fond dégradé et le voile de lisibilité.
+        eaRoot.insertBefore(el, eaVoileEl);
+        eaFondEl.style.display = "none"; // média présent → dégradé masqué
+      }
+
+      /// Met à jour l'overlay depuis une frame ecran-attente-etat (tick
+      /// 1 Hz Rust + transitions + resync). Auto-réparatrice : applique
+      /// l'état complet à chaque appel.
+      function majEcranAttente(etat) {
+        if (!eaRoot) return;
+        etat = etat || {};
+        if (!etat.actif) {
+          eaCacher();
+          return;
+        }
+
+        // Média : reconstruit UNIQUEMENT si media|kind change — sinon la
+        // vidéo se rechargerait à chaque tick (scintillement + re-buffer).
+        var media = etat.media || null;
+        var kind = etat.media_kind || null;
+        var sig = (media || "") + "|" + (kind || "");
+        if (sig !== eaMediaSig) {
+          eaMediaSig = sig;
+          eaSetMedia(media, kind);
+        }
+
+        // Son : porté par la vidéo (muted = !son) — appliqué à chaque frame
+        // pour que les réglages son/volume soient live pendant l'attente.
+        if (eaMediaEl && eaMediaEl.tagName === "VIDEO") {
+          eaMediaEl.muted = !etat.son;
+          eaMediaEl.volume = Math.max(
+            0,
+            Math.min(1, typeof etat.volume === "number" ? etat.volume : 0.5)
+          );
+        }
+
+        // Titre : dégradé aux couleurs du cadre (--ea-prim/--ea-sec).
+        if (etat.afficher_titre && etat.titre) {
+          eaTitreEl.textContent = etat.titre;
+          eaTitreEl.style.display = "";
+        } else {
+          eaTitreEl.style.display = "none";
+        }
+
+        // Minuteur : label + temps (Rust = source de vérité, jamais de
+        // décompte local — la diffusion reflète juste l'état reçu).
+        var enPause = !!etat.en_pause;
+        eaMinuteurEl.classList.toggle("en-pause", enPause);
+        eaLabelEl.textContent = enPause ? "En pause" : "Début dans";
+        eaTempsEl.textContent = eaFormatTemps(etat.temps_restant);
+
+        // Position + échelle de la carte minuteur (config live — le
+        // drag/resize de la modale commit pendant que l'écran est actif →
+        // déplacement en direct sur la diffusion). left/top = CENTRE de la
+        // carte ; l'échelle passe par le transform (transform-origin centre).
+        var mx = typeof etat.minuteur_x === "number" ? etat.minuteur_x : 960;
+        var my = typeof etat.minuteur_y === "number" ? etat.minuteur_y : 540;
+        var mec =
+          typeof etat.minuteur_echelle === "number" ? etat.minuteur_echelle : 1;
+        mec = Math.max(0.4, Math.min(3, mec));
+        eaMinuteurEl.style.left = mx + "px";
+        eaMinuteurEl.style.top = my + "px";
+        eaMinuteurEl.style.transform =
+          "translate(-50%, -50%) scale(" + mec + ")";
+
+        // Affichage + cadre SVG sur la carte minuteur (mesure après display).
+        if (!eaVisible) {
+          eaVisible = true;
+          eaRoot.style.display = "block";
+          void eaRoot.offsetWidth;
+          eaRoot.classList.add("visible");
+          eaAppliquerCouleurs();
+          requestAnimationFrame(function () {
+            appliquerCadreOverlay(eaMinuteurEl, "ecran-attente");
+          });
+        }
+      }
+
+      /// Cache l'overlay + stoppe le média (stop manuel ou fin de chrono —
+      /// Rust émet la frame actif:false dans les deux cas).
+      function eaCacher() {
+        if (!eaRoot || !eaVisible) return;
+        if (eaMediaEl && eaMediaEl.tagName === "VIDEO") {
+          eaMediaEl.pause();
+        }
+        eaRoot.classList.remove("visible");
+        eaVisible = false;
+        nettoyerCadreOverlay(eaMinuteurEl, "ecran-attente");
+        // Attendre la fin du fade-out avant de retirer le média du DOM.
+        setTimeout(function () {
+          if (!eaVisible && eaRoot) {
+            eaRoot.style.display = "none";
+            eaSetMedia(null, null);
+            eaMediaSig = "";
+          }
+        }, 500);
+      }
+
+      // Initialiser l'overlay écran d'attente dès le démarrage.
+      initEcranAttenteOverlay();
       connect();
     </script>
   </body>

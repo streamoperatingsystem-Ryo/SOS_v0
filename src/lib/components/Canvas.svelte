@@ -93,6 +93,8 @@
   let bgTitreItalique = $derived($sceneStore.bgTitreItalique ?? false);
   let bgTitreSouligne = $derived($sceneStore.bgTitreSouligne ?? false);
   let bgTitreEspacement = $derived($sceneStore.bgTitreEspacement ?? ESPACEMENT_TITRE_DEFAUT);
+  let bgTitreContourCouleur = $derived($sceneStore.bgTitreContourCouleur ?? "#fff");
+  let bgTitreContourEpaisseur = $derived($sceneStore.bgTitreContourEpaisseur ?? 2);
   let bgTitreGradient = $derived(gradientCadre(cadreAppActif ? cadreApp : null));
   let bgTitreFontStyle = $derived(bgTitreItalique ? "italic" : "normal");
   let bgTitreFontWeight = $derived(bgTitreGras ? "700" : "400");
@@ -454,7 +456,7 @@
       {#if bgTitreVisible}
         <div
           class="bg-titre {bgTitrePos}"
-          style="font-family: '{bgTitrePolice}', sans-serif; font-size: {bgTitreTaille}px; font-style: {bgTitreFontStyle}; font-weight: {bgTitreFontWeight}; text-decoration: {bgTitreTextDecoration}; letter-spacing: {bgTitreEspacement}px; background: linear-gradient(135deg, {bgTitreGradient.from}, {bgTitreGradient.to}); -webkit-background-clip: text; background-clip: text; color: transparent;"
+          style="font-family: '{bgTitrePolice}', sans-serif; font-size: {bgTitreTaille}px; font-style: {bgTitreFontStyle}; font-weight: {bgTitreFontWeight}; text-decoration: {bgTitreTextDecoration}; letter-spacing: {bgTitreEspacement}px; -webkit-text-stroke: {bgTitreContourEpaisseur}px {bgTitreContourCouleur}; background: linear-gradient(135deg, {bgTitreGradient.from}, {bgTitreGradient.to}); -webkit-background-clip: text; background-clip: text; color: transparent;"
         >{bgTitreTexte}</div>
       {/if}
       {#each $sceneStore.widgets as w (w.id)}
@@ -536,9 +538,9 @@
     line-height: 1.1;
     font-weight: 400;
     text-align: center;
-    /* Contour blanc 2px autour des lettres : paint-order:stroke paint le
-       contour SOUS le gradient de remplissage (sinon il mange les glyphes). */
-    -webkit-text-stroke: 2px #fff;
+    /* Contour des lettres (couleur + épaisseur réglables) : inline dans le
+       template. paint-order:stroke paint le contour SOUS le gradient de
+       remplissage (sinon il mange les glyphes). */
     paint-order: stroke fill;
   }
   .bg-titre.haut { top: 8px; }

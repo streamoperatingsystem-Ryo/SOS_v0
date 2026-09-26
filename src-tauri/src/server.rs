@@ -195,16 +195,24 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
     });
 
     // Tâche : lire les messages entrants. La diffusion peut demander un
-    // resync de l'état speedrun (LSS) à la (re)connexion — on re-émet la
-    // dernière run LSS chargée vers ce client via le canal chat_tx.
+    // resync de l'état speedrun (LSS) ou de l'écran d'attente à la
+    // (re)connexion — on re-émet la dernière frame connue via chat_tx.
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             if let Message::Text(txt) = msg {
                 // Resync speedrun : la diffusion demande l'état LSS courant.
                 // Non-fatal si aucune run chargée (reemit_lss est un no-op).
+                // Resync écran d'attente : repousse la dernière frame
+                // `ecran-attente-etat` (no-op si jamais activé).
                 if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&txt) {
-                    if parsed.get("type").and_then(|v| v.as_str()) == Some("speedrun-resync") {
-                        crate::speedrun::commands::reemit_lss();
+                    match parsed.get("type").and_then(|v| v.as_str()) {
+                        Some("speedrun-resync") => {
+                            crate::speedrun::commands::reemit_lss();
+                        }
+                        Some("ecran-attente-resync") => {
+                            crate::ecran_attente::reemit(&state.app);
+                        }
+                        _ => {}
                     }
                 }
             }

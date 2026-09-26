@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, sceneStore } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "../stores/obs";
-  import { openSection, toggleSection, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen } from "../stores/ui";
+  import { openSection, toggleSection, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen } from "../stores/ui";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
   import { connecterKick, deconnecterKick, kickErreur as kickErreurStore, lireSlugSauve } from "../stores/kick";
   import { connecterYoutube, deconnecterYoutube, demarrerChatYoutube, arreterChatYoutube } from "../stores/youtube";
@@ -251,6 +251,21 @@
     >
       <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.5-8.5h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
       <span>Interactions chat</span>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
+  <!-- Section Écran d'attente : LANCEUR DIRECT (pas un accordéon — le clic
+       ouvre la modale de config/contrôle BRB). Le média est affiché sur la
+       diffusion uniquement ; le chrono est détenu par Rust. -->
+  <div class="section">
+    <button
+      class="header"
+      onclick={() => ecranAttenteModalOpen.set(true)}
+      title="Ouvrir l'écran d'attente (média + chrono sur la diffusion)"
+    >
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+      <span>Écran d'attente</span>
       <span class="chevron">›</span>
     </button>
   </div>

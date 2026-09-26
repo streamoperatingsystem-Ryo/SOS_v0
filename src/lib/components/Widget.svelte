@@ -150,6 +150,8 @@
   let titreItalique = $derived(w.titreItalique ?? false);
   let titreSouligne = $derived(w.titreSouligne ?? false);
   let titreEspacement = $derived(w.titreEspacement ?? ESPACEMENT_TITRE_DEFAUT);
+  let titreContourCouleur = $derived(w.titreContourCouleur ?? "#fff");
+  let titreContourEpaisseur = $derived(w.titreContourEpaisseur ?? 2);
   let titreGradient = $derived(gradientCadre(cadreActif ? cadre : null));
   let titreFontStyle = $derived(titreItalique ? "italic" : "normal");
   let titreFontWeight = $derived(titreGras ? "700" : "400");
@@ -682,7 +684,7 @@
   {#if titreVisible}
     <div
       class="widget-titre {titrePos}"
-      style="font-family: '{titrePolice}', sans-serif; font-size: {titreTaille}px; font-style: {titreFontStyle}; font-weight: {titreFontWeight}; text-decoration: {titreTextDecoration}; letter-spacing: {titreEspacement}px; background: linear-gradient(135deg, {titreGradient.from}, {titreGradient.to}); -webkit-background-clip: text; background-clip: text; color: transparent;"
+      style="font-family: '{titrePolice}', sans-serif; font-size: {titreTaille}px; font-style: {titreFontStyle}; font-weight: {titreFontWeight}; text-decoration: {titreTextDecoration}; letter-spacing: {titreEspacement}px; -webkit-text-stroke: {titreContourEpaisseur}px {titreContourCouleur}; background: linear-gradient(135deg, {titreGradient.from}, {titreGradient.to}); -webkit-background-clip: text; background-clip: text; color: transparent;"
     >{titreTexte}</div>
   {/if}
 
@@ -983,9 +985,9 @@
     line-height: 1.1;
     font-weight: 400;
     text-align: center;
-    /* Contour blanc 2px autour des lettres : paint-order:stroke paint le
-       contour SOUS le gradient de remplissage (sinon il mange les glyphes). */
-    -webkit-text-stroke: 2px #fff;
+    /* Contour des lettres (couleur + épaisseur réglables) : inline dans le
+       template. paint-order:stroke paint le contour SOUS le gradient de
+       remplissage (sinon il mange les glyphes). */
     paint-order: stroke fill;
   }
   .widget-titre.dessus {

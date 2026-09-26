@@ -19,6 +19,8 @@
   let italique = $state(false);
   let souligne = $state(false);
   let espacement = $state(ESPACEMENT_TITRE_DEFAUT);
+  let contourCouleur = $state("#ffffff");
+  let contourEpaisseur = $state(2);
 
   // Gradient du cadre de l'application pour l'aperçu.
   let cadreApp = $derived($sceneStore.cadreApp ?? null);
@@ -35,6 +37,8 @@
       italique = $sceneStore.bgTitreItalique ?? false;
       souligne = $sceneStore.bgTitreSouligne ?? false;
       espacement = $sceneStore.bgTitreEspacement ?? ESPACEMENT_TITRE_DEFAUT;
+      contourCouleur = $sceneStore.bgTitreContourCouleur ?? "#ffffff";
+      contourEpaisseur = $sceneStore.bgTitreContourEpaisseur ?? 2;
     }
   });
 
@@ -51,6 +55,8 @@
         bgTitreItalique: undefined,
         bgTitreSouligne: undefined,
         bgTitreEspacement: undefined,
+        bgTitreContourCouleur: undefined,
+        bgTitreContourEpaisseur: undefined,
       });
     } else {
       void setBgTitre({
@@ -62,6 +68,8 @@
         bgTitreItalique: italique,
         bgTitreSouligne: souligne,
         bgTitreEspacement: Math.max(-2, Math.min(20, Math.round(espacement))),
+        bgTitreContourCouleur: contourCouleur,
+        bgTitreContourEpaisseur: Math.max(0, Math.min(6, Math.round(contourEpaisseur))),
       });
     }
     titreFondModalOpen.set(false);
@@ -77,6 +85,8 @@
       bgTitreItalique: undefined,
       bgTitreSouligne: undefined,
       bgTitreEspacement: undefined,
+      bgTitreContourCouleur: undefined,
+      bgTitreContourEpaisseur: undefined,
     });
     titreFondModalOpen.set(false);
   }
@@ -195,6 +205,31 @@
         </div>
       </div>
 
+      <!-- Contour des lettres : couleur + épaisseur (0 = aucun contour) -->
+      <div class="modal-bloc">
+        <div class="modal-bloc-titre">Contour des lettres</div>
+        <div class="taille-row">
+          <input
+            class="couleur-input"
+            type="color"
+            title="Couleur du contour"
+            value={contourCouleur}
+            oninput={(e) => (contourCouleur = (e.target as HTMLInputElement).value)}
+          />
+          <input
+            class="modal-range"
+            type="range"
+            min="0"
+            max="6"
+            step="1"
+            title="Épaisseur du contour (0 = aucun)"
+            value={contourEpaisseur}
+            oninput={(e) => (contourEpaisseur = parseFloat((e.target as HTMLInputElement).value))}
+          />
+          <span class="taille-val">{contourEpaisseur === 0 ? "Aucun" : Math.round(contourEpaisseur) + "px"}</span>
+        </div>
+      </div>
+
       <!-- Aperçu -->
       <div class="modal-bloc">
         <div class="modal-bloc-titre">Aperçu</div>
@@ -202,7 +237,7 @@
           {#if texte.trim()}
             <div
               class="apercu-titre"
-              style="font-family: '{police}', sans-serif; font-size: {taille}px; font-style: {italique ? 'italic' : 'normal'}; font-weight: {gras ? '700' : '400'}; text-decoration: {souligne ? 'underline' : 'none'}; letter-spacing: {espacement}px; background: linear-gradient(135deg, {grad.from}, {grad.to}); -webkit-background-clip: text; background-clip: text; color: transparent;"
+              style="font-family: '{police}', sans-serif; font-size: {taille}px; font-style: {italique ? 'italic' : 'normal'}; font-weight: {gras ? '700' : '400'}; text-decoration: {souligne ? 'underline' : 'none'}; letter-spacing: {espacement}px; -webkit-text-stroke: {contourEpaisseur}px {contourCouleur}; paint-order: stroke fill; background: linear-gradient(135deg, {grad.from}, {grad.to}); -webkit-background-clip: text; background-clip: text; color: transparent;"
             >{texte.trim()}</div>
           {:else}
             <div class="apercu-vide">Le titre apparaîtra ici</div>
@@ -320,6 +355,15 @@
     font-variant-numeric: tabular-nums;
     width: 40px;
     text-align: right;
+  }
+  .couleur-input {
+    width: 28px;
+    height: 24px;
+    border: 1px solid var(--bordure-ui);
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
   }
   .apercu-zone {
     display: flex;

@@ -2,6 +2,7 @@ mod api_deck;
 mod alertes;
 mod commandes;
 mod config;
+mod ecran_attente;
 mod pad_numerique;
 mod input_viewer;
 mod kick;
@@ -229,6 +230,18 @@ type MediaSpec = (&'static str, &'static [&'static str], u64, fn(&[u8]) -> bool)
 /// n'est pas compatible MP4 (ex. HEVC vidéo, audio Opus hors profil) —
 /// l'erreur ffmpeg est retournée telle quelle.
 fn validate_and_copy_media(app: &AppHandle, src: &std::path::Path) -> Result<(String, String, String), String> {
+    validate_and_copy_media_limite(app, src, false)
+}
+
+/// Variante interne : `video_sans_limite` = true → pas de cap de taille sur
+/// les vidéos (import écran d'attente UNIQUEMENT — la vidéo BRB peut être
+/// longue ; les images gardent leur cap 10 Mo). Extension, magic bytes et
+/// remux MKV→MP4 inchangés.
+fn validate_and_copy_media_limite(
+    app: &AppHandle,
+    src: &std::path::Path,
+    video_sans_limite: bool,
+) -> Result<(String, String, String), String> {
     use std::fs;
     use std::io::Read;
 
@@ -255,9 +268,10 @@ fn validate_and_copy_media(app: &AppHandle, src: &std::path::Path) -> Result<(St
             return Err(format!("Extension .{} non autorisée", ext));
         };
 
-    // 2. Taille ≤ limite du kind
+    // 2. Taille ≤ limite du kind (sauf vidéo écran d'attente : pas de cap —
+    //    le média BRB peut durer plusieurs minutes sans saturer le quota).
     let meta = fs::metadata(src).map_err(|e| format!("metadata: {}", e))?;
-    if meta.len() > max_bytes {
+    if meta.len() > max_bytes && !(video_sans_limite && kind == "video") {
         return Err(format!(
             "Fichier trop volumineux ({} octets > {} Mo)",
             meta.len(),
@@ -330,9 +344,13 @@ fn remux_to_mp4(app: &AppHandle, src: &std::path::Path, dest: &std::path::Path) 
 /// remux MKV→MP4) vers AppData/StreamOS/medias/<uuid>.<ext>. Retourne
 /// `Some((rel, kind))` si importé, `None` si dialog annulé.
 /// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm/mkv ≤ 80 Mo
-/// (mkv remuxé en mp4 via sidecar ffmpeg). Aucune mutation de la scène —
+/// (mkv remuxé en mp4 via sidecar ffmpeg) — sauf `video_sans_limite`
+/// (écran d'attente : pas de cap vidéo). Aucune mutation de la scène —
 /// l'appelant mutera le widget ciblé ou les champs fond après coup.
-fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String, String)>, String> {
+fn pick_and_copy_media(
+    app: &AppHandle,
+    video_sans_limite: bool,
+) -> Result<Option<(String, String, String)>, String> {
     use tauri_plugin_dialog::DialogExt;
 
     // 1. Dialog fichier (un seul filtre « Médias » : images + vidéos)
@@ -351,7 +369,7 @@ fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String, String
         .map_err(|e| format!("Chemin invalide: {}", e))?;
 
     // 2-5. Validation + copie (helper commun).
-    validate_and_copy_media(app, &src).map(Some)
+    validate_and_copy_media_limite(app, &src, video_sans_limite).map(Some)
 }
 
 /// Importe un média (image OU vidéo) pour un widget : dialog → validation
@@ -367,7 +385,7 @@ fn pick_and_copy_media(app: &AppHandle) -> Result<Option<(String, String, String
 #[tauri::command]
 fn import_media(app: AppHandle, _widget_id: String) -> Result<Option<(String, String)>, String> {
     // Helper commun : dialog + validation + copie (pas de mutation scène).
-    let Some((rel, _kind, nom)) = pick_and_copy_media(&app)? else {
+    let Some((rel, _kind, nom)) = pick_and_copy_media(&app, false)? else {
         return Ok(None); // dialog annulé
     };
     Ok(Some((rel, nom)))
@@ -417,7 +435,7 @@ fn import_media_from_paths(
 #[tauri::command]
 fn import_fond(app: AppHandle) -> Result<Option<String>, String> {
     // Helper commun : dialog + validation + copie (pas de mutation scène).
-    let Some((rel, _kind, _nom)) = pick_and_copy_media(&app)? else {
+    let Some((rel, _kind, _nom)) = pick_and_copy_media(&app, false)? else {
         return Ok(None); // dialog annulé
     };
     Ok(Some(rel))
@@ -2587,6 +2605,79 @@ fn pad_importer_son(app: AppHandle) -> Result<Option<String>, String> {
     import_son(app)
 }
 
+// ===== Écran d'attente (BRB — overlay plein écran diffusion :4321) =====
+
+/// État complet de l'écran d'attente (config + runtime) pour l'UI dashboard.
+#[tauri::command]
+fn ecran_attente_etat(
+    state: tauri::State<'_, ecran_attente::EcranAttenteState>,
+) -> ecran_attente::EcranAttenteEtat {
+    state.etat_complet()
+}
+
+/// Remplace la config + persiste + re-émet la frame WS si l'écran est actif
+/// (média/titre/son/volume appliqués en direct côté diffusion).
+#[tauri::command]
+fn ecran_attente_set_config(
+    state: tauri::State<'_, ecran_attente::EcranAttenteState>,
+    config: ecran_attente::EcranAttenteConfig,
+) -> Result<(), String> {
+    state.set_config(config)
+}
+
+/// Lance l'écran d'attente : chrono 1 Hz + frame WS + routage audio OBS
+/// (connexion one-shot, non-fatal si OBS absent — creds des stores OBS).
+#[tauri::command]
+fn ecran_attente_lancer(
+    state: tauri::State<'_, ecran_attente::EcranAttenteState>,
+    host: String,
+    port: u16,
+    password: String,
+) {
+    state.lancer(&host, port, &password)
+}
+
+/// Bascule pause/reprise du chrono. No-op si l'écran est inactif.
+#[tauri::command]
+fn ecran_attente_pause_toggle(state: tauri::State<'_, ecran_attente::EcranAttenteState>) {
+    state.toggle_pause()
+}
+
+/// Arrête l'écran d'attente + restaure l'audio bureau OBS (non-fatal).
+#[tauri::command]
+fn ecran_attente_arreter(
+    state: tauri::State<'_, ecran_attente::EcranAttenteState>,
+    host: String,
+    port: u16,
+    password: String,
+) {
+    state.arreter(&host, port, &password)
+}
+
+/// Importe un média (image OU vidéo) pour l'écran d'attente : dialog
+/// « Médias » (images + vidéos) → validation + copie (ou remux MKV→MP4)
+/// vers medias/. Retourne `Some((rel, kind, nom))`, `None` si annulé.
+/// Même mécanique que `pad_importer_media` (helper pick_and_copy_media),
+/// SAUF la limite de taille : pas de cap sur les vidéos (consigne
+/// utilisateur — la vidéo BRB peut être longue ; les images gardent 10 Mo).
+#[tauri::command]
+fn ecran_attente_importer_media(
+    app: AppHandle,
+) -> Result<Option<(String, String, String)>, String> {
+    pick_and_copy_media(&app, true)
+}
+
+/// Liste les sources audio de sortie OBS (`wasapi_output_capture`) pour le
+/// picker de la modale. Connexion one-shot (creds des stores OBS).
+#[tauri::command]
+async fn ecran_attente_lister_sources_audio(
+    host: String,
+    port: u16,
+    password: String,
+) -> Result<Vec<String>, String> {
+    ecran_attente::lister_sources_audio(&host, port, &password).await
+}
+
 // ===== Alertes (follow/raid/sub/resub/subgift/bits) =====
 
 /// Config complète des alertes (pour l'UI dashboard).
@@ -2812,6 +2903,13 @@ pub fn run() {
             let pad_state =
                 pad_numerique::PadNumeriqueState::new(handle.clone(), chat_tx.clone());
             app.manage(pad_state.clone());
+
+            // État Écran d'attente (BRB — overlay plein écran diffusion).
+            // Config persistée ecran_attente.json + chrono tokio 1 Hz +
+            // frames WS `ecran-attente-etat` sur chat_tx.
+            let ecran_attente_state =
+                ecran_attente::EcranAttenteState::new(handle.clone(), chat_tx.clone());
+            app.manage(ecran_attente_state.clone());
 
             // Speedrun Splitter — initialise le canal WS pour la diffusion.
             // Le moteur émet l'état du timer via chat_tx (speedrun-etat) vers
@@ -3141,6 +3239,13 @@ pub fn run() {
             pad_tester_touche,
             pad_importer_media,
             pad_importer_son,
+            ecran_attente_etat,
+            ecran_attente_set_config,
+            ecran_attente_lancer,
+            ecran_attente_pause_toggle,
+            ecran_attente_arreter,
+            ecran_attente_importer_media,
+            ecran_attente_lister_sources_audio,
             alertes_etat,
             alertes_set_config,
             alertes_set_overlay_config,

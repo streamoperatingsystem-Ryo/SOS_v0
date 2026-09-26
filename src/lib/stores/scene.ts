@@ -275,7 +275,7 @@ export async function setSpeedrunPolice(
 /// Passer titre = "" ou undefined pour supprimer le titre.
 export async function setWidgetTitre(
   id: string,
-  patch: Partial<Pick<Widget, "titre" | "titrePosition" | "titrePolice" | "titreTaille" | "titreGras" | "titreItalique" | "titreSouligne" | "titreEspacement">>
+  patch: Partial<Pick<Widget, "titre" | "titrePosition" | "titrePolice" | "titreTaille" | "titreGras" | "titreItalique" | "titreSouligne" | "titreEspacement" | "titreContourCouleur" | "titreContourEpaisseur">>
 ): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
@@ -287,7 +287,7 @@ export async function setWidgetTitre(
 /// Change la config du titre du fond de l'application (merge partiel + commit).
 /// Passer bgTitre = "" ou undefined pour supprimer le titre du fond.
 export async function setBgTitre(
-  patch: Partial<Pick<Scene, "bgTitre" | "bgTitrePosition" | "bgTitrePolice" | "bgTitreTaille" | "bgTitreGras" | "bgTitreItalique" | "bgTitreSouligne" | "bgTitreEspacement">>
+  patch: Partial<Pick<Scene, "bgTitre" | "bgTitrePosition" | "bgTitrePolice" | "bgTitreTaille" | "bgTitreGras" | "bgTitreItalique" | "bgTitreSouligne" | "bgTitreEspacement" | "bgTitreContourCouleur" | "bgTitreContourEpaisseur">>
 ): Promise<void> {
   sceneStore.update((s) => ({ ...s, ...patch }));
   await commitScene();

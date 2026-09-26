@@ -269,6 +269,8 @@ PAS "StreamOS" ; `config.rs` → `app_data_dir()`) :
 - `onboarding.json` — `{ "fait": true }` (présence de la galerie de presets au 1er lancement ; absent = premier démarrage)
 - `telemetrie/events.jsonl` — journal append-only des événements télémétrie (schéma v1, voir section dédiée)
 - `speedrun_baselines.json` — référence « dernière fois » du splitter : temps de split **cumulés** (secondes) par segment, keyed par chemin .lss. Mis à jour à chaque split réalisé ; mergé avec les PB du .lss pour la colonne delta (voir section Speedrun).
+- `ecran_attente.json` — config de l'écran d'attente BRB (duree_s, titre,
+  afficher_titre, son, volume, media/kind/nom, source_audio OBS)
 - `scenes/` — scènes SOS (JSON)
 - `medias/` — médias importés
 
@@ -1133,12 +1135,13 @@ les boutons sémantiques qui reposent un `--btn-tint` coloré.
 `titre` (vide/undefined = pas de titre), `titrePosition` ("dessus"/"dessous"),
 `titrePolice` (id Google Font, `fonts.ts` — woff2 embarqués via `server.rs`),
 `titreTaille` (12–72 px, défaut 24), `titreGras`/`titreItalique`/`titreSouligne`,
-`titreEspacement` (−2 à 20 px).
+`titreEspacement` (−2 à 20 px), `titreContourCouleur` (hex, défaut `"#fff"`),
+`titreContourEpaisseur` (0–6 px, 0 = aucun contour, défaut 2).
 
 ### Édition (dashboard)
 
 Double-clic sur le widget : `relY < 0.25` → position "dessus", le reste →
-"dessous" → `titreModalOpen` (ui.ts) → `TitreModal.svelte` → `majTitreWidget`
+"dessous" → `titreModalOpen` (ui.ts) → `TitreModal.svelte` → `setWidgetTitre`
 (scene.ts). Zones `.titre-zone` (25% haut/bas) : affichées au `:hover` dès
 que le widget est `selected`, **avec ou sans titre existant**, avec label
 explicite ambre (« Double-cliquez ici pour ajouter/modifier un titre
@@ -1151,10 +1154,14 @@ au-dessus/en dessous de votre widget »).
   fallback blanc→gris). Position `bottom:100%`/`top:100%`.
 - Diffusion : `applyTitreWidget` / `entry.titreEl` (diffusion.html) —
   créé/maj/supprimé selon `w.titre`, mêmes champs.
-- **Contour des lettres** : `-webkit-text-stroke: 2px #fff` +
-  `paint-order: stroke fill` (contour SOUS le gradient — sans paint-order il
-  mange les glyphes). Appliqué aux 4 règles : `.widget-titre` + `.bg-titre`
-  (dashboard) et `.widget-titre` + `#bg-titre` (diffusion).
+- **Contour des lettres** : `-webkit-text-stroke: <N>px <couleur>` réglable
+  par titre (`titreContourCouleur`/`titreContourEpaisseur`, resp.
+  `bgTitreContour*` ; épaisseur 0 = aucun contour) — inline dans les
+  templates Svelte / via `el.style.webkitTextStroke` dans les apply* de
+  diffusion.html. `paint-order: stroke fill` reste fixé dans les 4 règles
+  CSS (`.widget-titre` + `.bg-titre` dashboard, `.widget-titre` +
+  `#bg-titre` diffusion) : le contour est peint SOUS le gradient — sans
+  paint-order il mange les glyphes.
 
 ## Cadres SVG — règle absolue (NE PAS REGRESSER)
 
@@ -1521,6 +1528,8 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
   **OBS = one-shot** (pas de déconnexion) : clic = `obsConnect` +
   `sceneSyncCaptures` (re-sync, comme le bouton « Connecter »).
 - Modales : `modale-interactions`, `modale-moderation`, `modale-cadres`
+- Écran d'attente : `ecran-attente` (toggle lancer/arrêter — pastille verte
+  `data-plat="attente"` alimentée par `raccourcis:connexions.attente`)
 - Système : `systeme-masquer`
 
 ### Événements
@@ -1725,3 +1734,89 @@ drag ET resize :
 - **Zéro nouveau champ `Widget`** : `rotateX`/`rotateY` existants, rendus
   identiques dashboard (`Widget.svelte`) et diffusion (`diffusion.html`),
   persistés dans la scène JSON comme avant.
+
+## Écran d'attente (BRB) — overlay plein écran + chrono (2026-XX)
+
+> Porté de l'ancienne app (`features/ecran-attente/`), réécrit pour
+> l'architecture v0 — **même pattern que `pad_numerique.rs`/`bandeau.rs`** :
+> état détenu par Rust, broadcast `chat_tx` → `diffusion.html`. Le chrono est
+> une tâche tokio 1 Hz **source de vérité** : diffusion et dashboard ne font
+> que refléter `temps_restant`.
+
+### Contrats
+
+- **Config persistée** `ecran_attente.json` : `duree_s` (défaut 600), `titre`,
+  `afficher_titre`, `son` (**défaut ON** — consigne utilisateur), `volume`
+  (0.0-1.0, défaut 0.5), `media`/`media_kind`/`media_nom`, `source_audio`,
+  `minuteur_x`/`minuteur_y` (centre de la carte minuteur en px canvas,
+  défaut 960/540) et `minuteur_echelle` (0.4-3.0, défaut 1.0) — positionnés
+  par mini-canvas drag/resize dans la modale (même mécanique que le
+  « Squelette de position » des alertes/welcome).
+- **Frame WS `ecran-attente-etat`** (auto-réparatrice : config + runtime
+  complets à chaque tick/transition — un client reconnecté se réaligne à la
+  frame suivante). Resync : la diffusion envoie `ecran-attente-resync` au
+  `onopen` WS → `server.rs` appelle `ecran_attente::reemit()` (dernière
+  frame gardée en mémoire) — couvre les pauses sans tick. **Non enregistrée
+  en télémétrie** (frame de synchro UI, whitelist `collecte.rs` inchangée).
+- **Commandes Tauri** : `ecran_attente_etat`, `ecran_attente_set_config`,
+  `ecran_attente_lancer(host,port,password)`, `ecran_attente_pause_toggle`,
+  `ecran_attente_arreter(host,port,password)`, `ecran_attente_importer_media`
+  (helper `pick_and_copy_media(app, video_sans_limite)` — **pas de cap de
+  taille vidéo pour l'écran d'attente** : `validate_and_copy_media_limite`,
+  consigne utilisateur — la vidéo BRB peut être longue ; les images gardent
+  10 Mo. Tous les autres imports gardent les caps 10/80 Mo),
+  `ecran_attente_lister_sources_audio(host,port,password)`.
+- **Event `ecran-attente:etat`** → dashboard (modale + pillule header).
+- **Règle Mutex** : un seul `.lock()` par statement (piège non-réentrant).
+
+### Diffusion (`diffusion.html`)
+
+- Overlay `.ecran-attente-root` plein écran **z 9990** : recouvre la scène
+  mais reste **SOUS** les overlays éphémères (pad 9995, commandes 9996,
+  alertes 9997, bandeau 9998, welcome/voile 9999) — comportement validé.
+- Média plein cadre `object-fit:cover` (`<img>` / `<video loop>`) — reconstruit
+  UNIQUEMENT si `media|kind` change (signature `eaMediaSig`, sinon la vidéo
+  se rechargerait à chaque tick 1 Hz). Son porté par la vidéo
+  (`muted = !son`, `volume` appliqués à chaque frame → réglages live).
+- Sans média → dégradé animé teinté par les couleurs du cadre widget de la
+  scène (`bpmResoudreCouleurs` → `--ea-rgb-prim/sec`). Carte minuteur centrée
+  portant le **cadre SVG de la scène** (`appliquerCadreOverlay`,
+  `data-overlay="ecran-attente"`), ré-appliqué au snapshot (changement de
+  scène en live) ; titre ET chiffres du chrono en dégradé de texte aux mêmes
+  couleurs (chiffres nuancés de blanc pour la lisibilité).
+- Fin de chrono : « 0:00 » affiché ~1,5 s puis frame `actif:false` de Rust →
+  fade-out + nettoyage. La pause ne fige que le chrono — le média continue.
+
+### Routage audio OBS (porté de l'ancienne app, one-shot)
+
+Au `lancer` : connexion `obs::connect` → source `wasapi_output_capture` choisie
+ou créée (« SOS Audio Écran d'attente », idempotent) + `SetInputVolume` +
+`SetSceneItemEnabled false` sur les items `desktop|bureau` de la scène SOS.
+À l'arrêt (manuel OU fin de chrono — creds mémorisés au lancer) : réactivation
+par motif de nom. **Non-fatal** si OBS absent (l'overlay fonctionne quand
+même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
+
+### Dashboard
+
+- **Aucun rendu média** dans le dashboard (consigne utilisateur) : la modale
+  `EcranAttenteModal` (Toolbar « Écran d'attente ») montre nom du fichier +
+  config (durée, titre, son, volume, picker source audio OBS) + contrôles
+  (lancer / pause / arrêter). Commit immédiat par champ via
+  `ecran_attente_set_config`.
+- Pillule « Attente M:SS » dans le bandeau header quand actif (clic → modale),
+  bouton toggle `ecran-attente` dans la barre de raccourcis (pastille verte).
+
+### Fichiers
+
+| Fichier | Rôle |
+|---|---|
+| `src-tauri/src/ecran_attente.rs` | `EcranAttenteState` (config + runtime + timer tokio + frame WS + audio OBS), `reemit`, `lister_sources_audio` |
+| `src-tauri/src/lib.rs` | `mod ecran_attente`, `app.manage`, 7 commandes |
+| `src-tauri/src/server.rs` | Handler WS `ecran-attente-resync` → `reemit()` |
+| `src-tauri/resources/diffusion.html` | Overlay `.ecran-attente-*`, `majEcranAttente`, dispatch + resync |
+| `src/lib/stores/ecranAttente.ts` | Store + listener `ecran-attente:etat` + actions (creds OBS des stores `obs.ts`) |
+| `src/lib/components/EcranAttenteModal.svelte` | Modale config/contrôle (pas de preview média) |
+| `src/lib/stores/ui.ts` | Flag `ecranAttenteModalOpen` |
+| `src/lib/components/Toolbar.svelte` | Lanceur « Écran d'attente » |
+| `src/App.svelte` | Init, pillule header, dispatch `ecran-attente`, montage modale |
+| `src-tauri/resources/raccourcis.html` | Bouton `data-id="ecran-attente"` + `data-plat="attente"` |

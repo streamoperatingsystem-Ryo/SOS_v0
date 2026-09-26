@@ -3,7 +3,7 @@
   import { listen, emitTo } from "@tauri-apps/api/event";
   import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene } from "./lib/stores/scenes";
-  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen } from "./lib/stores/ui";
+  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, ecranAttenteModalOpen } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "./lib/stores/obs";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
   import { connecterKick, deconnecterKick, lireSlugSauve } from "./lib/stores/kick";
@@ -33,12 +33,14 @@
   import PresetsModal from "./lib/components/PresetsModal.svelte";
   import ConsoModal from "./lib/components/ConsoModal.svelte";
   import DupliquerSceneModal from "./lib/components/DupliquerSceneModal.svelte";
+  import EcranAttenteModal from "./lib/components/EcranAttenteModal.svelte";
   import { chargerPresets } from "./lib/stores/presets";
   import { initWelcome, chargerWelcome } from "./lib/stores/welcome";
   import { initBandeau, chargerBandeau } from "./lib/stores/bandeau";
   import { chargerAlertes } from "./lib/stores/alertes";
   import { initPositionOverlay, chargerPositionOverlay } from "./lib/stores/positionOverlay";
   import { initPad, chargerPad } from "./lib/stores/padNumerique";
+  import { ecranAttenteStore, initEcranAttente, chargerEcranAttente, toggleEcranAttente } from "./lib/stores/ecranAttente";
   import { fondSidebar } from "./lib/stores/fondSidebar";
   import { gradientCadre } from "./lib/cadres/registre";
 
@@ -63,6 +65,23 @@
   let obsErr = $derived($obsError);
   let obsStream = $derived($obsStreaming);
   let obsRecord = $derived($obsRecording);
+  // État écran d'attente (BRB) : pillule header quand actif + pastille barre
+  // de raccourcis. temps_restant descend à chaque tick Rust 1 Hz — l'effect
+  // de push raccourcis suit eaActif (bool) pour ne pas émettre à chaque tick.
+  let ea = $derived($ecranAttenteStore);
+  let eaActif = $derived(ea?.actif ?? false);
+
+  /// Formate des secondes → "M:SS" ou "H:MM:SS" (pillule attente header).
+  function formatTempsAttente(total: number): string {
+    const t = Math.max(0, Math.floor(total));
+    const h = Math.floor(t / 3600);
+    const m = Math.floor((t % 3600) / 60);
+    const s = t % 60;
+    if (h > 0) {
+      return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+    }
+    return `${m}:${String(s).padStart(2, "0")}`;
+  }
 
   // Couleur EFFECTIVE du cadre SVG → tout le chrome la suit : poussée dans
   // --cadre-couleur / --cadre-couleur-fin sur :root, consommée par
@@ -190,6 +209,11 @@
       case "modale-interactions": interactionModalOpen.set(true); break;
       case "modale-moderation": moderationModalOpen.set(true); break;
       case "modale-cadres": cadreModalOpen.set("widget"); break;
+      case "ecran-attente":
+        // Toggle lancer/arrêter l'écran d'attente (chrono + overlay diffusion
+        // + routage audio OBS). Erreur remontée dans ecranAttenteErreur.
+        try { await toggleEcranAttente(); } catch {}
+        break;
       case "systeme-masquer": await masquerRaccourcis(); break;
     }
   }
@@ -209,6 +233,8 @@
       // Sorties OBS : pastilles stream/record de la barre (data-plat homonymes).
       stream: get(obsStreaming),
       record: get(obsRecording),
+      // Écran d'attente : pastille du bouton BRB (vert = chrono en cours).
+      attente: get(ecranAttenteStore)?.actif ?? false,
     }).catch(() => {});
   }
 
@@ -218,6 +244,7 @@
     void obsSt;
     void obsStream;
     void obsRecord;
+    void eaActif;
     pushRaccourcisConnexions();
   });
 
@@ -367,6 +394,12 @@
     //     + charge la config initiale. L'audio local est joué côté dashboard.
     await initPad();
     await chargerPad();
+
+    // 3f-bis. Écran d'attente (BRB) : init listener (ecran-attente:etat,
+    //     émis à chaque tick Rust 1 Hz / transition) + charge l'état initial.
+    //     Le média est rendu côté diffusion uniquement (consigne utilisateur).
+    await initEcranAttente();
+    await chargerEcranAttente();
 
     // 3g. Barre de raccourcis : état initial (visible/bord/moniteur) + listener
     //     des actions émises par la fenêtre + handshake "ready" (la barre peut
@@ -537,6 +570,23 @@
             Diffusion (démarrage…)
           {/if}
         </span>
+        <!-- Pillule écran d'attente : visible seulement quand le chrono tourne
+             (état poussé par Rust à 1 Hz). Clic → ouvre la modale de contrôle
+             (pause / arrêt / config). -->
+        {#if ea?.actif}
+          <span class="bandeau-sep"></span>
+          <button
+            class="indicateur indicateur-btn plat-attente"
+            class:pause={ea.en_pause}
+            title={ea.en_pause
+              ? "Écran d'attente en pause — cliquer pour ouvrir le contrôle"
+              : "Écran d'attente actif — cliquer pour ouvrir le contrôle"}
+            onclick={() => ecranAttenteModalOpen.set(true)}
+          >
+            <span class="dot on"></span>
+            {ea.en_pause ? "Attente (pause)" : "Attente"} {formatTempsAttente(ea.temps_restant)}
+          </button>
+        {/if}
       </span>
       <!-- Sorties OBS : stream + record (vert = prêt à démarrer, rouge = actif) -->
       <span class="bandeau-sep"></span>
@@ -674,6 +724,10 @@
   <ConsoModal onFermer={() => consoModalOpen.set(false)} />
 {/if}
 
+<!-- Modale Écran d'attente (BRB) — gère son propre {#if $ecranAttenteModalOpen}
+     interne (même pattern que TitreModal). Média rendu diffusion uniquement. -->
+<EcranAttenteModal />
+
 <style>
   main {
     display: flex;
@@ -740,6 +794,27 @@
   .indicateur.off {
     opacity: 0.4;
     color: var(--gris);
+  }
+  /* Pillule écran d'attente : bouton déguisé en indicateur du bandeau —
+     cliquable (ouvre la modale de contrôle), temps en chiffres tabulaires. */
+  .indicateur-btn {
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
+    border: 1px solid var(--bordure-ui);
+    color: var(--texte);
+    font: inherit;
+    font-size: inherit;
+    padding: 0.1rem 0.45rem;
+    cursor: pointer;
+    font-variant-numeric: tabular-nums;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  }
+  .indicateur-btn:hover {
+    border-color: var(--accent-ui);
+    box-shadow: var(--btn-inset-hover), var(--glow-ui);
+  }
+  .indicateur-btn.pause {
+    opacity: 0.6;
   }
   /* .dot (pastille statut) : classe partagée définie dans app.css. */
   .dev-wrap {

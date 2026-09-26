@@ -103,3 +103,8 @@ export const presetsModalOpen = writable<"creation" | "onboarding" | null>(null)
 /// source (clic droit pastille → « Dupliquer »). Même pattern que
 /// titreModalOpen (cible portée par la valeur).
 export const dupliquerSceneModalOpen = writable<string | null>(null);
+
+/// Modale Écran d'attente (BRB) : true = ouverte. Config (média, durée,
+/// titre, son, source audio) + contrôles (lancer/pause/arrêter). Le média
+/// n'est JAMAIS rendu dans le dashboard — affichage diffusion uniquement.
+export const ecranAttenteModalOpen = writable(false);

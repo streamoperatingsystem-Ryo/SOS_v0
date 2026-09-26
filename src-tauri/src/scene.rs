@@ -329,6 +329,12 @@ pub struct Widget {
     /// Espacement des lettres en px (-2 à 20). Défaut 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub titreEspacement: Option<f64>,
+    /// Couleur du contour des lettres du titre (hex, ex: "#ffffff"). Défaut blanc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titreContourCouleur: Option<String>,
+    /// Épaisseur du contour des lettres en px (0-6 ; 0 = aucun contour). Défaut 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titreContourEpaisseur: Option<u32>,
 }
 
 /// Mapping des touches manette pour un widget input-viewer.
@@ -439,6 +445,14 @@ pub struct Scene {
     /// Espacement des lettres du titre du fond en px (-2 à 20). Défaut 0.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bgTitreEspacement: Option<f64>,
+    /// Couleur du contour des lettres du titre du fond (hex, ex: "#ffffff").
+    /// Défaut blanc.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgTitreContourCouleur: Option<String>,
+    /// Épaisseur du contour des lettres du titre du fond en px (0-6 ; 0 =
+    /// aucun contour). Défaut 2.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgTitreContourEpaisseur: Option<u32>,
 }
 
 impl Default for Scene {
@@ -475,6 +489,8 @@ impl Default for Scene {
             bgTitreItalique: None,
             bgTitreSouligne: None,
             bgTitreEspacement: None,
+            bgTitreContourCouleur: None,
+            bgTitreContourEpaisseur: None,
         }
     }
 }

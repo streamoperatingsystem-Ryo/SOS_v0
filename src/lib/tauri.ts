@@ -108,6 +108,12 @@ export interface Widget {
   titreSouligne?: boolean;
   /// Espacement des lettres en px (-2 à 20). Défaut 0.
   titreEspacement?: number;
+  /// Couleur du contour des lettres du titre (hex, ex: "#ffffff").
+  /// Défaut blanc.
+  titreContourCouleur?: string;
+  /// Épaisseur du contour des lettres en px (0-6 ; 0 = aucun contour).
+  /// Défaut 2.
+  titreContourEpaisseur?: number;
 }
 
 /// Plateformes supportées par les widgets type "goal" (miroir Rust scene.rs).
@@ -333,6 +339,12 @@ export interface Scene {
   bgTitreSouligne?: boolean;
   /// Espacement des lettres du titre du fond en px (-2 à 20). Défaut 0.
   bgTitreEspacement?: number;
+  /// Couleur du contour des lettres du titre du fond (hex, ex: "#ffffff").
+  /// Défaut blanc.
+  bgTitreContourCouleur?: string;
+  /// Épaisseur du contour des lettres du titre du fond en px (0-6 ; 0 =
+  /// aucun contour). Défaut 2.
+  bgTitreContourEpaisseur?: number;
 }
 
 /// Entrée de l'index des scènes (id + nom seulement, jamais le contenu).
@@ -482,6 +494,48 @@ export interface PadConfig {
   plage_actuelle: number;
   /// Clé "NumpadX_plage" → config de la touche.
   touches: Record<string, ToucheConfig>;
+}
+
+// ===== Types Écran d'attente (mirroir des structs Rust ecran_attente.rs) =====
+
+/// Config de l'écran d'attente (persistée dans ecran_attente.json).
+export interface EcranAttenteConfig {
+  /// Durée du chrono en secondes. Défaut 600.
+  duree_s: number;
+  /// Titre affiché en haut de l'écran (dégradé aux couleurs du cadre).
+  titre: string;
+  /// Afficher le titre. Défaut true.
+  afficher_titre: boolean;
+  /// Son du média vidéo (porté par la vidéo côté diffusion). Défaut true.
+  son: boolean;
+  /// Volume du média + de la source audio OBS dédiée (0.0-1.0). Défaut 0.5.
+  volume: number;
+  /// Chemin relatif du média ("medias/<uuid>.<ext>"). undefined = pas de média.
+  media?: string;
+  /// Kind du média : "image" | "video". undefined = pas de média.
+  media_kind?: string;
+  /// Nom original du fichier importé (affichage UI).
+  media_nom?: string;
+  /// Source audio OBS (wasapi_output_capture) choisie — undefined = créer
+  /// « SOS Audio Écran d'attente ».
+  source_audio?: string;
+  /// Centre horizontal de la carte minuteur (px canvas diffusion).
+  /// Défaut 960. Positionné par drag dans la modale.
+  minuteur_x: number;
+  /// Centre vertical de la carte minuteur (px canvas). Défaut 540.
+  minuteur_y: number;
+  /// Échelle de la carte minuteur (0.4-3.0). Défaut 1.0.
+  minuteur_echelle: number;
+}
+
+/// Snapshot complet (config + runtime) : commande `ecran_attente_etat` +
+/// event `ecran-attente:etat` (émis à chaque tick Rust 1 Hz / transition).
+export interface EcranAttenteEtat {
+  config: EcranAttenteConfig;
+  actif: boolean;
+  en_pause: boolean;
+  /// Secondes restantes (détenues par Rust — le dashboard reflète).
+  temps_restant: number;
 }
 
 // ===== Types Diagnostic conso (mirroir des structs Rust conso.rs) =====
@@ -1009,6 +1063,51 @@ export const tauri = {
   /// Importe un son (mp3/ogg/wav ≤ 10 Mo) pour une touche du pad.
   async padImporterSon(): Promise<string | null> {
     return invoke<string | null>("pad_importer_son");
+  },
+
+  // ===== Écran d'attente (BRB — overlay plein écran diffusion) =====
+
+  /// État complet (config + runtime) de l'écran d'attente.
+  async ecranAttenteEtat(): Promise<EcranAttenteEtat> {
+    return invoke<EcranAttenteEtat>("ecran_attente_etat");
+  },
+
+  /// Remplace la config + persiste + re-émet la frame WS si l'écran est actif.
+  async ecranAttenteSetConfig(config: EcranAttenteConfig): Promise<void> {
+    await invoke("ecran_attente_set_config", { config });
+  },
+
+  /// Lance l'écran d'attente : chrono + overlay diffusion + routage audio
+  /// OBS (non-fatal si OBS absent). Creds OBS des stores (localStorage).
+  async ecranAttenteLancer(host: string, port: number, password: string): Promise<void> {
+    await invoke("ecran_attente_lancer", { host, port, password });
+  },
+
+  /// Bascule pause/reprise du chrono (le média n'est pas affecté).
+  async ecranAttentePauseToggle(): Promise<void> {
+    await invoke("ecran_attente_pause_toggle");
+  },
+
+  /// Arrête l'écran + restaure l'audio bureau OBS (non-fatal).
+  async ecranAttenteArreter(host: string, port: number, password: string): Promise<void> {
+    await invoke("ecran_attente_arreter", { host, port, password });
+  },
+
+  /// Importe un média (image OU vidéo) : dialog « Médias » → validation +
+  /// copie (ou remux MKV→MP4) vers medias/. Retourne [rel, kind, nom] ou
+  /// null si annulé.
+  async ecranAttenteImporterMedia(): Promise<[string, string, string] | null> {
+    return invoke<[string, string, string] | null>("ecran_attente_importer_media");
+  },
+
+  /// Liste les sources audio de sortie OBS (wasapi_output_capture) pour le
+  /// picker de la modale. Connexion one-shot — lève une erreur si OBS absent.
+  async ecranAttenteListerSourcesAudio(
+    host: string,
+    port: number,
+    password: string,
+  ): Promise<string[]> {
+    return invoke<string[]>("ecran_attente_lister_sources_audio", { host, port, password });
   },
 
   // ===== Énumération PC + création capture depuis SOS (Lot 3) =====
