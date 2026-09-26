@@ -310,4 +310,10 @@ export const devLog: DevEntry[] = [
     date: "2026-09-26",
     note: "Clic droit pastille → « Dupliquer » (SceneBar, entre Renommer et Masquer le titre) → DupliquerSceneModal (pattern titreModalOpen : store dupliquerSceneModalOpen = id source, montée dans App.svelte) pré-remplie « Nom 2 » incrémenté tant que pris, Enter/Annuler, vide → suggestion. scenes::dupliquer (Rust) : load_scene_file + uuids widgets régénérés (politique presets::instancier — deux scènes ne partagent jamais leurs ids) + obsSource CONSERVÉ (source OBS partagée entre scènes, comme SOS-Caméra — kind/cible non stockés dans le JSON, recréation impossible) → creer_avec (sauvegarde courante + fin de liste + bascule RAM + snapshot). Commande scene_dupliquer + wrapper tauri.ts + duplicateScene (chaîne openScene : reload index/courante/scène + sceneSyncCaptures).",
   },
+  {
+    id: 51,
+    titre: "Follows temps réel — EventSub WebSocket (fin du poll Helix 60s)",
+    date: "2026-09-26",
+    note: "Nouveau module twitch_eventsub.rs (pattern twitch_chat.rs : demarrer → JoinHandle, backoff 1s→×2→30s, Cancel partagé avec l'IRC — stop_irc aborte les deux, démarré dans twitch_connecter avec l'IRC) : wss://eventsub.wss.twitch.tv:443/ws → session_welcome (session_id + keepalive_seconds) → abonnement channel.follow v2 via helix_post (scope moderator:read:followers déjà présent, broadcaster==moderator, 409 = déjà actif = OK) DANS les 10s suivant le welcome → boucle read : notification channel.follow → EventTwitch follow → alertes.on_event + emit chat:event (parité IRC) ; keepalive ~10s, read timeout keepalive×2+30 (socket morte → reconnexion) ; session_reconnect → reconnect_url immédiat sans backoff. SUPPRESSION du poll Helix 60s des follows (retard moyen 30s + 10 GET/min) : bloc stores/alertes.ts, appel App.svelte, commande twitch_followers_light + FollowerLight + wrapper tauri.ts. Unfollows/compteur communauté intacts (twitch_communaute_followers séparé).",
+  },
 ];

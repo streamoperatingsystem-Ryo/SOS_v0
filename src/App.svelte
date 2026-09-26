@@ -36,7 +36,7 @@
   import { chargerPresets } from "./lib/stores/presets";
   import { initWelcome, chargerWelcome } from "./lib/stores/welcome";
   import { initBandeau, chargerBandeau } from "./lib/stores/bandeau";
-  import { chargerAlertes, demarrerDiffFollows } from "./lib/stores/alertes";
+  import { chargerAlertes } from "./lib/stores/alertes";
   import { initPositionOverlay, chargerPositionOverlay } from "./lib/stores/positionOverlay";
   import { initPad, chargerPad } from "./lib/stores/padNumerique";
   import { fondSidebar } from "./lib/stores/fondSidebar";
@@ -344,10 +344,9 @@
     await initBandeau();
     await chargerBandeau();
 
-    // 3d. Alertes : charge la config + démarre la diff des follows (polling
-    //     Helix 60s — baseline au 1er poll, alertes sur les nouveaux ensuite).
+    // 3d. Alertes : charge la config (les événements — follows via EventSub
+    //     WebSocket temps réel, subs/bits/raids via IRC — sont gérés côté Rust).
     await chargerAlertes();
-    demarrerDiffFollows();
 
     // 3e. Speedrun Splitter : écoute l'event speedrun:event + charge les
     //     préférences sauvegardées (chemins ASL/LSS + settings).

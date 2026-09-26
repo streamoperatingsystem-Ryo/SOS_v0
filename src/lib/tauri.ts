@@ -1213,16 +1213,6 @@ export const tauri = {
     return invoke("twitch_communaute_followers");
   },
 
-  /// Followers allégé (user_id + followed_at uniquement) pour le polling
-  /// des alertes. Pas d'avatars, pas d'unfollows, pas de snapshot disque.
-  async twitchFollowersLight(): Promise<{
-    user_id: string;
-    login: string;
-    followed_at: string;
-  }[]> {
-    return invoke("twitch_followers_light");
-  },
-
   /// Subs : liste + total + points (pagination max 10 pages).
   /// Enrichi avec display_name + profile_image_url (batch /users).
   async twitchCommunauteSubs(): Promise<{

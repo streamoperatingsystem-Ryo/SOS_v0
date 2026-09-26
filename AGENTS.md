@@ -70,6 +70,13 @@ npm run tauri dev                    # dev complet (Rust + frontend)
   Scopes : `chat:read`, `channel:read:subscriptions`, `moderator:read:followers`, `user:read:email`.
   Token stocké dans keyring (Windows native).
 - **Chat** : IRC TLS vers `irc.chat.twitch.tv:6697`. PING/PONG toutes 60s.
+- **Follows** : EventSub WebSocket `channel.follow` v2 (`twitch_eventsub.rs`,
+  `wss://eventsub.wss.twitch.tv:443/ws`) — push temps réel, zéro polling.
+  Démarré/arrêté avec la connexion Twitch (même `cancel` que l'IRC,
+  `stop_irc` aborte les deux). Abonnement créé après le `session_welcome`
+  (fenêtre Twitch 10 s ; 409 = déjà actif = OK pour session_reconnect).
+  Keepalive ~10 s → read timeout keepalive×2+30 (socket morte détectée).
+  `session_reconnect` → reconnexion immédiate sans backoff.
 - **Communauté** : Helix API (followers, subs, viewers, broadcaster).
 - **Events emit** : `twitch:connecte`, `twitch:deconnecte`, `twitch:device`, `twitch:erreur`.
 - **Auto-resume** : lit token keyring au boot → valide (refresh si 401) → IRC direct.
@@ -543,8 +550,8 @@ Twitch IRC (twitch_chat.rs)
   ├─ USERNOTICE (msg-id: sub|resub|subgift|raid, tags msg-param-*) ─┐
   └─ PRIVMSG tag bits=<n> (cheers) ─────────────────────────────────┤
                                                                     ▼
-Follows : diff snapshots Helix côté frontend (stores/alertes.ts,   alertes.rs
-poll 60s, baseline au 1er poll + garde followed_at > boot)  ──→ alerte_declencher
+Follows : EventSub WS channel.follow v2 (twitch_eventsub.rs,      alertes.rs
+push temps réel — plus de poll Helix)  ──→ on_event (direct)
                                                                     │
                     ┌───────────────────────────────────────────────┘
                     ▼ moteur : config par type → cooldowns (viewer + global)
@@ -560,9 +567,13 @@ poll 60s, baseline au 1er poll + garde followed_at > boot)  ──→ alerte_dec
    dans un `_ =>` ignoré, aucun raid/sub n'est jamais émis (bug "raid sans
    alerte" en live). La détection de commande utilise `irc_command()` (pas
    `contains` — un message peut contenir le mot "USERNOTICE").
-2. **Le follow n'a pas d'event IRC** → diff des snapshots Helix côté frontend.
-   Double garde : baseline au 1er poll (pas d'alerte sur l'existant) +
-   `followed_at > bootIso` (élimine les faux positifs de la fenêtre paginée).
+2. **Le follow n'a pas d'event IRC** → EventSub WebSocket `channel.follow` v2
+   (`twitch_eventsub.rs`, push temps réel). ⚠️ L'abonnement doit être créé
+   dans les 10 s suivant le `session_welcome` (sinon Twitch ferme la socket),
+   et 409 Conflict = abonnement identique déjà actif = SUCCÈS (cas
+   session_reconnect, où Twitch migre les abonnements). L'ancien fallback
+   poll Helix 60s côté frontend (diff snapshots + garde followed_at > boot)
+   a été retiré avec l'arrivée d'EventSub (2026-09-26).
 3. **Un cheer EST un message** : le PRIVMSG bits continue de circuler dans le
    chat normalement, l'alerte est émise EN PLUS.
 4. **Une seule alerte à la fois** : file FIFO (max 5, oldest évincé) + timer
@@ -688,7 +699,7 @@ poll 60s, baseline au 1er poll + garde followed_at > boot)  ──→ alerte_dec
 | `src-tauri/src/twitch_chat.rs` | `irc_command()` + `parse_irc_tags()` + `parse_usernotice()` + tag bits |
 | `src-tauri/src/lib.rs` | `AlertesState` + `PositionOverlayState` + commandes `alertes_*` / `alerte_declencher` / `import_son` / `import_alerte_media` / `position_overlay_etat` / `position_overlay_set` |
 | `src/lib/stores/positionOverlay.ts` | Store unifié : `positionOverlay`, `initPositionOverlay`, `chargerPositionOverlay`, `sauverPositionOverlay` |
-| `src/lib/stores/alertes.ts` | Config store par type + diff follows (poll 60s) — overlay retiré (géré par positionOverlay) |
+| `src/lib/stores/alertes.ts` | Config store par type (événements follows/subs/bits/raids gérés côté Rust — IRC + EventSub WS) — overlay retiré (géré par positionOverlay) |
 | `src/lib/stores/commandes.ts` | Store commandes chat : `commandesStore`, `chargerCommandes`, `sauverCommande` (upsert), `supprimerCommande`, `testerCommande` |
 | `src/lib/components/InteractionViewerModal.svelte` | Modale Interactions chat — 5 onglets : Clip de bienvenue / Bandeau premier message / Alertes / Commandes / Squelette de position |
 | `src-tauri/resources/diffusion.html` | Overlay welcome (z 9999) + overlay alerte (z 9997) + overlay commande (z 9996) + handler `position-overlay-config` (applique aux trois) |

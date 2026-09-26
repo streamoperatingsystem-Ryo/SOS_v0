@@ -188,6 +188,39 @@ async fn helix_write(
     parse_resp(resp).await
 }
 
+/// Crée l'abonnement EventSub WebSocket `channel.follow` v2 pour une session
+/// (appelé par twitch_eventsub.rs après le session_welcome). Scope requis :
+/// moderator:read:followers (déjà dans les scopes d'auth). Le broadcaster est
+/// modérateur de son propre canal → broadcaster_user_id == moderator_user_id.
+///
+/// Idempotent : 409 Conflict (abonnement identique déjà actif — cas
+/// session_reconnect où Twitch migre les abonnements vers la nouvelle
+/// socket) = succès. Le format "Helix HTTP 409" vient de parse_resp (ce
+/// fichier) — matcher la chaîne est sûr.
+pub(crate) async fn eventsub_abonner_follows(
+    session_id: &str,
+    user_id: &str,
+    access: &str,
+) -> Result<(), HelixError> {
+    let body = serde_json::json!({
+        "type": "channel.follow",
+        "version": "2",
+        "condition": {
+            "broadcaster_user_id": user_id,
+            "moderator_user_id": user_id,
+        },
+        "transport": {
+            "method": "websocket",
+            "session_id": session_id,
+        },
+    });
+    match helix_post("/eventsub/subscriptions", &[], &body, access).await {
+        Ok(_) => Ok(()),
+        Err(HelixError::Autre(m)) if m.contains("Helix HTTP 409") => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 // ===== Types de réponse =====
 
 #[derive(Debug, Clone, Serialize)]
@@ -207,17 +240,6 @@ pub struct FollowerEntry {
 pub struct FollowersResp {
     pub total: u64,
     pub liste: Vec<FollowerEntry>,
-}
-
-/// Version allégée de FollowerEntry pour le polling des alertes :
-/// user_id + followed_at uniquement (pas d'avatars, pas de display_name).
-/// Évite la double pagination + enrichissement /users quand le poll des
-/// alertes (60s) tourne en parallèle du chargement communauté (boot).
-#[derive(Debug, Clone, Serialize)]
-pub struct FollowerLight {
-    pub user_id: String,
-    pub login: String,
-    pub followed_at: String,
 }
 
 #[derive(Debug, Clone, Serialize)]

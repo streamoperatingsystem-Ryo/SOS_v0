@@ -1,8 +1,7 @@
-// Store alertes côté dashboard. Config par type (persistée Rust) + détection
-// des follows par diff des snapshots Helix (pas d'event IRC pour les follows —
-// même approche que l'ancienne app). Les événements USERNOTICE/bits arrivent
-// directement côté Rust (twitch_chat.rs → alertes.rs) : le dashboard ne gère
-// QUE la config et la diff des follows.
+// Store alertes côté dashboard. Config par type (persistée Rust) uniquement.
+// Tous les événements arrivent côté Rust : USERNOTICE/bits via l'IRC
+// (twitch_chat.rs) et follows via EventSub WebSocket temps réel
+// (twitch_eventsub.rs) → alertes.rs. Le dashboard ne gère QUE la config.
 import { writable } from "svelte/store";
 import {
   tauri,
@@ -90,47 +89,4 @@ export async function sauverOverlay(ov: AlertesOverlayConfig): Promise<void> {
   } catch (e) {
     console.error("sauverOverlay:", e);
   }
-}
-
-// ===== Détection des follows (diff snapshots Helix) =====
-// Pas d'event IRC pour les follows : on poll la liste Helix toutes les 60s
-// et on déclenche pour les nouveaux (user_id inconnu ET followed_at post-boot
-// — élimine les faux positifs quand un follower entre dans la fenêtre paginée).
-
-const POLL_MS = 60_000;
-/// Followers connus (user_id). Rempli au premier poll (baseline, pas d'alerte).
-const connus = new Set<string>();
-/// Date de boot (ISO) — un follow antérieur n'est jamais "nouveau".
-const bootIso = new Date().toISOString();
-let pollTimer: ReturnType<typeof setInterval> | null = null;
-let baselineFait = false;
-
-async function pollFollowers(): Promise<void> {
-  try {
-    const resp = await tauri.twitchFollowersLight();
-    for (const f of resp) {
-      if (connus.has(f.user_id)) continue;
-      connus.add(f.user_id);
-      // Nouveau = connu après la baseline ET follow postérieur au boot.
-      // (ISO 8601 UTC : comparaison lexicographique fiable.)
-      const nouveau = baselineFait && f.followed_at > bootIso;
-      if (nouveau) {
-        tauri
-          .alerteDeclencher("follow", f.login, f.user_id, 0, 0, 0, "")
-          .catch(() => {});
-      }
-    }
-    baselineFait = true;
-  } catch {
-    // Twitch déconnecté / need_reauth / offline → silencieux, on retentera.
-  }
-}
-
-/// Démarre le polling des follows (baseline au 1er poll, alertes ensuite).
-/// Idempotent. Appelé au boot (App.svelte) — le polling tourne même si Twitch
-/// est déconnecté (la commande échoue silencieusement et on retente).
-export function demarrerDiffFollows(): void {
-  if (pollTimer) return;
-  void pollFollowers();
-  pollTimer = setInterval(pollFollowers, POLL_MS);
 }

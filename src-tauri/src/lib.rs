@@ -14,6 +14,7 @@ mod scenes;
 mod server;
 mod twitch_auth;
 mod twitch_chat;
+mod twitch_eventsub;
 mod viewers;
 mod twitch_helix;
 mod youtube_auth;
@@ -870,6 +871,9 @@ pub struct TwitchState {
     /// Canal d'envoi de commandes IRC (ex: "/clear") vers la tâche IRC.
     /// None si l'IRC n'est pas démarré. Remplacé à chaque démarrage IRC.
     pub irc_cmd_tx: Arc<std::sync::Mutex<Option<tokio::sync::mpsc::Sender<String>>>>,
+    /// Handle de la tâche EventSub (follows temps réel). Même cancel que
+    /// l'IRC — démarré/arrêté avec la connexion Twitch.
+    pub eventsub_handle: Arc<std::sync::Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 impl TwitchState {
@@ -882,6 +886,7 @@ impl TwitchState {
             user_id: Arc::new(std::sync::Mutex::new(None)),
             access: Arc::new(std::sync::Mutex::new(None)),
             irc_cmd_tx: Arc::new(std::sync::Mutex::new(None)),
+            eventsub_handle: Arc::new(std::sync::Mutex::new(None)),
         }
     }
 
@@ -909,7 +914,9 @@ impl TwitchState {
     fn access_courant(&self) -> Option<String> {
         self.access.lock().unwrap().clone()
     }
-    /// Arrête l'IRC en cours (si actif) : flag cancel + abort handle + clear canal cmd.
+    /// Arrête l'IRC + l'EventSub en cours (si actifs) : flag cancel + abort
+    /// handles + clear canal cmd. Le cancel étant partagé, les deux tâches
+    /// s'arrêtent — l'abort est ceinture+bretelles (même style que l'IRC).
     fn stop_irc(&self) {
         {
             let c = self.cancel.lock().unwrap();
@@ -917,6 +924,10 @@ impl TwitchState {
         }
         let mut h = self.irc_handle.lock().unwrap();
         if let Some(handle) = h.take() {
+            handle.abort();
+        }
+        let mut es = self.eventsub_handle.lock().unwrap();
+        if let Some(handle) = es.take() {
             handle.abort();
         }
         // Vider le canal de commandes : la tâche IRC qui le consommait est arrêtée.
@@ -1243,12 +1254,25 @@ async fn connect_with_tokens(
         chat_tx,
         tokens.access.clone(),
         tokens.login.clone(),
-        cancel,
+        cancel.clone(),
         Some(irc_cmd_rx),
     );
     {
         let mut h = state.irc_handle.lock().unwrap();
         *h = Some(handle);
+    }
+    // EventSub WebSocket : follows temps réel (remplace le poll Helix 60s).
+    // Même cancel que l'IRC — arrêt groupé dans stop_irc. Abonnement
+    // channel.follow v2 créé dans la tâche après le session_welcome.
+    let eventsub = twitch_eventsub::demarrer(
+        app.clone(),
+        tokens.access.clone(),
+        tokens.user_id.clone(),
+        cancel,
+    );
+    {
+        let mut es = state.eventsub_handle.lock().unwrap();
+        *es = Some(eventsub);
     }
     state.set_connected(true);
     state.set_login(Some(tokens.login.clone()));
@@ -1454,32 +1478,6 @@ async fn twitch_communaute_followers(
     }
 
     Ok(resp)
-}
-
-/// Followers allégé (user_id + followed_at uniquement) pour le polling des
-/// alertes (60s). Pas d'enrichissement d'avatars (batch /users), pas de
-/// détection d'unfollows, pas de snapshot disque — la commande lourde
-/// `twitch_communaute_followers` s'en charge au boot et au refresh manuel.
-/// Évite la double pagination + enrichissement quand le poll des alertes
-/// tourne en parallèle du chargement communauté.
-#[tauri::command]
-async fn twitch_followers_light(
-    state: tauri::State<'_, TwitchState>,
-) -> Result<Vec<twitch_helix::FollowerLight>, String> {
-    let uid = state.user_id_courant().ok_or("Pas connecté")?;
-    let access = state.access_courant().ok_or("Pas connecté")?;
-    let resp = twitch_helix::followers(&uid, &access)
-        .await
-        .map_err(helix_err_to_string)?;
-    Ok(resp
-        .liste
-        .into_iter()
-        .map(|f| twitch_helix::FollowerLight {
-            user_id: f.user_id,
-            login: f.login,
-            followed_at: f.followed_at,
-        })
-        .collect())
 }
 
 /// Subs : liste + total + points (pagination, max 10 pages).
@@ -3072,7 +3070,6 @@ pub fn run() {
             twitch_login_courant,
             twitch_reconnecter,
             twitch_communaute_followers,
-            twitch_followers_light,
             twitch_communaute_subs,
             twitch_communaute_viewers,
             twitch_communaute_unfollows,
