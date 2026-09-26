@@ -58,18 +58,24 @@ npm run tauri dev                    # dev complet (Rust + frontend)
 
 | Plateforme | Fichier Rust       | Méthode                          | Auth             | Persistance       | Auto-resume |
 |------------|--------------------|----------------------------------|------------------|-------------------|-------------|
-| Twitch     | `twitch_chat.rs`   | IRC (port 6697, TLS)             | OAuth2 Device Flow + keyring | keyring (token)   | oui (token coffre) |
+| Twitch     | `twitch_chat.rs`   | IRC sur WebSocket (wss, 443)     | OAuth2 Device Flow + keyring | keyring (token)   | oui (token coffre) |
 | YouTube    | `youtube_chat.rs`  | HTTP polling `/liveChat/messages`| OAuth2 Device Flow + keyring | keyring (token)   | oui (token coffre) |
 | Kick       | `kick.rs`          | WebSocket Pusher cloud (us2)     | Aucune (anonyme) | `kick.json` (slug)| oui (slug) |
 | TikTok     | `tiktok_chat.rs`   | WebSocket Webcast (PirateTok)    | Aucune (anonyme, ttwid) | `tiktok.json` (username) | oui (username) |
 
 ### Détails par plateforme
 
-#### Twitch (`twitch_auth.rs` + `twitch_chat.rs` + `twitch_helix.rs`)
+#### Twitch (`twitch_auth.rs` + `twitch_chat.rs` + `twitch_eventsub.rs` + `twitch_helix.rs`)
 - **Auth** : OAuth2 Device Code Flow (TVs & Limited Input devices).
-  Scopes : `chat:read`, `channel:read:subscriptions`, `moderator:read:followers`, `user:read:email`.
+  Scopes réels (`twitch_auth.rs` const `SCOPES`) : `chat:read`, `chat:edit`,
+  `moderator:read:followers`, `channel:read:subscriptions`,
+  `user:read:broadcast`, `moderator:manage:banned_users`, `moderation:read`,
+  `channel:read:vips`, `channel:manage:vips`, `channel:manage:moderators`,
+  `moderator:manage:chat_messages`.
   Token stocké dans keyring (Windows native).
-- **Chat** : IRC TLS vers `irc.chat.twitch.tv:6697`. PING/PONG toutes 60s.
+- **Chat** : IRC sur WebSocket `wss://irc-ws.chat.twitch.tv:443` (tags IRCv3).
+  PING/PONG réactif (le serveur envoie PING, on répond PONG immédiatement —
+  pas de timer) + Pong natif au niveau frame WebSocket.
 - **Follows** : EventSub WebSocket `channel.follow` v2 (`twitch_eventsub.rs`,
   `wss://eventsub.wss.twitch.tv:443/ws`) — push temps réel, zéro polling.
   Démarré/arrêté avec la connexion Twitch (même `cancel` que l'IRC,
