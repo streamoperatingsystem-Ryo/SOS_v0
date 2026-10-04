@@ -55,6 +55,7 @@ fn brand_bytes(name: &str) -> Option<&'static [u8]> {
     match name {
         "streamy-loading" => Some(include_bytes!("../../src/assets/streamy/streamy-loading.png")),
         "streamy-offline" => Some(include_bytes!("../../src/assets/streamy/streamy-offline.png")),
+        "streamy-welcome" => Some(include_bytes!("../../src/assets/streamy/streamy-welcome.png")),
         "wordmark" => Some(include_bytes!("../../src/assets/logo/LogoSOSDashboardSmallSize.png")),
         _ => None,
     }

@@ -711,6 +711,7 @@
       "testHint": "«Testare» mostra un banner fittizio sulla diffusione. «Reimpostare la sessione» rende tutti gli spettatori di nuovo eleggibili (nuovo stream).",
       "apparenceTitre": "Aspetto — colori del frame",
       "apparenceHint": "Il banner riprende i colori del frame widget applicato alla scena (vedere la modale Frame). Senza frame attivo, viene usato il tema bianco e nero predefinito.",
+      "policeSysteme": "Sistema (predefinito)",
       "testPseudo": "ViewerTest",
       "testMessage": "Questo è il mio primo messaggio!"
     },

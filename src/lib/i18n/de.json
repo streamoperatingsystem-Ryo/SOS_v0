@@ -711,6 +711,7 @@
       "testHint": "„Testen“ zeigt ein fiktives Banner in der Ausgabe. „Sitzung zurücksetzen“ macht alle Zuschauer wieder berechtigt (neuer Stream).",
       "apparenceTitre": "Aussehen — Rahmenfarben",
       "apparenceHint": "Das Banner übernimmt die Farben des auf die Szene angewendeten Widget-Rahmens (siehe Rahmen-Dialog). Ohne aktiven Rahmen wird das Standard-Schwarz-Weiß-Theme verwendet.",
+      "policeSysteme": "Systemschrift (Standard)",
       "testPseudo": "ViewerTest",
       "testMessage": "Dies ist meine erste Nachricht!"
     },

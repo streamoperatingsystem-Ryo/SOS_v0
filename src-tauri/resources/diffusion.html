@@ -1821,7 +1821,12 @@
           rgba(10, 10, 10, 0.97) 100%
         );
         box-shadow: 0 -6px 30px rgba(0, 0, 0, 0.55);
-        overflow: hidden;
+        /* visible : la mascotte Streamy déborde volontairement de la barre. */
+        overflow: visible;
+        /* Police configurable (modale Bandeau > Apparence) : --bpm-fonte posée
+           par applyBandeauPMConfig ; absente = police système (historique). */
+        font-family: var(--bpm-fonte, system-ui, "Segoe UI Emoji",
+          "Apple Color Emoji", "Noto Color Emoji", sans-serif);
         /* Border-top gradient aux couleurs du cadre SVG (comme les messages
            chat). border-image applique le gradient UNIQUEMENT à la bordure. */
         border-top: 2px solid;
@@ -1852,11 +1857,35 @@
       .bandeau-pm-root.pos-bas .bandeau-pm-ligne { top: 0; }
       .bandeau-pm-root.pos-haut .bandeau-pm-ligne { bottom: 0; }
 
+      /* Mascotte Streamy : ancrée à droite de la barre, plus haute qu'elle —
+         déborde vers le haut (pos-bas) ou vers le bas (pos-haut, sinon elle
+         sortirait de l'écran). Lue aux couleurs du cadre via drop-shadow. */
+      .bandeau-pm-streamy {
+        position: absolute;
+        right: 44px;
+        /* bottom négatif : les pieds de Streamy plongent sous le bord de la
+           barre — il « chevauche » le bandeau plutôt que d'être posé dessus. */
+        bottom: -24px;
+        height: 340%;
+        width: auto;
+        object-fit: contain;
+        pointer-events: none;
+        /* Miroir horizontal : Streamy fait face au contenu du bandeau. */
+        transform: scaleX(-1);
+        filter: drop-shadow(0 0 14px rgba(var(--bpm-rgb-prim, 224, 224, 224), 0.55));
+      }
+      .bandeau-pm-root.pos-haut .bandeau-pm-streamy {
+        bottom: auto;
+        top: -24px;
+      }
+
       .bandeau-pm-contenu {
         display: flex;
         align-items: center;
         gap: 18px;
-        padding: 16px 40px;
+        /* padding-right large : réserve la place de la mascotte (le texte ne
+           passe pas dessous). */
+        padding: 16px 300px 16px 40px;
         position: relative;
       }
       .bandeau-pm-badge {
@@ -6278,15 +6307,23 @@
         contenuEl.appendChild(bpmAvatarEl);
         contenuEl.appendChild(texteWrap);
 
+        // Mascotte Streamy à droite — déborde la barre en hauteur (asset de
+        // marque servi sur /brand/, cf. brand_bytes dans server.rs).
+        var streamyEl = document.createElement("img");
+        streamyEl.className = "bandeau-pm-streamy";
+        streamyEl.src = "/brand/streamy-welcome.png";
+        streamyEl.alt = "";
+
         bpmBarre.appendChild(ligneEl);
         bpmBarre.appendChild(contenuEl);
+        bpmBarre.appendChild(streamyEl);
         bpmRoot.appendChild(bpmBarre);
         stageEl.appendChild(bpmRoot);
 
         bpmAppliquerCouleurs();
       }
 
-      /// Applique la config (position/duree) au root bandeau.
+      /// Applique la config (position/duree/police) au root bandeau.
       function applyBandeauPMConfig(cfg) {
         if (typeof cfg.duree_ms === "number") bpmConfig.duree_ms = cfg.duree_ms;
         if (cfg.position === "bas" || cfg.position === "haut") {
@@ -6294,6 +6331,14 @@
           if (bpmRoot) {
             bpmRoot.classList.remove("pos-bas", "pos-haut");
             bpmRoot.classList.add("pos-" + cfg.position);
+          }
+        }
+        // Police : whitelist alphanumérique (injection CSS). "" = système.
+        if (typeof cfg.police === "string" && bpmRoot) {
+          if (/^[A-Za-z0-9]+$/.test(cfg.police)) {
+            bpmRoot.style.setProperty("--bpm-fonte", "'" + cfg.police + "'");
+          } else {
+            bpmRoot.style.removeProperty("--bpm-fonte");
           }
         }
       }

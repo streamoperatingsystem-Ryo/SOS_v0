@@ -55,6 +55,12 @@ export async function bandeauSetPosition(position: "bas" | "haut"): Promise<void
   await refresh();
 }
 
+/// Police Google embarquée (id woff2). "" = police système.
+export async function bandeauSetPolice(police: string): Promise<void> {
+  await tauri.bandeauSetConfig(undefined, undefined, undefined, police);
+  await refresh();
+}
+
 export async function bandeauStop(): Promise<void> {
   await tauri.bandeauStop();
 }

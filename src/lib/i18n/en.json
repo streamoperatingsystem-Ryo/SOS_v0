@@ -711,6 +711,7 @@
       "testHint": "\"Test\" shows a fake banner on the broadcast. \"Reset session\" makes all viewers eligible again (new stream).",
       "apparenceTitre": "Appearance — frame colors",
       "apparenceHint": "The banner uses the widget frame colors applied to the scene (see the Frames modal). Without an active frame, the default black & white theme is used.",
+      "policeSysteme": "System (default)",
       "testPseudo": "ViewerTest",
       "testMessage": "This is my first message!"
     },

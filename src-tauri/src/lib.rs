@@ -2789,16 +2789,17 @@ fn bandeau_etat(state: tauri::State<'_, bandeau::BandeauState>) -> bandeau::Band
     state.etat()
 }
 
-/// Met à jour la config du bandeau (merge partiel : actif/duree_ms/position).
-/// Persiste + émet la config vers diffusion.html + l'état vers le dashboard.
+/// Met à jour la config du bandeau (merge partiel : actif/duree_ms/position/
+/// police). Persiste + émet la config vers diffusion.html + l'état dashboard.
 #[tauri::command]
 fn bandeau_set_config(
     state: tauri::State<'_, bandeau::BandeauState>,
     actif: Option<bool>,
     duree_ms: Option<u64>,
     position: Option<String>,
+    police: Option<String>,
 ) -> Result<(), String> {
-    state.set_config(actif, duree_ms, position)
+    state.set_config(actif, duree_ms, position, police)
 }
 
 /// Stop immédiat du bandeau courant (annule timer + émet stop vers diffusion).

@@ -711,6 +711,7 @@
       "testHint": "«Probar» muestra un banner ficticio en la difusión. «Reiniciar sesión» hace a todos los espectadores elegibles de nuevo (nuevo stream).",
       "apparenceTitre": "Apariencia — colores del marco",
       "apparenceHint": "El banner toma los colores del marco de widget aplicado a la escena (ver modal Marcos). Sin marco activo, se usa el tema blanco y negro por defecto.",
+      "policeSysteme": "Sistema (predeterminada)",
       "testPseudo": "ViewerTest",
       "testMessage": "¡Este es mi primer mensaje!"
     },

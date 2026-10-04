@@ -711,6 +711,7 @@
       "testHint": "« Tester » affiche un bandeau fictif côté diffusion. « Reset session » rend tous les viewers à nouveau éligibles (nouveau stream).",
       "apparenceTitre": "Apparence — couleurs du cadre",
       "apparenceHint": "Le bandeau reprend les couleurs du cadre widget appliqué à la scène (voir modale Cadres). Sans cadre actif, le thème noir & blanc par défaut est utilisé.",
+      "policeSysteme": "Système (défaut)",
       "testPseudo": "ViewerTest",
       "testMessage": "Ceci est mon premier message !"
     },

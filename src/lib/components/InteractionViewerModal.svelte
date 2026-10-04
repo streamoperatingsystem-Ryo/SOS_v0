@@ -30,9 +30,11 @@
     bandeauSetActif,
     bandeauSetDuree,
     bandeauSetPosition,
+    bandeauSetPolice,
     bandeauResetSession,
     bandeauTester,
   } from "../stores/bandeau";
+  import { POLICES_TITRE } from "../fonts";
   import {
     TYPES_ALERTE,
     type TypeAlerte,
@@ -607,6 +609,7 @@
   let bDureeMs = $derived(bEtat?.duree_ms ?? 6000);
   let bDureeSec = $derived(bDureeMs / 1000);
   let bPosition = $derived(bEtat?.position ?? "bas");
+  let bPolice = $derived(bEtat?.police ?? "");
 
   async function onBandeauDureeInput(e: Event) {
     const sec = parseFloat((e.target as HTMLInputElement).value);
@@ -1003,6 +1006,20 @@
                 <p class="hint">
                   {$t("interactions.bandeau.apparenceHint")}
                 </p>
+              </div>
+              <div class="bloc">
+                <div class="bloc-titre">{$t("commun.police")}</div>
+                <!-- Sélection persistée au change (set_config → disque + WS). -->
+                <select
+                  class="police-select"
+                  value={bPolice}
+                  onchange={(e) => bandeauSetPolice(e.currentTarget.value)}
+                >
+                  <option value="">{$t("interactions.bandeau.policeSysteme")}</option>
+                  {#each POLICES_TITRE as p (p.id)}
+                    <option value={p.id} style="font-family: '{p.id}', sans-serif;">{p.nom}</option>
+                  {/each}
+                </select>
               </div>
             {/if}
           </div>
@@ -1999,6 +2016,26 @@
     opacity: 0.85;
     border-bottom: 1px solid var(--bordure-ui);
     padding-bottom: 0.2rem;
+  }
+  /* Selecteur de police (bandeau) — même style que TitreEditForm. */
+  .police-select {
+    width: 100%;
+    padding: 0.4rem 0.5rem;
+    background: var(--fond-controle);
+    color: var(--texte);
+    border: 1px solid var(--bordure-ui);
+    font: inherit;
+    font-size: 0.85rem;
+    cursor: pointer;
+  }
+  .police-select:focus {
+    outline: none;
+    border-color: var(--accent-ui);
+  }
+  .police-select option {
+    padding: 0.3rem;
+    background: var(--fond);
+    color: var(--texte);
   }
 
   /* Checkbox — accent violet néon */

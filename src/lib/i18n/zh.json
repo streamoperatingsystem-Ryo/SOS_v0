@@ -711,6 +711,7 @@
       "testHint": "“测试”在直播上显示一个模拟横幅。“重置会话”让所有观众重新具备资格（新直播）。",
       "apparenceTitre": "外观——边框颜色",
       "apparenceHint": "横幅沿用应用于场景的小组件边框颜色（见边框弹窗）。无启用边框时使用默认黑白主题。",
+      "policeSysteme": "系统（默认）",
       "testPseudo": "ViewerTest",
       "testMessage": "这是我的第一条消息！"
     },

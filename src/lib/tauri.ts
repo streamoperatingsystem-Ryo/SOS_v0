@@ -1913,9 +1913,10 @@ export const tauri = {
   async bandeauSetConfig(
     actif?: boolean,
     dureeMs?: number,
-    position?: "bas" | "haut"
+    position?: "bas" | "haut",
+    police?: string
   ): Promise<void> {
-    await invoke("bandeau_set_config", { actif, dureeMs, position });
+    await invoke("bandeau_set_config", { actif, dureeMs, position, police });
   },
 
   /// Stop immédiat du bandeau courant.
@@ -2077,4 +2078,6 @@ export interface BandeauEtat {
   actif: boolean;
   duree_ms: number;
   position: "bas" | "haut";
+  /// Id de police Google embarquée ("BebasNeue"…) — "" = police système.
+  police: string;
 }

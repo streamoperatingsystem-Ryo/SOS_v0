@@ -42,6 +42,10 @@ pub struct BandeauConfig {
     /// Position : "bas" (défaut) ou "haut".
     #[serde(default = "default_position")]
     pub position: String,
+    /// Police Google embarquée (id fichier woff2, ex: "BebasNeue").
+    /// "" = police système (défaut — rendu historique du bandeau).
+    #[serde(default)]
+    pub police: String,
 }
 
 fn default_duree_ms() -> u64 {
@@ -58,6 +62,7 @@ impl Default for BandeauConfig {
             actif: true,
             duree_ms: default_duree_ms(),
             position: default_position(),
+            police: String::new(),
         }
     }
 }
@@ -68,6 +73,7 @@ pub struct BandeauEtat {
     pub actif: bool,
     pub duree_ms: u64,
     pub position: String,
+    pub police: String,
 }
 
 /// Format du fichier bandeau_premier_message.json sur disque.
@@ -188,7 +194,7 @@ impl BandeauState {
     // ===== Contrôles =====
 
     /// Met à jour la config (merge partiel) + persiste + émet config WS + état.
-    pub fn set_config(&self, actif: Option<bool>, duree_ms: Option<u64>, position: Option<String>) -> Result<(), String> {
+    pub fn set_config(&self, actif: Option<bool>, duree_ms: Option<u64>, position: Option<String>, police: Option<String>) -> Result<(), String> {
         {
             let mut cfg = self.config.lock().unwrap();
             if let Some(a) = actif { cfg.actif = a; }
@@ -196,6 +202,13 @@ impl BandeauState {
             if let Some(p) = position {
                 if p == "bas" || p == "haut" {
                     cfg.position = p;
+                }
+            }
+            if let Some(f) = police {
+                // Whitelist : id de police = alphanumérique uniquement
+                // (injecté en CSS font-family côté diffusion).
+                if f.is_empty() || f.chars().all(|c| c.is_ascii_alphanumeric()) {
+                    cfg.police = f;
                 }
             }
         }
@@ -228,6 +241,7 @@ impl BandeauState {
             actif: cfg.actif,
             duree_ms: cfg.duree_ms,
             position: cfg.position.clone(),
+            police: cfg.police.clone(),
         }
     }
 
@@ -246,6 +260,7 @@ impl BandeauState {
             "config": {
                 "duree_ms": cfg.duree_ms,
                 "position": cfg.position,
+                "police": cfg.police,
             },
         });
         let _ = self.chat_tx.send(msg.to_string());
