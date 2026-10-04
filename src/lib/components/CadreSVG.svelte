@@ -4,7 +4,6 @@
 
   interface Props {
     style: string;
-    variante?: string;
     largeur: number;
     hauteur: number;
     couleur?: string;
@@ -16,7 +15,6 @@
 
   let {
     style = "carre",
-    variante = undefined,
     largeur = 100,
     hauteur = 100,
     couleur = "#ffffff",
@@ -27,7 +25,7 @@
   }: Props = $props();
 
   let svgString = $derived(
-    genererSVG(style, variante, largeur, hauteur, couleur, couleurFin, strokeWidth, idCadre, gradientAngle)
+    genererSVG(style, largeur, hauteur, couleur, couleurFin, strokeWidth, idCadre, gradientAngle)
   );
 </script>
 

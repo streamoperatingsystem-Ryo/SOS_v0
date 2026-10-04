@@ -65,10 +65,11 @@
     DISPOSITION_PAD,
     TOUCHES_RESERVEES,
     NOMS_AFFICHAGE,
-    LIBELLES_RESERVEES,
     NB_PLAGES,
   } from "../stores/padNumerique";
   import { sceneStore } from "../stores/scene";
+  import { t } from "../stores/langue";
+  import { get } from "svelte/store";
   import {
     tauri,
     type WelcomeViewerConfig,
@@ -116,42 +117,42 @@
   let typeActif = $state<TypeAlerte>("follow");
   let cfgSel = $derived(cfgType(typeActif));
 
-  function cfgType(t: TypeAlerte): AlerteTypeConfig {
-    return configType(alertes, t);
+  function cfgType(ty: TypeAlerte): AlerteTypeConfig {
+    return configType(alertes, ty);
   }
-  function majAlerte(t: TypeAlerte, patch: Partial<AlerteTypeConfig>) {
-    void sauverConfigType(t, { ...cfgType(t), ...patch });
+  function majAlerte(ty: TypeAlerte, patch: Partial<AlerteTypeConfig>) {
+    void sauverConfigType(ty, { ...cfgType(ty), ...patch });
   }
-  function toggleAlerteActif(t: TypeAlerte) {
-    majAlerte(t, { actif: !cfgType(t).actif });
+  function toggleAlerteActif(ty: TypeAlerte) {
+    majAlerte(ty, { actif: !cfgType(ty).actif });
   }
-  async function testerAlerte(t: TypeAlerte) {
+  async function testerAlerte(ty: TypeAlerte) {
     try {
-      await tauri.alertesTester(t);
+      await tauri.alertesTester(ty);
     } catch {
     }
   }
-  async function importerSonAlerte(t: TypeAlerte) {
+  async function importerSonAlerte(ty: TypeAlerte) {
     try {
       const rel = await tauri.importSon();
-      if (rel) majAlerte(t, { son: rel });
+      if (rel) majAlerte(ty, { son: rel });
     } catch (e) {
-      alert("Import refusé : " + e);
+      alert(get(t)("commun.importRefuse", { erreur: String(e) }));
     }
   }
   // Mode média effectif du type : "aucun" | "image" | "video".
-  function modeMedia(t: TypeAlerte): "aucun" | "image" | "video" {
-    const cfg = cfgType(t);
+  function modeMedia(ty: TypeAlerte): "aucun" | "image" | "video" {
+    const cfg = cfgType(ty);
     if (cfg.media && cfg.media_kind === "video") return "video";
     if (cfg.media) return "image";
     return "aucun";
   }
-  async function importerMediaAlerte(t: TypeAlerte, kind: "image" | "video") {
+  async function importerMediaAlerte(ty: TypeAlerte, kind: "image" | "video") {
     try {
       const rel = await tauri.importAlerteMedia(kind);
-      if (rel) majAlerte(t, { media: rel, media_kind: kind });
+      if (rel) majAlerte(ty, { media: rel, media_kind: kind });
     } catch (e) {
-      alert("Import refusé : " + e);
+      alert(get(t)("commun.importRefuse", { erreur: String(e) }));
     }
   }
 
@@ -167,8 +168,7 @@
       actif: true,
       commande: "",
       duree_ms: 5000,
-      texte_template: "{pseudo} lance {commande} !",
-      couleur: "#ffffff",
+      texte_template: get(t)("interactions.commandes.defautTemplate"),
       taille_px: 48,
       cooldown_viewer_s: 0,
       cooldown_global_s: 0,
@@ -199,7 +199,7 @@
       const rel = await tauri.importAlerteMedia(kind);
       if (rel) majCommande({ media: rel, media_kind: kind });
     } catch (e) {
-      alert("Import refusé : " + e);
+      alert(get(t)("commun.importRefuse", { erreur: String(e) }));
     }
   }
   async function importerSonCommande() {
@@ -207,7 +207,7 @@
       const rel = await tauri.importSon();
       if (rel) majCommande({ son: rel });
     } catch (e) {
-      alert("Import refusé : " + e);
+      alert(get(t)("commun.importRefuse", { erreur: String(e) }));
     }
   }
   // Mode média effectif de la commande : "aucun" | "image" | "video".
@@ -234,11 +234,11 @@
   );
 
   /// Mode média effectif de la touche : "aucun" | "audio" | "image" | "video".
-  function modeMediaPad(t: ToucheConfig | null): "aucun" | "audio" | "image" | "video" {
-    if (!t) return "aucun";
-    if (t.media_type === "audio") return "audio";
-    if (t.media_type === "video") return "video";
-    if (t.media_type === "image") return "image";
+  function modeMediaPad(tc: ToucheConfig | null): "aucun" | "audio" | "image" | "video" {
+    if (!tc) return "aucun";
+    if (tc.media_type === "audio") return "audio";
+    if (tc.media_type === "video") return "video";
+    if (tc.media_type === "image") return "image";
     return "aucun";
   }
 
@@ -254,7 +254,7 @@
     try {
       await padImporterMedia(padSelCode, padPlage, kind);
     } catch (e) {
-      alert("Import refusé : " + String(e));
+      alert(get(t)("commun.importRefuse", { erreur: String(e) }));
     }
   }
 
@@ -264,7 +264,7 @@
     try {
       await padImporterSon(padSelCode, padPlage);
     } catch (e) {
-      alert("Import refusé : " + String(e));
+      alert(get(t)("commun.importRefuse", { erreur: String(e) }));
     }
   }
 
@@ -362,7 +362,7 @@
       clip_thumbnail: clip.thumbnail_url,
       clip_mp4_url: mp4Url,
       clip_duree_ms: Math.round(clip.duration * 1000),
-      message: `Bienvenue ${login} !`,
+      message: get(t)("interactions.bienvenue.messageDefaut", { login }),
       display_name: login,
       avatar: null,
     };
@@ -614,33 +614,33 @@
   }
 
   async function onBandeauTester() {
-    await bandeauTester("ViewerTest", "Ceci est mon premier message !");
+    await bandeauTester(get(t)("interactions.bandeau.testPseudo"), get(t)("interactions.bandeau.testMessage"));
   }
 </script>
 
-<Modal title="Interactions chat" onClose={onFermer}>
+<Modal title={$t("interactions.titre")} onClose={onFermer}>
   <div class="tabs">
     <button class="tab" class:active={tab === "bienvenue"} onclick={() => (tab = "bienvenue")}>
-      Clip de bienvenue
+      {$t("interactions.tabBienvenue")}
     </button>
     <button class="tab" class:active={tab === "bandeau"} onclick={() => (tab = "bandeau")}>
-      Bandeau premier message
+      {$t("interactions.tabBandeau")}
     </button>
     <button class="tab" class:active={tab === "alertes"} onclick={() => (tab = "alertes")}>
-      Alertes
+      {$t("interactions.tabAlertes")}
     </button>
     <button class="tab" class:active={tab === "commandes"} onclick={() => (tab = "commandes")}>
-      Commandes
+      {$t("interactions.tabCommandes")}
     </button>
     <button
       class="tab"
       class:active={tab === "pad"}
       onclick={() => { tab = "pad"; void chargerPad(); }}
     >
-      Pad numérique
+      {$t("interactions.tabPad")}
     </button>
     <button class="tab" class:active={tab === "position"} onclick={() => (tab = "position")}>
-      Squelette de position
+      {$t("interactions.tabPosition")}
     </button>
   </div>
 
@@ -654,21 +654,21 @@
               class:selected={secBienvenue === "general"}
               onclick={() => (secBienvenue = "general")}
             >
-              <span class="alerte-nom">Général</span>
+              <span class="alerte-nom">{$t("commun.general")}</span>
             </button>
             <button
               class="alerte-select"
               class:selected={secBienvenue === "file"}
               onclick={() => (secBienvenue = "file")}
             >
-              <span class="alerte-nom">File d'attente</span>
+              <span class="alerte-nom">{$t("interactions.bienvenue.secFile")}</span>
             </button>
             <button
               class="alerte-select"
               class:selected={secBienvenue === "attribution"}
               onclick={() => (secBienvenue = "attribution")}
             >
-              <span class="alerte-nom">Attribution</span>
+              <span class="alerte-nom">{$t("interactions.bienvenue.secAttribution")}</span>
             </button>
           </div>
 
@@ -677,20 +677,20 @@
             {#if secBienvenue === "general"}
               <!-- Config globale + overlay -->
               <div class="bloc">
-                <div class="bloc-titre">Général</div>
+                <div class="bloc-titre">{$t("commun.general")}</div>
                 <label class="toggle">
                   <input
                     type="checkbox"
                     checked={actif}
                     onchange={(e) => welcomeSetConfigGlobaleActif(e.currentTarget.checked)}
                   />
-                  <span>Clips de bienvenue activés</span>
+                  <span>{$t("interactions.bienvenue.actifs")}</span>
                 </label>
 
                 <div class="duree-row">
-                  <span class="field-label">Durée d'affichage</span>
+                  <span class="field-label">{$t("interactions.bienvenue.dureeAffichage")}</span>
                   <span class="duree-val">
-                    {dureeAffichageSec === 0 ? "Naturelle" : `${dureeAffichageSec}s`}
+                    {dureeAffichageSec === 0 ? $t("interactions.bienvenue.naturelle") : `${dureeAffichageSec}s`}
                   </span>
                 </div>
                 <input
@@ -702,18 +702,18 @@
                   value={dureeAffichageSec}
                   oninput={onDureeInput}
                 />
-                <p class="hint">0 = durée naturelle du clip · 1-30s = forcé</p>
+                <p class="hint">{$t("interactions.bienvenue.dureeHint")}</p>
               </div>
             {/if}
 
             {#if secBienvenue === "file"}
               <!-- File d'attente -->
               <div class="bloc">
-                <div class="bloc-titre">File d'attente ({queue.length})</div>
+                <div class="bloc-titre">{$t("interactions.bienvenue.fileTitre", { n: queue.length })}</div>
 
                 {#if current}
                   <div class="current">
-                    <div class="current-label">En cours</div>
+                    <div class="current-label">{$t("interactions.bienvenue.enCours")}</div>
                     <div class="item">
                       {#if current.avatar}
                         <img src={current.avatar} alt="" class="avatar" />
@@ -723,8 +723,8 @@
                         <div class="item-clip">{current.clip_titre}</div>
                       </div>
                       <div class="item-actions">
-                        <button title="Skip" onclick={() => welcomeSkip()}>⏭</button>
-                        <button title="Stop tout" onclick={() => welcomeStop()}>⏹</button>
+                        <button title={$t("interactions.bienvenue.skipTitre")} onclick={() => welcomeSkip()}>⏭</button>
+                        <button title={$t("interactions.bienvenue.stopTout")} onclick={() => welcomeStop()}>⏹</button>
                       </div>
                     </div>
                   </div>
@@ -732,15 +732,15 @@
 
                 <div class="queue-actions">
                   <button onclick={() => welcomeVider()} disabled={queue.length === 0}>
-                    Vider
+                    {$t("commun.vider")}
                   </button>
                   <button onclick={() => welcomeResetSession()}>
-                    Reset session
+                    {$t("commun.resetSession")}
                   </button>
                 </div>
 
                 {#if queue.length === 0}
-                  <p class="empty">Aucun clip en attente</p>
+                  <p class="empty">{$t("interactions.bienvenue.aucunClip")}</p>
                 {:else}
                   <ul class="queue-list">
                     {#each queue as item, i (item.id)}
@@ -753,9 +753,9 @@
                           <div class="item-clip">{item.clip_titre}</div>
                         </div>
                         <div class="item-actions">
-                          <button title="Remonter" onclick={() => welcomeRemonter(item.id)} disabled={i === 0}>↑</button>
-                          <button title="Descendre" onclick={() => welcomeDescendre(item.id)} disabled={i === queue.length - 1}>↓</button>
-                          <button title="Retirer" onclick={() => welcomeRetirer(item.id)}>✕</button>
+                          <button title={get(t)("interactions.bienvenue.remonter")} onclick={() => welcomeRemonter(item.id)} disabled={i === 0}>↑</button>
+                          <button title={get(t)("interactions.bienvenue.descendre")} onclick={() => welcomeDescendre(item.id)} disabled={i === queue.length - 1}>↓</button>
+                          <button title={get(t)("commun.retirer")} onclick={() => welcomeRetirer(item.id)}>✕</button>
                         </div>
                       </li>
                     {/each}
@@ -767,35 +767,35 @@
             {#if secBienvenue === "attribution"}
               <!-- Attribution followers → clips -->
               <div class="bloc">
-                <div class="bloc-titre">Attribution (followers Twitch)</div>
+                <div class="bloc-titre">{$t("interactions.bienvenue.attributionTitre")}</div>
           <div class="actions-bar">
             <button
               class="action"
               onclick={onAttribuerAuto}
               disabled={attributing || listeAvecStreamer.length === 0}
             >
-              {attributing ? "Attribution en cours..." : "Attribution auto (tous les followers)"}
+              {attributing ? $t("interactions.bienvenue.attributionEnCours") : $t("interactions.bienvenue.attributionAuto")}
             </button>
             {#if progress}
               <span class="progress">
-                {progress.succes} succès / {progress.echecs} échecs — {progress.login}
+                {$t("interactions.bienvenue.progressResult", { succes: progress.succes, echecs: progress.echecs, login: progress.login })}
               </span>
             {/if}
           </div>
 
           <div class="attribution-body">
             <div class="followers-list">
-              <h3>Followers ({listeAvecStreamer.length})</h3>
+              <h3>{$t("interactions.bienvenue.followersTitre", { n: listeAvecStreamer.length })}</h3>
               <input
                 class="search-input"
                 type="text"
-                placeholder="Rechercher un follower..."
+                placeholder={$t("interactions.bienvenue.rechercherFollower")}
                 bind:value={searchQuery}
               />
               {#if listeAvecStreamer.length === 0}
-                <p class="empty">Aucun follower. Connecter Twitch + charger la communauté.</p>
+                <p class="empty">{$t("interactions.bienvenue.aucunFollower")}</p>
               {:else if followersFiltres.length === 0}
-                <p class="empty">Aucun follower ne correspond à « {searchQuery} ».</p>
+                <p class="empty">{$t("interactions.bienvenue.aucunFollowerMatch", { q: searchQuery })}</p>
               {:else}
                 <ul>
                   {#each followersFiltres as f (f.login)}
@@ -814,10 +814,10 @@
                         {/if}
                       </button>
                       {#if config}
-                        <button class="mini-btn" title={config.actif ? "Désactiver" : "Activer"} onclick={() => onToggleActif(f.login)}>
+                        <button class="mini-btn" title={config.actif ? get(t)("commun.desactiver") : get(t)("commun.activer")} onclick={() => onToggleActif(f.login)}>
                           {config.actif ? "⏸" : "▶"}
                         </button>
-                        <button class="mini-btn" title="Supprimer" onclick={() => onSupprimer(f.login)}>✕</button>
+                        <button class="mini-btn" title={get(t)("commun.supprimer")} onclick={() => onSupprimer(f.login)}>✕</button>
                       {/if}
                     </li>
                   {/each}
@@ -827,11 +827,11 @@
 
             {#if selectedLogin}
               <div class="clip-picker">
-                <h3>Clip de {selectedLogin}</h3>
+                <h3>{$t("interactions.bienvenue.clipDe", { login: selectedLogin })}</h3>
                 {#if loadingClips}
-                  <p class="empty">Chargement des clips...</p>
+                  <p class="empty">{$t("interactions.bienvenue.chargementClips")}</p>
                 {:else if clipsStreamer.length === 0}
-                  <p class="empty">Aucun clip disponible pour ce streamer.</p>
+                  <p class="empty">{$t("interactions.bienvenue.aucunClipDispo")}</p>
                 {:else}
                   <ul class="clips-list">
                     {#each clipsStreamer as clip (clip.id)}
@@ -847,27 +847,27 @@
                         <div class="clip-actions">
                           <button
                             class="mini-btn"
-                            title="Attribuer ce clip à ce viewer"
+                            title={get(t)("interactions.bienvenue.attribuerTitle")}
                             onclick={() => onAttribuerManuel(clip)}
                           >
-                            Attribuer
+                            {get(t)("interactions.bienvenue.attribuer")}
                           </button>
                           {#if testingClipId === clip.id}
                             <button
                               class="test-btn stop"
-                              title="Arrêter le clip"
+                              title={get(t)("interactions.bienvenue.arreterClip")}
                               onclick={onStopperTest}
                             >
-                              ⏹ Stop
+                              ⏹ {get(t)("widgetSpeedrun.stop")}
                             </button>
                           {:else}
                             <button
                               class="test-btn"
-                              title="Tester ce clip côté diffusion"
+                              title={get(t)("interactions.bienvenue.testerTitle")}
                               onclick={() => onTesterClip(clip)}
                               disabled={!!testingClipId}
                             >
-                              Tester
+                              {get(t)("commun.tester")}
                             </button>
                           {/if}
                         </div>
@@ -895,35 +895,35 @@
               class:selected={secBandeau === "general"}
               onclick={() => (secBandeau = "general")}
             >
-              <span class="alerte-nom">Général</span>
+              <span class="alerte-nom">{$t("commun.general")}</span>
             </button>
             <button
               class="alerte-select"
               class:selected={secBandeau === "duree"}
               onclick={() => (secBandeau = "duree")}
             >
-              <span class="alerte-nom">Durée</span>
+              <span class="alerte-nom">{$t("commun.duree")}</span>
             </button>
             <button
               class="alerte-select"
               class:selected={secBandeau === "position"}
               onclick={() => (secBandeau = "position")}
             >
-              <span class="alerte-nom">Position</span>
+              <span class="alerte-nom">{$t("interactions.bandeau.secPosition")}</span>
             </button>
             <button
               class="alerte-select"
               class:selected={secBandeau === "test"}
               onclick={() => (secBandeau = "test")}
             >
-              <span class="alerte-nom">Test &amp; session</span>
+              <span class="alerte-nom">{$t("interactions.bandeau.secTest")}</span>
             </button>
             <button
               class="alerte-select"
               class:selected={secBandeau === "apparence"}
               onclick={() => (secBandeau = "apparence")}
             >
-              <span class="alerte-nom">Apparence</span>
+              <span class="alerte-nom">{$t("interactions.bandeau.secApparence")}</span>
             </button>
           </div>
 
@@ -931,25 +931,24 @@
           <div class="alerte-detail">
             {#if secBandeau === "general"}
               <div class="bloc">
-                <div class="bloc-titre">Général</div>
+                <div class="bloc-titre">{$t("commun.general")}</div>
                 <label class="toggle">
                   <input
                     type="checkbox"
                     checked={bActif}
                     onchange={(e) => bandeauSetActif(e.currentTarget.checked)}
                   />
-                  <span>Bandeau premier message activé</span>
+                  <span>{$t("interactions.bandeau.actif")}</span>
                 </label>
                 <p class="hint">
-                  Affiche un bandeau en {bPosition === "haut" ? "haut" : "bas"} d'écran
-                  au premier message de chaque viewer (toutes plateformes).
+                  {$t("interactions.bandeau.actifHint", { pos: bPosition === "haut" ? $t("interactions.bandeau.posHaut") : $t("interactions.bandeau.posBas") })}
                 </p>
               </div>
             {:else if secBandeau === "duree"}
               <div class="bloc">
-                <div class="bloc-titre">Durée d'affichage</div>
+                <div class="bloc-titre">{$t("interactions.bandeau.dureeAffichage")}</div>
                 <div class="duree-row">
-                  <span class="field-label">Durée</span>
+                  <span class="field-label">{$t("commun.duree")}</span>
                   <span class="duree-val">{bDureeSec}s</span>
                 </div>
                 <input
@@ -961,51 +960,48 @@
                   value={bDureeSec}
                   oninput={onBandeauDureeInput}
                 />
-                <p class="hint">2-20s · le bandeau s'auto-masque à la fin</p>
+                <p class="hint">{$t("interactions.bandeau.dureeHint")}</p>
               </div>
             {:else if secBandeau === "position"}
               <div class="bloc">
-                <div class="bloc-titre">Position</div>
+                <div class="bloc-titre">{$t("interactions.bandeau.position")}</div>
                 <div class="position-row">
                   <button
                     class="pos-btn"
                     class:active={bPosition === "bas"}
                     onclick={() => bandeauSetPosition("bas")}
                   >
-                    ▾ Bas
+                    ▾ {$t("interactions.bandeau.bas")}
                   </button>
                   <button
                     class="pos-btn"
                     class:active={bPosition === "haut"}
                     onclick={() => bandeauSetPosition("haut")}
                   >
-                    ▴ Haut
+                    ▴ {$t("interactions.bandeau.haut")}
                   </button>
                 </div>
               </div>
             {:else if secBandeau === "test"}
               <div class="bloc">
-                <div class="bloc-titre">Test &amp; session</div>
+                <div class="bloc-titre">{$t("interactions.bandeau.secTest")}</div>
                 <div class="queue-actions">
                   <button onclick={onBandeauTester} disabled={!bActif}>
-                    Tester le bandeau
+                    {$t("interactions.bandeau.tester")}
                   </button>
                   <button onclick={() => bandeauResetSession()}>
-                    Reset session
+                    {$t("commun.resetSession")}
                   </button>
                 </div>
                 <p class="hint">
-                  « Tester » affiche un bandeau fictif côté diffusion. « Reset session »
-                  rend tous les viewers à nouveau éligibles (nouveau stream).
+                  {$t("interactions.bandeau.testHint")}
                 </p>
               </div>
             {:else}
               <div class="bloc">
-                <div class="bloc-titre">Apparence — couleurs du cadre</div>
+                <div class="bloc-titre">{$t("interactions.bandeau.apparenceTitre")}</div>
                 <p class="hint">
-                  Le bandeau reprend les couleurs du cadre widget appliqué à la scène
-                  (voir modale Cadres). Sans cadre actif, le thème noir &amp; blanc
-                  par défaut est utilisé.
+                  {$t("interactions.bandeau.apparenceHint")}
                 </p>
               </div>
             {/if}
@@ -1017,31 +1013,27 @@
     {#if tab === "alertes"}
       <div class="tab-body">
         <p class="hint">
-          Twitch. Les nouveaux followers sont détectés automatiquement
-          (vérification toutes les 60 s). Sélectionnez un type à gauche pour
-          régler son média, son texte et son comportement. La position/taille
-          de l'overlay est réglée dans l'onglet « Squelette de position »
-          (partagée avec les clips de bienvenue).
+          {$t("interactions.alertes.hintIntro")}
         </p>
 
         <div class="alertes-layout">
           <!-- Colonne gauche : liste des types (nom + ON/OFF) -->
           <div class="alertes-liste">
-            {#each TYPES_ALERTE as t (t)}
-              {@const c = cfgType(t)}
-              <div class="alerte-item" class:selected={typeActif === t}>
+            {#each TYPES_ALERTE as ty (ty)}
+              {@const c = cfgType(ty)}
+              <div class="alerte-item" class:selected={typeActif === ty}>
                 <button
                   class="alerte-select"
-                  class:selected={typeActif === t}
-                  onclick={() => (typeActif = t)}
+                  class:selected={typeActif === ty}
+                  onclick={() => (typeActif = ty)}
                 >
-                  <span class="alerte-nom">{NOMS_ALERTE[t]}</span>
+                  <span class="alerte-nom">{NOMS_ALERTE[ty]}</span>
                 </button>
                 <button
                   class="alerte-toggle"
                   class:on={c.actif}
-                  onclick={() => toggleAlerteActif(t)}
-                  title={c.actif ? "Désactiver ce type d'alerte" : "Activer ce type d'alerte"}
+                  onclick={() => toggleAlerteActif(ty)}
+                  title={c.actif ? get(t)("interactions.alertes.desactiverType") : get(t)("interactions.alertes.activerType")}
                 >{c.actif ? "ON" : "OFF"}</button>
               </div>
             {/each}
@@ -1050,23 +1042,23 @@
           <!-- Panneau droit : config du type sélectionné -->
           <div class="alerte-detail">
             <div class="bloc">
-              <div class="bloc-titre">Média</div>
+              <div class="bloc-titre">{$t("commun.media")}</div>
               <div class="media-modes">
                 <button
                   class="mode-btn"
                   class:active={modeMedia(typeActif) === "aucun"}
                   onclick={() => majAlerte(typeActif, { media: undefined, media_kind: undefined, son: undefined })}
-                >Aucun</button>
+                >{$t("commun.aucun")}</button>
                 <button
                   class="mode-btn"
                   class:active={modeMedia(typeActif) === "image"}
                   onclick={() => importerMediaAlerte(typeActif, "image")}
-                >Image</button>
+                >{$t("commun.image")}</button>
                 <button
                   class="mode-btn"
                   class:active={modeMedia(typeActif) === "video"}
                   onclick={() => importerMediaAlerte(typeActif, "video")}
-                >Vidéo</button>
+                >{$t("commun.video")}</button>
               </div>
               {#if cfgSel.media}
                 <div class="alerte-son">
@@ -1074,7 +1066,7 @@
                   <button
                     class="alerte-toggle"
                     onclick={() => majAlerte(typeActif, { media: undefined, media_kind: undefined })}
-                    title="Retirer le média"
+                    title={$t("commun.retirerMedia")}
                   >✕</button>
                 </div>
               {/if}
@@ -1085,25 +1077,24 @@
                     <button
                       class="alerte-toggle"
                       onclick={() => majAlerte(typeActif, { son: undefined })}
-                      title="Retirer le son"
+                      title={$t("commun.retirerSon")}
                     >✕</button>
                   {:else}
                     <button class="alerte-test" onclick={() => importerSonAlerte(typeActif)}>
-                      Importer un son
+                      {$t("commun.importerSon")}
                     </button>
                   {/if}
                 </div>
               {/if}
               <p class="hint">
-                Image = image + son + texte · Vidéo = vidéo seule (son inclus) +
-                texte · Aucun = icône + texte.
+                {$t("interactions.hintMedia")}
               </p>
             </div>
 
             <div class="bloc">
-              <div class="bloc-titre">Texte</div>
+              <div class="bloc-titre">{$t("commun.texte")}</div>
               <label class="alerte-field">
-                <span class="field-label">Texte</span>
+                <span class="field-label">{$t("commun.texte")}</span>
                 <input
                   value={cfgSel.texte_template}
                   spellcheck="false"
@@ -1111,17 +1102,13 @@
                 />
               </label>
               <p class="hint">
-                Variables : {'{pseudo} {nbViewers} {nbBits} {niveauSub} {nbMoisCumul} {destinataire}'}
+                {$t("interactions.alertes.variablesHint", { vars: "{pseudo} {nbViewers} {nbBits} {niveauSub} {nbMoisCumul} {destinataire}" })}
               </p>
               <p class="hint">
-                Variables : {'{pseudo} {nbViewers} {nbBits} {niveauSub} {nbMoisCumul} {destinataire}'}
-              </p>
-              <p class="hint">
-                La couleur du texte suit le cadre SVG de la scène (modale
-                « Vos cadres »). Sans cadre actif : blanc.
+                {$t("interactions.hintCadre")}
               </p>
               <label class="alerte-field">
-                <span class="field-label">Taille {cfgSel.taille_px}px</span>
+                <span class="field-label">{$t("commun.taille")} {cfgSel.taille_px}px</span>
                 <input
                   class="range"
                   type="range"
@@ -1135,10 +1122,10 @@
             </div>
 
             <div class="bloc">
-              <div class="bloc-titre">Comportement</div>
+              <div class="bloc-titre">{$t("commun.comportement")}</div>
               <div class="alerte-2col">
                 <label class="alerte-field">
-                  <span class="field-label">Durée (s)</span>
+                  <span class="field-label">{$t("commun.dureeS")}</span>
                   <input
                     type="number"
                     min="1"
@@ -1148,7 +1135,7 @@
                   />
                 </label>
                 <label class="alerte-field">
-                  <span class="field-label">Cooldown global (s)</span>
+                  <span class="field-label">{$t("interactions.cooldownGlobal")}</span>
                   <input
                     type="number"
                     min="0"
@@ -1159,7 +1146,7 @@
                 </label>
               </div>
               <label class="alerte-field">
-                <span class="field-label">Cooldown par viewer (s)</span>
+                <span class="field-label">{$t("interactions.cooldownViewer")}</span>
                 <input
                   type="number"
                   min="0"
@@ -1171,12 +1158,12 @@
             </div>
 
             <div class="bloc">
-              <div class="bloc-titre">Test</div>
+              <div class="bloc-titre">{$t("commun.test")}</div>
               <button class="alerte-test" onclick={() => testerAlerte(typeActif)} disabled={!cfgSel.actif}>
-                Tester l'alerte côté diffusion
+                {$t("interactions.alertes.testerBouton")}
               </button>
               <p class="hint">
-                Le Test contourne les cooldowns. Sans média : icône + texte.
+                {$t("interactions.testHint")}
               </p>
             </div>
           </div>
@@ -1187,10 +1174,7 @@
     {#if tab === "commandes"}
       <div class="tab-body">
         <p class="hint">
-          Commandes tapées dans le chat (ex: <b>!hype</b>). Quand un viewer
-          tape la commande, elle s'affiche en overlay sur la diffusion (même
-          moteur que les alertes : file d'attente, cooldowns, cadre SVG).
-          La position/taille est réglée dans l'onglet « Squelette de position ».
+          {$t("interactions.commandes.hintIntro")}
         </p>
 
         <div class="alertes-layout">
@@ -1209,12 +1193,12 @@
                   class="alerte-toggle"
                   class:on={c.actif}
                   onclick={() => majCommande({ actif: !c.actif })}
-                  title={c.actif ? "Désactiver cette commande" : "Activer cette commande"}
+                  title={c.actif ? get(t)("interactions.commandes.desactiver") : get(t)("interactions.commandes.activer")}
                 >{c.actif ? "ON" : "OFF"}</button>
               </div>
             {/each}
             <button class="alerte-test cmd-ajouter" onclick={onAjouterCommande}>
-              + Ajouter
+              + {$t("commun.ajouter")}
             </button>
           </div>
 
@@ -1222,9 +1206,9 @@
           <div class="alerte-detail">
             {#if cmdSel}
               <div class="bloc">
-                <div class="bloc-titre">Commande</div>
+                <div class="bloc-titre">{$t("interactions.commandes.titreBloc")}</div>
                 <label class="alerte-field">
-                  <span class="field-label">Commande (sans le !)</span>
+                  <span class="field-label">{$t("interactions.commandes.label")}</span>
                   <input
                     value={cmdSel.commande}
                     spellcheck="false"
@@ -1241,29 +1225,28 @@
                   />
                 </label>
                 <p class="hint">
-                  Les viewers tapent <b>!{cmdSel.commande || "…"}</b> dans le
-                  chat pour la déclencher.
+                  {$t("interactions.commandes.hintCommande", { cmd: "!" + (cmdSel.commande || "…") })}
                 </p>
               </div>
 
               <div class="bloc">
-                <div class="bloc-titre">Média</div>
+                <div class="bloc-titre">{$t("commun.media")}</div>
                 <div class="media-modes">
                   <button
                     class="mode-btn"
                     class:active={modeMediaCommande(cmdSel) === "aucun"}
                     onclick={() => majCommande({ media: undefined, media_kind: undefined, son: undefined })}
-                  >Aucun</button>
+                  >{$t("commun.aucun")}</button>
                   <button
                     class="mode-btn"
                     class:active={modeMediaCommande(cmdSel) === "image"}
                     onclick={() => importerMediaCommande("image")}
-                  >Image</button>
+                  >{$t("commun.image")}</button>
                   <button
                     class="mode-btn"
                     class:active={modeMediaCommande(cmdSel) === "video"}
                     onclick={() => importerMediaCommande("video")}
-                  >Vidéo</button>
+                  >{$t("commun.video")}</button>
                 </div>
                 {#if cmdSel.media}
                   <div class="alerte-son">
@@ -1271,7 +1254,7 @@
                     <button
                       class="alerte-toggle"
                       onclick={() => majCommande({ media: undefined, media_kind: undefined })}
-                      title="Retirer le média"
+                      title={$t("commun.retirerMedia")}
                     >✕</button>
                   </div>
                 {/if}
@@ -1282,25 +1265,24 @@
                       <button
                         class="alerte-toggle"
                         onclick={() => majCommande({ son: undefined })}
-                        title="Retirer le son"
+                        title={$t("commun.retirerSon")}
                       >✕</button>
                     {:else}
                       <button class="alerte-test" onclick={importerSonCommande}>
-                        Importer un son
+                        {$t("commun.importerSon")}
                       </button>
                     {/if}
                   </div>
                 {/if}
                 <p class="hint">
-                  Image = image + son + texte · Vidéo = vidéo seule (son inclus)
-                  + texte · Aucun = icône + texte.
+                  {$t("interactions.hintMedia")}
                 </p>
               </div>
 
               <div class="bloc">
-                <div class="bloc-titre">Texte</div>
+                <div class="bloc-titre">{$t("commun.texte")}</div>
                 <label class="alerte-field">
-                  <span class="field-label">Texte</span>
+                  <span class="field-label">{$t("commun.texte")}</span>
                   <input
                     value={cmdSel.texte_template}
                     spellcheck="false"
@@ -1308,15 +1290,13 @@
                   />
                 </label>
                 <p class="hint">
-                  Variables : {'{pseudo} {commande} {message}'} — {'{message}'} =
-                  texte tapé après la commande.
+                  {$t("interactions.commandes.variablesHint")}
                 </p>
                 <p class="hint">
-                  La couleur du texte suit le cadre SVG de la scène (modale
-                  « Vos cadres »). Sans cadre actif : blanc.
+                  {$t("interactions.hintCadre")}
                 </p>
                 <label class="alerte-field">
-                  <span class="field-label">Taille {cmdSel.taille_px}px</span>
+                  <span class="field-label">{$t("commun.taille")} {cmdSel.taille_px}px</span>
                   <input
                     class="range"
                     type="range"
@@ -1330,10 +1310,10 @@
               </div>
 
               <div class="bloc">
-                <div class="bloc-titre">Comportement</div>
+                <div class="bloc-titre">{$t("commun.comportement")}</div>
                 <div class="alerte-2col">
                   <label class="alerte-field">
-                    <span class="field-label">Durée (s)</span>
+                    <span class="field-label">{$t("commun.dureeS")}</span>
                     <input
                       type="number"
                       min="1"
@@ -1343,7 +1323,7 @@
                     />
                   </label>
                   <label class="alerte-field">
-                    <span class="field-label">Cooldown global (s)</span>
+                    <span class="field-label">{$t("interactions.cooldownGlobal")}</span>
                     <input
                       type="number"
                       min="0"
@@ -1354,7 +1334,7 @@
                   </label>
                 </div>
                 <label class="alerte-field">
-                  <span class="field-label">Cooldown par viewer (s)</span>
+                  <span class="field-label">{$t("interactions.cooldownViewer")}</span>
                   <input
                     type="number"
                     min="0"
@@ -1366,24 +1346,24 @@
               </div>
 
               <div class="bloc">
-                <div class="bloc-titre">Test & suppression</div>
+                <div class="bloc-titre">{$t("interactions.testSuppression")}</div>
                 <div class="queue-actions">
                   <button class="alerte-test" onclick={() => testerCommande(cmdSel.id)} disabled={!cmdSel.actif}>
-                    Tester la commande
+                    {$t("interactions.commandes.tester")}
                   </button>
                   <button
                     class="alerte-toggle"
                     onclick={() => { void supprimerCommande(cmdSel.id); }}
-                    title="Supprimer cette commande"
-                  >Supprimer</button>
+                    title={$t("interactions.commandes.supprimerTitle")}
+                  >{$t("commun.supprimer")}</button>
                 </div>
                 <p class="hint">
-                  Le Test contourne les cooldowns. Sans média : icône + texte.
+                  {$t("interactions.testHint")}
                 </p>
               </div>
             {:else}
               <div class="bloc">
-                <p class="hint">Aucune commande sélectionnée — créez-en une.</p>
+                <p class="hint">{$t("interactions.commandes.aucuneSelection")}</p>
               </div>
           {/if}
           </div>
@@ -1394,13 +1374,7 @@
     {#if tab === "pad"}
       <div class="tab-body">
         <p class="hint">
-          Pad numérique : 16 touches Numpad × 3 plages. Appuyez sur une touche
-          du pavé numérique pour déclencher un son, une image ou une vidéo en
-          overlay sur la diffusion. <b>+</b> et <b>-</b> du numpad changent de
-          plage. La position/taille est réglée dans l'onglet « Squelette de
-          position » (partagé avec welcome/alertes/commandes). L'audio est joué
-          des deux côtés : diffusion (OBS capte pour les viewers) + dashboard
-          (vous entendez sur votre PC).
+          {$t("interactions.pad.hintIntro")}
         </p>
 
         {#if padErr}
@@ -1411,39 +1385,38 @@
           <!-- Colonne gauche : activation + plages + grille 4×4 -->
           <div class="alertes-liste">
             <div class="bloc">
-              <div class="bloc-titre">Activation</div>
+              <div class="bloc-titre">{$t("interactions.pad.activation")}</div>
               <button
                 class="alerte-toggle"
                 class:on={padActif}
                 onclick={() => void padSetActif(!padActif)}
-                title={padActif ? "Désactiver le pad" : "Activer le pad"}
+                title={padActif ? $t("interactions.pad.desactiver") : $t("interactions.pad.activer")}
               >{padActif ? "ON" : "OFF"}</button>
               <p class="hint">
                 {padActif
-                  ? "Capture clavier globale active (GetAsyncKeyState 60Hz)."
-                  : "Capture clavier globale inactive."}
+                  ? $t("interactions.pad.hintActif")
+                  : $t("interactions.pad.hintInactif")}
               </p>
             </div>
 
             <div class="bloc">
-              <div class="bloc-titre">Plages</div>
+              <div class="bloc-titre">{$t("interactions.pad.plages")}</div>
               <div class="pad-plages">
                 {#each Array(NB_PLAGES) as _, i}
                   <button
                     class="pad-plage-btn"
                     class:active={padPlage === i}
                     onclick={() => void padSetPlage(i)}
-                  >Plage {i + 1}</button>
+                  >{get(t)("interactions.pad.plage", { n: i + 1 })}</button>
                 {/each}
               </div>
               <p class="hint">
-                Plage courante : <b>{padPlage + 1}</b> / {NB_PLAGES}.
-                Changez aussi avec <b>+</b> / <b>-</b> du numpad.
+                {$t("interactions.pad.plageCourante", { n: padPlage + 1, nb: NB_PLAGES })}
               </p>
             </div>
 
             <div class="bloc">
-              <div class="bloc-titre">Touches (plage {padPlage + 1})</div>
+              <div class="bloc-titre">{$t("interactions.pad.touches", { n: padPlage + 1 })}</div>
               <div class="pad-grille">
                 {#each DISPOSITION_PAD as ligne}
                   {#each ligne as code}
@@ -1458,11 +1431,11 @@
                       class:image={mode === "image"}
                       class:video={mode === "video"}
                       onclick={() => (padSelCode = reservee ? null : code)}
-                      title={reservee ? LIBELLES_RESERVEES[code] ?? code : code}
+                      title={reservee ? get(t)("interactions.pad.reservee" + code) : code}
                     >
                       <span class="pad-touche-nom">{NOMS_AFFICHAGE[code] ?? code}</span>
                       {#if reservee}
-                        <span class="pad-touche-badge reservee">réservée</span>
+                        <span class="pad-touche-badge reservee">{get(t)("interactions.pad.reservee")}</span>
                       {:else if mode !== "aucun"}
                         <span class="pad-touche-badge">{mode}</span>
                       {/if}
@@ -1477,35 +1450,35 @@
           <div class="alerte-detail">
             {#if padSelCode && padSel}
               <div class="bloc">
-                <div class="bloc-titre">Touche {NOMS_AFFICHAGE[padSelCode] ?? padSelCode} (plage {padPlage + 1})</div>
+                <div class="bloc-titre">{$t("interactions.pad.toucheTitre", { touche: NOMS_AFFICHAGE[padSelCode] ?? padSelCode, plage: padPlage + 1 })}</div>
                 <p class="hint">
-                  Appuyez sur cette touche du numpad pour déclencher le média.
+                  {$t("interactions.pad.hintTouche")}
                 </p>
               </div>
 
               <div class="bloc">
-                <div class="bloc-titre">Média</div>
+                <div class="bloc-titre">{$t("commun.media")}</div>
                 <div class="media-modes">
                   <button
                     class="mode-btn"
                     class:active={modeMediaPad(padSel) === "aucun"}
                     onclick={() => majPad({ media: undefined, media_kind: undefined, media_type: undefined, son: undefined })}
-                  >Aucun</button>
+                  >{$t("commun.aucun")}</button>
                   <button
                     class="mode-btn"
                     class:active={modeMediaPad(padSel) === "audio"}
                     onclick={onImporterSonPad}
-                  >Audio</button>
+                  >{$t("commun.audio")}</button>
                   <button
                     class="mode-btn"
                     class:active={modeMediaPad(padSel) === "image"}
                     onclick={() => onImporterMediaPad("image")}
-                  >Image</button>
+                  >{$t("commun.image")}</button>
                   <button
                     class="mode-btn"
                     class:active={modeMediaPad(padSel) === "video"}
                     onclick={() => onImporterMediaPad("video")}
-                  >Vidéo</button>
+                  >{$t("commun.video")}</button>
                 </div>
 
                 {#if padSel.media}
@@ -1514,7 +1487,7 @@
                     <button
                       class="alerte-toggle"
                       onclick={onRetirerMediaPad}
-                      title="Retirer le média"
+                      title={$t("commun.retirerMedia")}
                     >✕</button>
                   </div>
                 {/if}
@@ -1526,27 +1499,26 @@
                       <button
                         class="alerte-toggle"
                         onclick={onRetirerSonPad}
-                        title="Retirer le son"
+                        title={$t("commun.retirerSon")}
                       >✕</button>
                     {:else}
                       <button class="alerte-test" onclick={onImporterSonPad}>
-                        Importer un son
+                        {$t("commun.importerSon")}
                       </button>
                     {/if}
                   </div>
                 {/if}
 
                 <p class="hint">
-                  Audio = son seul (joué diffusion + dashboard) ·
-                  Image = image + son séparé · Vidéo = vidéo (son inclus, diffusion).
+                  {$t("interactions.pad.hintMedia")}
                 </p>
               </div>
 
               <div class="bloc">
-                <div class="bloc-titre">Comportement</div>
+                <div class="bloc-titre">{$t("commun.comportement")}</div>
                 <div class="alerte-2col">
                   <label class="alerte-field">
-                    <span class="field-label">Durée (s)</span>
+                    <span class="field-label">{$t("commun.dureeS")}</span>
                     <input
                       type="number"
                       min="1"
@@ -1556,7 +1528,7 @@
                     />
                   </label>
                   <label class="alerte-field">
-                    <span class="field-label">Volume {Math.round(padSel.volume * 100)}%</span>
+                    <span class="field-label">{$t("interactions.pad.volume", { n: Math.round(padSel.volume * 100) })}</span>
                     <input
                       class="range"
                       type="range"
@@ -1591,27 +1563,25 @@
               </div>
 
               <div class="bloc">
-                <div class="bloc-titre">Test & suppression</div>
+                <div class="bloc-titre">{$t("interactions.testSuppression")}</div>
                 <div class="queue-actions">
                   <button class="alerte-test" onclick={onTesterTouchePad} disabled={!padActif && modeMediaPad(padSel) === "aucun"}>
-                    Tester la touche
+                    {$t("interactions.pad.tester")}
                   </button>
                   <button
                     class="alerte-toggle"
                     onclick={onSupprimerTouchePad}
-                    title="Réinitialiser cette touche"
-                  >Réinitialiser</button>
+                    title={$t("interactions.pad.reinitialiserTitle")}
+                  >{$t("commun.reinitialiser")}</button>
                 </div>
                 <p class="hint">
-                  Le Test déclenche la touche côté diffusion + joue l'audio local.
+                  {$t("interactions.pad.testHint")}
                 </p>
               </div>
             {:else}
               <div class="bloc">
                 <p class="hint">
-                  Sélectionnez une touche dans la grille à gauche pour la
-                  configurer. Les touches <b>+</b> et <b>-</b> sont réservées
-                  (navigation entre plages).
+                  {$t("interactions.pad.hintSelection")}
                 </p>
               </div>
             {/if}
@@ -1623,16 +1593,14 @@
     {#if tab === "position"}
       <div class="tab-body">
         <p class="hint">
-          Position et taille du squelette partagé par les overlays « Clip de
-          bienvenue » et « Alertes ». Glisser pour déplacer, coins pour
-          redimensionner. La position s'applique en live sur la diffusion.
+          {$t("interactions.position.hintIntro")}
         </p>
 
         <div class="bloc">
-          <div class="bloc-titre">Squelette de position</div>
+          <div class="bloc-titre">{$t("interactions.tabPosition")}</div>
           <div class="alerte-presets">
             {#each Object.entries(PRESETS_OVERLAY) as [pos, label] (pos)}
-              <button class="alerte-test" title={pos} onclick={() => presetOverlay(pos)}>{label}</button>
+              <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetOverlay(pos)}>{label}</button>
             {/each}
           </div>
           <div
@@ -1648,7 +1616,7 @@
               onpointerdown={onRectDown}
               role="presentation"
             >
-              <span class="skeleton-label">Overlay</span>
+              <span class="skeleton-label">{$t("interactions.position.overlay")}</span>
               <div class="sk-handle nw" onpointerdown={(e) => onHandleDown(e, "resize-nw")} role="presentation"></div>
               <div class="sk-handle ne" onpointerdown={(e) => onHandleDown(e, "resize-ne")} role="presentation"></div>
               <div class="sk-handle sw" onpointerdown={(e) => onHandleDown(e, "resize-sw")} role="presentation"></div>
@@ -1656,7 +1624,7 @@
             </div>
           </div>
           <p class="hint">
-            Glisser pour déplacer · coins pour redimensionner · canvas {REF_W}×{REF_H}
+            {$t("interactions.position.hintGlisser", { w: REF_W, h: REF_H })}
           </p>
           <div class="alerte-4col">
             <label class="alerte-field">
@@ -1676,7 +1644,7 @@
               />
             </label>
             <label class="alerte-field">
-              <span class="field-label">Largeur</span>
+              <span class="field-label">{$t("commun.largeur")}</span>
               <input
                 type="number"
                 min="80"
@@ -1686,7 +1654,7 @@
               />
             </label>
             <label class="alerte-field">
-              <span class="field-label">Hauteur (réf.)</span>
+              <span class="field-label">{$t("interactions.position.hauteurRef")}</span>
               <input
                 type="number"
                 min="60"

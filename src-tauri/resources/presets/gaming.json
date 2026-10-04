@@ -2,6 +2,7 @@
   "id": "gaming",
   "nom": "Gaming",
   "description": "Caméra en bas à gauche, chat à droite et clavier en bas — prêt à streamer.",
+  "description_en": "Camera bottom-left, chat on the right and keyboard at the bottom — ready to stream.",
   "scene": {
     "widgets": [
       {
@@ -43,7 +44,6 @@
     "canvasH": 1080,
     "cadreWidget": {
       "style": "cyberpunk",
-      "variante": "defaut",
       "strokeWidth": 6,
       "couleur": "#00f0ff",
       "couleurFin": "#ff00ff",

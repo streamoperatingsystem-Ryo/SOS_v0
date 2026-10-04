@@ -8,6 +8,7 @@
     buildSnapTargets,
     computeSnap,
     sceneStore,
+    mettreWidgetPlan,
     type SnapTarget,
   } from "../stores/scene";
   import { afficherGuidesDrag, masquerGuides } from "../stores/guides";
@@ -19,11 +20,11 @@
   import type { Widget } from "../tauri";
   import { get } from "svelte/store";
   import CadreSVG from "./CadreSVG.svelte";
-  import { genererClipPathCadre, couleurCadre, gradientCadre } from "../cadres/registre";
-  import { titreModalOpen } from "../stores/ui";
+  import { genererClipPathCadre, gradientCadre } from "../cadres/registre";
+  import { titreModalOpen, type PositionTitre } from "../stores/ui";
   import { POLICE_TITRE_DEFAUT, TAILLE_TITRE_DEFAUT, ESPACEMENT_TITRE_DEFAUT } from "../fonts";
-  import { GOAL_METRIQUE_LABELS } from "../tauri";
-  import { valeursGoals } from "../stores/objectifs";
+  import { valeursGoals, goalsTwitch } from "../stores/objectifs";
+  import { t, localeTag } from "../stores/langue";
   import WidgetSpeedrun from "./WidgetSpeedrun.svelte";
 
   let { w, scale }: { w: Widget; scale: number } = $props();
@@ -39,19 +40,31 @@
   let isGoal = $derived(widgetType === "goal");
 
   // ===== Widget goal (aperçu dashboard) =====
-  // Valeur live depuis le store objectifs (events communaute:update /
-  // viewers:update). Le rendu complet (progression + célébration) est dans
-  // diffusion.html — ici c'est une vignette de config.
+  // Mode manuel : valeur live depuis valeursGoals (communaute/viewers).
+  // Mode lié (goalId) : valeur du Creator Goal Twitch (frames goal-twitch).
+  // Le rendu complet (progression + célébration) est dans diffusion.html —
+  // ici c'est une vignette de config.
+  let goalLieLive = $derived(w.goalId ? $goalsTwitch[w.goalId] : undefined);
   let goalActuel = $derived(
-    w.goalPlateforme && w.goalMetrique
-      ? $valeursGoals[w.goalPlateforme]?.[w.goalMetrique]
-      : undefined
+    w.goalId
+      ? goalLieLive?.actuel
+      : w.goalPlateforme && w.goalMetrique
+        ? $valeursGoals[w.goalPlateforme]?.[w.goalMetrique]
+        : undefined
   );
+  let goalCibleLive = $derived(w.goalId ? goalLieLive?.cible : w.goalCible);
   let goalPct = $derived(
-    goalActuel !== undefined && w.goalCible
-      ? Math.min(100, Math.round((goalActuel / w.goalCible) * 100))
+    goalActuel !== undefined && goalCibleLive
+      ? Math.min(100, Math.round((goalActuel / goalCibleLive) * 100))
       : null
   );
+  // Libellé en mode lié : description saisie par le streamer sur Twitch,
+  // sinon label du type de goal (goal.ttype.*).
+  let goalLabelLie = $derived.by(() => {
+    if (!w.goalId) return null;
+    if (!goalLieLive) return $t("carteEdition.goalsTwitch");
+    return goalLieLive.description || $t("goal.ttype." + goalLieLive.goal_type);
+  });
 
   // Mini widget — jamais en dessous.
   const MIN = 80;
@@ -125,25 +138,35 @@
   // par widget, le cadre de scène reste actif pour les autres.
   let cadre = $derived($sceneStore.cadreWidget ?? null);
   let cadreActif = $derived(!!cadre?.actif && (cadre?.strokeWidth ?? 0) > 0 && w.sansCadre !== true);
-  // Couleur du badge « en lecture dans OBS » = couleur RÉELLE du cadre SVG
-  // widget choisi (couleur utilisateur si personnalisable, palette de la
-  // variante pour les presets). Fallback --texte si pas de cadre actif.
+  // Couleur du badge « en lecture dans OBS » = couleur du cadre SVG
+  // (couleur utilisateur). Fallback --texte si pas de cadre actif.
   let lectureCouleur = $derived(
-    cadreActif && cadre ? couleurCadre(cadre.style, cadre.variante, cadre.couleur) : "var(--texte)"
+    cadreActif && cadre ? cadre.couleur : "var(--texte)"
+  );
+  // Épaisseur effective : le widget goal adopte l'échelle « bulle »
+  // (plafond 2px — même cadre que les messages chat en mode bulles en
+  // diffusion, cadreMsgScale/cadreGoal de diffusion.html) ; son format
+  // compact rendrait le stroke scène disproportionné.
+  let cadreStroke = $derived(
+    isGoal ? Math.max(1, Math.min(cadre?.strokeWidth ?? 4, 2)) : (cadre?.strokeWidth ?? 4)
   );
   let clipPathCorps = $derived(
     cadreActif && cadre
-      ? genererClipPathCadre(cadre.style, cadre.variante, w.largeur, w.hauteur, cadre.strokeWidth) ?? ""
+      ? genererClipPathCadre(cadre.style, w.largeur, w.hauteur, cadreStroke) ?? ""
       : ""
   );
 
-  // ===== Titre du widget (au-dessus ou en dessous) =====
-  // Titre optionnel : texte + police Google Font + taille + position.
-  // Le gradient du texte reprend les couleurs du cadre SVG actif de la scène
-  // (fallback blanc→gris si aucun cadre actif).
-  let titreTexte = $derived(w.titre ?? "");
-  let titreVisible = $derived(titreTexte.length > 0);
-  let titrePos = $derived(w.titrePosition ?? "dessus");
+  // ===== Titres du widget (haut/bas/gauche/droite) =====
+  // Jusqu'à 4 titres simultanés (un texte par position, champ vide = aucun),
+  // style partagé (police/taille/…). Le gradient du texte reprend les
+  // couleurs du cadre SVG actif de la scène (fallback blanc→gris si aucun
+  // cadre actif). Latéraux (gauche/droite) : texte vertical (CSS
+  // writing-mode ci-dessous).
+  let titreHaut = $derived(w.titreHaut ?? "");
+  let titreBas = $derived(w.titreBas ?? "");
+  let titreGauche = $derived(w.titreGauche ?? "");
+  let titreDroite = $derived(w.titreDroite ?? "");
+  let titreVisible = $derived(!!(titreHaut || titreBas || titreGauche || titreDroite));
   let titrePolice = $derived(w.titrePolice ?? POLICE_TITRE_DEFAUT);
   let titreTaille = $derived(w.titreTaille ?? TAILLE_TITRE_DEFAUT);
   let titreGras = $derived(w.titreGras ?? false);
@@ -152,10 +175,23 @@
   let titreEspacement = $derived(w.titreEspacement ?? ESPACEMENT_TITRE_DEFAUT);
   let titreContourCouleur = $derived(w.titreContourCouleur ?? "#fff");
   let titreContourEpaisseur = $derived(w.titreContourEpaisseur ?? 2);
-  let titreGradient = $derived(gradientCadre(cadreActif ? cadre : null));
+  let cadreGradient = $derived(gradientCadre(cadreActif ? cadre : null));
+  // Dégradé du texte : personnalisé si titreCouleur défini, sinon cadre.
+  let titreGradient = $derived(
+    w.titreCouleur ? { from: w.titreCouleur, to: w.titreCouleurFin ?? w.titreCouleur } : cadreGradient
+  );
   let titreFontStyle = $derived(titreItalique ? "italic" : "normal");
   let titreFontWeight = $derived(titreGras ? "700" : "400");
   let titreTextDecoration = $derived(titreSouligne ? "underline" : "none");
+  // Style inline partagé par les 4 titres (même config, textes différents).
+  let titreStyle = $derived(
+    "font-family: '" + titrePolice + "', sans-serif; font-size: " + titreTaille +
+    "px; font-style: " + titreFontStyle + "; font-weight: " + titreFontWeight +
+    "; text-decoration: " + titreTextDecoration + "; letter-spacing: " + titreEspacement +
+    "px; -webkit-text-stroke: " + titreContourEpaisseur + "px " + titreContourCouleur +
+    "; background: linear-gradient(135deg, " + titreGradient.from + ", " + titreGradient.to +
+    "); -webkit-background-clip: text; background-clip: text; color: transparent;"
+  );
 
   // Mapping mode → object-fit. "etendre" géré à part (img auto + min 100%).
   const FIT_CSS: Record<string, string> = {
@@ -334,6 +370,10 @@
   });
 
   function onpointerdown(e: PointerEvent) {
+    // Bouton gauche uniquement : le clic droit ouvre le menu contextuel du
+    // widget (contextmenu remonte à Canvas) — il ne doit ni sélectionner,
+    // ni démarrer un drag, ni déposer un morph.
+    if (e.button !== 0) return;
     e.stopPropagation();
     selectWidget(w.id);
     // Mode morphing actif + widget média IMAGE → clic = bulge/pinch au point
@@ -361,6 +401,8 @@
   }
 
   function onHandleDown(e: PointerEvent, h: string) {
+    // Bouton gauche uniquement (même raison que onpointerdown).
+    if (e.button !== 0) return;
     e.stopPropagation();
     selectWidget(w.id);
     setCarteEdition("widget");
@@ -466,23 +508,33 @@
     await commitScene();
   }
 
-  // Double-clic sur le haut ou le bas du widget → ouvre la modale titre.
-  // La zone haut (25% supérieur) présélectionne "dessus", le reste "dessous".
+  // ===== Boutons -/+ de plan (survol, dashboard uniquement) =====
+  // « − » envoie tout en arrière-plan, « + » tout au premier plan
+  // (mettreWidgetPlan, scene.ts). La caméra est exclue (plage réservée
+  // z=5000 — isCamera masque le bloc). Disabled aux extrémités de la bande
+  // non-caméra : un widget à égalité de z peut encore être (dé)coiffé.
+  let estDerriere = $derived(
+    !$sceneStore.widgets.some((x) => x.type !== "camera" && x.z < w.z)
+  );
+  let estDevant = $derived(
+    !$sceneStore.widgets.some((x) => x.type !== "camera" && x.z > w.z)
+  );
+
+  // Double-clic sur le widget → ouvre la modale titres, focus sur le champ
+  // du bord le plus proche du clic (haut/bas/gauche/droite).
   function ondblclick(e: MouseEvent) {
     e.stopPropagation();
     const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const relX = (e.clientX - rect.left) / rect.width;
     const relY = (e.clientY - rect.top) / rect.height;
-    const position = relY < 0.25 ? "dessus" : "dessous";
-    // Pré-régler la position si le widget n'a pas encore de titre.
-    if (!titreVisible) {
-      sceneStore.update((s) => ({
-        ...s,
-        widgets: s.widgets.map((w2) =>
-          w2.id === w.id ? { ...w2, titrePosition: position } : w2
-        ),
-      }));
-    }
-    titreModalOpen.set(w.id);
+    const dHaut = relY;
+    const dBas = 1 - relY;
+    const dGauche = relX;
+    const dDroite = 1 - relX;
+    const min = Math.min(dHaut, dBas, dGauche, dDroite);
+    const position: PositionTitre =
+      min === dHaut ? "haut" : min === dBas ? "bas" : min === dGauche ? "gauche" : "droite";
+    titreModalOpen.set({ id: w.id, position });
   }
 </script>
 
@@ -491,6 +543,7 @@
   class="widget"
   class:dragging
   class:morphable
+  data-widget-id={w.id}
   bind:this={outerEl}
   style="left:{w.x}px; top:{w.y}px; width:{w.largeur}px; height:{w.hauteur}px; z-index:{w.z};"
   onpointerdown={onpointerdown}
@@ -549,21 +602,21 @@
            Aucune bulle, aucun scroll, aucun avatar. Les bulles s'affichent
            dans diffusion.html (OBS :4321) via WS {"type":"chat"}. -->
       {@render mediaFond()}
-      <div class="chat-actif">Chat actif</div>
+      <div class="chat-actif">{$t("widget.chatActif")}</div>
     {:else if isCamera}
       <!-- Widget caméra (dashboard) : placeholder seulement. L'image vient de
            la source OBS "SOS-Caméra" (dshow_input sous SOS-Diffusion) qui
            apparaît à travers le trou du widget dans diffusion.html. Le
            dashboard est une config, pas un player. -->
       <div class="camera-actif">
-        <span>Caméra</span>
+        <span>{$t("widget.camera")}</span>
       </div>
     {:else if isWelcomeClip}
       <!-- Widget clip de bienvenue (dashboard) : placeholder seulement.
            Le clip se joue dans diffusion.html (OBS :4321) via WS
            {"type":"welcome-clip-play"}. Position/taille/z pilotées ici. -->
       <div class="welcome-clip-actif">
-        <span>Clip de bienvenue</span>
+        <span>{$t("widget.clipBienvenue")}</span>
       </div>
     {:else if isInputViewer}
       <!-- Widget input viewer (dashboard) : badge "affiché dans OBS" seulement.
@@ -574,7 +627,7 @@
       {@render mediaFond()}
       <div class="input-viewer-obs msg-pill">
         <span class="msg-pill-icon">▶</span>
-        <span class="msg-pill-text">Votre input viewer est affiché dans OBS</span>
+        <span class="msg-pill-text">{$t("widget.inputViewerObs")}</span>
       </div>
     {:else if isSpeedrun}
       <!-- Widget speedrun splitter (dashboard) : timer + contrôles manuels +
@@ -582,7 +635,7 @@
            diffusion.html (OBS :4321) via WS {"type":"speedrun-etat"}. -->
       {@render mediaFond()}
       <div class="contenu-dessus">
-        <WidgetSpeedrun contenu={w} gradient={titreGradient} />
+        <WidgetSpeedrun contenu={w} gradient={cadreGradient} />
       </div>
     {:else if isGoal}
       <!-- Widget objectif (dashboard) : vignette live actuel/cible + barre.
@@ -590,11 +643,16 @@
            diffusion.html (OBS :4321) via WS communaute/viewers/goal-atteint. -->
       {@render mediaFond()}
       <div class="goal-preview">
-        <span class="goal-preview-label">{GOAL_METRIQUE_LABELS[w.goalMetrique ?? "followers"]} · {w.goalPlateforme ?? "twitch"}</span>
-        <span class="goal-preview-count">
-          {goalActuel === undefined ? "N/A" : goalActuel.toLocaleString("fr-FR")}
-          {#if w.goalCible}<span class="goal-preview-cible">/ {w.goalCible.toLocaleString("fr-FR")}</span>{/if}
+        <span class="goal-preview-label">
+          {#if w.goalId}{goalLabelLie} · twitch{:else}{$t("goal.metrique." + (w.goalMetrique ?? "followers"))} · {w.goalPlateforme ?? "twitch"}{/if}
         </span>
+        <span class="goal-preview-count">
+          {goalActuel === undefined ? "N/A" : goalActuel.toLocaleString($localeTag)}
+          {#if goalCibleLive}<span class="goal-preview-cible">/ {goalCibleLive.toLocaleString($localeTag)}</span>{/if}
+        </span>
+        {#if goalLieLive?.termine}
+          <span class="goal-preview-label">{$t("carteEdition.goalTermine")}</span>
+        {/if}
         {#if goalPct !== null}
           <div class="goal-preview-bar"><div class="goal-preview-fill" style="width:{goalPct}%"></div></div>
         {/if}
@@ -653,7 +711,7 @@
            :4321 via mediaPaused — la vignette dashboard reste figée. -->
       <div class="lecture-obs msg-pill" style="color: {lectureCouleur};">
         <span class="msg-pill-icon">▶</span>
-        <span class="msg-pill-text">Votre vidéo est en lecture dans OBS</span>
+        <span class="msg-pill-text">{$t("widget.videoLectureObs")}</span>
       </div>
     {/if}
 
@@ -665,10 +723,9 @@
       <div class="widget-cadre">
         <CadreSVG
           style={cadre.style}
-          variante={cadre.variante}
           largeur={w.largeur}
           hauteur={w.hauteur}
-          strokeWidth={cadre.strokeWidth}
+          strokeWidth={cadreStroke}
           couleur={cadre.couleur}
           couleurFin={cadre.couleurFin}
           gradientAngle={cadre.gradientAngle}
@@ -678,25 +735,32 @@
     {/if}
   </div>
 
-  <!-- Titre du widget (au-dessus ou en dessous) — hors .widget-3d pour ne pas
-       être clippé par le cadre SVG. Gradient de texte reprenant les couleurs
-       du cadre actif (fallback blanc→gris). Police Google Font + taille px. -->
-  {#if titreVisible}
-    <div
-      class="widget-titre {titrePos}"
-      style="font-family: '{titrePolice}', sans-serif; font-size: {titreTaille}px; font-style: {titreFontStyle}; font-weight: {titreFontWeight}; text-decoration: {titreTextDecoration}; letter-spacing: {titreEspacement}px; -webkit-text-stroke: {titreContourEpaisseur}px {titreContourCouleur}; background: linear-gradient(135deg, {titreGradient.from}, {titreGradient.to}); -webkit-background-clip: text; background-clip: text; color: transparent;"
-    >{titreTexte}</div>
+  <!-- Titres du widget (haut/bas/gauche/droite — latéraux verticaux) — hors
+       .widget-3d pour ne pas être clippés par le cadre SVG. Gradient de
+       texte reprenant les couleurs du cadre actif (fallback blanc→gris).
+       Police Google Font + taille px, style partagé entre les 4 positions. -->
+  {#if titreHaut}
+    <div class="widget-titre haut" style={titreStyle}>{titreHaut}</div>
+  {/if}
+  {#if titreBas}
+    <div class="widget-titre bas" style={titreStyle}>{titreBas}</div>
+  {/if}
+  {#if titreGauche}
+    <div class="widget-titre gauche" style={titreStyle}>{titreGauche}</div>
+  {/if}
+  {#if titreDroite}
+    <div class="widget-titre droite" style={titreStyle}>{titreDroite}</div>
   {/if}
 
-  <!-- Zones de double-clic (haut/bas) — affichées au survol du widget
-       sélectionné (avec ou sans titre existant) pour indiquer où
+  <!-- Zones de double-clic (haut/bas/gauche/droite) — affichées au survol du
+       widget sélectionné (avec ou sans titre existant) pour indiquer où
        double-cliquer pour ajouter/modifier un titre. -->
   {#if selected}
     <div class="titre-zone titre-zone-haut">
       <div class="msg-pill">
         <span class="msg-pill-icon">▶</span>
         <span class="msg-pill-text"
-          >Double-cliquez ici pour {titreVisible ? "modifier le" : "ajouter un"} titre au-dessus de votre widget</span
+          >Double-cliquez ici pour {titreVisible ? "modifier les" : "ajouter des"} titres au-dessus de votre widget</span
         >
       </div>
     </div>
@@ -704,9 +768,56 @@
       <div class="msg-pill">
         <span class="msg-pill-icon">▶</span>
         <span class="msg-pill-text"
-          >Double-cliquez ici pour {titreVisible ? "modifier le" : "ajouter un"} titre en dessous de votre widget</span
+          >Double-cliquez ici pour {titreVisible ? "modifier les" : "ajouter des"} titres en dessous de votre widget</span
         >
       </div>
+    </div>
+    <div class="titre-zone titre-zone-gauche">
+      <div class="msg-pill">
+        <span class="msg-pill-icon">▶</span>
+        <span class="msg-pill-text"
+          >Double-cliquez ici pour {titreVisible ? "modifier les" : "ajouter des"} titres à gauche de votre widget</span
+        >
+      </div>
+    </div>
+    <div class="titre-zone titre-zone-droite">
+      <div class="msg-pill">
+        <span class="msg-pill-icon">▶</span>
+        <span class="msg-pill-text"
+          >Double-cliquez ici pour {titreVisible ? "modifier les" : "ajouter des"} titres à droite de votre widget</span
+        >
+      </div>
+    </div>
+  {/if}
+
+  <!-- Boutons -/+ de plan : visibles au survol du widget (dashboard
+       uniquement — jamais en diffusion). pointerdown/dblclick stoppés : un
+       clic ne doit ni sélectionner, ni démarrer un drag, ni déposer un
+       morph, ni ouvrir la modale titres. -->
+  {#if !isCamera}
+    <!-- Contre-scale : taille CONSTANTE à l'écran quel que soit le zoom du
+         canvas (le badge est enfant du widget, il subirait le scale sinon).
+         padding-bottom dans la boîte → l'écart visuel reste constant lui
+         aussi. -->
+    <div class="z-controls" style="transform: scale({scale > 0 ? 1 / scale : 1});">
+      <button
+        class="z-btn"
+        title={$t("carteEdition.arrierePlan")}
+        aria-label={$t("carteEdition.arrierePlan")}
+        disabled={estDerriere}
+        onpointerdown={(e) => e.stopPropagation()}
+        ondblclick={(e) => e.stopPropagation()}
+        onclick={() => void mettreWidgetPlan(w.id, "arriere")}
+      >−</button>
+      <button
+        class="z-btn"
+        title={$t("carteEdition.premierPlan")}
+        aria-label={$t("carteEdition.premierPlan")}
+        disabled={estDevant}
+        onpointerdown={(e) => e.stopPropagation()}
+        ondblclick={(e) => e.stopPropagation()}
+        onclick={() => void mettreWidgetPlan(w.id, "avant")}
+      >+</button>
     </div>
   {/if}
 
@@ -971,14 +1082,13 @@
   .sw { left: -4px;  bottom: -4px; cursor: nesw-resize; }
   .w  { left: -4px;  top: 50%;    transform: translateY(-50%); cursor: ew-resize; }
 
-  /* ===== Titre du widget ===== */
-  /* Positionné au-dessus ou en dessous du widget, centré horizontalement.
-     Hors .widget-3d → non clippé par le cadre SVG. pointer-events:none
+  /* ===== Titres du widget ===== */
+  /* Positionnés autour du widget : haut/bas centrés horizontalement,
+     gauche/droite centrés verticalement en TEXTE VERTICAL (writing-mode).
+     Hors .widget-3d → non clippés par le cadre SVG. pointer-events:none
      pour ne pas bloquer le drag/sélection. */
   .widget-titre {
     position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
     white-space: nowrap;
     pointer-events: none;
     z-index: 10;
@@ -990,19 +1100,38 @@
        remplissage (sinon il mange les glyphes). */
     paint-order: stroke fill;
   }
-  .widget-titre.dessus {
+  .widget-titre.haut,
+  .widget-titre.bas {
+    left: 50%;
+    transform: translateX(-50%);
+  }
+  .widget-titre.haut {
     bottom: 100%;
     margin-bottom: 2px;
   }
-  .widget-titre.dessous {
+  .widget-titre.bas {
     top: 100%;
     margin-top: 2px;
   }
-  /* Zones de double-clic (haut/bas) — vraie pastille .msg-pill (même
-     recette que « lecture OBS », teinte ambre action) au survol du widget
-     sélectionné, avec ou sans titre existant. container-type:inline-size
-     pour le cqw de la pastille. pointer-events:none (le dblclick est
-     géré par le parent). */
+  .widget-titre.gauche,
+  .widget-titre.droite {
+    top: 50%;
+    transform: translateY(-50%);
+    writing-mode: vertical-rl;
+  }
+  .widget-titre.gauche {
+    right: 100%;
+    margin-right: 2px;
+  }
+  .widget-titre.droite {
+    left: 100%;
+    margin-left: 2px;
+  }
+  /* Zones de double-clic (haut/bas pleine largeur, gauche/droite entre les
+     deux) — vraie pastille .msg-pill (même recette que « lecture OBS »,
+     teinte ambre action) au survol du widget sélectionné, avec ou sans titre
+     existant. container-type:inline-size pour le cqw de la pastille.
+     pointer-events:none (le dblclick est géré par le parent). */
   .titre-zone {
     position: absolute;
     left: 0;
@@ -1018,8 +1147,80 @@
   }
   .titre-zone-haut { top: 0; }
   .titre-zone-bas { bottom: 0; }
+  .titre-zone-gauche {
+    left: 0;
+    top: 25%;
+    height: 50%;
+    width: 22%;
+  }
+  .titre-zone-droite {
+    right: 0;
+    top: 25%;
+    height: 50%;
+    width: 22%;
+  }
   .widget:hover .titre-zone { opacity: 1; }
   .titre-zone .msg-pill {
     color: var(--message-user-action-color);
+  }
+
+  /* ===== Boutons -/+ de plan ===== */
+  /* Badge flottant AU-DESSUS du coin supérieur droit du widget (ne recouvre
+     pas le contenu), visible au survol — dashboard uniquement. Le bloc est
+     contre-scalé inline (transform 1/scale) : tout ce qui suit est en px
+     ÉCRAN constants, pas en px canvas. Ambre --message-user-action-color
+     (sémantique « action », famille des titre-zones) — voyant sans casser
+     le thème. pointer-events:none au repos → la zone invisible ne mange
+     pas les clics ; masqué pendant le drag/resize. */
+  .z-controls {
+    position: absolute;
+    bottom: 100%;
+    right: 0;
+    transform-origin: bottom right;
+    display: flex;
+    gap: 6px;
+    padding: 0 0 6px 0;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 30;
+  }
+  .widget:hover .z-controls {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .widget.dragging .z-controls {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .z-btn {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--message-user-action-color);
+    background: color-mix(in srgb, var(--message-user-action-color) 22%, var(--fond-panneau));
+    border: 2px solid var(--message-user-action-color);
+    border-radius: 50%;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--message-user-action-color) 45%, transparent);
+    cursor: pointer;
+    transition:
+      background 0.12s ease,
+      color 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+  .z-btn:hover:not(:disabled) {
+    color: var(--fond);
+    background: var(--message-user-action-color);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--message-user-action-color) 70%, transparent);
+  }
+  .z-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
   }
 </style>

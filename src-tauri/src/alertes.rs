@@ -13,7 +13,7 @@
 /// v0 — même pattern que bandeau.rs) :
 ///   - Config par type persistée `data/alertes_config.json` : actif, duree_ms,
 ///     texte_template (variables {pseudo} {nbViewers} {nbBits} {niveauSub}
-///     {nbMoisCumul} {destinataire}), couleur, taille_px, cooldowns, son.
+///     {nbMoisCumul} {destinataire}), taille_px, cooldowns, son.
 ///   - File FIFO (max 5 en attente) + UNE alerte affichée à la fois.
 ///   - Cooldown par viewer (anti-spam) + global (rythme), par type.
 ///   - Émission WS sur chat_tx : `alerte-config` (avant play) + `alerte-play`
@@ -22,7 +22,7 @@
 /// ⚠️ Leçon de l'ancienne app : USERNOTICE doit être parsé explicitement —
 /// tombé dans un `_ =>` ignoré, aucun raid/sub n'est jamais émis (bug "raid
 /// sans alerte" en live).
-use crate::config::data_dir;
+use crate::config::{data_dir, lire_langue};
 use crate::position_overlay::PositionOverlayState;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
@@ -53,8 +53,6 @@ pub struct AlerteTypeConfig {
     pub duree_ms: u64,
     #[serde(default)]
     pub texte_template: String,
-    #[serde(default = "default_couleur")]
-    pub couleur: String,
     #[serde(default = "default_taille_px")]
     pub taille_px: u32,
     #[serde(default)]
@@ -82,29 +80,65 @@ fn default_true() -> bool {
 fn default_duree_ms() -> u64 {
     5000
 }
-fn default_couleur() -> String {
-    "#ffffff".to_string()
-}
 fn default_taille_px() -> u32 {
     48
 }
 
-/// Config par défaut d'un type (template spécifique au type).
-fn config_type_defaut(type_alerte: &str) -> AlerteTypeConfig {
-    let template = match type_alerte {
-        "follow" => "{pseudo} vient de suivre !",
-        "raid" => "{pseudo} raide avec {nbViewers} viewers !",
-        "sub" => "{pseudo} vient de s'abonner !",
-        "resub" => "{pseudo} resub pour {nbMoisCumul} mois !",
-        "subgift" => "{pseudo} offre un sub à {destinataire} !",
-        "bits" => "{pseudo} a envoyé {nbBits} bits !",
-        _ => "{pseudo}",
+/// Config par défaut d'un type (template spécifique au type). Le template suit
+/// la langue UI (`lire_langue`) — FR = source de vérité, miroir de
+/// stores/alertes.ts configDefautType + clés i18n `alertes.defaut.*`.
+fn config_type_defaut(type_alerte: &str, langue: &str) -> AlerteTypeConfig {
+    let template = match langue {
+        "en" => match type_alerte {
+            "follow" => "{pseudo} just followed!",
+            "raid" => "{pseudo} is raiding with {nbViewers} viewers!",
+            "sub" => "{pseudo} just subscribed!",
+            "resub" => "{pseudo} resubbed for {nbMoisCumul} months!",
+            "subgift" => "{pseudo} gifted a sub to {destinataire}!",
+            "bits" => "{pseudo} sent {nbBits} bits!",
+            _ => "{pseudo}",
+        },
+        "es" => match type_alerte {
+            "follow" => "{pseudo} acaba de seguirte!",
+            "raid" => "{pseudo} raidea con {nbViewers} viewers!",
+            "sub" => "{pseudo} acaba de suscribirse!",
+            "resub" => "{pseudo} se resuscribió por {nbMoisCumul} meses!",
+            "subgift" => "{pseudo} regaló una sub a {destinataire}!",
+            "bits" => "{pseudo} envió {nbBits} bits!",
+            _ => "{pseudo}",
+        },
+        "it" => match type_alerte {
+            "follow" => "{pseudo} ha appena iniziato a seguirti!",
+            "raid" => "{pseudo} sta raidando con {nbViewers} viewers!",
+            "sub" => "{pseudo} si è appena abbonato!",
+            "resub" => "{pseudo} riabbonato da {nbMoisCumul} mesi!",
+            "subgift" => "{pseudo} ha regalato un sub a {destinataire}!",
+            "bits" => "{pseudo} ha inviato {nbBits} bits!",
+            _ => "{pseudo}",
+        },
+        "zh" => match type_alerte {
+            "follow" => "{pseudo} 刚刚关注了你！",
+            "raid" => "{pseudo} 正在以 {nbViewers} 名观众突袭！",
+            "sub" => "{pseudo} 刚刚订阅了！",
+            "resub" => "{pseudo} 续订了 {nbMoisCumul} 个月！",
+            "subgift" => "{pseudo} 向 {destinataire} 赠送了订阅！",
+            "bits" => "{pseudo} 发送了 {nbBits} 个 bits！",
+            _ => "{pseudo}",
+        },
+        _ => match type_alerte {
+            "follow" => "{pseudo} vient de suivre !",
+            "raid" => "{pseudo} raide avec {nbViewers} viewers !",
+            "sub" => "{pseudo} vient de s'abonner !",
+            "resub" => "{pseudo} resub pour {nbMoisCumul} mois !",
+            "subgift" => "{pseudo} offre un sub à {destinataire} !",
+            "bits" => "{pseudo} a envoyé {nbBits} bits !",
+            _ => "{pseudo}",
+        },
     };
     AlerteTypeConfig {
         actif: true,
         duree_ms: default_duree_ms(),
         texte_template: template.to_string(),
-        couleur: default_couleur(),
         taille_px: default_taille_px(),
         cooldown_viewer_s: 0,
         cooldown_global_s: 0,
@@ -158,9 +192,10 @@ impl Default for AlertesOverlayConfig {
 }
 
 impl AlertesConfig {
-    /// Config effective d'un type (champ absent sur disque → défaut du type).
-    pub fn pour(&self, type_alerte: &str) -> AlerteTypeConfig {
-        let defaut = config_type_defaut(type_alerte);
+    /// Config effective d'un type (champ absent sur disque → défaut du type,
+    /// template dans la langue UI).
+    pub fn pour(&self, type_alerte: &str, langue: &str) -> AlerteTypeConfig {
+        let defaut = config_type_defaut(type_alerte, langue);
         match type_alerte {
             "follow" => self.follow.clone().unwrap_or(defaut),
             "raid" => self.raid.clone().unwrap_or(defaut),
@@ -219,7 +254,6 @@ struct AlerteItem {
     son: Option<String>,
     media: Option<String>,
     media_kind: Option<String>,
-    couleur: String,
     taille_px: u32,
     duree_ms: u64,
 }
@@ -268,7 +302,10 @@ impl AlertesState {
         if !TYPES_ALERTE.contains(&evt.type_alerte.as_str()) {
             return;
         }
-        let cfg = self.config.lock().unwrap().pour(&evt.type_alerte);
+        // Langue lue UNE fois avant le lock (règle mutex non réentrant) :
+        // sert aux templates par défaut quand le type n'a pas de config persistée.
+        let langue = lire_langue(&self.app).unwrap_or_else(|| "fr".to_string());
+        let cfg = self.config.lock().unwrap().pour(&evt.type_alerte, &langue);
         if !cfg.actif {
             return;
         }
@@ -303,7 +340,6 @@ impl AlertesState {
             son: cfg.son.clone(),
             media: cfg.media.clone(),
             media_kind: cfg.media_kind.clone(),
-            couleur: cfg.couleur.clone(),
             taille_px: cfg.taille_px,
             duree_ms: cfg.duree_ms.max(1000),
         };
@@ -337,7 +373,6 @@ impl AlertesState {
                 "son": item.son,
                 "media": item.media,
                 "media_kind": item.media_kind,
-                "couleur": item.couleur,
                 "taille_px": item.taille_px,
                 "duree_ms": item.duree_ms,
             },

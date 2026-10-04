@@ -82,13 +82,38 @@ pub struct EcranAttenteConfig {
     /// Défaut 1.0.
     #[serde(default = "default_minuteur_echelle")]
     pub minuteur_echelle: f64,
+    /// Layout de l'overlay : "signature" (marque StreamOS — Streamy +
+    /// stries néon + wordmark, défaut) | "minimal" (rendu historique :
+    /// dégradé + titre + carte minuteur seuls).
+    #[serde(default = "default_layout")]
+    pub layout: String,
+    /// Centre horizontal de Streamy (px canvas). Défaut 170 (haut-gauche).
+    #[serde(default = "default_streamy_x")]
+    pub streamy_x: f64,
+    /// Centre vertical de Streamy (px canvas). Défaut 180.
+    #[serde(default = "default_streamy_y")]
+    pub streamy_y: f64,
+    /// Échelle de Streamy (0.3-2.0). Défaut 0.6.
+    #[serde(default = "default_streamy_echelle")]
+    pub streamy_echelle: f64,
+    /// Centre horizontal du wordmark logo (px canvas). Défaut 960.
+    #[serde(default = "default_logo_x")]
+    pub logo_x: f64,
+    /// Centre vertical du wordmark logo (px canvas). Défaut 140 (haut-centre).
+    #[serde(default = "default_logo_y")]
+    pub logo_y: f64,
+    /// Échelle du wordmark logo (0.3-2.0). Défaut 1.0.
+    #[serde(default = "default_logo_echelle")]
+    pub logo_echelle: f64,
 }
 
 fn default_duree_s() -> u64 {
     600
 }
 fn default_titre() -> String {
-    "Stream Operating System".to_string()
+    // Vide par défaut : le wordmark StreamOS (layout signature) fait office
+    // de titre — l'utilisateur peut toujours saisir un titre personnalisé.
+    String::new()
 }
 fn default_true() -> bool {
     true
@@ -103,6 +128,27 @@ fn default_minuteur_y() -> f64 {
     540.0
 }
 fn default_minuteur_echelle() -> f64 {
+    1.0
+}
+fn default_layout() -> String {
+    "signature".to_string()
+}
+fn default_streamy_x() -> f64 {
+    170.0
+}
+fn default_streamy_y() -> f64 {
+    180.0
+}
+fn default_streamy_echelle() -> f64 {
+    0.6
+}
+fn default_logo_x() -> f64 {
+    960.0
+}
+fn default_logo_y() -> f64 {
+    140.0
+}
+fn default_logo_echelle() -> f64 {
     1.0
 }
 
@@ -121,6 +167,13 @@ impl Default for EcranAttenteConfig {
             minuteur_x: default_minuteur_x(),
             minuteur_y: default_minuteur_y(),
             minuteur_echelle: default_minuteur_echelle(),
+            layout: default_layout(),
+            streamy_x: default_streamy_x(),
+            streamy_y: default_streamy_y(),
+            streamy_echelle: default_streamy_echelle(),
+            logo_x: default_logo_x(),
+            logo_y: default_logo_y(),
+            logo_echelle: default_logo_echelle(),
         }
     }
 }
@@ -353,6 +406,13 @@ impl EcranAttenteState {
                 "minuteur_x": config.minuteur_x,
                 "minuteur_y": config.minuteur_y,
                 "minuteur_echelle": config.minuteur_echelle.clamp(0.4, 3.0),
+                "layout": config.layout,
+                "streamy_x": config.streamy_x,
+                "streamy_y": config.streamy_y,
+                "streamy_echelle": config.streamy_echelle.clamp(0.3, 2.0),
+                "logo_x": config.logo_x,
+                "logo_y": config.logo_y,
+                "logo_echelle": config.logo_echelle.clamp(0.3, 2.0),
             }
         })
         .to_string();

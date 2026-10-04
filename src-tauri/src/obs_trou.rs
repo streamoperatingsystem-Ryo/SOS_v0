@@ -12,8 +12,13 @@
 ///
 /// Sync transform : appelée au commitScene (pointerup) pour tous les widgets
 /// avec obsSource=Some. Reconnect one-shot, SetSceneItemTransform par item.
-use serde_json::{json, Value};
+use std::fs;
+use std::path::{Path, PathBuf};
 
+use serde_json::{json, Value};
+use sha2::{Digest, Sha256};
+
+use crate::mask_png;
 use crate::obs::{connect, rpc, SOURCE_NAME, WsSink, WsStreamHalf};
 
 use futures_util::SinkExt;
@@ -573,6 +578,35 @@ fn default_zoom_sync() -> f64 {
     1.0
 }
 
+/// Crop centré (gauche/droite, haut/bas) en pixels SOURCE pour qu'une
+/// capture reste DANS la boîte w×h du widget. Deux composantes cumulées :
+///   - crop zoom (zoom ≥ 1 = recadrage centré, formule historique) ;
+///   - crop ratio, UNIQUEMENT en fit « remplir » (cover) : rogne le côté
+///     excédentaire pour que la zone visible ait EXACTEMENT le ratio w/h.
+///     Sans ce crop, OBS_BOUNDS_SCALE_OUTER agrandit la source au-delà de la
+///     boîte et le débord est visible à travers tout trou destination-out
+///     voisin (caméra posée sur un widget troué). obs-websocket n'expose pas
+///     « rogner selon la boîte englobante » → crop explicite.
+///
+/// Source non dimensionnée (0) → (0, 0).
+fn crop_source(src_w: f64, src_h: f64, w: f64, h: f64, fit: &str, zoom: f64) -> (f64, f64) {
+    if src_w <= 0.0 || src_h <= 0.0 {
+        return (0.0, 0.0);
+    }
+    let zoom_crop = if zoom > 1.0 { zoom } else { 1.0 };
+    let mut vw = src_w / zoom_crop;
+    let mut vh = src_h / zoom_crop;
+    if fit == "remplir" && w > 0.0 && h > 0.0 {
+        let ratio = w / h;
+        if vw / vh > ratio {
+            vw = vh * ratio;
+        } else {
+            vh = vw / ratio;
+        }
+    }
+    ((src_w - vw) / 2.0, (src_h - vh) / 2.0)
+}
+
 /// Mapping mode d'affichage widget → boundsType OBS.
 /// ajuster → SCALE_INNER (contain) ; remplir → SCALE_OUTER (cover) ;
 /// etendre → MAX_ONLY ; etirer → STRETCH ; centrer → NONE (alignment centre,
@@ -642,19 +676,14 @@ pub async fn sync_trous(
             }),
         )
         .await?;
-        let src_w = cur["sourceWidth"].as_f64().unwrap_or(0.0);
-        let src_h = cur["sourceHeight"].as_f64().unwrap_or(0.0);
+        // Réponse obs-websocket v5 : { "sceneItemTransform": { sourceWidth, … } }.
+        let tr = &cur["sceneItemTransform"];
+        let src_w = tr["sourceWidth"].as_f64().unwrap_or(0.0);
+        let src_h = tr["sourceHeight"].as_f64().unwrap_or(0.0);
 
-        // 2. Crop centré pour zoom ≥ 1. zoom < 1 → pas de crop (zoom crop = 1).
-        //    visible = source / zoom_crop → on garde le centre, on coupe les bords.
-        let zoom_crop = if it.zoom > 1.0 { it.zoom } else { 1.0 };
-        let (crop_lr, crop_tb) = if src_w > 0.0 && src_h > 0.0 && zoom_crop > 1.0 {
-            let vw = src_w / zoom_crop;
-            let vh = src_h / zoom_crop;
-            ((src_w - vw) / 2.0, (src_h - vh) / 2.0)
-        } else {
-            (0.0, 0.0)
-        };
+        // 2. Crop centré : zoom ≥ 1 (recadrage) + ratio w/h en « remplir »
+        //    (la source ne déborde plus de la boîte) — cf. crop_source.
+        let (crop_lr, crop_tb) = crop_source(src_w, src_h, it.w, it.h, &it.fit, it.zoom);
 
         // 3. SetSceneItemTransform : bounds = w×h (fixes), boundsType = fit,
         //    crop centré, rotation, alignment 0, position = centre.
@@ -858,7 +887,23 @@ async fn ensure_camera(
         }
     }
 
-    // 4. Transform : centre + SCALE_OUTER (cover) + alignment 0 (sync_trous).
+    // 4. Transform : centre + SCALE_OUTER (cover) + alignment 0 (sync_trous)
+    //    + crop ratio w/h (crop_source « remplir », zoom 1 = contrat caméra
+    //    de commitScene) : la source ne déborde pas de la boîte dès la
+    //    création. Capteur pas encore dimensionné (0×0) → crop 0, rattrapé
+    //    au prochain commit (sync_trous).
+    let cur = rpc(
+        write,
+        read,
+        "GetSceneItemTransform",
+        "cam_get_transform",
+        json!({ "sceneUuid": scene_uuid, "sceneItemId": item_id }),
+    )
+    .await?;
+    let tr = &cur["sceneItemTransform"];
+    let src_w = tr["sourceWidth"].as_f64().unwrap_or(0.0);
+    let src_h = tr["sourceHeight"].as_f64().unwrap_or(0.0);
+    let (crop_lr, crop_tb) = crop_source(src_w, src_h, w, h, "remplir", 1.0);
     let cx = x + w / 2.0;
     let cy = y + h / 2.0;
     rpc(
@@ -875,7 +920,11 @@ async fn ensure_camera(
                 "boundsWidth": w,
                 "boundsHeight": h,
                 "boundsType": "OBS_BOUNDS_SCALE_OUTER",
-                "alignment": 0
+                "alignment": 0,
+                "cropLeft": crop_lr,
+                "cropRight": crop_lr,
+                "cropTop": crop_tb,
+                "cropBottom": crop_tb
             }
         }),
     )
@@ -1104,6 +1153,353 @@ pub async fn camera_hide(host: &str, port: u16, password: &str) -> Result<(), St
     Ok(())
 }
 
+// ===== Masque caméra — découpe SOS-Caméra / SOS-Caméra-Fond à la forme du cadre =====
+
+/// Nom du filtre « Image mask/Blend » posé sur SOS-Caméra et SOS-Caméra-Fond.
+/// Mode alpha : l'alpha du PNG multiplie l'alpha de la source
+/// (mask_alpha_filter.effect), `stretch` étire le PNG à la taille de base
+/// de la source → le masque est généré en pixels de la source.
+const SOS_MASQUE_FILTRE: &str = "SOS-Masque";
+
+/// Kind OBS du filtre. ⚠️ obs-websocket expose DEUX kinds (vérifié OBS 32.2.2 /
+/// obs-websocket 5.7.4 via GetSourceFilterKindList) : "mask_filter" = v1
+/// OBSOLÈTE (`opacity` ENTIER 0-100 → 1.0 lu comme 1 % → source quasi
+/// transparente, plaque noire visible à travers) et "mask_filter_v2"
+/// (`opacity` double 0-1, sRGB). On crée TOUJOURS la v2 ; un filtre v1
+/// résiduel est remplacé (le kind ne se change pas par SetSourceFilterSettings).
+const SOS_MASQUE_KIND: &str = "mask_filter_v2";
+
+/// Réglages du filtre : alpha du PNG, image étirée, aucune atténuation
+/// (color 0xFFFFFF + opacity 1.0 → vec4(1,1,1,1), cf. mask_alpha_filter.effect).
+fn reglages_masque(chemin_png: &str) -> Value {
+    json!({
+        "type": "mask_alpha_filter.effect",
+        "image_path": chemin_png,
+        "color": 16_777_215,
+        "opacity": 1.0,
+        "stretch": true
+    })
+}
+
+/// Hash court (16 hex) d'octets : nom de fichier de masque versionné par
+/// contenu — même masque → même nom (écriture sautée), masque changé →
+/// nouveau fichier (changement de chemin = cache d'images OBS contourné).
+fn hex_court(bytes: &[u8]) -> String {
+    bytes.iter().take(8).map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Taille de base (native) d'un item de scène : GetSceneItemTransform →
+/// sourceWidth/sourceHeight. None si l'item est absent de la scène ou si la
+/// source n'est pas encore dimensionnée (capteur dshow en cours de démarrage).
+async fn taille_base_item(
+    write: &mut WsSink,
+    read: &mut WsStreamHalf,
+    scene_uuid: &str,
+    items: &[Value],
+    source_name: &str,
+) -> Option<(f64, f64)> {
+    let id = items
+        .iter()
+        .find(|it| it["sourceName"].as_str() == Some(source_name))
+        .and_then(|it| it["sceneItemId"].as_i64())?;
+    let tr = rpc(
+        write,
+        read,
+        "GetSceneItemTransform",
+        &format!("masque_taille_{}", id),
+        json!({ "sceneUuid": scene_uuid, "sceneItemId": id }),
+    )
+    .await
+    .ok()?;
+    // Réponse obs-websocket v5 : { "sceneItemTransform": { sourceWidth, … } }.
+    let tr = &tr["sceneItemTransform"];
+    let w = tr["sourceWidth"].as_f64().unwrap_or(0.0);
+    let h = tr["sourceHeight"].as_f64().unwrap_or(0.0);
+    if w > 0.0 && h > 0.0 {
+        Some((w, h))
+    } else {
+        None
+    }
+}
+
+/// Chemin du PNG actuellement référencé par le filtre SOS-Masque d'un input
+/// (pour le nettoyage : ne jamais supprimer un fichier encore utilisé).
+async fn chemin_filtre_actuel(
+    write: &mut WsSink,
+    read: &mut WsStreamHalf,
+    input_name: &str,
+) -> Option<String> {
+    let liste = rpc(
+        write,
+        read,
+        "GetSourceFilterList",
+        "masque_chemin",
+        json!({ "sourceName": input_name }),
+    )
+    .await
+    .ok()?;
+    liste["filters"]
+        .as_array()?
+        .iter()
+        .find(|f| f["filterName"].as_str() == Some(SOS_MASQUE_FILTRE))
+        .and_then(|f| f["filterSettings"]["image_path"].as_str().map(str::to_string))
+}
+
+/// Mappe les points du polygone (coords widget-local 0..w × 0..h) en pixels
+/// de base de la source, en inversant le pipeline de sync_trous : crop zoom
+/// centré puis bounds fit alignés au centre (alignment 0). La rotation de
+/// l'item est volontairement ignorée : le filtre s'applique AVANT le
+/// transform de l'item → la forme tourne avec la source, exactement comme
+/// le cadre SVG tourne avec le widget dans la page de diffusion.
+fn points_en_espace_source(
+    points: &[(f64, f64)],
+    src_w: f64,
+    src_h: f64,
+    w: f64,
+    h: f64,
+    fit: &str,
+    zoom: f64,
+) -> Vec<(f64, f64)> {
+    // Crop centré zoom + ratio (MÊME fonction que sync_trous / ensure_camera).
+    let (crop_lr, crop_tb) = crop_source(src_w, src_h, w, h, fit, zoom);
+    let wc = (src_w - 2.0 * crop_lr).max(1.0);
+    let hc = (src_h - 2.0 * crop_tb).max(1.0);
+    // Échelle selon le boundsType (miroir de fit_to_bounds).
+    let (sx, sy) = match fit_to_bounds(fit) {
+        "OBS_BOUNDS_SCALE_OUTER" => {
+            let s = (w / wc).max(h / hc);
+            (s, s)
+        }
+        "OBS_BOUNDS_SCALE_INNER" => {
+            let s = (w / wc).min(h / hc);
+            (s, s)
+        }
+        "OBS_BOUNDS_MAX_ONLY" => {
+            let s = (w / wc).min(h / hc).min(1.0);
+            (s, s)
+        }
+        "OBS_BOUNDS_NONE" => (1.0, 1.0),
+        _ => (w / wc, h / hc), // STRETCH
+    };
+    points
+        .iter()
+        .map(|&(px, py)| {
+            (
+                crop_lr + wc / 2.0 + (px - w / 2.0) / sx,
+                crop_tb + hc / 2.0 + (py - h / 2.0) / sy,
+            )
+        })
+        .collect()
+}
+
+/// Crée ou met à jour le filtre SOS-Masque sur un input OBS. Skip interne si
+/// le filtre référence déjà ce PNG (pas de rechargement d'image inutile).
+async fn appliquer_filtre_masque(
+    write: &mut WsSink,
+    read: &mut WsStreamHalf,
+    input_name: &str,
+    chemin_png: &str,
+) -> Result<(), String> {
+    let liste = rpc(
+        write,
+        read,
+        "GetSourceFilterList",
+        "masque_filtres",
+        json!({ "sourceName": input_name }),
+    )
+    .await?;
+    let existant = liste["filters"]
+        .as_array()
+        .and_then(|fs| fs.iter().find(|f| f["filterName"].as_str() == Some(SOS_MASQUE_FILTRE)));
+    // Filtre d'un autre kind (v1 obsolète posé par une version antérieure)
+    // → retiré puis recréé en v2 ci-dessous.
+    let existant = match existant {
+        Some(f) if f["filterKind"].as_str() != Some(SOS_MASQUE_KIND) => {
+            retirer_filtre_masque(write, read, input_name).await;
+            None
+        }
+        autre => autre,
+    };
+    if let Some(f) = existant {
+        if f["filterSettings"]["image_path"].as_str() == Some(chemin_png) {
+            return Ok(());
+        }
+        rpc(
+            write,
+            read,
+            "SetSourceFilterSettings",
+            "masque_set",
+            json!({
+                "sourceName": input_name,
+                "filterName": SOS_MASQUE_FILTRE,
+                "filterSettings": reglages_masque(chemin_png),
+                "overlay": true
+            }),
+        )
+        .await?;
+    } else {
+        rpc(
+            write,
+            read,
+            "CreateSourceFilter",
+            "masque_create",
+            json!({
+                "sourceName": input_name,
+                "filterName": SOS_MASQUE_FILTRE,
+                "filterKind": SOS_MASQUE_KIND,
+                "filterSettings": reglages_masque(chemin_png)
+            }),
+        )
+        .await?;
+    }
+    Ok(())
+}
+
+/// Retire le filtre SOS-Masque d'un input (cadre sans forme → caméra
+/// rectangulaire, comportement d'avant le masque). Non-fatal si absent.
+async fn retirer_filtre_masque(write: &mut WsSink, read: &mut WsStreamHalf, input_name: &str) {
+    let _ = rpc(
+        write,
+        read,
+        "RemoveSourceFilter",
+        "masque_remove",
+        json!({ "sourceName": input_name, "filterName": SOS_MASQUE_FILTRE }),
+    )
+    .await;
+}
+
+/// Commande frontend : découpe SOS-Caméra ET SOS-Caméra-Fond à la forme du
+/// cadre SVG du widget caméra. `points` = polygone en coords widget-local
+/// (source de vérité : genererClipPathCadre côté dashboard — même forme
+/// que le trou destination-out de diffusion.html). `points` null/vide =
+/// cadre sans forme (carre/sansCadre) → filtres retirés, caméra
+/// rectangulaire.
+///
+/// Le filtre OBS s'applique à la résolution NATIVE de la source (avant le
+/// transform de l'item) et `stretch` étire le PNG à la taille de base → le
+/// masque est généré en pixels de la source, en mappant le polygone par
+/// l'inverse du pipeline sync_trous (points_en_espace_source). La position
+/// (x, y) du widget n'intervient PAS : un déplacement ne change pas le masque.
+///
+/// Retour : true si la caméra a été masquée (ou les filtres retirés),
+/// false si la source n'était pas encore dimensionnée (capteur dshow en
+/// démarrage) → le dashboard ne met pas en cache et retente au prochain
+/// commit (auto-guérison).
+///
+/// One-shot : connect → scene_sos → par input (taille → mapping → PNG →
+/// filtre) → nettoyage → close. PNG écrit dans `dossier_masques` (<data>/obs)
+/// sous un nom versionné par hash du contenu. Erreur filtre → log +
+/// continuation (la source reste rectangulaire), jamais d'échec global.
+#[allow(clippy::too_many_arguments)]
+pub async fn camera_mask_sync(
+    host: &str,
+    port: u16,
+    password: &str,
+    points: Option<Vec<(f64, f64)>>,
+    w: f64,
+    h: f64,
+    fit: &str,
+    zoom: f64,
+    dossier_masques: &Path,
+) -> Result<bool, String> {
+    let (mut write, mut read) = connect(host, port, password).await?;
+    let sos = scene_sos(&mut write, &mut read).await?
+        .ok_or("OBS: scène « SOS » introuvable ou sans SOS-Diffusion")?;
+    let scene_uuid = &sos.scene_uuid;
+
+    // Cadre sans forme → caméra rectangulaire : retirer les filtres.
+    let Some(points) = points.filter(|p| p.len() >= 3) else {
+        for input in [SOS_CAMERA, SOS_CAMERA_FOND] {
+            retirer_filtre_masque(&mut write, &mut read, input).await;
+        }
+        let _ = write.close().await;
+        return Ok(true);
+    };
+
+    fs::create_dir_all(dossier_masques)
+        .map_err(|e| format!("OBS masque: création du dossier impossible: {}", e))?;
+
+    let mut fichiers_courants: Vec<PathBuf> = Vec::new();
+    let mut camera_masquee = false;
+    for input in [SOS_CAMERA, SOS_CAMERA_FOND] {
+        // Taille de base : capteur dshow tout juste créé (sourceWidth encore
+        // 0) → un retry court ; item absent ou toujours rien → skip.
+        let mut taille =
+            taille_base_item(&mut write, &mut read, scene_uuid, &sos.items, input).await;
+        if taille.is_none()
+            && input == SOS_CAMERA
+            && sos.items.iter().any(|it| it["sourceName"].as_str() == Some(SOS_CAMERA))
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(1200)).await;
+            taille = taille_base_item(&mut write, &mut read, scene_uuid, &sos.items, input).await;
+        }
+        let Some((src_w, src_h)) = taille else {
+            eprintln!("[OBS] masque: « {} » sans taille de base → skip", input);
+            continue;
+        };
+        let (rw, rh) = (src_w.round().max(1.0) as u32, src_h.round().max(1.0) as u32);
+        // Caméra : fit/zoom du widget. Plaque noire : toujours cover sans
+        // crop (même transform qu'ensure_camera_fond / sync_trous).
+        let (fit_src, zoom_src) = if input == SOS_CAMERA {
+            (fit, zoom)
+        } else {
+            ("remplir", 1.0)
+        };
+        let pts_src =
+            points_en_espace_source(&points, rw as f64, rh as f64, w, h, fit_src, zoom_src);
+        let couverture = mask_png::rasteriser_polygone(&pts_src, rw, rh);
+        let png = mask_png::encoder_png_rgba(&couverture, rw, rh);
+
+        let mut hacheur = Sha256::new();
+        hacheur.update(&png);
+        let chemin = dossier_masques.join(format!(
+            "masque-{}-{}.png",
+            if input == SOS_CAMERA { "camera" } else { "fond" },
+            hex_court(&hacheur.finalize())
+        ));
+        if !chemin.exists() {
+            fs::write(&chemin, &png)
+                .map_err(|e| format!("OBS masque: écriture {}: {}", chemin.display(), e))?;
+        }
+
+        if let Err(e) =
+            appliquer_filtre_masque(&mut write, &mut read, input, &chemin.to_string_lossy()).await
+        {
+            eprintln!("[OBS] masque: filtre « {} »: {}", input, e);
+            continue;
+        }
+        fichiers_courants.push(chemin);
+        if input == SOS_CAMERA {
+            camera_masquee = true;
+        }
+    }
+
+    // Nettoyage des masques orphelins (générations précédentes) : on garde
+    // les fichiers courants + ceux encore référencés par un filtre (input
+    // sauté ou apply échoué → son ancien PNG doit survivre).
+    let mut chemins_gardes = fichiers_courants;
+    for input in [SOS_CAMERA, SOS_CAMERA_FOND] {
+        if let Some(chemin) = chemin_filtre_actuel(&mut write, &mut read, input).await {
+            chemins_gardes.push(PathBuf::from(chemin));
+        }
+    }
+    if let Ok(entrees) = fs::read_dir(dossier_masques) {
+        for entree in entrees.flatten() {
+            let chemin = entree.path();
+            let est_masque = chemin
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("masque-") && n.ends_with(".png"));
+            if est_masque && !chemins_gardes.contains(&chemin) {
+                let _ = fs::remove_file(&chemin);
+            }
+        }
+    }
+
+    let _ = write.close().await;
+    Ok(camera_masquee)
+}
+
 /// Synchronise les captures SOS-Trou-* et SOS-Fond-* avec la scène chargée.
 /// Au chargement d'une scène :
 ///   - items SOS dont le nom commence par "SOS-Trou-" ET n'est dans AUCUN
@@ -1320,11 +1716,11 @@ pub async fn sync_scene_captures(
 }
 
 /// Force l'ordre visuel des sources SOS dans la scène :
-///   Index 0..F-1 (BAS) : SOS-Fond-* (captures de fond app/jeu plein canvas)
-///   Index F..T-1       : SOS-Trou-* (tous les trous, ordre relatif conservé)
-///   Index T            : SOS-Caméra-Fond (plaque noire)
-///   Index T+1          : SOS-Caméra
-///   Index T+2 (HAUT)   : SOS-Diffusion
+///   HAUT de scène (index max, du haut vers le bas) : SOS-Diffusion >
+///     SOS-Caméra > SOS-Caméra-Fond > SOS-Trou-* (ordre relatif conservé) —
+///     le bloc SOS est AU-DESSUS de toutes les sources de l'utilisateur.
+///   BAS de scène (indices 0..F-1) : SOS-Fond-* — captures plein canvas,
+///     SOUS les sources de l'utilisateur aussi (sinon elles les couvrent).
 ///
 /// Diffusion AU-DESSUS de tout : les widgets :4321 (chat/médias + cadres
 /// SVG) passent devant les captures. La caméra apparaît via le trou
@@ -1406,10 +1802,16 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
         top_to_bottom.push(id);
     }
     top_to_bottom.extend(trou_ids.iter().copied());
-    // SOS-Fond-* en DERNIER = index le plus bas (fond de scène, sous tout).
-    top_to_bottom.extend(bg_capture_ids.iter().copied());
+    // SOS-Fond-* PAS dans le bloc du haut : une capture de fond est PLEIN
+    // CANVAS — au-dessus des sources utilisateur elle les masquerait
+    // entièrement. Elle reste aux indices 0..F-1 (tout en bas de la scène).
 
-    let mut idx = top_to_bottom.len() as i64 - 1; // index le plus haut = Diffusion
+    // Départ = index MAX de la scène (arr.len()-1), PAS le nombre d'items SOS :
+    // le bloc SOS occupe le HAUT de la scène, au-dessus des sources de
+    // l'utilisateur (captures, médias). Avec top_to_bottom.len()-1 il se
+    // retrouvait rangé en BAS (indices 0..N) → toute source non-SOS passait
+    // devant SOS-Diffusion.
+    let mut idx = arr.len() as i64 - 1; // index le plus haut = Diffusion
     for id in top_to_bottom {
         let _ = rpc(write, read, "SetSceneItemIndex", &format!("reorder_{}", id), json!({
             "sceneUuid": scene_uuid,
@@ -1417,6 +1819,15 @@ async fn reorder_sos_sources(write: &mut WsSink, read: &mut WsStreamHalf, scene_
             "sceneItemIndex": idx
         })).await;
         idx -= 1;
+    }
+    // Captures de fond : indices 0..F-1, SOUS toutes les sources (bloc SOS
+    // et sources utilisateur).
+    for (i, id) in bg_capture_ids.iter().enumerate() {
+        let _ = rpc(write, read, "SetSceneItemIndex", &format!("reorder_bg_{}", id), json!({
+            "sceneUuid": scene_uuid,
+            "sceneItemId": id,
+            "sceneItemIndex": i as i64
+        })).await;
     }
 }
 

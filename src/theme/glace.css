@@ -57,6 +57,12 @@
   --dash-orange: var(--t-orange-800);
   --dash-jaune: var(--t-jaune-700);
   --dash-glow-danger: var(--t-dash-glow-danger);
+  --carte-bleue: var(--t-bleu-950);
+  --carte-violette: var(--t-violet-950);
+  --carte-jaune: var(--t-jaune-700);
+  --carte-dore: var(--t-ambre-950);
+  --carte-verte: var(--t-emeraude-700);
+  --carte-ardoise: var(--t-ardoise-700);
   /* ===== Boutons — verre sombre translucide, aucune teinte colorée =====
      --btn-tint transparent : pas de couleur dans le fill ni le shine ;
      --btn-base = verre sombre translucide (le fond ambiant transparaît,
@@ -84,4 +90,17 @@
   --plat-tiktok: var(--t-tiktok);
   --plat-obs: var(--t-obs);
   --plat-diffusion: var(--t-vert);
+  /* ===== Guide du streamer — rôles « artwork » du livre feuilletable =====
+     Palette parchemin/cuir/dorure consommée par GuideLivre.svelte
+     (overlay dashboard uniquement). Même logique que les palettes cadres :
+     décor interne du composant, pas du chrome — le chrome de l'overlay
+     (fermer, flèches, folios) reste sur les rôles existants. */
+  --livre-papier: var(--t-parchemin);
+  --livre-papier-ombre: var(--t-parchemin-ombre);
+  --livre-encre: var(--t-encre);
+  --livre-encre-douce: var(--t-encre-douce);
+  --livre-couverture: var(--t-cuir);
+  --livre-couverture-claire: var(--t-cuir-clair);
+  --livre-dore: var(--t-dore);
+  --livre-ruban: var(--t-ruban);
 }

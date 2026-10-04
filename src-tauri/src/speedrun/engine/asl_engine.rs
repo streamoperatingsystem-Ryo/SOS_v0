@@ -30,14 +30,40 @@ use crate::speedrun::memory::process::Process;
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum SpeedrunEvent {
+    /// index = split de départ (index armé par clic en NotRunning, sinon 0).
     #[serde(rename = "started")]
-    Started,
+    Started { index: i32 },
+    /// time = durée du segment bouclé, cumul = temps total de run (champ
+    /// séparé), index = current_split_index après incrément (split réalisé =
+    /// index − 1).
     #[serde(rename = "split")]
-    Split { time: String, index: i32 },
+    Split { time: String, cumul: String, index: i32 },
     #[serde(rename = "reset")]
     Reset,
+    /// Même contrat que Split : time = durée du dernier segment,
+    /// cumul = temps final, index = total_splits.
     #[serde(rename = "ended")]
-    Ended { time: String },
+    Ended { time: String, cumul: String, index: i32 },
+    /// Saut vers un index (clic sur une ligne) : NotRunning = armement,
+    /// Running/Paused/Ended = retry de segment. phase = phase résultante.
+    #[serde(rename = "goto")]
+    Goto { index: i32, phase: String },
+    /// État consolidé pour resync (reconnexion WS de la diffusion) : phase,
+    /// index (armé inclus), durées de segment enregistrées, chronos.
+    /// segmentTime null en NotRunning (ligne armée → 0:00.00 côté frontend).
+    #[serde(rename = "etat")]
+    Etat {
+        phase: String,
+        index: i32,
+        #[serde(rename = "splitTimes")]
+        split_times: Vec<Option<String>>,
+        #[serde(rename = "realTime")]
+        real_time: String,
+        #[serde(rename = "gameTime")]
+        game_time: Option<String>,
+        #[serde(rename = "segmentTime")]
+        segment_time: Option<String>,
+    },
     #[serde(rename = "gameTime")]
     GameTime { time: String },
     /// Temps régulier émis chaque tick quand Running/Paused (RTA + game time).
@@ -45,12 +71,15 @@ pub enum SpeedrunEvent {
     /// Le frontend utilise realTime comme fallback pour tempsJeu si gameTime est null.
     /// Sans cet event, le chrono reste à 0 après start manuel quand gameTime ASL
     /// retourne null (ex: M["TimerActive"].Current null → gameTime retourne null).
+    /// segmentTime = temps vivant du segment courant (primary − seg_start).
     #[serde(rename = "time")]
     Time {
         #[serde(rename = "realTime")]
         real_time: String,
         #[serde(rename = "gameTime")]
         game_time: Option<String>,
+        #[serde(rename = "segmentTime")]
+        segment_time: Option<String>,
     },
     #[serde(rename = "connected")]
     Connected { process: String, pid: u32 },
@@ -86,6 +115,9 @@ pub enum ActionManuelle {
     Undo,
     Reset,
     Pause,
+    /// Clic sur une ligne de split : arme l'index (NotRunning) ou saute à
+    /// l'index en retry de segment (Running/Paused/Ended).
+    GoTo { index: i32 },
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -132,6 +164,9 @@ enum EngineCommand {
     MajSettingsAsl {
         valeurs: std::collections::HashMap<String, bool>,
     },
+    /// Émet l'état consolidé (event `etat`) — resync diffusion à la
+    /// reconnexion WS (reload OBS en cours de run).
+    EmitEtat,
     Shutdown,
 }
 
@@ -220,6 +255,14 @@ impl AslEngine {
             .send(EngineCommand::ActionManuelle { action })
             .map_err(|e| format!("Channel: {}", e))
     }
+
+    /// Demande au thread moteur d'émettre l'état consolidé (event `etat`).
+    /// Appelé par reemit_lss quand la diffusion demande un resync WS.
+    pub fn emit_etat(&self) -> Result<(), String> {
+        self.sender
+            .send(EngineCommand::EmitEtat)
+            .map_err(|e| format!("Channel: {}", e))
+    }
 }
 
 impl Drop for AslEngine {
@@ -248,6 +291,11 @@ struct EngineInner {
     init_completed: bool,
     running: bool,
     script_ctx: ScriptContext,
+    /// Durées de segment enregistrées pour la tentative en cours
+    /// (index = segment 0-based). Alimenté à chaque split ; effacé par
+    /// reset/goto (retry de segment : les précédents ne comptent pas comme
+    /// finis) ; lu par undo_split (reprend le segment défait à d_k).
+    temps_segs: Vec<Option<f64>>,
     /// Compteur de ticks d'attente d'attach. Double usage : throttle du log
     /// "en attente" ET throttle du scan de processus (1 scan/s — le scan est
     /// un CreateToolhelp32Snapshot complet, coûteux en kernel, et il y a un
@@ -274,6 +322,7 @@ impl EngineInner {
             init_completed: false,
             running: false,
             script_ctx: ScriptContext::new(),
+            temps_segs: Vec::new(),
             ticks_attente_attach: 0,
         }
     }
@@ -382,6 +431,7 @@ impl EngineInner {
         self.settings = settings;
         self.timer = TimerModel::new();
         self.timer.state.total_splits = total_splits;
+        self.temps_segs = vec![None; total_splits.max(0) as usize];
         self.init_completed = false;
         self.process = None;
         self.running = true;
@@ -397,7 +447,9 @@ impl EngineInner {
     }
 
     /// Une itération de polling. Retourne un event si quelque chose s'est passé.
-    fn poll_tick<F>(&mut self, _callback: &F) -> Option<SpeedrunEvent>
+    /// `callback` permet d'émettre des events supplémentaires dans le même
+    /// tick (ex: Reset avant Disconnected quand le processus meurt).
+    fn poll_tick<F>(&mut self, callback: &F) -> Option<SpeedrunEvent>
     where
         F: Fn(SpeedrunEvent),
     {
@@ -468,8 +520,14 @@ impl EngineInner {
         // 2. Vérifier que le processus est vivant
         if !self.process.as_ref().unwrap().is_alive() {
             log::info!("[ASL] Processus jeu fermé");
-            if self.timer.state.current_phase != TimerPhase::NotRunning {
+            // Sortie du jeu : le timer reset → émettre Reset pour que
+            // l'affichage (store + diffusion) suive le timer Rust. Couvre
+            // aussi l'armement d'un split (armed_index effacé par reset).
+            if self.timer.state.current_phase != TimerPhase::NotRunning
+                || self.timer.state.armed_index.is_some()
+            {
                 self.timer.reset();
+                callback(SpeedrunEvent::Reset);
             }
             self.process = None;
             self.init_completed = false;
@@ -569,8 +627,9 @@ impl EngineInner {
                 Ok(result) => {
                     if result == "true" && self.settings.start {
                         self.timer.start();
-                        log::info!("[ASL] Timer démarré");
-                        return Some(SpeedrunEvent::Started);
+                        let index = self.timer.state.current_split_index;
+                        log::info!("[ASL] Timer démarré (split #{})", index);
+                        return Some(SpeedrunEvent::Started { index });
                     }
                     // E8 Bug A — log throttle si start() retourne false
                     // (diagnostic auto-start : settings.start=false ou script
@@ -663,19 +722,12 @@ impl EngineInner {
 
             if do_reset && self.settings.reset {
                 self.timer.reset();
+                self.temps_segs.iter_mut().for_each(|t| *t = None);
                 return Some(SpeedrunEvent::Reset);
             } else if do_split && self.settings.split {
-                self.timer.split();
-                let ct = self.timer.state.current_time();
-                let time_str = ct.format();
-                let index = self.timer.state.current_split_index;
-
-                if self.timer.state.current_phase == TimerPhase::Ended {
-                    return Some(SpeedrunEvent::Ended {
-                        time: time_str.clone(),
-                    });
+                if let Some(event) = self.faire_split() {
+                    return Some(event);
                 }
-                return Some(SpeedrunEvent::Split { time: time_str, index });
             }
         }
 
@@ -696,10 +748,60 @@ impl EngineInner {
                     .map(|t| timer::format_time(t))
                     .unwrap_or_else(|| "00:00.00".to_string()),
                 game_time: ct.game_time.map(|gt| timer::format_time(gt)),
+                segment_time: self
+                    .timer
+                    .state
+                    .segment_elapsed()
+                    .map(|s| timer::format_time(s)),
             });
         }
 
         None
+    }
+
+    /// Split (auto ASL ou manuel) : enregistre la durée du segment bouclé
+    /// dans temps_segs et retourne l'event Split (ou Ended sur le dernier).
+    /// Contrat : `time` = durée du segment, `cumul` = temps total de run.
+    /// None si le timer a refusé le split (phase ou temps nul).
+    fn faire_split(&mut self) -> Option<SpeedrunEvent> {
+        let seg_dur = self.timer.split()?;
+        let index = self.timer.state.current_split_index;
+        let seg_idx = (index - 1).max(0) as usize;
+        if self.temps_segs.len() <= seg_idx {
+            self.temps_segs.resize(seg_idx + 1, None);
+        }
+        self.temps_segs[seg_idx] = Some(seg_dur);
+        let cumul = self.timer.state.current_time().format();
+        let time = timer::format_time(seg_dur);
+        if self.timer.state.current_phase == TimerPhase::Ended {
+            return Some(SpeedrunEvent::Ended { time, cumul, index });
+        }
+        Some(SpeedrunEvent::Split { time, cumul, index })
+    }
+
+    /// État consolidé pour resync (event `etat`) : phase, index (armé
+    /// inclus), durées de segment enregistrées, chronos. Émis à la demande
+    /// (reconnexion WS de la diffusion — un reload OBS retrouve la run).
+    fn etat_courant(&self) -> SpeedrunEvent {
+        let st = &self.timer.state;
+        let ct = st.current_time();
+        SpeedrunEvent::Etat {
+            phase: format!("{:?}", st.current_phase),
+            index: st.current_split_index,
+            split_times: self
+                .temps_segs
+                .iter()
+                .map(|d| d.map(timer::format_time))
+                .collect(),
+            real_time: ct
+                .real_time
+                .map(timer::format_time)
+                .unwrap_or_else(|| "00:00.00".to_string()),
+            game_time: ct.game_time.map(timer::format_time),
+            // NotRunning (armé ou non) → null : la ligne armée affiche
+            // 0:00.00 côté frontend.
+            segment_time: st.segment_elapsed().map(timer::format_time),
+        }
     }
 
     /// Traite une action manuelle (depuis le widget) et retourne l'event
@@ -712,29 +814,37 @@ impl EngineInner {
             ActionManuelle::Start => {
                 if phase_before == TimerPhase::NotRunning {
                     self.timer.start();
-                    log::info!("[ASL] Timer démarré (manuel)");
-                    return Some(SpeedrunEvent::Started);
+                    let index = self.timer.state.current_split_index;
+                    log::info!("[ASL] Timer démarré (manuel) — split #{}", index);
+                    return Some(SpeedrunEvent::Started { index });
                 }
                 None
             }
             ActionManuelle::Split => {
                 if phase_before == TimerPhase::Running {
-                    self.timer.split();
-                    let ct = self.timer.state.current_time();
-                    let time_str = ct.format();
-                    let index = self.timer.state.current_split_index;
-                    if self.timer.state.current_phase == TimerPhase::Ended {
-                        log::info!("[ASL] Run terminée (manuel) — {}", time_str);
-                        return Some(SpeedrunEvent::Ended { time: time_str });
+                    if let Some(event) = self.faire_split() {
+                        match &event {
+                            SpeedrunEvent::Ended { cumul, .. } => {
+                                log::info!("[ASL] Run terminée (manuel) — {}", cumul);
+                            }
+                            SpeedrunEvent::Split { index, time, .. } => {
+                                log::info!("[ASL] Split (manuel) #{} — {}", index, time);
+                            }
+                            _ => {}
+                        }
+                        return Some(event);
                     }
-                    log::info!("[ASL] Split (manuel) #{} — {}", index, time_str);
-                    return Some(SpeedrunEvent::Split { time: time_str, index });
                 }
                 None
             }
             ActionManuelle::Skip => {
                 if phase_before == TimerPhase::Running || phase_before == TimerPhase::Paused {
+                    let skipped = self.timer.state.current_split_index.max(0) as usize;
                     self.timer.skip_split();
+                    // Le segment sauté ne compte pas : aucun temps enregistré.
+                    if skipped < self.temps_segs.len() {
+                        self.temps_segs[skipped] = None;
+                    }
                     let index = self.timer.state.current_split_index;
                     log::info!("[ASL] Split skip (manuel) → #{}", index);
                     return Some(SpeedrunEvent::SplitSkipped { index });
@@ -742,8 +852,19 @@ impl EngineInner {
                 None
             }
             ActionManuelle::Undo => {
-                if phase_before != TimerPhase::NotRunning {
-                    self.timer.undo_split();
+                if phase_before != TimerPhase::NotRunning
+                    && self.timer.state.current_split_index > 0
+                {
+                    // Durée du segment défait (lue dans temps_segs AVANT
+                    // undo — seg_start recule de d_k, le chrono réaffiche
+                    // d_k au lieu de repartir de zéro). L'entrée est ensuite
+                    // effacée : le temps reprendra sa place au prochain split.
+                    let undone = (self.timer.state.current_split_index - 1).max(0) as usize;
+                    let duree = self.temps_segs.get(undone).copied().flatten();
+                    if undone < self.temps_segs.len() {
+                        self.temps_segs[undone] = None;
+                    }
+                    self.timer.undo_split(duree);
                     let index = self.timer.state.current_split_index;
                     log::info!("[ASL] Split undo (manuel) → #{}", index);
                     return Some(SpeedrunEvent::SplitUndone { index });
@@ -751,12 +872,31 @@ impl EngineInner {
                 None
             }
             ActionManuelle::Reset => {
-                if phase_before != TimerPhase::NotRunning {
+                // Un index armé en NotRunning compte comme un état à reset.
+                if phase_before != TimerPhase::NotRunning
+                    || self.timer.state.armed_index.is_some()
+                {
                     self.timer.reset();
+                    self.temps_segs.iter_mut().for_each(|t| *t = None);
                     log::info!("[ASL] Reset (manuel)");
                     return Some(SpeedrunEvent::Reset);
                 }
                 None
+            }
+            ActionManuelle::GoTo { index } => {
+                let total = self.timer.state.total_splits;
+                if index < 0 || (total > 0 && index >= total) {
+                    return None;
+                }
+                self.timer.aller_a(index);
+                // Retry de segment : tous les temps de la tentative sont
+                // effacés (avant et après l'index) — les précédents ne
+                // comptent pas comme finis. Le PB reste la référence
+                // affichée (colonne droite).
+                self.temps_segs.iter_mut().for_each(|t| *t = None);
+                let phase = format!("{:?}", self.timer.state.current_phase);
+                log::info!("[ASL] Goto split #{} (phase {})", index, phase);
+                Some(SpeedrunEvent::Goto { index, phase })
             }
             ActionManuelle::Pause => {
                 // pause() est un toggle : Running → Paused, Paused → Running
@@ -925,6 +1065,9 @@ where
                         callback(event);
                     }
                 }
+                EngineCommand::EmitEtat => {
+                    callback(engine.etat_courant());
+                }
                 EngineCommand::MajSettingsAsl { valeurs } => {
                     engine.script_ctx.maj_settings_asl(&valeurs);
                     log::debug!(
@@ -1009,6 +1152,7 @@ mod tests_event_serialization {
         let event = SpeedrunEvent::Time {
             real_time: "00:05.123".to_string(),
             game_time: Some("00:03.456".to_string()),
+            segment_time: Some("00:02.000".to_string()),
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(
@@ -1031,6 +1175,7 @@ mod tests_event_serialization {
         let event = SpeedrunEvent::Time {
             real_time: "00:01.000".to_string(),
             game_time: None,
+            segment_time: None,
         };
         let json = serde_json::to_string(&event).unwrap();
         assert!(

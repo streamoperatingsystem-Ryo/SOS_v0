@@ -23,6 +23,9 @@
   --t-emeraude-700: #047857;
   --t-orange-800: #9a3412;
   --t-jaune-700: #a16207;
+  --t-bleu-950: #172554;
+  --t-violet-950: #2e1065;
+  --t-ambre-950: #451a03;
   /* Sémantique (états, signaux — non thémables). */
   --t-ambre: #f59e0b;
   --t-vert: #22c55e;
@@ -33,6 +36,20 @@
   --t-youtube: #f43f5e;
   --t-tiktok: #ec4899;
   --t-obs: #d1d5db;
+  /* Palette « livre » (Guide du streamer) — artwork parchemin/cuir/dorure.
+     Consommée via les rôles --livre-* de glace.css, jamais en direct. */
+  --t-parchemin: #efe4c8;
+  --t-parchemin-ombre: #dccdaa;
+  --t-encre: #3a2e20;
+  --t-encre-douce: #6f5f4a;
+  --t-cuir: #3d2b1a;
+  --t-cuir-clair: #5a4128;
+  --t-dore: #c9a24b;
+  --t-ruban: #8e2f2f;
+  /* Ardoise — teinte de la carte « Ergonomie » ouverte (pied de sidebar).
+     Niveau 700 (comme jaune-700 / emeraude-700) : une variante 950 serait
+     invisible en bordure pointillée sur --fond-panneau. */
+  --t-ardoise-700: #334155;
   /* Composites (dégradés + glows). */
   --t-gradient-sig: linear-gradient(135deg, #f97316, #ec4899, #8b5cf6);
   --t-glow-orange: 0 0 8px rgba(249, 115, 22, 0.4);

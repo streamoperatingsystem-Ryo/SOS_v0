@@ -154,11 +154,13 @@
            parité — sinon le contour mange les glyphes). */
         paint-order: stroke fill;
       }
-      /* Titre du fond de l'application (intérieur haut/bas) — hors #bg (non
-         clippé). Positionné sur #stage (couvre tout le canvas). Au-dessus du
-         fond (z-index 1), sous les widgets. Gradient de texte reprenant les
-         couleurs du cadre de l'application (cadreApp). */
-      #bg-titre {
+      /* Titres du fond de l'application (haut/bas/gauche/droite) — hors #bg
+         (non clippés). Positionnés sur #stage (couvre tout le canvas).
+         Au-dessus du fond (z-index 1), sous les widgets. Gauche/droite =
+         texte vertical (writing-mode, inline via applyTitreFond). Gradient
+         de texte reprenant les couleurs du cadre unifié (cadreWidget).
+         paint-order:stroke sous le gradient. */
+      .bg-titre {
         position: absolute;
         white-space: nowrap;
         pointer-events: none;
@@ -170,7 +172,8 @@
            applyTitreFond. paint-order:stroke sous le gradient. */
         paint-order: stroke fill;
       }
-      /* Overlay cadre app : bord extérieur du canvas, au-dessus des widgets. */
+      /* Overlay cadre unifié — bord extérieur du canvas, au-dessus des
+         widgets. Même CadreConfig (cadreWidget) que les widgets. */
       #cadre-app-overlay {
         position: absolute;
         inset: 0;
@@ -264,14 +267,11 @@
         pointer-events: none;
         font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji",
           "Noto Color Emoji", sans-serif;
-        scrollbar-width: thin;
-        scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+        /* Overlay OBS : scrollbar masquée — widget en lecture seule
+           (pointer-events:none), une barre visible est du bruit. */
+        scrollbar-width: none;
       }
-      .chat-body::-webkit-scrollbar { width: 6px; }
-      .chat-body::-webkit-scrollbar-thumb {
-        background: rgba(255, 255, 255, 0.2);
-        border-radius: 3px;
-      }
+      .chat-body::-webkit-scrollbar { display: none; }
       .chat-msg {
         display: flex;
         align-items: flex-start;
@@ -315,6 +315,22 @@
         word-wrap: break-word;
         overflow-wrap: anywhere;
       }
+      /* Emote inline dans le texte (officielles Twitch + BTTV/7TV/FFZ).
+         Même contrainte que .avatar : width/height explicites OBLIGATOIRES
+         pour échapper à la règle globale `.widget img` (étire à 100%).
+         Hauteur 1.5em = convention chat Twitch (~taille ligne). width:auto
+         préserve le ratio des emotes larges. vertical-align aligne sur le
+         texte (emote centrée sur la ligne). */
+      .chat-msg .emote {
+        /* inline-block OBLIGATOIRE : la règle globale `.widget img` impose
+           display:block, qui casse le flux en ligne dans .texte et empile
+           les emotes en colonne. */
+        display: inline-block;
+        width: auto;
+        height: 1.5em;
+        vertical-align: middle;
+        margin: -0.1em 0.1em;
+      }
       .chat-msg .badge {
         margin-right: 2px;
         font-size: 0.9em;
@@ -354,6 +370,41 @@
       .chat-msg .texte {
         word-wrap: break-word;
         overflow-wrap: anywhere;
+      }
+
+      /* Mode « bulles » (widget.chatStyle) : le WIDGET disparaît — on ne
+         voit plus que les messages, détachés et plus gros (capture de
+         référence). Concrètement :
+         - fond glass / backdrop / box-shadow / clip-path du widget neutralisés
+         - .cadre-overlay niveau widget masqué (le cadre SVG vit sur chaque
+           bulle, pas autour du widget) — le clip-path du widget rognerait
+           sinon les ornements des bulles au bord (inline → !important requis)
+         - barre viewers masquée : chrome du widget, pas un message
+         - padding du chat-body élargi : marge pour les ornements SVG qui
+           débordent de la bulle (margin ~ep*2.5) sans être rognés par
+           overflow:hidden du widget
+         - .chat-msg en 1.3em : tout ce qui est en em suit (avatar, emotes,
+           plat-badges) — zébrage off (carte autonome, fond uniforme),
+           position:relative pour l'overlay .cadre-overlay par message. */
+      .widget.chat.chat-bulles {
+        background: transparent;
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        box-shadow: none;
+        border: none !important;
+        clip-path: none !important;
+        -webkit-clip-path: none !important;
+      }
+      .widget.chat.chat-bulles > .cadre-overlay { display: none; }
+      .widget.chat.chat-bulles .chat-viewers { display: none; }
+      .widget.chat.chat-bulles .chat-body { gap: 0.6em; padding: 1.4em; }
+      .widget.chat.chat-bulles .chat-msg {
+        position: relative;
+        font-size: 1.3em;
+        padding: 6px 10px 6px 12px;
+      }
+      .widget.chat.chat-bulles .chat-msg:nth-child(even) {
+        background: rgba(255, 255, 255, 0.07);
       }
 
       /* Widget clip de bienvenue : CARTE verticale (portrait, type téléphone) —
@@ -658,19 +709,6 @@
         color: var(--gris);
         opacity: 0.6;
       }
-      .sr-seg-idx {
-        font-size: 0.85em;
-        font-weight: 700;
-        color: var(--gris);
-        min-width: 1.4em;
-        text-align: right;
-        font-variant-numeric: tabular-nums;
-        text-shadow: 0 1px 2px #000;
-      }
-      .sr-seg-actif .sr-seg-idx {
-        color: var(--sr-grad-from, #e0e0e0);
-        text-shadow: 0 0 0.4em var(--sr-grad-from, #e0e0e0), 0 1px 2px #000;
-      }
       .sr-seg-nom {
         flex: 1;
         overflow: hidden;
@@ -678,15 +716,19 @@
         white-space: nowrap;
         text-shadow: 0 1px 2px #000, 0 0 1px #000;
       }
+      /* Colonne delta (dernière colonne, "+/−" façon LiveSplit) : vert =
+         temps gagné vs PB du segment, rouge = temps perdu, gris = neutre.
+         Largeur de colonne fixe — la case reste visible même vide (jamais
+         display:none). Variables sémantiques — jamais d'hex en dur. */
       .sr-seg-pb {
         font-variant-numeric: tabular-nums;
         color: var(--gris);
         font-size: 0.9em;
         text-shadow: 0 1px 2px #000;
+        min-width: 3.2em;
+        text-align: right;
+        flex-shrink: 0;
       }
-      /* Colonne delta « dernière fois » (1ère colonne temps) : vert = temps
-         gagné (devant la référence), rouge = temps perdu, gris = neutre.
-         Variables sémantiques — jamais d'hex en dur. */
       .sr-seg-pb.delta-ahead { color: var(--message-ok-color); }
       .sr-seg-pb.delta-behind { color: var(--message-error-color); }
       .sr-seg-pb.delta-ahead,
@@ -696,18 +738,19 @@
          aussi sur le split en cours. */
       .sr-seg.sr-seg-ahead { border-color: var(--message-ok-color); }
       .sr-seg.sr-seg-behind { border-color: var(--message-error-color); }
-      /* Temps de run (split réalisé) — affiché à droite du segment pour les
-         splits déjà passés. Couleur du cadre (gradient) pour le distinguer du
-         PB (gris). Masqué tant que le split n'est pas passé (vide). */
+      /* Temps de segment (colonne milieu) : durée figée (passé), vivante
+         (actif) ou PB du segment (non atteint). Couleur du cadre (gradient).
+         Largeur de colonne fixe — visible même vide, jamais display:none. */
       .sr-seg-time {
         font-variant-numeric: tabular-nums;
         color: var(--sr-grad-from, #e0e0e0);
         font-size: 0.9em;
         font-weight: 600;
         text-shadow: 0 1px 2px #000;
-        min-width: 0;
+        min-width: 3.6em;
+        text-align: right;
+        flex-shrink: 0;
       }
-      .sr-seg-time:empty { display: none; }
       /* Split actif : temps en couleur cadre + glow doux (une seule couche
          lumineuse + ombre noire de lisibilité). */
       .sr-seg-actif .sr-seg-time {
@@ -717,22 +760,90 @@
           0 0 0.4em var(--sr-grad-from, #e0e0e0),
           0 1px 2px #000;
       }
+      /* ===== Mode ligne (srLayout "ligne", ou "auto" sous le seuil de
+         hauteur — voir srEstLigne) =====
+         Façon LiveSplit horizontal : splits en scroll horizontal à gauche
+         (cellules empilées nom / delta+temps), timer épinglé à droite.
+         Header, meta et barre de progression masqués. */
+      .widget.speedrun.sr-ligne {
+        flex-direction: row;
+        align-items: center;
+        gap: 0.4em;
+        padding: 0.3em 0.5em;
+      }
+      .widget.speedrun.sr-ligne .sr-header,
+      .widget.speedrun.sr-ligne .sr-meta,
+      .widget.speedrun.sr-ligne .sr-barre {
+        display: none;
+      }
+      .widget.speedrun.sr-ligne .sr-timer {
+        margin: 0;
+        flex-shrink: 0;
+        order: 2;
+      }
+      .widget.speedrun.sr-ligne .sr-timer .sr-timer-valeur {
+        font-size: 1.4em;
+      }
+      .widget.speedrun.sr-ligne .sr-splits {
+        flex-direction: row;
+        align-items: stretch;
+        overflow-x: auto;
+        overflow-y: hidden;
+        flex: 1;
+        min-width: 0;
+        padding-top: 0;
+      }
+      .widget.speedrun.sr-ligne .sr-splits::-webkit-scrollbar {
+        width: 0;
+        height: 5px;
+      }
+      /* Cellule empilée : nom en haut (pleine largeur via wrap), temps +
+         delta côte à côte dessous. */
+      .widget.speedrun.sr-ligne .sr-seg {
+        flex-wrap: wrap;
+        flex: 0 0 auto;
+        min-width: 5.5em;
+        max-width: 9em;
+        padding: 0.15em 0.4em;
+        gap: 0 0.4em;
+        align-content: center;
+      }
+      .widget.speedrun.sr-ligne .sr-seg-nom { flex: 0 0 100%; }
+      .widget.speedrun.sr-ligne .sr-seg-time { flex: 1; }
+      .widget.speedrun.sr-ligne .sr-seg-time,
+      .widget.speedrun.sr-ligne .sr-seg-pb {
+        font-size: 0.75em;
+      }
       /* ===== Widget objectif (goal) =====
-         Compteur live actuel/cible + barre de progression. cqw = container
-         query units (container-type sur .widget.goal — même convention que
-         .inputviewer). Accent = gradient du cadre SVG (--sr-grad-from/to),
-         comme le speedrun. La célébration est contenue au widget (voile
-         interne + pulse ~6s sur frame goal-atteint) — elle ne touche PAS la
-         file d'alertes globale. */
+         Compteur live actuel/cible + barre de progression — même
+         structure que la vignette dashboard (label uppercase, compteur
+         gras, barre fine ~78%), tailles un cran au-dessus pour la
+         lisibilité en diffusion. Tailles proportionnelles à la
+         HAUTEUR du widget via calc(var(--goal-h) * N) — la boîte est une
+         barre fine (~280×90) : dimensionner sur la largeur débordait
+         (~150px de contenu pour 90px). --goal-w/--goal-h posés en JS sur
+         le chemin goal. PAS de cqw : absents du CEF de plusieurs versions
+         d'OBS → contenu invisible en diffusion.
+         Accent = gradient du cadre SVG (--sr-grad-from/to), comme le
+         speedrun. La célébration est contenue au widget (voile interne +
+         pulse ~6s sur frame goal-atteint) — elle ne touche PAS la file
+         d'alertes globale. */
       .widget.goal {
-        container-type: inline-size;
         display: flex;
         flex-direction: column;
         align-items: center;
+        /* Le bloc entier (entête+chiffres+barre) est centré en hauteur —
+           space-evenly étalait les rangées bord à bord (entête collée en
+           haut, barre isolée en bas = « collé en haut »). */
         justify-content: center;
-        gap: 4cqw;
-        padding: 6cqw 8cqw;
+        gap: calc(var(--goal-h, 90px) * 0.06);
+        padding: calc(var(--goal-h, 90px) * 0.09) calc(var(--goal-w, 280px) * 0.04);
         box-sizing: border-box;
+        /* Carte sombre translucide — le fond verre clair .widget rend le
+           texte clair illisible sur un jeu lumineux. Même teinte que
+           .widget.chat (0.35) : l'ancienne 0.5 alourdissait le visuel vs
+           la vignette dashboard quasi transparente. */
+        background: rgba(10, 10, 10, 0.35);
         color: var(--texte);
         font-family: "Segoe UI", system-ui, sans-serif;
       }
@@ -743,16 +854,16 @@
       .goal-entete {
         display: flex;
         align-items: center;
-        gap: 2cqw;
-        font-size: 7cqw;
+        gap: calc(var(--goal-h, 90px) * 0.06);
+        font-size: calc(var(--goal-h, 90px) * 0.14);
         color: var(--gris);
         text-transform: uppercase;
         letter-spacing: 0.06em;
       }
-      .goal-entete .logo { width: 6cqw; height: 6cqw; }
-      .goal-entete .plat-badge { font-size: 6.5cqw; }
+      .goal-entete .logo { width: calc(var(--goal-h, 90px) * 0.16); height: calc(var(--goal-h, 90px) * 0.16); }
+      .goal-entete .plat-badge { font-size: calc(var(--goal-h, 90px) * 0.14); }
       .goal-chiffres {
-        font-size: 14cqw;
+        font-size: calc(var(--goal-h, 90px) * 0.26);
         font-weight: 700;
         font-variant-numeric: tabular-nums;
         line-height: 1;
@@ -763,12 +874,14 @@
         color: var(--gris);
         font-weight: 500;
       }
+      /* Track visible : alpha 0.32 + 4px min — à 0.18/3px la barre était
+         invisible sur le fond sombre (le contenu paraissait non centré). */
       .goal-bar {
-        width: 100%;
-        height: 3cqw;
+        width: 78%;
+        height: calc(var(--goal-h, 90px) * 0.07);
         min-height: 4px;
         border-radius: 999px;
-        background: rgba(224, 224, 224, 0.18);
+        background: rgba(224, 224, 224, 0.32);
         overflow: hidden;
       }
       .goal-fill {
@@ -782,7 +895,7 @@
       /* Compteur ≥ cible (état persistant) : liseré lumineux sur la barre —
          distinct de la célébration one-shot ci-dessous. */
       .widget.goal.goal-plein .goal-fill {
-        box-shadow: 0 0 1.5cqw var(--sr-grad-from, #e0e0e0);
+        box-shadow: 0 0 calc(var(--goal-h, 90px) * 0.03) var(--sr-grad-from, #e0e0e0);
       }
       .goal-celebration {
         position: absolute;
@@ -790,7 +903,7 @@
         display: flex;
         align-items: center;
         justify-content: center;
-        font-size: 9cqw;
+        font-size: calc(var(--goal-h, 90px) * 0.16);
         font-weight: 700;
         color: var(--sr-grad-from, #fff);
         background: rgba(0, 0, 0, 0.55);
@@ -798,13 +911,22 @@
         pointer-events: none;
         z-index: 2;
         transition: opacity 250ms ease;
-        text-shadow: 0 0 1cqw var(--sr-grad-from, #fff), 0 1px 2px #000;
+        text-shadow: 0 0 calc(var(--goal-h, 90px) * 0.02) var(--sr-grad-from, #fff), 0 1px 2px #000;
       }
       .goal-celebration.visible { opacity: 1; }
       .widget.goal.goal-fete { animation: goalGlow 600ms ease-in-out 5; }
+      /* Statut « Terminé » des goals liés (channel.goal.end) — invisible
+         quand vide, n'ajoute aucune ligne au layout. */
+      .goal-statut {
+        font-size: calc(var(--goal-h, 90px) * 0.11);
+        text-align: center;
+        opacity: 0.75;
+        letter-spacing: 0.05em;
+      }
+      .goal-statut:empty { display: none; }
       @keyframes goalGlow {
         0%, 100% { filter: none; }
-        50% { filter: brightness(1.35) drop-shadow(0 0 2cqw var(--sr-grad-from, #fff)); }
+        50% { filter: brightness(1.35) drop-shadow(0 0 calc(var(--goal-h, 90px) * 0.04) var(--sr-grad-from, #fff)); }
       }
       .iv-section {
         display: none;
@@ -823,6 +945,45 @@
         padding: 4% 8%;
       }
       .widget.inputviewer[data-mode="manette"] .iv-section-manette { display: flex; }
+      /* ===== Châssis clavier/numpad — plaque SVG derrière les touches =====
+         .iv-kb = boîte relative pleine surface ; .iv-kb-chassis (SVG étiré,
+         preserveAspectRatio none) dessine plaque + plateau encaissé + câble ;
+         .iv-kb-topbar = barre de LEDs non étirée (meet) calée en haut à
+         droite ; .iv-kb-keys = zone des touches DOM par-dessus. */
+      .iv-kb { position: relative; width: 100%; height: 100%; }
+      .iv-kb-chassis { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+      /* Plaque translucide : le média de fond transparaît sur la surface du
+         châssis (rebords/contours). Les touches restent opaques (verre →
+         keycap pleine) pour que le média ne passe PAS sous elles. */
+      .iv-kb-plate { stroke: rgba(255, 255, 255, 0.10); stroke-width: 0.4; fill-opacity: 0.55; }
+      .iv-kb-bed { fill: rgba(0, 0, 0, 0.35); stroke: rgba(255, 255, 255, 0.06); stroke-width: 0.3; }
+      .iv-kb-cable { fill: rgba(0, 0, 0, 0.35); }
+      .iv-kb-topbar {
+        position: absolute;
+        top: 1.5%;
+        left: 4%;
+        right: 4%;
+        height: 8%;
+        display: block;
+      }
+      .iv-kb-led {
+        fill: rgba(255, 255, 255, 0.14);
+        stroke: rgba(255, 255, 255, 0.15);
+        stroke-width: 1;
+        transition: fill 80ms ease, stroke 80ms ease, filter 80ms ease;
+      }
+      .iv-kb-topbar g.presse .iv-kb-led {
+        fill: var(--inputviewer-couleur-presse, #8b5cf6);
+        stroke: var(--inputviewer-couleur-presse, #8b5cf6);
+        filter: drop-shadow(0 0 8px var(--inputviewer-couleur-presse, #8b5cf6));
+      }
+      .iv-kb-led-txt {
+        fill: rgba(255, 255, 255, 0.35);
+        font: 600 10px "Rajdhani", "Segoe UI", sans-serif;
+        text-anchor: middle;
+      }
+      .iv-kb-keys { position: absolute; left: 4.5%; right: 4.5%; top: 11.5%; bottom: 5.5%; display: flex; }
+      .iv-kb-keys > * { flex: 1; min-width: 0; }
       .iv-clavier {
         width: 100%;
         height: 100%;
@@ -830,15 +991,16 @@
         flex-direction: column;
         align-items: stretch;
         justify-content: center;
-        /* Marges larges gauche/droite (~8% de la largeur du widget) + marges
-           verticales plus serrées pour grossir les keycaps. */
-        padding: 1cqw 8cqw;
+        /* Le châssis porte les marges extérieures ; ici juste l'air interne
+           entre plateau et keycaps. */
+        padding: 0.5cqw 1.5cqw;
         gap: 0.3cqw;
         overflow: hidden;
       }
       .iv-rangee { display: flex; gap: 0.25cqw; width: 100%; }
-      /* Keycap verre 3D : gradient vertical (haut clair → bas sombre), reflet
-         top via ::before, ombre interne (creux) + ombre externe (profondeur). */
+      /* Keycap réaliste : gradient vertical (haut clair → bas sombre), reflet
+         top via ::before, ombre interne (creux) + jupe sombre + ombre externe
+         (la touche « sort » du plateau). */
       .iv-touche {
         position: relative;
         flex: 1;
@@ -847,11 +1009,13 @@
         justify-content: center;
         min-height: 6cqw;
         padding: 0.15cqw 0.2cqw;
+        /* Keycap opaque : le média de fond ne doit transparaître que sur le
+           châssis (rebords), pas sous les touches. */
         background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.18) 0%,
-          rgba(255, 255, 255, 0.06) 50%,
-          rgba(255, 255, 255, 0.03) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.18);
+          #3d424e 0%,
+          #272b33 55%,
+          #1d2027 100%);
+        border: 1px solid rgba(255, 255, 255, 0.16);
         border-radius: 0.9cqw;
         color: #f0f0f0;
         font-size: 1.9cqw;
@@ -862,7 +1026,8 @@
         overflow: hidden;
         box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset,
                     0 -1px 2px rgba(0, 0, 0, 0.3) inset,
-                    0 2px 4px rgba(0, 0, 0, 0.35);
+                    0 3px 0 rgba(0, 0, 0, 0.40),
+                    0 4px 8px rgba(0, 0, 0, 0.35);
         transition: background 80ms ease, transform 80ms ease, box-shadow 80ms ease;
       }
       /* Reflet vitreux en haut de la keycap (verre poli). */
@@ -903,142 +1068,39 @@
       .iv-fleches .iv-rangee { width: 100%; justify-content: center; }
       .iv-fleches .iv-touche { flex: 0 0 6cqw; }
       /* Souris — forme de souris (corps ovale + 2 boutons + molette) */
-      .iv-souris {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 2cqw;
-        height: 100%;
-        width: 100%;
-        padding: 1cqw 4cqw;
+      /* ===== Souris — skin réaliste en SVG inline (vue de dessus) =====
+         Corps de souris + zones de clic gauche/droite + molette crantée,
+         générés par ivGenererSourisHTML (viewBox 360x520, meet → responsive).
+         .presse toujours togglée sur les <g data-souris>, même variable
+         --inputviewer-couleur-presse que les autres modes. */
+      /* Corps translucide : le média transparaît sur la coque, pas sous les
+         clics (zones opaques). */
+      .iv-ms-corps { stroke: rgba(255, 255, 255, 0.12); stroke-width: 2; fill-opacity: 0.62; }
+      .iv-ms-seam { fill: none; stroke: rgba(0, 0, 0, 0.4); stroke-width: 2; }
+      .iv-ms-zone {
+        stroke: rgba(255, 255, 255, 0.10);
+        stroke-width: 1.5;
+        transition: fill 80ms ease, stroke 80ms ease, filter 80ms ease;
       }
-      /* Corps souris : ovale vertical arrondi (haut bombé, bas arrondi). */
-      .iv-souris-corps {
-        position: relative;
-        display: flex;
-        align-items: stretch;
-        width: 42cqw;
-        height: 60cqw;
-        max-width: 100%;
-        padding: 2cqw 1.8cqw 5cqw;
-        gap: 1cqw;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.16) 0%,
-          rgba(255, 255, 255, 0.05) 55%,
-          rgba(255, 255, 255, 0.02) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 21cqw 21cqw 14cqw 14cqw;
-        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset,
-                    0 -2px 4px rgba(0, 0, 0, 0.25) inset,
-                    0 6px 18px rgba(0, 0, 0, 0.4);
+      .iv-ms-wheel-loge { fill: rgba(0, 0, 0, 0.25); }
+      .iv-ms-wheel {
+        stroke: rgba(255, 255, 255, 0.18);
+        stroke-width: 1.5;
+        transition: fill 80ms ease, stroke 80ms ease, filter 80ms ease;
       }
-      /* Reflet vitreux sur le haut du corps. */
-      .iv-souris-corps::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 1.5cqw;
-        right: 1.5cqw;
-        height: 40%;
-        border-radius: 9cqw 9cqw 0 0;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.22) 0%,
-          rgba(255, 255, 255, 0) 100%);
-        pointer-events: none;
-      }
-      /* Boutons G/D (verre 3D, prennent la largeur, hauteur ~60% du corps). */
-      .iv-souris-bouton {
-        position: relative;
-        flex: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.14) 0%,
-          rgba(255, 255, 255, 0.04) 60%,
-          rgba(255, 255, 255, 0.02) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 2.4cqw 2.4cqw 1.2cqw 1.2cqw;
-        color: #f0f0f0;
-        font-size: 3.6cqw;
-        font-weight: 700;
-        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
-        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset,
-                    0 -1px 2px rgba(0, 0, 0, 0.25) inset;
-        transition: background 80ms ease, transform 80ms ease, box-shadow 80ms ease;
-      }
-      .iv-souris-bouton::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 45%;
-        border-radius: 2.4cqw 2.4cqw 0 0;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.22) 0%,
-          rgba(255, 255, 255, 0) 100%);
-        pointer-events: none;
-      }
-      /* Molette centrale : étroite, verticale, verre 3D. */
-      .iv-souris-molette {
-        position: relative;
-        flex: 0 0 6cqw;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.14) 0%,
-          rgba(255, 255, 255, 0.04) 60%,
-          rgba(255, 255, 255, 0.02) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.16);
-        border-radius: 2.4cqw;
-        color: #f0f0f0;
-        font-size: 2.6cqw;
-        font-weight: 700;
-        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
-        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.12) inset,
-                    0 -1px 2px rgba(0, 0, 0, 0.25) inset;
-        transition: background 80ms ease, transform 80ms ease, box-shadow 80ms ease;
-      }
-      .iv-souris-molette::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 45%;
-        border-radius: 2.4cqw 2.4cqw 0 0;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.22) 0%,
-          rgba(255, 255, 255, 0) 100%);
-        pointer-events: none;
-      }
-      .iv-souris-bouton.presse,
-      .iv-souris-molette.presse {
-        background: linear-gradient(180deg,
-          var(--inputviewer-couleur-presse, #8b5cf6) 0%,
-          color-mix(in srgb, var(--inputviewer-couleur-presse, #8b5cf6) 70%, #000) 100%);
-        border-color: var(--inputviewer-couleur-presse, #8b5cf6);
-        outline: 3px solid var(--inputviewer-couleur-presse, #8b5cf6);
-        outline-offset: 3px;
-        color: #fff;
-        transform: scale(0.94) translateY(0.1cqw);
-        box-shadow: 0 0 16px 2px var(--inputviewer-couleur-presse, #8b5cf6),
-                    0 1px 0 rgba(255, 255, 255, 0.3) inset,
-                    0 -2px 4px rgba(0, 0, 0, 0.4) inset;
-      }
-      .iv-souris-position {
-        padding: 0.8cqw 1.6cqw;
-        background: rgba(255, 255, 255, 0.06);
-        border: 1px solid rgba(255, 255, 255, 0.1);
-        border-radius: 1.2cqw;
-        -webkit-backdrop-filter: blur(4px);
-        backdrop-filter: blur(4px);
-        font-size: 3cqw;
-        color: rgba(240, 240, 240, 0.85);
+      .iv-ms-wheel-ridge { stroke: rgba(0, 0, 0, 0.35); stroke-width: 2; }
+      .iv-ms-dpi { fill: rgba(255, 255, 255, 0.08); stroke: rgba(255, 255, 255, 0.10); stroke-width: 1; }
+      .iv-ms-coord {
+        fill: #aeb4c2;
+        font: 600 16px "Rajdhani", "Segoe UI", sans-serif;
+        text-anchor: middle;
         font-variant-numeric: tabular-nums;
+      }
+      .iv-section-souris g.presse .iv-ms-zone,
+      .iv-section-souris g.presse .iv-ms-wheel {
+        fill: var(--inputviewer-couleur-presse, #8b5cf6);
+        stroke: var(--inputviewer-couleur-presse, #8b5cf6);
+        filter: drop-shadow(0 0 12px var(--inputviewer-couleur-presse, #8b5cf6));
       }
 
       /* ===== Numpad (pavé numérique) — glass + keycaps verre 3D ===== */
@@ -1058,19 +1120,21 @@
         justify-content: center;
         min-height: 6cqw;
         padding: 0.4cqw;
+        /* Keycap opaque : média visible sur le châssis, pas sous les touches. */
         background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.18) 0%,
-          rgba(255, 255, 255, 0.06) 50%,
-          rgba(255, 255, 255, 0.03) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 2.5cqw;
+          #3d424e 0%,
+          #272b33 55%,
+          #1d2027 100%);
+        border: 1px solid rgba(255, 255, 255, 0.16);
+        border-radius: 1.6cqw;
         color: #f0f0f0;
         font-size: 2cqw;
         font-weight: 600;
         text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
         box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset,
                     0 -1px 2px rgba(0, 0, 0, 0.3) inset,
-                    0 2px 4px rgba(0, 0, 0, 0.35);
+                    0 3px 0 rgba(0, 0, 0, 0.40),
+                    0 4px 8px rgba(0, 0, 0, 0.35);
         transition: background 80ms ease, transform 80ms ease, box-shadow 80ms ease;
       }
       .iv-numpad-touche::before {
@@ -1080,7 +1144,7 @@
         left: 0;
         right: 0;
         height: 45%;
-        border-radius: 2.5cqw 2.5cqw 0 0;
+        border-radius: 1.6cqw 1.6cqw 0 0;
         background: linear-gradient(180deg,
           rgba(255, 255, 255, 0.25) 0%,
           rgba(255, 255, 255, 0) 100%);
@@ -1103,229 +1167,117 @@
       .iv-numpad-double-h { grid-row: span 2; }
       .iv-numpad-double-w { grid-column: span 2; }
 
-      /* ===== Manette (gamepad) — glass + boutons verre 3D + skins ===== */
-      .iv-manette {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        justify-content: center;
-        gap: 0.4cqw;
-        width: 100%;
-        height: 100%;
-        padding: 0.2cqw 0.7cqw;
+      /* ===== Manette (gamepad) — 3 skins réalistes en SVG inline =====
+         Les 3 skins (8bitdo/xbox/ps) sont chacun un <svg> complet généré par
+         ivGenererManette*SVG — plus de markup DOM de boutons (supprimé). */
+      .iv-manette { width: 100%; height: 100%; }
+      /* ===== Skin 8BitDo ProFight — manette réaliste en SVG inline =====
+         Tout le dessin (corps, gâchettes, D-pad, boutons) est un <svg>
+         viewBox 760x420 + preserveAspectRatio="meet" → scale natif à toute
+         taille de widget. L'état pressé reste .presse togglée par
+         majInputViewerEtat sur les <g data-bouton>/<g data-dpad> ; la couleur
+         vient toujours de --inputviewer-couleur-presse (même contrat).
+         Les fills de base sont des gradients en <defs> (attributs fill) :
+         la règle CSS .presse les écrase (priorité CSS > attribut). */
+      .iv-manette.iv-manette-fig { display: block; padding: 0; gap: 0; }
+      .iv-fig-canvas { display: block; width: 100%; height: 100%; }
+      /* Corps translucide : le média de fond transparaît sur la coque et les
+         rebords. Les boutons/touches/d-pads restent opaques (le média ne doit
+         pas passer sous les touches). */
+      .iv-fig-corps { stroke: rgba(255, 255, 255, 0.12); stroke-width: 2; fill-opacity: 0.62; }
+      .iv-fig-corps-inner { fill: rgba(255, 255, 255, 0.03); stroke: rgba(255, 255, 255, 0.05); stroke-width: 1.5; }
+      .iv-fig-home { stroke: rgba(255, 255, 255, 0.10); stroke-width: 1.5; transition: fill 80ms ease, filter 80ms ease; }
+      .iv-fig-deco { fill: rgba(255, 255, 255, 0.10); }
+      .iv-fig-dish { stroke: rgba(255, 255, 255, 0.08); stroke-width: 2; fill-opacity: 0.75; }
+      .iv-fig-cross { stroke: rgba(255, 255, 255, 0.10); stroke-width: 1.5; }
+      .iv-fig-hub { stroke: rgba(255, 255, 255, 0.10); stroke-width: 1.5; }
+      .iv-fig-hub-dot { fill: rgba(255, 255, 255, 0.08); }
+      .iv-fig-shoulder,
+      .iv-fig-face,
+      .iv-fig-pill {
+        stroke: rgba(255, 255, 255, 0.15);
+        stroke-width: 1.5;
+        transition: fill 80ms ease, stroke 80ms ease, filter 80ms ease;
       }
-      .iv-manette-rangee {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        gap: 0.6cqw;
-        width: 100%;
-      }
-      .iv-manette-gachettes { gap: 1.8cqw; }
-      .iv-manette-principale { gap: 2.4cqw; }
-      .iv-manette-sticks { gap: 3.5cqw; }
-      /* Boutons manette (verre 3D, mêmes principes que keycaps) */
-      .iv-manette-bouton {
-        position: relative;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        min-width: 14.5cqw;
-        min-height: 12cqw;
-        padding: 0.4cqw;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.18) 0%,
-          rgba(255, 255, 255, 0.06) 50%,
-          rgba(255, 255, 255, 0.03) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.18);
-        border-radius: 50%;
-        color: #f0f0f0;
-        font-size: 4cqw;
-        font-weight: 700;
-        text-shadow: 0 1px 1px rgba(0, 0, 0, 0.5);
-        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset,
-                    0 -1px 2px rgba(0, 0, 0, 0.3) inset,
-                    0 2px 4px rgba(0, 0, 0, 0.35);
-        transition: background 80ms ease, transform 80ms ease, box-shadow 80ms ease;
-      }
-      .iv-manette-bouton::before {
-        content: "";
-        position: absolute;
-        top: 0;
-        left: 0;
-        right: 0;
-        height: 45%;
-        border-radius: 50% 50% 0 0;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.25) 0%,
-          rgba(255, 255, 255, 0) 100%);
+      .iv-fig-btn-shadow { fill: rgba(0, 0, 0, 0.35); }
+      .iv-fig-zone { fill: transparent; transition: fill 80ms ease, filter 80ms ease; }
+      .iv-fig-sheen { fill: rgba(255, 255, 255, 0.12); pointer-events: none; }
+      .iv-fig-sheen-line { fill: none; stroke: rgba(255, 255, 255, 0.07); stroke-width: 3; }
+      .iv-fig-ico { fill: #aeb4c2; pointer-events: none; }
+      .iv-fig-diag { fill: rgba(255, 255, 255, 0.12); transition: fill 80ms ease, filter 80ms ease; }
+      .iv-fig-lbl {
+        fill: #dfe3ec;
+        font: 700 22px "Rajdhani", "Segoe UI", sans-serif;
+        text-anchor: middle;
+        dominant-baseline: central;
         pointer-events: none;
       }
-      .iv-manette-bouton.presse {
-        background: linear-gradient(180deg,
-          var(--inputviewer-couleur-presse, #8b5cf6) 0%,
-          color-mix(in srgb, var(--inputviewer-couleur-presse, #8b5cf6) 70%, #000) 100%);
-        border-color: var(--inputviewer-couleur-presse, #8b5cf6);
-        outline: 3px solid var(--inputviewer-couleur-presse, #8b5cf6);
-        outline-offset: 3px;
-        color: #fff;
-        transform: scale(0.92);
-        box-shadow: 0 0 18px 2px var(--inputviewer-couleur-presse, #8b5cf6),
-                    0 1px 0 rgba(255, 255, 255, 0.3) inset,
-                    0 -2px 4px rgba(0, 0, 0, 0.4) inset;
+      .iv-fig-lbl-sm { font-size: 11px; fill: #aeb4c2; }
+      .iv-fig-arrow { font-size: 17px; fill: rgba(223, 227, 236, 0.40); }
+      /* État pressé SVG : même variable que les autres modes, glow via
+         drop-shadow (outline/box-shadow n'existent pas en SVG). Le fill CSS
+         écrase le fill="url(#...)" de base (attribut de présentation). */
+      .iv-manette-fig g.presse .iv-fig-shoulder,
+      .iv-manette-fig g.presse .iv-fig-face,
+      .iv-manette-fig g.presse .iv-fig-pill {
+        fill: var(--inputviewer-couleur-presse, #8b5cf6);
+        stroke: var(--inputviewer-couleur-presse, #8b5cf6);
+        filter: drop-shadow(0 0 12px var(--inputviewer-couleur-presse, #8b5cf6));
       }
-      /* D-Pad (grille 3x3) */
-      .iv-manette-dpad {
-        display: grid;
-        grid-template-columns: repeat(3, auto);
-        grid-template-rows: repeat(3, auto);
-        gap: 0.4cqw;
+      .iv-manette-fig g.presse .iv-fig-zone {
+        fill: var(--inputviewer-couleur-presse, #8b5cf6);
+        fill-opacity: 0.85;
+        filter: drop-shadow(0 0 10px var(--inputviewer-couleur-presse, #8b5cf6));
       }
-      .iv-manette-dpad .iv-manette-bouton { border-radius: 1.2cqw; min-width: 11cqw; min-height: 9cqw; }
-      .iv-manette-dpad-diag {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 11cqw;
-        height: 9cqw;
-        font-size: 3.1cqw;
-        color: rgba(240, 240, 240, 0.25);
-        opacity: 0.4;
-        transition: opacity 80ms, color 80ms;
+      .iv-manette-fig g.presse .iv-fig-diag {
+        fill: var(--inputviewer-couleur-presse, #8b5cf6);
+        filter: drop-shadow(0 0 8px var(--inputviewer-couleur-presse, #8b5cf6));
       }
-      .iv-manette-dpad-diag.presse {
-        opacity: 1;
-        color: var(--inputviewer-couleur-presse, #8b5cf6);
-        text-shadow: 0 0 8px var(--inputviewer-couleur-presse, #8b5cf6),
-                     0 0 4px var(--inputviewer-couleur-presse, #8b5cf6);
+      .iv-manette-fig g.presse .iv-fig-home {
+        fill: var(--inputviewer-couleur-presse, #8b5cf6);
+        filter: drop-shadow(0 0 8px var(--inputviewer-couleur-presse, #8b5cf6));
       }
-      .iv-manette-dpad-centre { width: 11cqw; height: 9cqw; }
-      /* Centre (Select/Start) */
-      .iv-manette-centre {
-        display: flex;
-        flex-direction: column;
-        gap: 1cqw;
+      .iv-manette-fig g.presse text { fill: #fff; }
+      .iv-manette-fig g.presse .iv-fig-arrow { fill: #fff; }
+      /* Sticks analogiques SVG (Xbox/PS) : base fixe + cap mobile. Le cap est
+         déplacé par style.transform en px viewBox (voir majInputViewerEtat —
+         les % de la version DOM ne s'appliquent pas à un élément SVG). */
+      .iv-fig-stick { transition: transform 40ms ease-out; }
+      .iv-fig-stick-base { stroke: rgba(255, 255, 255, 0.08); stroke-width: 2; fill-opacity: 0.75; }
+      .iv-fig-stick-cap {
+        stroke: rgba(255, 255, 255, 0.16);
+        stroke-width: 1.5;
+        transition: fill 80ms ease, stroke 80ms ease, filter 80ms ease;
       }
-      .iv-manette-centre .iv-manette-bouton { min-width: 10cqw; min-height: 5.5cqw; border-radius: 1.2cqw; font-size: 2.7cqw; }
-      /* Boutons face (losange) */
-      .iv-manette-face {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.4cqw;
+      .iv-fig-stick-ring { fill: none; stroke: rgba(255, 255, 255, 0.08); stroke-width: 2; }
+      .iv-manette-fig g.presse .iv-fig-stick-cap,
+      .iv-manette-fig g.actif .iv-fig-stick-cap {
+        fill: var(--inputviewer-couleur-presse, #8b5cf6);
+        stroke: var(--inputviewer-couleur-presse, #8b5cf6);
+        filter: drop-shadow(0 0 12px var(--inputviewer-couleur-presse, #8b5cf6));
       }
-      .iv-manette-face-rangee {
-        display: flex;
-        gap: 0.4cqw;
-        justify-content: center;
+      /* Xbox : lettres colorées façon 360 (mutées, lisibles sur sombre). */
+      .iv-fig-lbl-a { fill: #7bc47f; }
+      .iv-fig-lbl-b { fill: #e0685e; }
+      .iv-fig-lbl-x { fill: #5e9de0; }
+      .iv-fig-lbl-y { fill: #e0c45e; }
+      /* PlayStation : symboles colorés façon DualShock. */
+      .iv-fig-lbl-tri { fill: #7bc47f; }
+      .iv-fig-lbl-squ { fill: #d78bb8; }
+      .iv-fig-lbl-cir { fill: #e0685e; }
+      .iv-fig-lbl-cro { fill: #6fa8e8; }
+      /* Touchpad DualSense : zone rectangulaire centrale, en retrait. */
+      .iv-fig-pad {
+        stroke: rgba(255, 255, 255, 0.10);
+        stroke-width: 1.5;
+        transition: fill 80ms ease, filter 80ms ease;
       }
-      .iv-manette-face .iv-manette-bouton { min-width: 11cqw; min-height: 9cqw; }
-      /* Joysticks */
-      .iv-manette-stick-groupe {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        gap: 0.6cqw;
+      .iv-manette-fig g.presse .iv-fig-pad {
+        fill: var(--inputviewer-couleur-presse, #8b5cf6);
+        filter: drop-shadow(0 0 12px var(--inputviewer-couleur-presse, #8b5cf6));
       }
-      .iv-manette-stick-zone {
-        position: relative;
-        width: 27cqw;
-        height: 22cqw;
-        border-radius: 50%;
-        background: rgba(255, 255, 255, 0.04);
-        border: 1px solid rgba(255, 255, 255, 0.12);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }
-      .iv-manette-stick-indicateur {
-        position: absolute;
-        width: 15.5cqw;
-        height: 13cqw;
-        border-radius: 50%;
-        background: linear-gradient(180deg,
-          rgba(255, 255, 255, 0.2) 0%,
-          rgba(255, 255, 255, 0.08) 100%);
-        border: 1px solid rgba(255, 255, 255, 0.2);
-        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.15) inset,
-                    0 2px 4px rgba(0, 0, 0, 0.3);
-        transform: translate(-50%, -50%);
-        left: 50%;
-        top: 50%;
-        transition: transform 40ms ease-out;
-      }
-      .iv-manette-stick-indicateur.actif {
-        background: linear-gradient(180deg,
-          var(--inputviewer-couleur-presse, #8b5cf6) 0%,
-          color-mix(in srgb, var(--inputviewer-couleur-presse, #8b5cf6) 70%, #000) 100%);
-        border: 2px solid var(--inputviewer-couleur-presse, #8b5cf6);
-        outline: 3px solid var(--inputviewer-couleur-presse, #8b5cf6);
-        outline-offset: 3px;
-        box-shadow: 0 0 14px 2px var(--inputviewer-couleur-presse, #8b5cf6);
-      }
-      .iv-manette-sticks .iv-manette-bouton { min-width: 9cqw; min-height: 5.5cqw; border-radius: 1.2cqw; font-size: 2.4cqw; }
-      /* ===== Skin rétro 8BitDo : touches « relevées » + espacement aéré =====
-         Pas de sticks → plus d'air disponible. Touches surélevées (ombre de
-         profondeur renforcée), gaps élargis (gâchettes L/ZL/ZR/R surtout) et
-         marges latérales pour les cadres épais. */
-      .iv-manette[data-skin="8bitdo"] { gap: 0.8cqw; padding: 0.8cqw 2cqw; }
-      .iv-manette[data-skin="8bitdo"] .iv-manette-gachettes { gap: 3cqw; }
-      .iv-manette[data-skin="8bitdo"] .iv-manette-principale { gap: 3.2cqw; }
-      .iv-manette[data-skin="8bitdo"] .iv-manette-dpad,
-      .iv-manette[data-skin="8bitdo"] .iv-manette-face,
-      .iv-manette[data-skin="8bitdo"] .iv-manette-face-rangee { gap: 0.7cqw; }
-      .iv-manette[data-skin="8bitdo"] .iv-manette-bouton {
-        box-shadow: 0 1px 0 rgba(255, 255, 255, 0.18) inset,
-                    0 -1px 2px rgba(0, 0, 0, 0.3) inset,
-                    0 4px 8px rgba(0, 0, 0, 0.5);
-      }
-      /* .presse doit être re-scopé : sans ça la règle ci-dessus (spécificité
-         plus forte que .iv-manette-bouton.presse) écraserait le glow pressé. */
-      .iv-manette[data-skin="8bitdo"] .iv-manette-bouton.presse {
-        box-shadow: 0 0 18px 2px var(--inputviewer-couleur-presse, #8b5cf6),
-                    0 1px 0 rgba(255, 255, 255, 0.3) inset,
-                    0 -2px 4px rgba(0, 0, 0, 0.4) inset;
-      }
-      /* ===== Skins manette (labels via ::after sur data-bouton) ===== */
-      /* Xbox : A/B/X/Y, LB/LT/RT/RB, View/Menu */
-      .iv-manette[data-skin="xbox"] [data-bouton="0"]::after { content: "A"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="1"]::after { content: "B"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="2"]::after { content: "X"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="3"]::after { content: "Y"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="4"]::after { content: "LB"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="5"]::after { content: "RB"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="6"]::after { content: "LT"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="7"]::after { content: "RT"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="8"]::after { content: "View"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="9"]::after { content: "Menu"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="10"]::after { content: "L3"; }
-      .iv-manette[data-skin="xbox"] [data-bouton="11"]::after { content: "R3"; }
-      /* PlayStation : ✕/○/□/△, L1/L2/R1/R2, Share/Options */
-      .iv-manette[data-skin="ps"] [data-bouton="0"]::after { content: "✕"; }
-      .iv-manette[data-skin="ps"] [data-bouton="1"]::after { content: "○"; }
-      .iv-manette[data-skin="ps"] [data-bouton="2"]::after { content: "□"; }
-      .iv-manette[data-skin="ps"] [data-bouton="3"]::after { content: "△"; }
-      .iv-manette[data-skin="ps"] [data-bouton="4"]::after { content: "L1"; }
-      .iv-manette[data-skin="ps"] [data-bouton="5"]::after { content: "R1"; }
-      .iv-manette[data-skin="ps"] [data-bouton="6"]::after { content: "L2"; }
-      .iv-manette[data-skin="ps"] [data-bouton="7"]::after { content: "R2"; }
-      .iv-manette[data-skin="ps"] [data-bouton="8"]::after { content: "Share"; }
-      .iv-manette[data-skin="ps"] [data-bouton="9"]::after { content: "Options"; }
-      .iv-manette[data-skin="ps"] [data-bouton="10"]::after { content: "L3"; }
-      .iv-manette[data-skin="ps"] [data-bouton="11"]::after { content: "R3"; }
-      /* 8BitDo ProFight : A/B/X/Y, L/R/ZL/ZR, Select/Start */
-      .iv-manette[data-skin="8bitdo"] [data-bouton="0"]::after { content: "A"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="1"]::after { content: "B"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="2"]::after { content: "X"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="3"]::after { content: "Y"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="4"]::after { content: "L"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="5"]::after { content: "R"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="6"]::after { content: "ZL"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="7"]::after { content: "ZR"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="8"]::after { content: "Select"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="9"]::after { content: "Start"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="10"]::after { content: "L3"; }
-      .iv-manette[data-skin="8bitdo"] [data-bouton="11"]::after { content: "R3"; }
+      /* Les 3 skins manette (8bitdo/xbox/ps) sont des SVG inline : les labels
+         sont des <text> dans le markup (::after ne fonctionne pas en SVG). */
 
       /* ===== Bandeau premier message =====
          Pleine largeur, en bas (défaut) ou en haut. Couleurs dérivées du
@@ -1637,14 +1589,236 @@
         opacity: 0.6;
       }
 
+      /* ===== Layout « signature » StreamOS =====
+         Éléments de marque posés AU-DESSUS du voile (même plan que titre/
+         minuteur) : stries néon diagonales aux coins (comète glissante),
+         mascotte Streamy en flottement + anneaux orbitaux, wordmark
+         électrique en bas, ligne morse ···−−−···. Palette fixe
+         cyan→violet→magenta (identité du site) ; l'aurora de fond garde
+         la teinte du cadre (--ea-rgb-*). transform/opacity uniquement —
+         coût quasi nul en CEF. Tout le bloc reste display:none hors
+         .layout-signature (= rendu historique « minimal »). */
+      .ecran-attente-sig-stries,
+      .ecran-attente-sig-streamy,
+      .ecran-attente-sig-wordmark,
+      .ecran-attente-sig-morse {
+        display: none;
+      }
+      .layout-signature .ecran-attente-sig-stries,
+      .layout-signature .ecran-attente-sig-streamy,
+      .layout-signature .ecran-attente-sig-wordmark {
+        display: block;
+      }
+      .layout-signature .ecran-attente-sig-morse {
+        display: flex;
+      }
+
+      /* Stries néon : 4 barres fines le long des diagonales aux coins
+         (inspiré du bandeau du site). ::before = ligne sœur plus fine ;
+         .sig-comet = segment brillant qui glisse le long de la barre. */
+      .ecran-attente-sig-stries {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+      }
+      .sig-strie {
+        position: absolute;
+        width: 2px;
+        height: 34vmin;
+        border-radius: 2px;
+        background: linear-gradient(
+          to bottom,
+          transparent,
+          rgba(103, 232, 249, 0.45) 30%,
+          rgba(168, 85, 247, 0.45) 70%,
+          transparent
+        );
+        box-shadow: 0 0 10px rgba(103, 232, 249, 0.3);
+      }
+      .sig-strie::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        left: 8px;
+        width: 1px;
+        background: inherit;
+        opacity: 0.5;
+      }
+      .sig-strie.s1 { top: -5vmin; left: 9vmin; transform: rotate(45deg); }
+      .sig-strie.s2 { top: -5vmin; right: 9vmin; transform: rotate(-45deg); }
+      .sig-strie.s3 { bottom: -5vmin; left: 9vmin; transform: rotate(-45deg); }
+      .sig-strie.s4 { bottom: -5vmin; right: 9vmin; transform: rotate(45deg); }
+      .sig-strie.s2 .sig-comet { animation-delay: 1.5s; }
+      .sig-strie.s3 .sig-comet { animation-delay: 3s; }
+      .sig-strie.s4 .sig-comet { animation-delay: 4.5s; }
+      .sig-comet {
+        position: absolute;
+        left: -1px;
+        top: 0;
+        width: 4px;
+        height: 18%;
+        border-radius: 4px;
+        background: linear-gradient(
+          to bottom,
+          transparent,
+          rgba(224, 255, 255, 0.95),
+          transparent
+        );
+        filter: drop-shadow(0 0 6px rgba(103, 232, 249, 0.9));
+        transform: translateY(-120%);
+        animation: ea-comet 6s linear infinite;
+      }
+      @keyframes ea-comet {
+        from { transform: translateY(-120%); }
+        to { transform: translateY(620%); }
+      }
+
+      /* Mascotte Streamy : flottement lent + anneaux orbitaux derrière
+         (clin d'œil aux .orb du dashboard et aux anneaux du logo SOS).
+         Position/échelle inline (streamy_x/y/echelle de la config, drag/
+         resize dans la modale ; left/top = centre, transform-origin
+         centre) — défaut haut-gauche. */
+      .ecran-attente-sig-streamy {
+        position: absolute;
+        left: 170px;
+        top: 180px;
+        transform: translate(-50%, -50%) scale(0.6);
+        transform-origin: center center;
+        width: 300px;
+        height: 430px;
+      }
+      .sig-orbite {
+        position: absolute;
+        left: 50%;
+        top: 50%;
+        width: 118%;
+        aspect-ratio: 1;
+        transform: translate(-50%, -50%);
+        border-radius: 50%;
+        border: 2px solid rgba(103, 232, 249, 0.22);
+        box-shadow:
+          0 0 26px rgba(103, 232, 249, 0.14),
+          inset 0 0 26px rgba(139, 92, 246, 0.12);
+      }
+      /* Arcs brillants rotatifs : conic-gradient masqué en anneau —
+         cyan extérieur, magenta intérieur en sens inverse. */
+      .sig-orbite::before {
+        content: "";
+        position: absolute;
+        inset: -2px;
+        border-radius: 50%;
+        background: conic-gradient(
+          from 0deg,
+          transparent 0 72%,
+          rgba(103, 232, 249, 0.85) 86%,
+          transparent 100%
+        );
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 4px), #000 calc(100% - 3px));
+        animation: ea-orbite-tourne 9s linear infinite;
+      }
+      .sig-orbite::after {
+        content: "";
+        position: absolute;
+        inset: 7%;
+        border-radius: 50%;
+        background: conic-gradient(
+          from 180deg,
+          transparent 0 78%,
+          rgba(236, 72, 153, 0.7) 90%,
+          transparent 100%
+        );
+        -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+        mask: radial-gradient(farthest-side, transparent calc(100% - 3px), #000 calc(100% - 2px));
+        animation: ea-orbite-tourne 13s linear infinite reverse;
+      }
+      @keyframes ea-orbite-tourne {
+        to { transform: rotate(360deg); }
+      }
+      .sig-mascotte {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        filter: drop-shadow(0 0 34px rgba(139, 92, 246, 0.55));
+        animation: ea-streamy-flotte 5.5s ease-in-out infinite;
+      }
+      @keyframes ea-streamy-flotte {
+        0%, 100% { transform: translateY(-9px); }
+        50% { transform: translateY(9px); }
+      }
+
+      /* Wordmark électrique — le fond noir du PNG est neutralisé par
+         mix-blend-mode:screen (aucune retouche d'asset nécessaire).
+         Position/échelle inline (logo_x/y/echelle ; left/top = centre) —
+         défaut haut-centre, là où le titre texte par défaut se trouvait. */
+      .ecran-attente-sig-wordmark {
+        position: absolute;
+        left: 960px;
+        top: 140px;
+        transform: translate(-50%, -50%);
+        transform-origin: center center;
+        width: 480px;
+        mix-blend-mode: screen;
+        opacity: 0.9;
+        filter: drop-shadow(0 2px 14px rgba(0, 0, 0, 0.6));
+      }
+
+      /* Ligne morse ···−−−··· : 9 segments (i.p = point, i.t = trait)
+         flashés en séquence sur un cycle de 9,5 s — la signature SOS. */
+      .ecran-attente-sig-morse {
+        position: absolute;
+        left: 50%;
+        bottom: 1.7%;
+        transform: translateX(-50%);
+        gap: 9px;
+        align-items: center;
+      }
+      .ecran-attente-sig-morse i {
+        display: block;
+        height: 6px;
+        border-radius: 4px;
+        background: rgba(103, 232, 249, 0.9);
+        box-shadow: 0 0 8px rgba(103, 232, 249, 0.6);
+        opacity: 0.14;
+        animation: ea-morse-p 9.5s linear infinite;
+      }
+      .ecran-attente-sig-morse i.p { width: 6px; }
+      .ecran-attente-sig-morse i.t {
+        width: 22px;
+        animation-name: ea-morse-t;
+      }
+      /* Points : flash court (~0,45 s). */
+      @keyframes ea-morse-p {
+        0% { opacity: 1; }
+        5%, 100% { opacity: 0.14; }
+      }
+      /* Traits : flash long (~1,1 s). */
+      @keyframes ea-morse-t {
+        0% { opacity: 1; }
+        12%, 100% { opacity: 0.14; }
+      }
+      /* Rythme ··· −−− ··· : points rapprochés, traits espacés. */
+      .ecran-attente-sig-morse i:nth-child(1) { animation-delay: 0s; }
+      .ecran-attente-sig-morse i:nth-child(2) { animation-delay: 0.7s; }
+      .ecran-attente-sig-morse i:nth-child(3) { animation-delay: 1.4s; }
+      .ecran-attente-sig-morse i:nth-child(4) { animation-delay: 2.4s; }
+      .ecran-attente-sig-morse i:nth-child(5) { animation-delay: 4s; }
+      .ecran-attente-sig-morse i:nth-child(6) { animation-delay: 5.6s; }
+      .ecran-attente-sig-morse i:nth-child(7) { animation-delay: 7.2s; }
+      .ecran-attente-sig-morse i:nth-child(8) { animation-delay: 7.9s; }
+      .ecran-attente-sig-morse i:nth-child(9) { animation-delay: 8.6s; }
+
       .bandeau-pm-barre {
         position: relative;
         width: 100%;
         background: linear-gradient(
           90deg,
-          rgba(10, 10, 10, 0.96) 0%,
-          rgba(var(--bpm-rgb-fond, 224, 224, 224), 0.18) 50%,
-          rgba(10, 10, 10, 0.96) 100%
+          rgba(10, 10, 10, 0.97) 0%,
+          rgb(var(--bpm-rgb-fond, 40, 40, 40)) 50%,
+          rgba(10, 10, 10, 0.97) 100%
         );
         box-shadow: 0 -6px 30px rgba(0, 0, 0, 0.55);
         overflow: hidden;
@@ -1778,6 +1952,9 @@
       // renderScene).
       const camClipSvg = document.getElementById("sos-cam-clip-svg");
       const camClipPath = document.getElementById("sos-cam-clip-path");
+      // Distance de perspective (px) du tilt 3D — même valeur pour les
+      // widgets (.widget-3d), le fond (#bg) et la projection des trous.
+      const PERSP = 800;
       // Durée d'une demi-transition (fade out ou fade in), en ms.
       const FONDU_DEMI = 300;
       // Id de la scène actuellement affichée (pour distinguer un CHANGEMENT de
@@ -1840,10 +2017,10 @@
       // widget speedrun soit créé dans widgetMap (race condition resync).
       // Appliqué au widget dès sa création dans renderScene.
       let pendingLss = null;
-      // Dernière baseline reçue (référence delta « dernière fois », émise au
-      // started de chaque run) — rejouée si le widget est recréé en cours de
-      // run (race condition resync, comme pendingLss).
-      let pendingBaseline = null;
+      // Dernier état consolidé reçu (event "etat" — resync complet émis par
+      // le moteur quand la diffusion demande un resync). Rejoué si le widget
+      // est recréé en cours de run (race condition resync, comme pendingLss).
+      let pendingEtat = null;
 
       // Messages chat reçus via WS (type "chat"). Borné à 200.
       let chatMessages = [];
@@ -1920,6 +2097,15 @@
         followers: "Followers", subs: "Subs", sub_points: "Points de subs",
         abonnes: "Abonnés", viewers: "Viewers"
       };
+      // Creator Goals Twitch déclarés (frames "goal-twitch" : EventSub
+      // channel.goal.* + poll viewers.rs) — widgets LIÉS par goalId.
+      let goalsTwitchMap = {};
+      const GOAL_TTYPE_LABELS = {
+        follower: "Followers", subscription: "Subs",
+        subscription_count: "Subs (total)", new_subscription: "Nouveaux subs",
+        new_subscription_count: "Nouveaux subs (total)",
+        new_bit: "Bits", new_cheerer: "Cheerers"
+      };
 
       // Valeur live d'une métrique pour une plateforme. undefined = jamais
       // mesurée / plateforme hors-ligne → affichage « N/A » (jamais de
@@ -1930,12 +2116,35 @@
         return c ? c[met] : undefined;
       }
 
-      // Maj DOM d'un widget goal : chiffres + barre + état « plein ».
-      // Appelée sur frames communaute/viewers ET à la création/update.
+      // Libellé d'entête d'un widget goal : mode lié = description du goal
+      // Twitch (fallback label du type Helix) ; mode manuel = métrique.
+      function goalLabelEntete(w) {
+        if (w.goalId) {
+          var g = goalsTwitchMap[w.goalId];
+          if (g) return g.description || GOAL_TTYPE_LABELS[g.goal_type] || "Objectif";
+          return "Objectif Twitch"; // en attente de la 1re frame goal-twitch
+        }
+        return GOAL_MET_LABELS[w.goalMetrique || "followers"] || "Objectif";
+      }
+
+      // Maj DOM d'un widget goal : chiffres + barre + état « plein » +
+      // statut « Terminé » (mode lié). Appelée sur frames communaute/viewers/
+      // goal-twitch ET à la création/update.
       function majGoalValeur(entry, w) {
         if (!entry.goalActuelEl) return;
-        var actuel = goalValeur(w.goalPlateforme || "twitch", w.goalMetrique || "followers");
-        var cible = w.goalCible || 0;
+        var actuel, cible, termine = false;
+        if (w.goalId) {
+          // Mode lié : le compteur vient de Twitch (frames goal-twitch),
+          // jamais des métriques locales.
+          var g = goalsTwitchMap[w.goalId];
+          actuel = g ? g.actuel : undefined;
+          cible = g ? g.cible : 0;
+          termine = !!(g && g.termine);
+          if (entry.goalMetEl) entry.goalMetEl.textContent = goalLabelEntete(w);
+        } else {
+          actuel = goalValeur(w.goalPlateforme || "twitch", w.goalMetrique || "followers");
+          cible = w.goalCible || 0;
+        }
         entry.goalActuelEl.textContent =
           typeof actuel === "number" ? actuel.toLocaleString("fr-FR") : "N/A";
         entry.goalCibleEl.textContent = cible ? cible.toLocaleString("fr-FR") : "—";
@@ -1943,15 +2152,32 @@
           ? Math.min(100, Math.round((actuel / cible) * 100)) : 0;
         entry.goalFillEl.style.width = pct + "%";
         entry.el.classList.toggle("goal-plein", cible > 0 && pct >= 100);
+        if (entry.goalStatutEl) {
+          entry.goalStatutEl.textContent = termine ? "Terminé" : "";
+        }
       }
 
-      // Re-maj tous les widgets goal d'une plateforme (après frame reçue).
+      // Re-maj tous les widgets goal MANUELS d'une plateforme (après frame
+      // communaute/viewers). Les widgets liés (goalId) sont exclus — leur
+      // valeur vient des frames goal-twitch, pas des métriques mesurées.
       function majGoalWidgets(plat) {
         if (!currentScene || !currentScene.widgets) return;
         for (var i = 0; i < currentScene.widgets.length; i++) {
           var w = currentScene.widgets[i];
           if ((w.type || "media") !== "goal") continue;
+          if (w.goalId) continue;
           if ((w.goalPlateforme || "twitch") !== plat) continue;
+          var entry = widgetMap.get(w.id);
+          if (entry) majGoalValeur(entry, w);
+        }
+      }
+
+      // Re-maj tous les widgets goal LIÉS (après frame goal-twitch).
+      function majGoalWidgetsLies() {
+        if (!currentScene || !currentScene.widgets) return;
+        for (var i = 0; i < currentScene.widgets.length; i++) {
+          var w = currentScene.widgets[i];
+          if ((w.type || "media") !== "goal" || !w.goalId) continue;
           var entry = widgetMap.get(w.id);
           if (entry) majGoalValeur(entry, w);
         }
@@ -2016,8 +2242,37 @@
           + logo
           + '<span class="pseudo" style="color: ' + couleur + ';">' + escapeHtml(m.pseudo) + '</span>'
           + '<span class="separateur">:</span>'
-          + '<span class="texte">' + escapeHtml(m.texte) + '</span>'
+          + '<span class="texte">' + renderTexte(m) + '</span>'
           + '</div>';
+      }
+
+      // Remplace les emotes par des <img> aux positions fournies par Rust
+      // (m.emotes : offsets UTF-16, fin EXCLUSIVE — unités de String.slice).
+      // Texte entre segments échappé comme avant (XSS-safe). URL contrainte
+      // à https:// : les URLs viennent des APIs emotes, jamais du chatter.
+      // URL invalide → segment rendu en texte brut échappé (nom affiché).
+      function renderTexte(m) {
+        if (!m.emotes || m.emotes.length === 0) return escapeHtml(m.texte);
+        var html = "";
+        var pos = 0;
+        var n = m.texte.length;
+        for (var i = 0; i < m.emotes.length; i++) {
+          var e = m.emotes[i];
+          // Segment invalide/chevauchant → ignoré (défense, Rust trie déjà).
+          if (e.debut < pos || e.debut >= e.fin || e.fin > n) continue;
+          html += escapeHtml(m.texte.slice(pos, e.debut));
+          if (typeof e.url === "string" && e.url.indexOf("https://") === 0) {
+            html += '<img class="emote" src="' + escapeHtml(e.url) + '"'
+              + ' alt="' + escapeHtml(e.nom) + '"'
+              + ' title="' + escapeHtml(e.nom) + '"'
+              + ' referrerpolicy="no-referrer">';
+          } else {
+            html += escapeHtml(m.texte.slice(e.debut, e.fin));
+          }
+          pos = e.fin;
+        }
+        html += escapeHtml(m.texte.slice(pos));
+        return html;
       }
 
       // Remplit un élément .chat-body avec les messages filtrés.
@@ -2060,17 +2315,86 @@
       // Construit le nœud DOM d'UN message (partagé par fillChatBody rebuild
       // et appendChatMessage incrémental). borderImg/avatarRing inline — le
       // CEF d'OBS ne recalcule pas border-image quand une var() change.
-      function creerNoeudChat(m, taillePolice, borderImg, avatarRing) {
+      // avecCadreSvg (mode bulles + cadre actif) : la bordure CSS est retirée
+      // comme sur les widgets (applyCadreWidget → border:none) — l'overlay
+      // SVG posé par decorerCadreMsg tient lieu de bordure.
+      function creerNoeudChat(m, taillePolice, borderImg, avatarRing, avecCadreSvg) {
         var div = document.createElement("div");
         div.className = "chat-msg";
-        div.style.borderImage = borderImg;
+        if (avecCadreSvg) div.style.border = "none";
+        else div.style.borderImage = borderImg;
         div.innerHTML = renderChatMsg(m, 0, taillePolice);
         var av = div.querySelector(".avatar");
         if (av) av.style.boxShadow = avatarRing;
         return div;
       }
 
-      function fillChatBody(bodyEl, filtre, taillePolice, gradFrom, gradTo) {
+      // Compteur d'unicité pour les ids de gradient SVG des bulles chat
+      // (genererCadreSVG suffixe ses <defs> par idCadre — collision sinon).
+      var chatMsgUid = 0;
+
+      // Cadre à appliquer PAR MESSAGE en mode bulles : la CadreConfig de
+      // scène TELLE QUELLE (mêmes valeurs que sur un widget objectif —
+      // style, couleurs, strokeWidth). null = pas de cadre par message
+      // (cadre inactif/stroke 0/sansCadre → fallback border-image dégradé).
+      function cadreParMessage(scene, w) {
+        var cadre = scene && scene.cadreWidget;
+        if (!cadre || !cadre.actif || (cadre.strokeWidth || 0) <= 0) return null;
+        if (w.sansCadre === true) return null;
+        return cadre;
+      }
+
+      // strokeWidth plafonné pour les bulles : la valeur scène est calibrée
+      // pour un widget (~160px+). Sur une bulle ~45px tout dépassement de
+      // ~2px rend épais — les renderers dessinent ~3×ep en bande visible
+      // (sous-couche ep*2.2 + traits internes) et leurs ornements ont un
+      // plancher 8-12px (bevels/coins). Plafond absolu 2px quelle que soit
+      // la valeur scène (sw=1 reste respecté). Échelle partagée avec le
+      // widget goal via cadreGoal — cadre visuellement identique.
+      function cadreMsgScale(cadre) {
+        var sw = cadre.strokeWidth || 4;
+        var scaled = Math.max(1, Math.min(sw, 2));
+        if (scaled === sw) return cadre;
+        var c = {};
+        for (var k in cadre) c[k] = cadre[k];
+        c.strokeWidth = scaled;
+        return c;
+      }
+
+      // Cadre à appliquer au widget GOAL : le cadre de scène ramené à
+      // l'échelle « bulle » (cadreMsgScale) — le goal est un widget
+      // compact (~280×90) où le stroke scène calibré ≥160px rendrait le
+      // cadre disproportionné. Le cadre du goal a ainsi exactement la
+      // même taille que celui des messages chat en mode bulles.
+      function cadreGoal(scene) {
+        var c = scene && scene.cadreWidget;
+        return c ? cadreMsgScale(c) : c;
+      }
+
+      // Pose le cadre SVG réel sur une bulle aux dims connues : clip-path à
+      // la forme du cadre + enfant .cadre-overlay — même traitement que
+      // applyCadreWidget sur les widgets (objectif inclus).
+      function decorerCadreMsgDims(div, cadre, W, H) {
+        if (W <= 0 || H <= 0) return;
+        cadre = cadreMsgScale(cadre);
+        var clip = genererCadreClipPath(cadre, W, H);
+        if (clip) {
+          div.style.clipPath = clip;
+          div.style.webkitClipPath = clip;
+        }
+        var overlay = document.createElement("div");
+        overlay.className = "cadre-overlay";
+        overlay.innerHTML = genererCadreSVG(cadre, W, H, "cm" + (chatMsgUid++));
+        div.appendChild(overlay);
+      }
+
+      // Variante qui mesure la bulle (déjà insérée — la hauteur dépend du
+      // contenu : texte wrappé, emotes).
+      function decorerCadreMsg(div, cadre) {
+        decorerCadreMsgDims(div, cadre, div.offsetWidth, div.offsetHeight);
+      }
+
+      function fillChatBody(bodyEl, filtre, taillePolice, gradFrom, gradTo, cadreMsg) {
         var msgs = filtre === "unifie"
           ? chatMessages
           : chatMessages.filter(function (m) { return m.plateforme === filtre; });
@@ -2082,7 +2406,20 @@
         var borderImg = "linear-gradient(135deg, " + gf + ", " + gt + ") 1";
         var avatarRing = "0 0 0 1px " + gf + ", 0 0 6px rgba(255,255,255,0.25)";
         for (var i = 0; i < msgs.length; i++) {
-          bodyEl.appendChild(creerNoeudChat(msgs[i], taillePolice, borderImg, avatarRing));
+          bodyEl.appendChild(creerNoeudChat(msgs[i], taillePolice, borderImg, avatarRing, !!cadreMsg));
+        }
+        // Passe 2 : cadres par bulle — mesures en lecture seule (une seule
+        // fois layout) puis écritures, sinon chaque offsetWidth suivant une
+        // mutation force un reflow synchrone (×200).
+        if (cadreMsg) {
+          var kids = bodyEl.children;
+          var dims = [];
+          for (var k = 0; k < kids.length; k++) {
+            dims.push([kids[k].offsetWidth, kids[k].offsetHeight]);
+          }
+          for (k = 0; k < kids.length; k++) {
+            decorerCadreMsgDims(kids[k], cadreMsg, dims[k][0], dims[k][1]);
+          }
         }
         bodyEl.scrollTop = bodyEl.scrollHeight;
       }
@@ -2125,7 +2462,11 @@
           }
           // Append uniquement si le message passe le filtre du widget.
           if (filtre === "unifie" || m.plateforme === filtre) {
-            entry.chatBody.appendChild(creerNoeudChat(m, taille, borderImg, avatarRing));
+            var node = creerNoeudChat(m, taille, borderImg, avatarRing, !!entry.cadreMsg);
+            entry.chatBody.appendChild(node);
+            // Mode bulles + cadre actif : cadre SVG réel par message,
+            // mesuré post-insertion (comme un widget objectif).
+            if (entry.cadreMsg) decorerCadreMsg(node, entry.cadreMsg);
             entry.chatBody.scrollTop = entry.chatBody.scrollHeight;
           }
         }
@@ -2395,10 +2736,11 @@
                            cw, ch, fit);
         if (!r) return;
 
-        // Zoom + rotation 2D + offset du fond : on dessine dans un sous-canvas temporaire
-        // puis on drawImage avec transform. Plus simple : on set le transform
-        // du ctx autour du centre du canvas, drawImage, puis reset.
-        const zoom = scene.bgZoom || 1;
+        // Rotation 2D + offset du fond : transform du ctx autour du centre,
+        // drawImage, puis reset. NB : bgZoom n'est PLUS peint ici — il est
+        // appliqué en scale() sur #bg (renderBg), en espace écran APRÈS le
+        // tilt, pour agrandir le plan projeté entier (couvre le canvas même
+        // incliné) au lieu de ne grandir que dans le plan pré-tilt.
         const rot = (scene.bgRot || 0) * Math.PI / 180;
         const ox = scene.bgOffsetX || 0;
         const oy = scene.bgOffsetY || 0;
@@ -2429,7 +2771,7 @@
               pctx.save();
               pctx.translate(pw / 2 + ox / pf, ph / 2 + oy / pf);
               pctx.rotate(rot);
-              pctx.scale(zoom * bgMH, zoom * bgMV);
+              pctx.scale(bgMH, bgMV);
               pctx.translate(-pw / 2, -ph / 2);
               try {
                 pctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, r.dx / pf, r.dy / pf, r.dw / pf, r.dh / pf);
@@ -2446,7 +2788,7 @@
           ctx.filter = bgFilter;
           ctx.translate(cw / 2 + ox, ch / 2 + oy);
           ctx.rotate(rot);
-          ctx.scale(zoom * bgMH, zoom * bgMV);
+          ctx.scale(bgMH, bgMV);
           ctx.translate(-cw / 2, -ch / 2);
           try {
             ctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
@@ -2509,7 +2851,57 @@
           const w = 1 - z2 / d;
           return { x: x1 / w, y: y2 / w };
         }
-        const PERSP = 800;
+        // Tilt du fond (snapshot) : compensation des trous — voir
+        // unprojectCorner. Fond plat → identité, comportement inchangé.
+        const bgRX = scene.bgRotX || 0;
+        const bgRY = scene.bgRotY || 0;
+        const bgZ = scene.bgZoom || 1;
+        const bgTilt = bgRX !== 0 || bgRY !== 0;
+        const bgCompense = bgTilt || bgZ !== 1;
+        // Projection inverse du tilt 3D du fond (#bg subit perspective(2×cw)
+        // rotateX rotateY en CSS, origin centre — voir renderBg).
+        // projectCorner projette
+        // local→écran ; ici on résout l'inverse écran→local (système 2×2 sur
+        // lx, ly) pour que chaque trou, dessiné AVANT le tilt dans le canvas,
+        // retombe à l'écran exactement sous son widget — jamais déplacé.
+        function unprojectCorner(sx, sy, rx, ry, d) {
+          const rxR = rx * Math.PI / 180;
+          const ryR = ry * Math.PI / 180;
+          const crx = Math.cos(rxR), srx = Math.sin(rxR);
+          const cry = Math.cos(ryR), sry = Math.sin(ryR);
+          const a = cry - (sx / d) * sry * crx;
+          const b = (sx / d) * srx;
+          const c = sry * (srx - (sy / d) * crx);
+          const e = crx + (sy / d) * srx;
+          const det = a * e - b * c;
+          if (Math.abs(det) < 1e-9) return { x: sx, y: sy };
+          return { x: (sx * e - b * sy) / det, y: (a * sy - sx * c) / det };
+        }
+        // Point écran (coords scène) → point canvas-local à travers le tilt.
+        // Identité quand le fond est plat.
+        function trouToCanvas(sx, sy) {
+          if (!bgCompense) return { x: sx, y: sy };
+          // Le transform de #bg est "scale(z) perspective rotateX rotateY" :
+          // le scale est appliqué EN DERNIER aux coords écran → on divise
+          // d'abord par z, puis on un-projette le tilt. d = cw×2 : perspective
+          // du FOND (renderBg), pas PERSP=800 qui reste celle des widgets.
+          const q = unprojectCorner((sx - cw / 2) / bgZ, (sy - ch / 2) / bgZ, bgRX, bgRY, cw * 2);
+          return { x: q.x + cw / 2, y: q.y + ch / 2 };
+        }
+        // Dessine un trou (destination-out) depuis ses points ÉCRAN : avec un
+        // fond tilté chaque point est converti via trouToCanvas (image
+        // réciproque) — le trou reste aligné sous son widget plat ou tilté.
+        function fillTrouEcran(pts) {
+          var q = trouToCanvas(pts[0][0], pts[0][1]);
+          bgCtx.beginPath();
+          bgCtx.moveTo(q.x, q.y);
+          for (var i = 1; i < pts.length; i++) {
+            q = trouToCanvas(pts[i][0], pts[i][1]);
+            bgCtx.lineTo(q.x, q.y);
+          }
+          bgCtx.closePath();
+          bgCtx.fill();
+        }
         bgCtx.save();
         bgCtx.globalCompositeOperation = "destination-out";
         const ws = scene.widgets || [];
@@ -2541,27 +2933,28 @@
               const cy = w.y + w.hauteur / 2;
               const hw = w.largeur / 2;
               const hh = w.hauteur / 2;
-              bgCtx.beginPath();
-              if (rx === 0 && ry === 0) {
-                // Fast path : translater les points du clip-path vers la position du widget.
-                bgCtx.moveTo(clipPts[0][0] + w.x, clipPts[0][1] + w.y);
-                for (var pi = 1; pi < clipPts.length; pi++) {
-                  bgCtx.lineTo(clipPts[pi][0] + w.x, clipPts[pi][1] + w.y);
-                }
-              } else {
-                // 3D : projeter chaque point du clip-path (relatif au centre).
-                var p0 = projectCorner(clipPts[0][0] - hw, clipPts[0][1] - hh, rx, ry, PERSP);
-                bgCtx.moveTo(cx + p0.x, cy + p0.y);
-                for (var pi = 1; pi < clipPts.length; pi++) {
+              // Points ÉCRAN du trou : clip-path translaté (widget plat) ou
+              // projeté 3D (widget tilté). fillTrouEcran compense le tilt du
+              // fond via trouToCanvas (identité si le fond est plat).
+              var ptsEcran = [];
+              for (var pi = 0; pi < clipPts.length; pi++) {
+                if (rx === 0 && ry === 0) {
+                  ptsEcran.push([clipPts[pi][0] + w.x, clipPts[pi][1] + w.y]);
+                } else {
                   var p = projectCorner(clipPts[pi][0] - hw, clipPts[pi][1] - hh, rx, ry, PERSP);
-                  bgCtx.lineTo(cx + p.x, cy + p.y);
+                  ptsEcran.push([cx + p.x, cy + p.y]);
                 }
               }
-              bgCtx.closePath();
-              bgCtx.fill();
+              fillTrouEcran(ptsEcran);
             } else if (rx === 0 && ry === 0) {
-              // Fast path : rectangle AABB (pas de cadre ou cadre sans clip-path).
-              bgCtx.fillRect(w.x, w.y, w.largeur, w.hauteur);
+              if (bgCompense) {
+                // Rectangle écran à un-projeter (fond tilté ou zoomé, widget plat).
+                fillTrouEcran([[w.x, w.y], [w.x + w.largeur, w.y],
+                               [w.x + w.largeur, w.y + w.hauteur], [w.x, w.y + w.hauteur]]);
+              } else {
+                // Fast path : rectangle AABB (pas de cadre ou cadre sans clip-path).
+                bgCtx.fillRect(w.x, w.y, w.largeur, w.hauteur);
+              }
             } else {
               // Quad projeté : 4 coins locaux (relatifs au centre, z=0)
               // projetés par la même matrice que .widget-3d, puis translatés.
@@ -2573,13 +2966,8 @@
               const c1 = projectCorner( hw, -hh, rx, ry, PERSP);
               const c2 = projectCorner( hw,  hh, rx, ry, PERSP);
               const c3 = projectCorner(-hw,  hh, rx, ry, PERSP);
-              bgCtx.beginPath();
-              bgCtx.moveTo(cx + c0.x, cy + c0.y);
-              bgCtx.lineTo(cx + c1.x, cy + c1.y);
-              bgCtx.lineTo(cx + c2.x, cy + c2.y);
-              bgCtx.lineTo(cx + c3.x, cy + c3.y);
-              bgCtx.closePath();
-              bgCtx.fill();
+              fillTrouEcran([[cx + c0.x, cy + c0.y], [cx + c1.x, cy + c1.y],
+                             [cx + c2.x, cy + c2.y], [cx + c3.x, cy + c3.y]]);
             }
             n++;
           }
@@ -2635,6 +3023,23 @@
       // de fichier (bgMedia) ou le kind change. Sinon style only (mais le
       // mediaEl est display:none — le rendu visuel est sur #bg-canvas).
       function renderBg(scene) {
+        // Tilt 3D du fond (gizmo, ±90°) : perspective CSS sur #bg — le canvas
+        // entier tilt comme un widget (.widget-3d). Posé une fois par snapshot
+        // (pas à chaque frame vidéo). Les trous compensent ce tilt par
+        // projection inverse dans peindreFond → ils restent sous leurs widgets.
+        const bgTiltX = scene.bgRotX || 0;
+        const bgTiltY = scene.bgRotY || 0;
+        const bgZ = scene.bgZoom || 1;
+        // Perspective proportionnelle au canvas : d = 2×largeur garde le même
+        // ratio d/demi-largeur que les widgets (800px pour ~400px) → tilt
+        // doux, et w = 1−z/d ne croise jamais 0 (à ±90° sur 1920px : 0.75).
+        // Zoom : scale(z) EN PREMIER dans la liste = appliqué EN DERNIER aux
+        // coords écran (post-perspective) → le plan tilté entier grandit et
+        // couvre tout le canvas. Les trous compensent via trouToCanvas (/bgZ).
+        const bgPersp = (scene.canvasW || 1920) * 2;
+        bgEl.style.transform = (bgTiltX !== 0 || bgTiltY !== 0 || bgZ !== 1)
+          ? "scale(" + bgZ + ") perspective(" + bgPersp + "px) rotateX(" + bgTiltX + "deg) rotateY(" + bgTiltY + "deg)"
+          : "";
         const rel = scene.bgMedia || "";
         // Fond capture OBS (bgObsSource) : PRIORITAIRE sur le média — même
         // chemin que « pas de fond » (mediaEl retiré + canvas transparent) :
@@ -2921,9 +3326,32 @@
         return '<div class="' + cls + '" data-touche="' + code + '" style="flex:' + taille + '">' + label + "</div>";
       }
 
+      // ===== Châssis clavier/numpad (SVG derrière les touches DOM) =====
+      // Plaque + câble + plateau encaissé, étirés (preserveAspectRatio none,
+      // coords en % via viewBox 100x100). La barre de LEDs est un SVG séparé
+      // non étiré (meet, calé à droite) : les LEDs portent data-touche →
+      // elles s'allument avec la touche comme sur un vrai clavier.
+      function ivChassisHTML() {
+        return '<svg class="iv-kb-chassis" viewBox="0 0 100 100" preserveAspectRatio="none">'
+          + '<defs><linearGradient id="ivk-plate" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#333844"/><stop offset="0.5" stop-color="#23262e"/><stop offset="1" stop-color="#14161b"/>'
+          + '</linearGradient></defs>'
+          + '<rect class="iv-kb-plate" x="2" y="1.5" width="96" height="97" rx="3" fill="url(#ivk-plate)"/>'
+          + '<rect class="iv-kb-cable" x="46" y="0" width="8" height="2" rx="0.8"/>'
+          + '<rect class="iv-kb-bed" x="4" y="10.5" width="92" height="84" rx="2"/>'
+          + '</svg>'
+          + '<svg class="iv-kb-topbar" viewBox="0 0 280 46" preserveAspectRatio="xMaxYMid meet">'
+          + '<g data-touche="CapsLock"><circle class="iv-kb-led" cx="176" cy="16" r="7"/><text class="iv-kb-led-txt" x="176" y="38">CAPS</text></g>'
+          + '<g data-touche="NumLock"><circle class="iv-kb-led" cx="226" cy="16" r="7"/><text class="iv-kb-led-txt" x="226" y="38">NUM</text></g>'
+          + '<g data-touche="ScrollLock"><circle class="iv-kb-led" cx="272" cy="16" r="7"/><text class="iv-kb-led-txt" x="272" y="38">SCRL</text></g>'
+          + '</svg>';
+      }
+
       function ivGenererClavierHTML(layout) {
         var rangees = layout === "qwerty" ? IV_CLAVIER_QWERTY : IV_CLAVIER_AZERTY;
-        var html = '<div class="iv-section iv-section-clavier"><div class="iv-clavier">';
+        var html = '<div class="iv-section iv-section-clavier"><div class="iv-kb">'
+          + ivChassisHTML()
+          + '<div class="iv-kb-keys"><div class="iv-clavier">';
         for (var r = 0; r < rangees.length; r++) {
           html += '<div class="iv-rangee">';
           for (var t = 0; t < rangees[r].length; t++) {
@@ -2938,25 +3366,59 @@
           + '<div class="iv-touche" data-touche="ArrowDown">▼</div>'
           + '<div class="iv-touche" data-touche="ArrowRight">►</div>'
           + "</div></div>";
-        html += "</div></div>";
+        html += "</div></div></div></div>";
         return html;
       }
 
+      // Souris : skin réaliste SVG (vue de dessus) — corps bombé, zones de
+      // clic gauche/droite séparées par la couture centrale, molette crantée
+      // (clic milieu). data-souris sur des <g> → toggle .presse inchangé.
+      // data-souris-x/y portés par des <tspan> (textContent marche en SVG).
       function ivGenererSourisHTML() {
-        return '<div class="iv-section iv-section-souris"><div class="iv-souris">'
-          + '<div class="iv-souris-corps">'
-          + '<div class="iv-souris-bouton" data-souris="gauche">G</div>'
-          + '<div class="iv-souris-molette" data-souris="milieu">M</div>'
-          + '<div class="iv-souris-bouton" data-souris="droite">D</div>'
-          + "</div>"
-          + '<div class="iv-souris-position">X: <span data-souris-x>0</span> · Y: <span data-souris-y>0</span></div>'
-          + "</div></div>";
+        return '<div class="iv-section iv-section-souris">'
+          + '<svg class="iv-fig-canvas" viewBox="0 0 360 520" preserveAspectRatio="xMidYMid meet">'
+          + '<defs>'
+          + '<linearGradient id="ivs-corps" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#3a3f4d"/><stop offset="0.5" stop-color="#262a33"/><stop offset="1" stop-color="#14161c"/>'
+          + '</linearGradient>'
+          + '<linearGradient id="ivs-btn" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#484e5c"/><stop offset="1" stop-color="#22252d"/>'
+          + '</linearGradient>'
+          + '<linearGradient id="ivs-wheel" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#565e6e"/><stop offset="1" stop-color="#2a2e37"/>'
+          + '</linearGradient>'
+          + '</defs>'
+          // Corps : silhouette de souris (haut bombé, bas arrondi).
+          + '<path class="iv-ms-corps" fill="url(#ivs-corps)" d="M180 32 C92 32 56 128 56 236 L56 296 C56 412 104 490 180 490 C256 490 304 412 304 296 L304 236 C304 128 268 32 180 32 Z"/>'
+          // Zones de clic gauche/droite (moitiés hautes, coupées par la couture).
+          + '<g data-souris="gauche"><path class="iv-ms-zone" fill="url(#ivs-btn)" d="M174 46 C104 50 72 134 72 214 L174 214 Z"/></g>'
+          + '<g data-souris="droite"><path class="iv-ms-zone" fill="url(#ivs-btn)" d="M186 46 C256 50 288 134 288 214 L186 214 Z"/></g>'
+          // Coutures (ligne centrale + séparation sous les clics).
+          + '<path class="iv-ms-seam" d="M180 44 L180 216"/>'
+          + '<path class="iv-ms-seam" d="M72 214 L288 214"/>'
+          // Logement + molette crantée (clic milieu).
+          + '<rect class="iv-ms-wheel-loge" x="158" y="62" width="44" height="92" rx="22"/>'
+          + '<g data-souris="milieu">'
+          + '<rect class="iv-ms-wheel" x="166" y="74" width="28" height="68" rx="14" fill="url(#ivs-wheel)"/>'
+          + '<line class="iv-ms-wheel-ridge" x1="172" y1="94" x2="188" y2="94"/>'
+          + '<line class="iv-ms-wheel-ridge" x1="172" y1="105" x2="188" y2="105"/>'
+          + '<line class="iv-ms-wheel-ridge" x1="172" y1="116" x2="188" y2="116"/>'
+          + '<line class="iv-ms-wheel-ridge" x1="172" y1="127" x2="188" y2="127"/>'
+          + '</g>'
+          // Bouton DPI déco + reflet sur la coque.
+          + '<circle class="iv-ms-dpi" cx="180" cy="186" r="7"/>'
+          + '<ellipse class="iv-fig-sheen" cx="150" cy="90" rx="60" ry="22" transform="rotate(-16 150 90)"/>'
+          // Coordonnées curseur (sous le corps).
+          + '<text class="iv-ms-coord" x="180" y="512">X: <tspan data-souris-x>0</tspan> · Y: <tspan data-souris-y>0</tspan></text>'
+          + '</svg></div>';
       }
 
       // Pavé numérique : reconnaît AUSSI les chiffres du haut du clavier
       // (Digit0-9) en plus du pavé (Numpad0-9) via data-touche-alt.
       function ivGenererNumpadHTML() {
-        return '<div class="iv-section iv-section-numpad"><div class="iv-numpad">'
+        return '<div class="iv-section iv-section-numpad"><div class="iv-kb">'
+          + ivChassisHTML()
+          + '<div class="iv-kb-keys"><div class="iv-numpad">'
           + '<div class="iv-numpad-touche" data-touche="NumLock">Num</div>'
           + '<div class="iv-numpad-touche" data-touche="NumpadDivide">/</div>'
           + '<div class="iv-numpad-touche" data-touche="NumpadMultiply">*</div>'
@@ -2974,63 +3436,286 @@
           + '<div class="iv-numpad-touche iv-numpad-double-h" data-touche="NumpadEnter">↵</div>'
           + '<div class="iv-numpad-touche iv-numpad-double-w" data-touche-alt="Digit0" data-touche-alt2="Numpad0">0</div>'
           + '<div class="iv-numpad-touche" data-touche="NumpadDecimal">.</div>'
-          + "</div></div>";
+          + "</div></div></div></div>";
       }
 
-      // Manette : layout générique (D-pad + boutons face + gâchettes + sticks).
-      // Le skin (ps/xbox/8bitdo) change les labels via data-skin + CSS.
+      // ===== Skin 8BitDo ProFight : fightpad réaliste en SVG inline =====
+      // Corps de manette dessiné en SVG (viewBox 760x420, "meet" → responsive
+      // natif). Les zones cliquables gardent data-bouton/data-dpad sur des <g>
+      // → majInputViewerEtat toggle .presse sans changement. Pas de sticks.
+      // Fills de base = gradients en <defs> (url) ; .presse les écrase en CSS.
+      function ivGenererManette8BitDoSVG() {
+        // Bouton face : ombre portée sous la pastille + pastille gradient +
+        // reflet + label. btn = index data-bouton (mapping standard Gamepad).
+        function face(btn, cx, cy, lbl) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<circle class="iv-fig-btn-shadow" cx="' + cx + '" cy="' + (cy + 4) + '" r="28"/>'
+            + '<circle class="iv-fig-face" cx="' + cx + '" cy="' + cy + '" r="27" fill="url(#ivg-btn)"/>'
+            + '<ellipse class="iv-fig-sheen" cx="' + cx + '" cy="' + (cy - 12) + '" rx="15" ry="6"/>'
+            + '<text class="iv-fig-lbl" x="' + cx + '" y="' + cy + '">' + lbl + '</text></g>';
+        }
+        // Zone pressable d'un bras de la croix : invisible au repos, elle
+        // s'illumine à .presse. La flèche est gravée sur la croix de base.
+        function zone(dir, x, y, w, h) {
+          return '<g data-dpad="' + dir + '" class="iv-fig-dpad">'
+            + '<rect class="iv-fig-zone" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="10"/></g>';
+        }
+        // Diagonale : point discret qui s'allume quand 2 bras sont pressés.
+        function diag(dir, cx, cy) {
+          return '<g data-dpad="' + dir + '"><circle class="iv-fig-diag" cx="' + cx + '" cy="' + cy + '" r="7"/></g>';
+        }
+        // Gâchette d'épaule : capsule qui dépasse au-dessus du corps.
+        function shoulder(btn, x, lbl) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<rect class="iv-fig-shoulder" x="' + x + '" y="16" width="150" height="80" rx="32" fill="url(#ivg-btn)"/>'
+            + '<rect class="iv-fig-sheen" x="' + (x + 12) + '" y="24" width="126" height="20" rx="10"/>'
+            + '<text class="iv-fig-lbl" x="' + (x + 75) + '" y="46">' + lbl + '</text></g>';
+        }
+        // Select/Start : petite pilule bas-centre.
+        function pill(btn, x, lbl) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<circle class="iv-fig-btn-shadow" cx="' + (x + 31) + '" cy="310" r="17"/>'
+            + '<rect class="iv-fig-pill" x="' + x + '" y="288" width="62" height="26" rx="13" fill="url(#ivg-btn)"/>'
+            + '<text class="iv-fig-lbl iv-fig-lbl-sm" x="' + (x + 31) + '" y="301">' + lbl + '</text></g>';
+        }
+        return '<div class="iv-section iv-section-manette"><div class="iv-manette iv-manette-fig" data-skin="8bitdo">'
+          + '<svg class="iv-fig-canvas" viewBox="0 0 760 420" preserveAspectRatio="xMidYMid meet">'
+          + '<defs>'
+          + '<linearGradient id="ivg-corps" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#3a3f4d"/><stop offset="0.45" stop-color="#262a33"/><stop offset="1" stop-color="#14161c"/>'
+          + '</linearGradient>'
+          + '<linearGradient id="ivg-btn" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#4a5060"/><stop offset="1" stop-color="#22252d"/>'
+          + '</linearGradient>'
+          + '<linearGradient id="ivg-cross" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#2f333e"/><stop offset="1" stop-color="#1c1f26"/>'
+          + '</linearGradient>'
+          + '<radialGradient id="ivg-dish" cx="0.5" cy="0.45" r="0.62">'
+          + '<stop offset="0" stop-color="#20242c"/><stop offset="1" stop-color="#101318"/>'
+          + '</radialGradient>'
+          + '</defs>'
+          // Épaules ZL/ZR (dessinées AVANT le corps : seul le chapeau dépasse).
+          + shoulder(6, 118, "ZL") + shoulder(7, 492, "ZR")
+          // Corps : silhouette fightpad (haut plat, flancs arrondis, bas
+          // légèrement aplati) + panneau interne en retrait pour le relief.
+          + '<path class="iv-fig-corps" fill="url(#ivg-corps)" d="M58 200 C58 108 138 58 243 58 L517 58 C622 58 702 108 702 200 C702 252 674 294 614 322 C550 352 466 362 380 362 C294 362 210 352 146 322 C86 294 58 252 58 200 Z"/>'
+          + '<path class="iv-fig-corps-inner" d="M78 202 C78 124 150 76 250 76 L510 76 C610 76 682 124 682 202 C682 246 656 282 604 306 C546 332 464 342 380 342 C296 342 214 332 156 306 C104 282 78 246 78 202 Z"/>'
+          // Boutons déco haut-centre + home (bouton 16 du mapping standard).
+          + '<circle class="iv-fig-deco" cx="352" cy="108" r="7"/>'
+          + '<circle class="iv-fig-deco" cx="408" cy="108" r="7"/>'
+          + '<g data-bouton="16" class="iv-fig-btn"><circle class="iv-fig-home" cx="380" cy="140" r="11" fill="url(#ivg-btn)"/></g>'
+          // D-pad : dish radial + vraie croix (2 barres) + zones pressables
+          // invisibles + diagonales + moyeu.
+          + '<circle class="iv-fig-dish" cx="178" cy="220" r="92" fill="url(#ivg-dish)"/>'
+          + '<rect class="iv-fig-cross" x="154" y="152" width="48" height="136" rx="10" fill="url(#ivg-cross)"/>'
+          + '<rect class="iv-fig-cross" x="110" y="196" width="136" height="48" rx="10" fill="url(#ivg-cross)"/>'
+          + diag("haut-gauche", 130, 172) + diag("haut-droite", 226, 172)
+          + diag("bas-gauche", 130, 268) + diag("bas-droite", 226, 268)
+          + zone("haut", 156, 154, 44, 60)
+          + zone("bas", 156, 226, 44, 60)
+          + zone("gauche", 112, 198, 60, 44)
+          + zone("droite", 184, 198, 60, 44)
+          + '<text class="iv-fig-lbl iv-fig-arrow" x="178" y="163">▲</text>'
+          + '<text class="iv-fig-lbl iv-fig-arrow" x="178" y="277">▼</text>'
+          + '<text class="iv-fig-lbl iv-fig-arrow" x="121" y="220">◄</text>'
+          + '<text class="iv-fig-lbl iv-fig-arrow" x="235" y="220">►</text>'
+          + '<circle class="iv-fig-hub" cx="178" cy="220" r="30" fill="url(#ivg-cross)"/>'
+          + '<circle class="iv-fig-hub-dot" cx="178" cy="220" r="9"/>'
+          // Boutons face : 2 rangées de 3 (X Y L / A B R), légèrement
+          // remontées en suivant la pente du corps.
+          + face(2, 468, 166, "X") + face(3, 558, 160, "Y") + face(4, 648, 166, "L")
+          + face(0, 468, 254, "A") + face(1, 558, 260, "B") + face(5, 648, 254, "R")
+          // Select + Start.
+          + pill(8, 318, "SELECT") + pill(9, 400, "START")
+          + "</svg></div></div>";
+      }
+
+      // ===== Skin Xbox : manette réaliste en SVG inline =====
+      // Silhouette à grips asymétriques, sticks décalés (gauche haut, droite
+      // bas), face en losange A/B/X/Y colorée, triggers LT/RT derrière le
+      // corps, bumpers LB/RB sur le bord supérieur, View/Menu/Xbox au centre.
+      // Même contrat que le skin 8bitdo : <g data-bouton>/<g data-dpad> +
+      // <g data-stick-indicateur class="iv-fig-stick"> pour les caps mobiles.
+      function ivGenererManetteXboxSVG() {
+        // Bouton face : ombre + pastille + reflet + lettre colorée (classe).
+        function face(btn, cx, cy, lbl, lblCls) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<circle class="iv-fig-btn-shadow" cx="' + cx + '" cy="' + (cy + 4) + '" r="26"/>'
+            + '<circle class="iv-fig-face" cx="' + cx + '" cy="' + cy + '" r="25" fill="url(#ivgx-btn)"/>'
+            + '<ellipse class="iv-fig-sheen" cx="' + cx + '" cy="' + (cy - 11) + '" rx="14" ry="5"/>'
+            + '<text class="iv-fig-lbl ' + lblCls + '" x="' + cx + '" y="' + cy + '">' + lbl + '</text></g>';
+        }
+        // Stick analogique : base fixe + cap mobile (transform JS en px).
+        // Le cap porte AUSSI data-bouton (10/11) → clic L3/R3 illumine.
+        function stick(cx, cy, cote, btn) {
+          return '<circle class="iv-fig-stick-base" cx="' + cx + '" cy="' + cy + '" r="48" fill="url(#ivgx-dish)"/>'
+            + '<g class="iv-fig-stick" data-stick-indicateur="' + cote + '" data-bouton="' + btn + '">'
+            + '<circle class="iv-fig-btn-shadow" cx="' + cx + '" cy="' + (cy + 4) + '" r="31"/>'
+            + '<circle class="iv-fig-stick-cap" cx="' + cx + '" cy="' + cy + '" r="30" fill="url(#ivgx-btn)"/>'
+            + '<circle class="iv-fig-stick-ring" cx="' + cx + '" cy="' + cy + '" r="18"/></g>';
+        }
+        // Zone pressable invisible sur un bras de la croix du D-pad.
+        function zone(dir, x, y, w, h) {
+          return '<g data-dpad="' + dir + '" class="iv-fig-dpad">'
+            + '<rect class="iv-fig-zone" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="10"/></g>';
+        }
+        function diag(dir, cx, cy) {
+          return '<g data-dpad="' + dir + '"><circle class="iv-fig-diag" cx="' + cx + '" cy="' + cy + '" r="5"/></g>';
+        }
+        // Trigger (derrière le corps) et bumper (sur le bord supérieur).
+        function trigger(btn, cx, lbl) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<rect class="iv-fig-shoulder" x="' + (cx - 70) + '" y="6" width="140" height="80" rx="30" fill="url(#ivgx-btn)"/>'
+            + '<text class="iv-fig-lbl" x="' + cx + '" y="36">' + lbl + '</text></g>';
+        }
+        function bumper(btn, cx, lbl) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<rect class="iv-fig-shoulder" x="' + (cx - 82) + '" y="50" width="164" height="42" rx="21" fill="url(#ivgx-btn)"/>'
+            + '<rect class="iv-fig-sheen" x="' + (cx - 70) + '" y="56" width="140" height="12" rx="6"/>'
+            + '<text class="iv-fig-lbl" x="' + cx + '" y="72">' + lbl + '</text></g>';
+        }
+        return '<div class="iv-section iv-section-manette"><div class="iv-manette iv-manette-fig" data-skin="xbox">'
+          + '<svg class="iv-fig-canvas" viewBox="0 0 760 430" preserveAspectRatio="xMidYMid meet">'
+          + '<defs>'
+          + '<linearGradient id="ivgx-corps" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#33373f"/><stop offset="0.45" stop-color="#21242b"/><stop offset="1" stop-color="#121418"/>'
+          + '</linearGradient>'
+          + '<linearGradient id="ivgx-btn" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#454b57"/><stop offset="1" stop-color="#1f2229"/>'
+          + '</linearGradient>'
+          + '<linearGradient id="ivgx-cross" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#2c3038"/><stop offset="1" stop-color="#191c21"/>'
+          + '</linearGradient>'
+          + '<radialGradient id="ivgx-dish" cx="0.5" cy="0.45" r="0.62">'
+          + '<stop offset="0" stop-color="#1e2128"/><stop offset="1" stop-color="#0e1114"/>'
+          + '</radialGradient>'
+          + '</defs>'
+          // Triggers LT/RT derrière le corps (seul le haut dépasse).
+          + trigger(6, 170, "LT") + trigger(7, 590, "RT")
+          // Corps : arcade haute + deux grips qui descendent aux coins.
+          + '<path class="iv-fig-corps" fill="url(#ivgx-corps)" d="M380 64 C215 64 80 114 70 198 C62 268 80 336 120 372 C150 400 200 388 216 346 C226 318 254 300 287 300 L473 300 C506 300 534 318 544 346 C560 388 610 400 640 372 C680 336 698 268 690 198 C680 114 545 64 380 64 Z"/>'
+          + '<path class="iv-fig-sheen-line" d="M108 152 C195 96 565 96 652 152"/>'
+          // Bumpers LB/RB posés sur le bord supérieur du corps.
+          + bumper(4, 170, "LB") + bumper(5, 590, "RB")
+          // Bouton Xbox (home, bouton 16) + View (8) / Menu (9).
+          + '<g data-bouton="16" class="iv-fig-btn"><circle class="iv-fig-btn-shadow" cx="380" cy="109" r="20"/><circle class="iv-fig-face" cx="380" cy="105" r="19" fill="url(#ivgx-btn)"/><text class="iv-fig-lbl" x="380" y="105" style="font-size:18px">✕</text></g>'
+          + '<g data-bouton="8" class="iv-fig-btn"><circle class="iv-fig-face" cx="335" cy="148" r="13" fill="url(#ivgx-btn)"/>'
+          + '<rect class="iv-fig-ico" x="329" y="143" width="7" height="8" rx="1"/><rect class="iv-fig-ico" x="334" y="146" width="7" height="8" rx="1"/></g>'
+          + '<g data-bouton="9" class="iv-fig-btn"><circle class="iv-fig-face" cx="425" cy="148" r="13" fill="url(#ivgx-btn)"/>'
+          + '<rect class="iv-fig-ico" x="419" y="141" width="12" height="2.4" rx="1"/><rect class="iv-fig-ico" x="419" y="146" width="12" height="2.4" rx="1"/><rect class="iv-fig-ico" x="419" y="151" width="12" height="2.4" rx="1"/></g>'
+          // Stick gauche (haut) — cap mobile data-stick-indicateur.
+          + stick(195, 175, "gauche", 10)
+          // D-pad satellite (bas-gauche) : dish + croix + zones + diagonales.
+          + '<circle class="iv-fig-dish" cx="195" cy="300" r="56" fill="url(#ivgx-dish)"/>'
+          + '<rect class="iv-fig-cross" x="173" y="262" width="44" height="76" rx="10" fill="url(#ivgx-cross)"/>'
+          + '<rect class="iv-fig-cross" x="157" y="278" width="76" height="44" rx="10" fill="url(#ivgx-cross)"/>'
+          + diag("haut-gauche", 161, 266) + diag("haut-droite", 229, 266)
+          + diag("bas-gauche", 161, 334) + diag("bas-droite", 229, 334)
+          + zone("haut", 175, 264, 40, 32)
+          + zone("bas", 175, 304, 40, 32)
+          + zone("gauche", 159, 280, 32, 40)
+          + zone("droite", 199, 280, 32, 40)
+          + '<circle class="iv-fig-hub" cx="195" cy="300" r="14" fill="url(#ivgx-cross)"/>'
+          // Boutons face en losange : Y haut, X gauche, B droite, A bas.
+          + face(3, 560, 122, "Y", "iv-fig-lbl-y")
+          + face(2, 507, 170, "X", "iv-fig-lbl-x")
+          + face(1, 613, 170, "B", "iv-fig-lbl-b")
+          + face(0, 560, 218, "A", "iv-fig-lbl-a")
+          // Stick droit (bas).
+          + stick(560, 300, "droite", 11)
+          + "</svg></div></div>";
+      }
+
+      // ===== Skin PlayStation : DualSense réaliste en SVG inline =====
+      // Sticks symétriques en bas, D-pad à 4 bras séparés, symboles ✕○□△
+      // colorés, touchpad central cliquable (bouton 17), Share/Options.
+      function ivGenererManettePsSVG() {
+        // Bouton face : ombre + pastille + symbole coloré (△□○✕).
+        function face(btn, cx, cy, lbl, lblCls) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<circle class="iv-fig-btn-shadow" cx="' + cx + '" cy="' + (cy + 4) + '" r="26"/>'
+            + '<circle class="iv-fig-face" cx="' + cx + '" cy="' + cy + '" r="25" fill="url(#ivgp-btn)"/>'
+            + '<ellipse class="iv-fig-sheen" cx="' + cx + '" cy="' + (cy - 11) + '" rx="14" ry="5"/>'
+            + '<text class="iv-fig-lbl ' + lblCls + '" x="' + cx + '" y="' + cy + '">' + lbl + '</text></g>';
+        }
+        // Stick analogique symétrique (même contrat que le skin Xbox).
+        function stick(cx, cy, cote, btn) {
+          return '<circle class="iv-fig-stick-base" cx="' + cx + '" cy="' + cy + '" r="48" fill="url(#ivgp-dish)"/>'
+            + '<g class="iv-fig-stick" data-stick-indicateur="' + cote + '" data-bouton="' + btn + '">'
+            + '<circle class="iv-fig-btn-shadow" cx="' + cx + '" cy="' + (cy + 4) + '" r="31"/>'
+            + '<circle class="iv-fig-stick-cap" cx="' + cx + '" cy="' + cy + '" r="30" fill="url(#ivgp-btn)"/>'
+            + '<circle class="iv-fig-stick-ring" cx="' + cx + '" cy="' + cy + '" r="18"/></g>';
+        }
+        // Direction de D-pad PS : bras séparé arrondi, flèche gravée.
+        function dbtn(dir, x, y, w, h, arrow, tx, ty) {
+          return '<g data-dpad="' + dir + '" class="iv-fig-dpad">'
+            + '<rect class="iv-fig-face" x="' + x + '" y="' + y + '" width="' + w + '" height="' + h + '" rx="12" fill="url(#ivgp-btn)"/>'
+            + '<text class="iv-fig-lbl iv-fig-arrow" x="' + tx + '" y="' + ty + '">' + arrow + '</text></g>';
+        }
+        // Trigger (derrière le corps) et bumper (sur le bord supérieur).
+        function trigger(btn, cx, lbl) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<rect class="iv-fig-shoulder" x="' + (cx - 70) + '" y="6" width="140" height="80" rx="30" fill="url(#ivgp-btn)"/>'
+            + '<text class="iv-fig-lbl" x="' + cx + '" y="36">' + lbl + '</text></g>';
+        }
+        function bumper(btn, cx, lbl) {
+          return '<g data-bouton="' + btn + '" class="iv-fig-btn">'
+            + '<rect class="iv-fig-shoulder" x="' + (cx - 82) + '" y="50" width="164" height="42" rx="21" fill="url(#ivgp-btn)"/>'
+            + '<rect class="iv-fig-sheen" x="' + (cx - 70) + '" y="56" width="140" height="12" rx="6"/>'
+            + '<text class="iv-fig-lbl" x="' + cx + '" y="72">' + lbl + '</text></g>';
+        }
+        return '<div class="iv-section iv-section-manette"><div class="iv-manette iv-manette-fig" data-skin="ps">'
+          + '<svg class="iv-fig-canvas" viewBox="0 0 760 430" preserveAspectRatio="xMidYMid meet">'
+          + '<defs>'
+          + '<linearGradient id="ivgp-corps" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#343a46"/><stop offset="0.45" stop-color="#22262e"/><stop offset="1" stop-color="#131519"/>'
+          + '</linearGradient>'
+          + '<linearGradient id="ivgp-btn" x1="0" y1="0" x2="0" y2="1">'
+          + '<stop offset="0" stop-color="#474e5c"/><stop offset="1" stop-color="#21242c"/>'
+          + '</linearGradient>'
+          + '<radialGradient id="ivgp-dish" cx="0.5" cy="0.45" r="0.62">'
+          + '<stop offset="0" stop-color="#1e2128"/><stop offset="1" stop-color="#0e1114"/>'
+          + '</radialGradient>'
+          + '</defs>'
+          // Triggers L2/R2 derrière le corps.
+          + trigger(6, 160, "L2") + trigger(7, 600, "R2")
+          // Corps DualSense : haut large, deux grips qui plongent vers le bas.
+          + '<path class="iv-fig-corps" fill="url(#ivgp-corps)" d="M380 60 C220 60 90 105 80 178 C72 240 88 305 118 348 C140 390 170 408 200 398 C232 387 244 350 248 318 L512 318 C516 350 528 387 560 398 C590 408 620 390 642 348 C672 305 688 240 680 178 C670 105 540 60 380 60 Z"/>'
+          + '<path class="iv-fig-sheen-line" d="M112 140 C200 88 560 88 648 140"/>'
+          // Bumpers L1/R1 sur le bord supérieur.
+          + bumper(4, 160, "L1") + bumper(5, 600, "R1")
+          // Touchpad central cliquable (bouton 17) + liseré lumineux déco.
+          + '<g data-bouton="17" class="iv-fig-btn"><rect class="iv-fig-pad" x="305" y="92" width="150" height="88" rx="12" fill="url(#ivgp-dish)"/></g>'
+          + '<path class="iv-fig-sheen-line" d="M312 184 L448 184"/>'
+          // Share (8) / Options (9) : petits boutons flanquant le touchpad.
+          + '<g data-bouton="8" class="iv-fig-btn"><circle class="iv-fig-face" cx="288" cy="102" r="10" fill="url(#ivgp-btn)"/><rect class="iv-fig-ico" x="283" y="99" width="10" height="2" rx="1"/><rect class="iv-fig-ico" x="283" y="103" width="10" height="2" rx="1"/></g>'
+          + '<g data-bouton="9" class="iv-fig-btn"><circle class="iv-fig-face" cx="472" cy="102" r="10" fill="url(#ivgp-btn)"/><rect class="iv-fig-ico" x="467" y="98" width="10" height="8" rx="1"/></g>'
+          // Bouton PS (home, bouton 16) sous le touchpad.
+          + '<g data-bouton="16" class="iv-fig-btn"><circle class="iv-fig-btn-shadow" cx="380" cy="209" r="13"/><circle class="iv-fig-face" cx="380" cy="205" r="12" fill="url(#ivgp-btn)"/><text class="iv-fig-lbl" x="380" y="205" style="font-size:8px">PS</text></g>'
+          // D-pad PS : 4 bras séparés + petit moyeu.
+          + dbtn("haut", 164, 112, 42, 56, "▲", 185, 132)
+          + dbtn("bas", 164, 182, 42, 56, "▼", 185, 218)
+          + dbtn("gauche", 108, 154, 56, 42, "◄", 128, 175)
+          + dbtn("droite", 196, 154, 56, 42, "►", 232, 175)
+          + '<circle class="iv-fig-hub" cx="185" cy="175" r="12" fill="url(#ivgp-btn)"/>'
+          // Boutons face en losange : △ haut, □ gauche, ○ droite, ✕ bas.
+          + face(3, 575, 130, "△", "iv-fig-lbl-tri")
+          + face(2, 522, 177, "□", "iv-fig-lbl-squ")
+          + face(1, 628, 177, "○", "iv-fig-lbl-cir")
+          + face(0, 575, 224, "✕", "iv-fig-lbl-cro")
+          // Sticks symétriques en bas (L3/R3 au clic).
+          + stick(265, 285, "gauche", 10)
+          + stick(495, 285, "droite", 11)
+          + "</svg></div></div>";
+      }
+
+      // Manette : les 3 skins sont des SVG réalistes dédiés
+      // (ivGenererManette*SVG). Valeur inconnue → xbox par défaut.
       function ivGenererManetteHTML(skin) {
         var s = skin || "xbox";
-        // 8BitDo (rétro) : pas de joysticks, D-pad 8 directions seulement.
-        var avec_sticks = s !== "8bitdo";
-        return '<div class="iv-section iv-section-manette"><div class="iv-manette" data-skin="' + s + '">'
-          // Gâchettes (LB/LT/RT/RB ou L1/L2/R1/R2)
-          + '<div class="iv-manette-rangee iv-manette-gachettes">'
-          + '<div class="iv-manette-bouton" data-bouton="4"></div>'
-          + '<div class="iv-manette-bouton" data-bouton="6"></div>'
-          + '<div class="iv-manette-bouton" data-bouton="7"></div>'
-          + '<div class="iv-manette-bouton" data-bouton="5"></div>'
-          + "</div>"
-          // Ligne principale : D-pad + centre + boutons face
-          + '<div class="iv-manette-rangee iv-manette-principale">'
-          // D-Pad (grille 3x3 avec diagonales)
-          + '<div class="iv-manette-dpad">'
-          + '<div class="iv-manette-dpad-diag" data-dpad="haut-gauche">◤</div>'
-          + '<div class="iv-manette-bouton" data-dpad="haut">▲</div>'
-          + '<div class="iv-manette-dpad-diag" data-dpad="haut-droite">◥</div>'
-          + '<div class="iv-manette-bouton" data-dpad="gauche">◄</div>'
-          + '<div class="iv-manette-dpad-centre"></div>'
-          + '<div class="iv-manette-bouton" data-dpad="droite">►</div>'
-          + '<div class="iv-manette-dpad-diag" data-dpad="bas-gauche">◣</div>'
-          + '<div class="iv-manette-bouton" data-dpad="bas">▼</div>'
-          + '<div class="iv-manette-dpad-diag" data-dpad="bas-droite">◢</div>'
-          + "</div>"
-          // Centre : Select + Start
-          + '<div class="iv-manette-centre">'
-          + '<div class="iv-manette-bouton" data-bouton="8"></div>'
-          + '<div class="iv-manette-bouton" data-bouton="9"></div>'
-          + "</div>"
-          // Boutons face (losange : haut, gauche, droite, bas)
-          + '<div class="iv-manette-face">'
-          + '<div class="iv-manette-face-rangee"><div class="iv-manette-bouton" data-bouton="3"></div></div>'
-          + '<div class="iv-manette-face-rangee"><div class="iv-manette-bouton" data-bouton="2"></div><div class="iv-manette-bouton" data-bouton="1"></div></div>'
-          + '<div class="iv-manette-face-rangee"><div class="iv-manette-bouton" data-bouton="0"></div></div>'
-          + "</div>"
-          + "</div>"
-          // Joysticks (L3 + R3) — masqués pour 8BitDo (rétro)
-          + (avec_sticks
-            ? '<div class="iv-manette-rangee iv-manette-sticks">'
-              + '<div class="iv-manette-stick-groupe">'
-              + '<div class="iv-manette-stick-zone" data-stick-zone="gauche"><div class="iv-manette-stick-indicateur" data-stick-indicateur="gauche"></div></div>'
-              + '<div class="iv-manette-bouton" data-bouton="10"></div>'
-              + "</div>"
-              + '<div class="iv-manette-stick-groupe">'
-              + '<div class="iv-manette-stick-zone" data-stick-zone="droite"><div class="iv-manette-stick-indicateur" data-stick-indicateur="droite"></div></div>'
-              + '<div class="iv-manette-bouton" data-bouton="11"></div>'
-              + "</div>"
-              + "</div>"
-            : "")
-          + "</div></div>";
+        if (s === "8bitdo") return ivGenererManette8BitDoSVG();
+        if (s === "ps") return ivGenererManettePsSVG();
+        return ivGenererManetteXboxSVG();
       }
 
       function ivGenererHTML(w) {
@@ -3161,7 +3846,13 @@
             var ax = stick === "gauche" ? (mAxes[0] || 0) : (mAxes[2] || 0);
             var ay = stick === "gauche" ? (mAxes[1] || 0) : (mAxes[3] || 0);
             var actif = Math.abs(ax) > 0.15 || Math.abs(ay) > 0.15;
-            stickEls[si].style.transform = "translate(calc(-50% + " + (ax * 40) + "%), calc(-50% + " + (ay * 40) + "%))";
+            // Cap SVG (iv-fig-stick) : translate en px viewBox (le calc %
+            // centré est pensé pour le cap DOM absolu, inutilisable en SVG).
+            if (stickEls[si].classList.contains("iv-fig-stick")) {
+              stickEls[si].style.transform = "translate(" + (ax * 26) + "px, " + (ay * 26) + "px)";
+            } else {
+              stickEls[si].style.transform = "translate(calc(-50% + " + (ax * 40) + "%), calc(-50% + " + (ay * 40) + "%))";
+            }
             stickEls[si].classList.toggle("actif", actif);
           }
         }
@@ -3193,6 +3884,18 @@
           case "Ended": return "ended";
           default: return "ready";
         }
+      }
+
+      /// Disposition du splitter : srLayout "ligne"/"colonne" forcent le mode ;
+      /// "auto"/absent → splits en ligne (scroll horizontal, façon LiveSplit)
+      /// si la hauteur du widget passe sous ~4× la taille de base (même seuil
+      /// que WidgetSpeedrun.svelte — srTaillePolice fallback = 16, celui du
+      /// fontSize appliqué ci-dessous).
+      function srEstLigne(w) {
+        if (w.srLayout === "ligne") return true;
+        if (w.srLayout === "colonne") return false;
+        var srTailleSeuil = w.srTaillePolice || 16;
+        return (w.hauteur || 0) < srTailleSeuil * 4;
       }
 
       /// Parse un temps formaté "MM:SS.mmm" ou "HH:MM:SS.mmm" vers secondes.
@@ -3228,25 +3931,23 @@
       }
 
       /// Formate un delta signé façon LiveSplit (colonne "+/−") : signe
-      /// toujours présent, précision au dixième — "-1.6", "+2.3", "-1:23.4".
+      /// toujours présent, format m:ss (h:mm:ss au-delà d'une heure),
+      /// secondes arrondies — jamais de décimales ("-1:01", "+0:12").
       function srFormatDelta(secs) {
         var sign = secs < 0 ? "-" : "+";
-        var totalDs = Math.round(Math.abs(secs) * 10);
-        var h = Math.floor(totalDs / 36000);
-        var m = Math.floor((totalDs % 36000) / 600);
-        var s = Math.floor((totalDs % 600) / 10);
-        var d = totalDs % 10;
+        var totalS = Math.round(Math.abs(secs));
+        var h = Math.floor(totalS / 3600);
+        var m = Math.floor((totalS % 3600) / 60);
+        var s = totalS % 60;
+        var ss = String(s).padStart(2, "0");
         if (h > 0) {
-          return sign + h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") + "." + d;
+          return sign + h + ":" + String(m).padStart(2, "0") + ":" + ss;
         }
-        if (m > 0) {
-          return sign + m + ":" + String(s).padStart(2, "0") + "." + d;
-        }
-        return sign + s + "." + d;
+        return sign + m + ":" + ss;
       }
 
       /// Recrée le HTML de la liste des segments (quand le total change).
-      /// Ordre des colonnes aligné sur le dashboard : n° | nom | delta | temps.
+      /// Ordre des colonnes aligné sur le dashboard : nom | temps | delta.
       function srRecreerSplits(entry, segments) {
         var splitsEl = entry.el.querySelector(".sr-splits");
         if (!splitsEl) return;
@@ -3254,10 +3955,9 @@
         for (var i = 0; i < segments.length; i++) {
           var seg = segments[i];
           html += '<div class="sr-seg" data-idx="' + i + '">' +
-            '<span class="sr-seg-idx">' + (i + 1) + '</span>' +
             '<span class="sr-seg-nom">' + (seg.nom || "") + '</span>' +
-            '<span class="sr-seg-pb"></span>' +
             '<span class="sr-seg-time"></span>' +
+            '<span class="sr-seg-pb"></span>' +
             '</div>';
         }
         splitsEl.innerHTML = html;
@@ -3270,61 +3970,76 @@
         if (!splitsEl) return;
         var segs = splitsEl.querySelectorAll(".sr-seg");
         var idx = entry.srIndex;
-        // Temps courant en secondes (pour le split actif en cours).
-        var currentSecs = srParseTime(entry.srGameTime || entry.srRealTime || "00:00.00");
         for (var j = 0; j < segs.length; j++) {
-          // Delta vs référence « dernière fois » (entry.srBaseline = baseline
-          // mergée PB, figée au started du run) — CUMULÉ au split, comme
-          // LiveSplit : passé = temps enregistré, actif = temps courant live.
-          // "0.0" neutre si non parcouru / skippé / sans référence.
-          var deltaTxt = "0.0";
-          var deltaSens = "";
-          var ref = (entry.srBaseline && j < entry.srBaseline.length)
-            ? entry.srBaseline[j] : null;
-          if (idx !== null && j <= idx && ref !== null && ref !== undefined) {
-            var cumulDelta = null;
-            if (j < idx) {
-              var tSplit = (entry.srSplitTimes && j < entry.srSplitTimes.length)
-                ? entry.srSplitTimes[j] : "";
-              // Segment skippé : pas de temps enregistré → pas de delta.
-              if (tSplit) cumulDelta = srParseTime(tSplit);
-            } else {
-              cumulDelta = currentSecs;
+          // Durée PB du segment (référence LiveSplit : pb[j] − pb[j-1] en
+          // cumul LSS ; real time d'abord, fallback game time). null si le
+          // segment n'a pas de PB.
+          var segDef = (entry.srSegments && j < entry.srSegments.length)
+            ? entry.srSegments[j] : null;
+          // Durée PB du segment = pb[j] − pb[j−1] — le .lss stocke les PB en
+          // CUMUL. null si le segment OU le précédent n'a pas de PB : sans
+          // pb[j−1], soustraire 0 rendrait le cumul entier au lieu de la durée.
+          var segPb = null;
+          if (segDef) {
+            var pbCur = (segDef.pbRealTime != null) ? segDef.pbRealTime : segDef.pbGameTime;
+            if (pbCur != null) {
+              if (j === 0) {
+                segPb = pbCur; // cumul du 1er segment = sa durée
+              } else {
+                var pPrev = entry.srSegments[j - 1];
+                var pbPrev = pPrev
+                  ? ((pPrev.pbRealTime != null) ? pPrev.pbRealTime : pPrev.pbGameTime)
+                  : null;
+                if (pbPrev != null) segPb = pbCur - pbPrev;
+              }
             }
-            if (cumulDelta !== null) {
-              // Classer sur la valeur arrondie au dixième (cohérent avec
-              // l'affichage : "0.0"/"-0.0" ne bascule pas de couleur).
-              var dd = Math.round((cumulDelta - ref) * 10) / 10;
+          }
+          var enregistre = (entry.srSplitTimes && j < entry.srSplitTimes.length)
+            ? entry.srSplitTimes[j] : "";
+          var estActif = (idx !== null && j === idx);
+          var enCours = estActif &&
+            (entry.srPhase === "Running" || entry.srPhase === "Paused");
+          // Delta vs PB du segment — colonne "+/−" façon LiveSplit :
+          // actif = temps vivant − PB (défile à chaque tick), passé = durée
+          // réalisée − PB (figé au split), non atteint / skippé / armé en
+          // NotRunning / sans PB = vide.
+          var deltaTxt = "";
+          var deltaSens = "";
+          if (segPb !== null) {
+            var segSecs = null;
+            if (idx !== null && j < idx && enregistre) {
+              segSecs = srParseTime(enregistre);
+            } else if (enCours && entry.srSegTime) {
+              segSecs = srParseTime(entry.srSegTime);
+            }
+            if (segSecs !== null) {
+              // Classer sur la valeur arrondie à la seconde (cohérent avec
+              // l'affichage m:ss : "+0:00" ne bascule pas de couleur).
+              var dd = Math.round(segSecs - segPb);
               deltaTxt = srFormatDelta(dd);
               deltaSens = dd < 0 ? "ahead" : dd > 0 ? "behind" : "";
             }
           }
           // Classe de la ligne : actif/done + bordure résultat (ahead/behind).
           var segCls = "sr-seg";
-          if (idx !== null && j === idx) segCls += " sr-seg-actif";
+          if (estActif) segCls += " sr-seg-actif";
           else if (idx !== null && j < idx) segCls += " sr-seg-done";
           if (deltaSens === "ahead") segCls += " sr-seg-ahead";
           else if (deltaSens === "behind") segCls += " sr-seg-behind";
           if (segs[j].className !== segCls) segs[j].className = segCls;
-          // Temps de run (segment = delta, pas cumulé) :
-          //   - split passé : cumul[j] - cumul[j-1]
-          //   - split actif : temps courant - cumul[idx-1] (en fluo via CSS)
-          //   - non parcouru : "--/--/--"
+          // Colonne temps (droite) — sémantique LiveSplit :
+          //   - passé avec temps enregistré : durée réalisée figée
+          //   - actif : temps vivant du segment (0:00.00 si armé)
+          //   - non atteint / skippé : durée PB du segment (vide si pas de PB)
           var timeEl = segs[j].querySelector(".sr-seg-time");
           if (timeEl) {
-            var segTime = "--/--/--";
-            if (idx !== null && j < idx) {
-              // Passé : delta entre cumuls
-              var cumulJ = (entry.srSplitTimes && j < entry.srSplitTimes.length)
-                ? srParseTime(entry.srSplitTimes[j]) : 0;
-              var cumulPrev = (j > 0 && entry.srSplitTimes && (j - 1) < entry.srSplitTimes.length)
-                ? srParseTime(entry.srSplitTimes[j - 1]) : 0;
-              segTime = srFormatSegment(cumulJ - cumulPrev);
-            } else if (idx !== null && j === idx) {
-              // Actif : temps courant - cumul précédent
-              var prevCumul = (j > 0 && entry.srSplitTimes && (j - 1) < entry.srSplitTimes.length)
-                ? srParseTime(entry.srSplitTimes[j - 1]) : 0;
-              segTime = srFormatSegment(currentSecs - prevCumul);
+            var segTime;
+            if (estActif) {
+              segTime = entry.srSegTime || "00:00.00";
+            } else if (idx !== null && j < idx && enregistre) {
+              segTime = enregistre;
+            } else {
+              segTime = (segPb !== null) ? srFormatSegment(segPb) : "";
             }
             if (timeEl.textContent !== segTime) timeEl.textContent = segTime;
           }
@@ -3352,18 +4067,27 @@
         }
         // Scroll auto : centrer le segment actif dans la liste (si la liste
         // déborde). Pas de smooth behavior — le CEF d'OBS saccade avec les
-        // animations. Scroll instantané par calcul manuel du scrollTop.
+        // animations. Scroll instantané par calcul manuel. Mode ligne :
+        // centrage horizontal (scrollLeft) au lieu de vertical (scrollTop).
         if (idx !== null && idx >= 0 && idx < segs.length) {
           var actif = segs[idx];
-          var containerH = splitsEl.clientHeight;
-          var actifTop = actif.offsetTop;
-          var actifH = actif.offsetHeight;
-          // Centrer : scrollTop = top de l'actif - moitié du conteneur + moitié de l'actif
-          var target = actifTop - (containerH - actifH) / 2;
-          // Clamp ≥ 0
-          if (target < 0) target = 0;
-          if (Math.abs(splitsEl.scrollTop - target) > 1) {
-            splitsEl.scrollTop = target;
+          if (entry.el.classList.contains("sr-ligne")) {
+            var targetX = actif.offsetLeft - (splitsEl.clientWidth - actif.offsetWidth) / 2;
+            if (targetX < 0) targetX = 0;
+            if (Math.abs(splitsEl.scrollLeft - targetX) > 1) {
+              splitsEl.scrollLeft = targetX;
+            }
+          } else {
+            var containerH = splitsEl.clientHeight;
+            var actifTop = actif.offsetTop;
+            var actifH = actif.offsetHeight;
+            // Centrer : scrollTop = top de l'actif - moitié du conteneur + moitié de l'actif
+            var target = actifTop - (containerH - actifH) / 2;
+            // Clamp ≥ 0
+            if (target < 0) target = 0;
+            if (Math.abs(splitsEl.scrollTop - target) > 1) {
+              splitsEl.scrollTop = target;
+            }
           }
         }
       }
@@ -3433,9 +4157,10 @@
         if (etat.type === "lss") {
           pendingLss = etat;
         }
-        // Même chose pour la baseline (référence delta émise au started).
-        if (etat.type === "baseline") {
-          pendingBaseline = etat.splits || null;
+        // Même chose pour l'état consolidé (resync complet émis à la demande
+        // de resync WS — rejoué si le widget est recréé après coup).
+        if (etat.type === "etat") {
+          pendingEtat = etat;
         }
 
         // Trouver le widget speedrun dans widgetMap.
@@ -3449,24 +4174,29 @@
             case "started":
               entry.srPhase = "Running";
               entry.srActif = true;
-              entry.srIndex = 0;
+              // index = split de départ (armé par clic en NotRunning, sinon 0).
+              entry.srIndex = (etat.index !== undefined) ? etat.index : 0;
               entry.srSplitTimes = [];
+              entry.srSegTime = "00:00.00";
               break;
             case "split":
               if (etat.index !== undefined) entry.srIndex = etat.index;
-              // Stocker le temps du split pour l'afficher à droite du segment.
+              // etat.time = durée du segment bouclé (le cumul de run voyage
+              // dans etat.cumul). index = current_split_index après
+              // incrément → segment bouclé = index − 1 (0-based).
               if (etat.time && etat.index !== undefined) {
                 if (!entry.srSplitTimes) entry.srSplitTimes = [];
-                // L'index Rust est 1-based après split (current_split_index
-                // incrémenté avant l'event) → le temps correspond au segment
-                // précédent (index - 1).
                 var segIdx = etat.index - 1;
                 while (entry.srSplitTimes.length <= segIdx) entry.srSplitTimes.push("");
                 entry.srSplitTimes[segIdx] = etat.time;
               }
+              // Le nouveau segment repart de zéro (segmentTime réel arrive
+              // au prochain tick Time).
+              entry.srSegTime = "00:00.00";
               break;
             case "splitSkipped":
               if (etat.index !== undefined) entry.srIndex = etat.index;
+              entry.srSegTime = "00:00.00";
               break;
             case "splitUndone":
               if (etat.index !== undefined) {
@@ -3476,6 +4206,9 @@
                   entry.srSplitTimes[etat.index] = "";
                 }
               }
+              // Le segment défait reprend là où il en était (d_k) — le temps
+              // réel arrive au prochain tick Time.
+              entry.srSegTime = null;
               break;
             case "reset":
               entry.srPhase = "NotRunning";
@@ -3483,9 +4216,45 @@
               entry.srGameTime = null;
               entry.srRealTime = "00:00.00";
               entry.srSplitTimes = [];
+              entry.srSegTime = null;
               break;
             case "ended":
               entry.srPhase = "Ended";
+              // etat.time = durée du dernier segment, etat.index = total.
+              // Stocker le dernier split comme les autres (colonne droite
+              // figée) — l'index à total retire le highlight « actif ».
+              if (etat.index !== undefined) {
+                entry.srIndex = etat.index;
+                if (etat.time) {
+                  if (!entry.srSplitTimes) entry.srSplitTimes = [];
+                  var lastIdx = etat.index - 1;
+                  while (entry.srSplitTimes.length <= lastIdx) entry.srSplitTimes.push("");
+                  entry.srSplitTimes[lastIdx] = etat.time;
+                }
+              }
+              entry.srSegTime = null;
+              break;
+            case "goto":
+              // Clic sur une ligne : armement (NotRunning) ou retry de
+              // segment. Tous les temps de la tentative sont effacés — les
+              // précédents ne comptent pas comme finis (le PB reste affiché
+              // via srSegments). Chrono de segment à zéro.
+              if (etat.phase) entry.srPhase = etat.phase;
+              if (etat.index !== undefined) entry.srIndex = etat.index;
+              entry.srSplitTimes = [];
+              entry.srSegTime =
+                (etat.phase === "Running" || etat.phase === "Paused")
+                  ? "00:00.00" : null;
+              break;
+            case "etat":
+              // Resync complet (reload/reconnexion) : remplace tout l'état.
+              if (etat.phase) entry.srPhase = etat.phase;
+              entry.srIndex =
+                (etat.index !== undefined && etat.index >= 0) ? etat.index : null;
+              entry.srSplitTimes = (etat.splitTimes || []).map(function (t) { return t || ""; });
+              if (etat.realTime) entry.srRealTime = etat.realTime;
+              entry.srGameTime = etat.gameTime || etat.realTime || null;
+              entry.srSegTime = etat.segmentTime || null;
               break;
             case "gameTime":
               if (etat.time) entry.srGameTime = etat.time;
@@ -3497,6 +4266,7 @@
               } else if (etat.realTime) {
                 entry.srGameTime = etat.realTime;
               }
+              if (etat.segmentTime !== undefined) entry.srSegTime = etat.segmentTime;
               break;
             case "paused":
               entry.srPhase = "Paused";
@@ -3513,33 +4283,34 @@
               entry.srConnecte = false;
               entry.srProcessus = null;
               entry.srSplitTimes = [];
+              entry.srSegTime = null;
               break;
             case "connected":
               entry.srConnecte = true;
               if (etat.process) entry.srProcessus = etat.process;
               break;
             case "disconnected":
+              // Sortie du jeu : le timer Rust a reset → l'affichage suit
+              // (même nettoyage que reset + perte de connexion).
               entry.srConnecte = false;
               entry.srProcessus = null;
+              entry.srPhase = "NotRunning";
+              entry.srIndex = null;
+              entry.srGameTime = null;
+              entry.srRealTime = "00:00.00";
+              entry.srSplitTimes = [];
+              entry.srSegTime = null;
               break;
             case "lss":
-              // Métadonnées LSS (jeu + catégorie + segments + baseline) —
-              // reçues quand le dashboard charge un .lss. On peuple l'en-tête
-              // + la liste des segments + la référence delta (baseline mergée
-              // PB, calculée côté Rust).
+              // Métadonnées LSS (jeu + catégorie + segments) — reçues quand
+              // le dashboard charge un .lss. On peuple l'en-tête + la liste
+              // des segments (la référence delta = PB du segment, calculée
+              // depuis srSegments).
               entry.srNomJeu = etat.nomJeu || "";
               entry.srNomCategorie = etat.nomCategorie || "";
               entry.srSegments = etat.segments || [];
-              entry.srBaseline = etat.baseline || [];
               entry.srTotalSplits = entry.srSegments.length;
               srRecreerSplits(entry, entry.srSegments);
-              break;
-            case "baseline":
-              // Référence delta « dernière fois » — émise au started de chaque
-              // run (fraîche : inclut les splits enregistrés au run précédent).
-              // Figée pour tout le run : les enregistrements en cours de run
-              // ne la modifient pas (c'est la référence du prochain run).
-              entry.srBaseline = etat.splits || [];
               break;
             default:
               break;
@@ -3556,8 +4327,47 @@
         }
       }
 
+      // ===== Mode Just Chatting (frame WS just-chatting-etat) =====
+      // Overlay non-destructif : la scène réelle (currentScene, JSON disque)
+      // n'est JAMAIS mutée. Quand actif, on rend une COPIE de la scène où le
+      // widget caméra et les widgets chat reçoivent les rects JC (fractions
+      // 0-1 calculées en Rust × canvas réel) et les autres types sont filtrés
+      // — le sweep `seen` retire leur DOM et peindreFond ne perce plus leurs
+      // trous (leurs sources OBS disparaissent aussi). La caméra OBS est
+      // déplacée par le dashboard (camera_sync), pas ici.
+      let jcEtat = { actif: false, paysage: null, portrait: null };
+
+      function jcDeriverScene(scene) {
+        if (!jcEtat.actif || !scene || !scene.widgets) return scene;
+        var cw = scene.canvasW || 1920;
+        var ch = scene.canvasH || 1080;
+        // Paysage si W >= H, portrait sinon (formule unique côté Rust).
+        var layout = cw >= ch ? jcEtat.paysage : jcEtat.portrait;
+        if (!layout || !layout.camera || !layout.chat) return scene;
+        var widgets = [];
+        for (var jci = 0; jci < scene.widgets.length; jci++) {
+          var jcw = scene.widgets[jci];
+          var jct = jcw.type || "media";
+          if (jct !== "camera" && jct !== "chat") continue;
+          var r = jct === "camera" ? layout.camera : layout.chat;
+          var copie = Object.assign({}, jcw);
+          copie.x = Math.round(r.x * cw);
+          copie.y = Math.round(r.y * ch);
+          copie.largeur = Math.round(r.w * cw);
+          copie.hauteur = Math.round(r.h * ch);
+          widgets.push(copie);
+        }
+        var copieScene = Object.assign({}, scene);
+        copieScene.widgets = widgets;
+        return copieScene;
+      }
+
       function renderScene(scene) {
         if (!scene || !scene.widgets) return;
+
+        // Mode Just Chatting : rendre la scène DÉRIVÉE (copie — jamais la
+        // scène réelle). Inactif → identité (jcDeriverScene retourne scene).
+        scene = jcDeriverScene(scene);
 
         // Dims canvas (coords scène).
         applyCanvasDims(scene);
@@ -3617,7 +4427,7 @@
               applyWidgetStyle(trouEl, w);
               trouWrap.appendChild(trouEl);
               stageEl.appendChild(trouWrap);
-              var trouNew = { el: trouEl, wrapEl: trouWrap, mediaEl: null, mediaKey: "", kind: "trou", mediaTime: 0, cadreOverlayEl: null, cadreKey: "", titreEl: null };
+              var trouNew = { el: trouEl, wrapEl: trouWrap, mediaEl: null, mediaKey: "", kind: "trou", mediaTime: 0, cadreOverlayEl: null, cadreKey: "", titreEls: null };
               widgetMap.set(w.id, trouNew);
               applyCadreWidget(trouEl, trouNew, w, scene.cadreWidget);
               applyTitreWidget(trouNew, w, scene.cadreWidget);
@@ -3643,19 +4453,38 @@
             // Gradient du cadre SVG pour le border des messages (comme les
             // splits du speedrun — variables --sr-grad-from/--sr-grad-to).
             var chatGrad = gradientCadre(scene.cadreWidget);
+            // Mise en forme : "bulles" = messages détachés + cadre SVG réel
+            // par message (même CadreConfig que les widgets — voir
+            // cadreParMessage). La clé de rebuild inclut la signature du
+            // cadre par message + la largeur du widget (les SVG par bulle
+            // sont mesurés : un resize impose un re-mesure).
+            var newStyle = w.chatStyle === "bulles" ? "bulles" : "compact";
+            var cadreMsg = newStyle === "bulles" ? cadreParMessage(scene, w) : null;
+            var chatRebuildKey = newStyle + "|" + chatGrad.from + "|" + chatGrad.to + "|"
+              + (cadreMsg
+                ? cadreMsg.style + "|" + cadreMsg.strokeWidth + "|" + (cadreMsg.gradientAngle ?? "") + "|" + Math.round(w.largeur)
+                : "");
             if (entry) {
-              // UPDATE : style + re-remplir si filtre/taille a changé.
+              // UPDATE : style + re-remplir SEULEMENT si filtre/taille/couleurs
+              // du cadre/style ont changé. Le border-image des messages est
+              // inline (CEF ne recalcule pas les var() en dynamique) →
+              // rebuild requis si le gradient bouge. Sinon le DOM suit déjà
+              // le buffer via appendChatMessage (O(1)/message) : pas de
+              // rebuild 200 nœuds à chaque snapshot.
               applyWidgetStyle(entry.el, w);
               entry.el.style.setProperty("--sr-grad-from", chatGrad.from);
               entry.el.style.setProperty("--sr-grad-to", chatGrad.to);
+              entry.el.classList.toggle("chat-bulles", newStyle === "bulles");
               entry.wrapEl.style.zIndex = w.z;
               var newFiltre = w.chatFiltre || "unifie";
               var newTaille = w.taillePolice || 16;
-              if (entry.chatFiltre !== newFiltre || entry.taillePolice !== newTaille) {
+              entry.cadreMsg = cadreMsg;
+              if (entry.chatFiltre !== newFiltre || entry.taillePolice !== newTaille || entry.chatRebuildKey !== chatRebuildKey) {
                 entry.chatFiltre = newFiltre;
                 entry.taillePolice = newTaille;
+                entry.chatRebuildKey = chatRebuildKey;
+                fillChatBody(entry.chatBody, newFiltre, newTaille, chatGrad.from, chatGrad.to, cadreMsg);
               }
-              fillChatBody(entry.chatBody, newFiltre, newTaille, chatGrad.from, chatGrad.to);
               if (entry.viewersBar) fillViewersBar(entry.viewersBar, newFiltre, newTaille);
               // Média de fond (sous les messages, recréé si changé).
               syncMediaFond(entry, w);
@@ -3669,6 +4498,7 @@
               wrapEl.style.zIndex = w.z;
               var el = document.createElement("div");
               el.className = "widget chat";
+              if (newStyle === "bulles") el.classList.add("chat-bulles");
               applyWidgetStyle(el, w);
               el.style.setProperty("--sr-grad-from", chatGrad.from);
               el.style.setProperty("--sr-grad-to", chatGrad.to);
@@ -3682,14 +4512,15 @@
               stageEl.appendChild(wrapEl);
               var filtre = w.chatFiltre || "unifie";
               var taille = w.taillePolice || 16;
-              fillChatBody(chatBody, filtre, taille, chatGrad.from, chatGrad.to);
+              fillChatBody(chatBody, filtre, taille, chatGrad.from, chatGrad.to, cadreMsg);
               fillViewersBar(viewersBar, filtre, taille);
               var chatNew = {
                 el: el, wrapEl: wrapEl, mediaEl: null, mediaKey: "",
                 kind: "chat", mediaTime: 0,
                 chatBody: chatBody, viewersBar: viewersBar,
                 chatFiltre: filtre, taillePolice: taille,
-                cadreOverlayEl: null, cadreKey: "", titreEl: null
+                chatRebuildKey: chatRebuildKey, cadreMsg: cadreMsg,
+                cadreOverlayEl: null, cadreKey: "", titreEls: null
               };
               widgetMap.set(w.id, chatNew);
               // Média de fond (premier enfant, sous le chat-body).
@@ -3776,7 +4607,7 @@
                 el: ivEl, wrapEl: ivWrap, mediaEl: null, mediaKey: "",
                 kind: "inputviewer", mediaTime: 0, inputKey: ivKey,
                 inputMapping: w.inputMapping || null,
-                cadreOverlayEl: null, cadreKey: "", titreEl: null
+                cadreOverlayEl: null, cadreKey: "", titreEls: null
               };
               widgetMap.set(w.id, ivNew);
               // Média de fond (premier enfant, sous le markup clavier/souris).
@@ -3802,6 +4633,8 @@
             if (srEntry) {
               // UPDATE : style + z-order + cadre.
               applyWidgetStyle(srEntry.el, w);
+              // Disposition colonne/ligne (srLayout + seuil hauteur en auto).
+              srEntry.el.classList.toggle("sr-ligne", srEstLigne(w));
               var srGrad = gradientCadre(scene.cadreWidget);
               srEntry.el.style.setProperty("--sr-grad-from", srGrad.from);
               srEntry.el.style.setProperty("--sr-grad-to", srGrad.to);
@@ -3827,6 +4660,8 @@
               var srEl = document.createElement("div");
               srEl.className = "widget speedrun";
               applyWidgetStyle(srEl, w);
+              // Disposition colonne/ligne (srLayout + seuil hauteur en auto).
+              srEl.classList.toggle("sr-ligne", srEstLigne(w));
               var srGrad = gradientCadre(scene.cadreWidget);
               srEl.style.setProperty("--sr-grad-from", srGrad.from);
               srEl.style.setProperty("--sr-grad-to", srGrad.to);
@@ -3855,11 +4690,11 @@
               var srNew = {
                 el: srEl, wrapEl: srWrap, mediaEl: null, mediaKey: "",
                 kind: "speedrun", mediaTime: 0,
-                cadreOverlayEl: null, cadreKey: "", titreEl: null,
+                cadreOverlayEl: null, cadreKey: "", titreEls: null,
                 srTotalSplits: 0, srPhase: "NotRunning", srSegments: [],
                 srIndex: null, srGameTime: null, srRealTime: "00:00.00",
                 srNomJeu: "", srNomCategorie: "", srConnecte: false, srActif: false,
-                srProcessus: null, srSplitTimes: [], srBaseline: []
+                srProcessus: null, srSplitTimes: [], srSegTime: null
               };
               widgetMap.set(w.id, srNew);
               // Média de fond (premier enfant, sous le timer + les splits).
@@ -3871,10 +4706,10 @@
               if (pendingLss) {
                 majSpeedrunEtat(pendingLss);
               }
-              // Rejouer la dernière baseline si reçue (plus fraîche que celle
-              // du payload lss si un run a été démarré entre-temps).
-              if (pendingBaseline) {
-                majSpeedrunEtat({ type: "baseline", splits: pendingBaseline });
+              // Rejouer le dernier état consolidé si reçu (run en cours au
+              // moment où le widget a été recréé — resync index + temps).
+              if (pendingEtat) {
+                majSpeedrunEtat(pendingEtat);
               }
             }
             continue;
@@ -3895,23 +4730,34 @@
               gEntry = null;
             }
             var gGrad = gradientCadre(scene.cadreWidget);
-            var gKey = (w.goalPlateforme || "twitch") + "|" + (w.goalMetrique || "followers");
+            var gKey = (w.goalPlateforme || "twitch") + "|" +
+              (w.goalId ? "id:" + w.goalId : (w.goalMetrique || "followers"));
             if (gEntry) {
-              // UPDATE : style + z + cadre + entête si plat/métrique changé.
+              // UPDATE : style + z + cadre + entête si plat/métrique/lien
+              // changé. En mode lié le label peut aussi évoluer via les
+              // frames goal-twitch (majGoalValeur le met à jour).
               applyWidgetStyle(gEntry.el, w);
               gEntry.el.style.setProperty("--sr-grad-from", gGrad.from);
               gEntry.el.style.setProperty("--sr-grad-to", gGrad.to);
+              // --goal-w/--goal-h : base des tailles calc() du CSS goal
+              // (pas de cqw — absent du CEF de plusieurs versions d'OBS).
+              // MAJ à chaque snapshot → suit les resizes.
+              gEntry.el.style.setProperty("--goal-w", w.largeur + "px");
+              gEntry.el.style.setProperty("--goal-h", w.hauteur + "px");
               gEntry.wrapEl.style.zIndex = w.z;
               if (gEntry.goalKey !== gKey) {
                 gEntry.goalKey = gKey;
                 gEntry.goalEnteteEl.innerHTML =
                   logoPlateforme(w.goalPlateforme || "twitch") +
-                  '<span class="goal-met">' + (GOAL_MET_LABELS[w.goalMetrique || "followers"] || "Objectif") + '</span>';
+                  '<span class="goal-met">' + goalLabelEntete(w) + '</span>';
+                gEntry.goalMetEl = gEntry.goalEnteteEl.querySelector(".goal-met");
               }
               majGoalValeur(gEntry, w);
               // Média de fond (sous le contenu, recréé si changé).
               syncMediaFond(gEntry, w);
-              applyCadreWidget(gEntry.el, gEntry, w, scene.cadreWidget);
+              // Cadre à l'échelle « bulle » (cadreGoal) — même taille que
+              // le cadre des messages chat en mode bulles.
+              applyCadreWidget(gEntry.el, gEntry, w, cadreGoal(scene));
               applyTitreWidget(gEntry, w, scene.cadreWidget);
             } else {
               // CREATE : conteneur + entête (logo+métrique) + chiffres + barre.
@@ -3923,14 +4769,17 @@
               applyWidgetStyle(gEl, w);
               gEl.style.setProperty("--sr-grad-from", gGrad.from);
               gEl.style.setProperty("--sr-grad-to", gGrad.to);
+              gEl.style.setProperty("--goal-w", w.largeur + "px");
+              gEl.style.setProperty("--goal-h", w.hauteur + "px");
               gEl.innerHTML =
                 '<div class="goal-entete">' +
                   logoPlateforme(w.goalPlateforme || "twitch") +
-                  '<span class="goal-met">' + (GOAL_MET_LABELS[w.goalMetrique || "followers"] || "Objectif") + '</span>' +
+                  '<span class="goal-met">' + goalLabelEntete(w) + '</span>' +
                 '</div>' +
                 '<div class="goal-chiffres"><span class="goal-actuel">N/A</span>' +
                   '<span class="goal-sep">/</span><span class="goal-cible">—</span></div>' +
                 '<div class="goal-bar"><div class="goal-fill"></div></div>' +
+                '<div class="goal-statut"></div>' +
                 '<div class="goal-celebration">🎉 Objectif atteint !</div>';
               gWrap.appendChild(gEl);
               stageEl.appendChild(gWrap);
@@ -3939,18 +4788,20 @@
                 kind: "goal", mediaTime: 0,
                 goalKey: gKey,
                 goalEnteteEl: gEl.querySelector(".goal-entete"),
+                goalMetEl: gEl.querySelector(".goal-met"),
                 goalActuelEl: gEl.querySelector(".goal-actuel"),
                 goalCibleEl: gEl.querySelector(".goal-cible"),
                 goalFillEl: gEl.querySelector(".goal-fill"),
+                goalStatutEl: gEl.querySelector(".goal-statut"),
                 goalCelebEl: gEl.querySelector(".goal-celebration"),
                 goalTimer: null,
-                cadreOverlayEl: null, cadreKey: "", titreEl: null
+                cadreOverlayEl: null, cadreKey: "", titreEls: null
               };
               widgetMap.set(w.id, gNew);
               majGoalValeur(gNew, w);
               // Média de fond (premier enfant, sous le contenu).
               syncMediaFond(gNew, w);
-              applyCadreWidget(gEl, gNew, w, scene.cadreWidget);
+              applyCadreWidget(gEl, gNew, w, cadreGoal(scene));
               applyTitreWidget(gNew, w, scene.cadreWidget);
             }
             continue;
@@ -3988,7 +4839,7 @@
                 mMEntry = {
                   el: mEl, wrapEl: mWrap, mediaEl: mSrc, mediaKey: mediaKey(w.media), kind: "morph",
                   mediaTime: 0, morphRendu: morphCreerRendu(mCv), morphOffscreen: null,
-                  morphRaf: null, dernierW: w, cadreOverlayEl: null, cadreKey: "", titreEl: null
+                  morphRaf: null, dernierW: w, cadreOverlayEl: null, cadreKey: "", titreEls: null
                 };
               } catch {
                 mMEntry = null;
@@ -4080,7 +4931,7 @@
             }
             wrapEl.appendChild(el);
             stageEl.appendChild(wrapEl);
-            var newEntry = { el: el, wrapEl: wrapEl, mediaEl: mediaEl, mediaKey: key, kind: kind, mediaTime: w.mediaTime || 0, cadreOverlayEl: null, cadreKey: "", titreEl: null };
+            var newEntry = { el: el, wrapEl: wrapEl, mediaEl: mediaEl, mediaKey: key, kind: kind, mediaTime: w.mediaTime || 0, cadreOverlayEl: null, cadreKey: "", titreEls: null };
             widgetMap.set(w.id, newEntry);
             applyMediaState(newEntry, w);
             // Cadre widget : clip-path + overlay SVG.
@@ -4201,13 +5052,8 @@
       }
 
       // --- Cyberpunk ---
-      var CYBERPUNK_VARIANTES = {
-        defaut: { c1: "#00f0ff", c2: "#ff00ff", c3: "#ffffff" },
-        "vert-magenta": { c1: "#39ff14", c2: "#ff00ff", c3: "#ffffff" },
-        "orange-cyan": { c1: "#ff8800", c2: "#00f0ff", c3: "#ffffff" },
-        "violet-cyan": { c1: "#8c4dff", c2: "#00f0ff", c3: "#ffffff" },
-        "rouge-cyan": { c1: "#ff2244", c2: "#00f0ff", c3: "#ffffff" }
-      };
+      // Tons dérivés des couleurs utilisateur : couleur = néon principal,
+      // couleurFin = néon secondaire, highlight blanc.
       function getCyberpunkBevelSize(sw) {
         return Math.max(8, Math.round(clampStrokeWidth(sw) * 3.5));
       }
@@ -4215,9 +5061,11 @@
         var s = Math.min(getCyberpunkBevelSize(sw), W / 4, H / 4);
         return "path('M " + s + " 0 L " + (W - s) + " 0 L " + W + " " + s + " L " + W + " " + (H - s) + " L " + (W - s) + " " + H + " L " + s + " " + H + " L 0 " + (H - s) + " L 0 " + s + " Z')";
       }
-      function renderCyberpunk(W, H, idCadre, strokeWidth, variante) {
-        var pal = CYBERPUNK_VARIANTES[variante] || CYBERPUNK_VARIANTES.defaut;
-        var c1 = pal.c1, c2 = pal.c2, c3 = pal.c3;
+      function renderCyberpunk(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var c2 = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.35);
+        var c3 = "#ffffff";
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
         var offset = ep / 2;
         var bevel = getCyberpunkBevelSize(ep);
@@ -4270,8 +5118,8 @@
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<clipPath id="' + clipPathId + '"><path d="' + pathBorder + '"/></clipPath>'
-          + '<linearGradient id="' + gradId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + c1 + '"/><stop offset="50%" stop-color="' + c2 + '"/><stop offset="100%" stop-color="' + c1 + '"/></linearGradient>'
-          + '<linearGradient id="' + gradInnerId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + c3 + '" stop-opacity="0.9"/><stop offset="50%" stop-color="' + c1 + '" stop-opacity="0.6"/><stop offset="100%" stop-color="' + c3 + '" stop-opacity="0.9"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c1 + '"/><stop offset="50%" stop-color="' + c2 + '"/><stop offset="100%" stop-color="' + c1 + '"/></linearGradient>'
+          + '<linearGradient id="' + gradInnerId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c3 + '" stop-opacity="0.9"/><stop offset="50%" stop-color="' + c1 + '" stop-opacity="0.6"/><stop offset="100%" stop-color="' + c3 + '" stop-opacity="0.9"/></linearGradient>'
           + "</defs>"
           + '<g clip-path="url(#' + clipPathId + ')">'
           + '<path d="' + pathBorder + '" fill="none" stroke="' + c1 + '" stroke-width="' + (ep * 2.2) + '" stroke-linejoin="miter" opacity="0.25"/>'
@@ -4283,14 +5131,8 @@
       }
 
       // --- Story ---
-      var STORY_VARIANTES = {
-        pink: { vif: "#ff4d8d", clair: "#ff80b5", profond: "#e63973", pale: "#ffd6e8" },
-        blue: { vif: "#4d88ff", clair: "#80b5ff", profond: "#3973e6", pale: "#d6e8ff" },
-        purple: { vif: "#8c4dff", clair: "#b580ff", profond: "#7339e6", pale: "#e8d6ff" },
-        green: { vif: "#4dff88", clair: "#80ffb5", profond: "#39e673", pale: "#d6ffe8" },
-        orange: { vif: "#ff884d", clair: "#ffb580", profond: "#e67339", pale: "#ffe8d6" },
-        yellow: { vif: "#ffd700", clair: "#ffed4d", profond: "#e6a800", pale: "#fff5d6" }
-      };
+      // Tons dérivés : couleur = vif, couleurFin = profond ; clair/pale =
+      // couleur éclaircie (aucune palette figée).
       function getStoryClipSize(sw) {
         return Math.max(12, Math.round(clampStrokeWidth(sw) * 4));
       }
@@ -4315,9 +5157,16 @@
       function heartShape(cx, cy, s) {
         return "M " + cx + " " + (cy + s * 0.25) + " C " + (cx - s * 0.42) + " " + (cy - s * 0.08) + " " + (cx - s * 0.42) + " " + (cy - s * 0.42) + " " + cx + " " + (cy - s * 0.18) + " C " + (cx + s * 0.42) + " " + (cy - s * 0.42) + " " + (cx + s * 0.42) + " " + (cy - s * 0.08) + " " + cx + " " + (cy + s * 0.25) + " Z";
       }
-      function renderStory(W, H, idCadre, strokeWidth, variante) {
-        var palette = STORY_VARIANTES[variante] || STORY_VARIANTES.pink;
+      function renderStory(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+        var vif = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var palette = {
+          vif: vif,
+          clair: bpmEclaircir(vif, 0.35),
+          profond: bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(vif, 0.2),
+          pale: bpmEclaircir(vif, 0.75)
+        };
         var blanc = "#ffffff";
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
         var s = Math.min(getStoryClipSize(ep), W / 4, H / 4);
         var margin = Math.max(10, ep * 2.5);
@@ -4365,8 +5214,8 @@
         }
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + palette.vif + '"/><stop offset="50%" stop-color="' + palette.clair + '"/><stop offset="100%" stop-color="' + palette.profond + '"/></linearGradient>'
-          + '<linearGradient id="' + innerGradId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + blanc + '" stop-opacity="0.7"/><stop offset="50%" stop-color="' + palette.pale + '" stop-opacity="0.5"/><stop offset="100%" stop-color="' + blanc + '" stop-opacity="0.7"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + palette.vif + '"/><stop offset="50%" stop-color="' + palette.clair + '"/><stop offset="100%" stop-color="' + palette.profond + '"/></linearGradient>'
+          + '<linearGradient id="' + innerGradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + blanc + '" stop-opacity="0.7"/><stop offset="50%" stop-color="' + palette.pale + '" stop-opacity="0.5"/><stop offset="100%" stop-color="' + blanc + '" stop-opacity="0.7"/></linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
           + '<g clip-path="url(#' + clipId + ')">'
@@ -4380,11 +5229,7 @@
       }
 
       // --- Thin Line ---
-      var THINLINE_VARIANTES = {
-        graphite: { principal: "#2d2d2d", accent: "#4a4a4a" },
-        argent: { principal: "#a0a0a0", accent: "#c0c0c0" },
-        "blanc-pure": { principal: "#ffffff", accent: "#e0e0e0" }
-      };
+      // couleur = trait principal, couleurFin = accent des coins/marqueurs.
       function getThinLineClipSize(sw) {
         return Math.max(6, Math.round(clampStrokeWidth(sw) * 1.5));
       }
@@ -4393,8 +5238,12 @@
         var rEff = Math.min(r, W / 4, H / 4);
         return "path('M " + rEff + " 0 L " + (W - rEff) + " 0 Q " + W + " 0 " + W + " " + rEff + " L " + W + " " + (H - rEff) + " Q " + W + " " + H + " " + (W - rEff) + " " + H + " L " + rEff + " " + H + " Q 0 " + H + " 0 " + (H - rEff) + " L 0 " + rEff + " Q 0 0 " + rEff + " 0 Z')";
       }
-      function renderThinLine(W, H, idCadre, strokeWidth, variante) {
-        var p = THINLINE_VARIANTES[variante] || THINLINE_VARIANTES.graphite;
+      function renderThinLine(W, H, idCadre, strokeWidth, couleur, couleurFin) {
+        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var p = {
+          principal: c1,
+          accent: bpmHexValide(couleurFin) ? couleurFin : bpmEclaircir(c1, 0.3)
+        };
         var ep = clampStrokeWidth(strokeWidth);
         var r = Math.min(getThinLineClipSize(ep), W / 4, H / 4);
         var margin = Math.max(4, ep);
@@ -4418,13 +5267,7 @@
       }
 
       // --- Hexagon ---
-      var HEXAGON_VARIANTES = {
-        ambre: { principal: "#f59e0b", profond: "#b45309", clair: "#fcd34d" },
-        azure: { principal: "#0ea5e9", profond: "#0369a1", clair: "#7dd3fc" },
-        emerald: { principal: "#10b981", profond: "#047857", clair: "#6ee7b7" },
-        violet: { principal: "#8b5cf6", profond: "#6d28d9", clair: "#c4b5fd" },
-        steel: { principal: "#64748b", profond: "#334155", clair: "#cbd5e1" }
-      };
+      // couleur = principal, couleurFin = profond ; clair = couleur éclaircie.
       function getHexagonClipSize(sw) {
         return Math.max(12, Math.round(clampStrokeWidth(sw) * 4));
       }
@@ -4441,8 +5284,14 @@
         }
         return "M " + pts.join(" L ") + " Z";
       }
-      function renderHexagon(W, H, idCadre, strokeWidth, variante) {
-        var p = HEXAGON_VARIANTES[variante] || HEXAGON_VARIANTES.ambre;
+      function renderHexagon(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var p = {
+          principal: c1,
+          profond: bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.3),
+          clair: bpmEclaircir(c1, 0.45)
+        };
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
         var s = Math.min(getHexagonClipSize(ep), W / 4, H / 4);
         var margin = Math.max(10, ep * 2.5);
@@ -4460,7 +5309,7 @@
         }).join("");
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="' + p.principal + '"/><stop offset="100%" stop-color="' + p.profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + p.principal + '"/><stop offset="100%" stop-color="' + p.profond + '"/></linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
           + '<g clip-path="url(#' + clipId + ')">'
@@ -4496,7 +5345,7 @@
           x2: Math.round(50 + dx * scale), y2: Math.round(50 + dy * scale)
         };
       }
-      function renderMGStyle(W, H, idCadre, strokeWidth, variante, couleur, couleurFin, gradientAngle) {
+      function renderMGStyle(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
         var cPrincipal = (couleur && /^#[0-9a-f]{6}$/i.test(couleur)) ? couleur : "#ffffff";
         var cAccent = (couleurFin && /^#[0-9a-f]{6}$/i.test(couleurFin)) ? couleurFin : "#000000";
         var angle = isFinite(gradientAngle) ? gradientAngle : 135;
@@ -4601,21 +5450,16 @@
       function genererCadreSVG(cadre, W, H, idCadre) {
         if (!cadre) return "";
         var style = cadre.style || "carre";
-        var variante = cadre.variante;
         var strokeWidth = cadre.strokeWidth || 4;
         var couleur = cadre.couleur || "#ffffff";
-        var couleurFin = cadre.couleurFin || "#000000";
+        var couleurFin = cadre.couleurFin || "";
         var gradientAngle = isFinite(cadre.gradientAngle) ? cadre.gradientAngle : 135;
         if (style === "arrondis" || style === "carre") {
           return renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle);
         }
         var fn = CADRES_RENDERERS[style];
         if (fn) {
-          // mgstyle = personnalisable (couleurs user + angle) ; presets ignorent ces args.
-          if (style === "mgstyle") {
-            return fn(W, H, idCadre, strokeWidth, variante, couleur, couleurFin, gradientAngle);
-          }
-          return fn(W, H, idCadre, strokeWidth, variante);
+          return fn(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle);
         }
         return "";
       }
@@ -4623,7 +5467,6 @@
       function genererCadreClipPath(cadre, W, H) {
         if (!cadre) return null;
         var style = cadre.style || "carre";
-        var variante = cadre.variante;
         var strokeWidth = cadre.strokeWidth || 4;
         if (style === "arrondis") {
           var r = Math.min(8, W / 4, H / 4);
@@ -4632,14 +5475,14 @@
         if (style === "carre") return null;
         var fn = CADRES_CLIP_PATHS[style];
         if (!fn) return null;
-        try { return fn(W, H, strokeWidth, variante); } catch (e) { return null; }
+        try { return fn(W, H, strokeWidth); } catch (e) { return null; }
       }
 
       // Clé de hachage pour détecter les changements de cadre (évite recréer
       // le SVG à chaque snapshot si rien n'a bougé).
       function cadreKey(cadre, W, H) {
         if (!cadre) return "";
-        return (cadre.style || "") + "|" + (cadre.variante || "") + "|"
+        return (cadre.style || "") + "|"
           + (cadre.strokeWidth || 0) + "|" + (cadre.couleur || "") + "|"
           + (cadre.couleurFin || "") + "|" + (cadre.gradientAngle ?? "") + "|"
           + Math.round(W) + "x" + Math.round(H);
@@ -4647,35 +5490,14 @@
 
       // Dégradé de couleur d'un cadre pour le rendu du titre de widget.
       // Retourne { from, to } :
-      // - Cadre personnalisable (arrondis, carre, mgstyle) → couleur/couleurFin du user.
-      // - Preset → paire de couleurs de la variante (from → to).
+      // - Cadre actif → couleur/couleurFin du user (tous les styles).
       // - Pas de cadre actif (cadre null/inactif) → dégradé blanc→gris par défaut.
       function gradientCadre(cadre) {
         if (!cadre || !cadre.actif) {
           return { from: "#e0e0e0", to: "#9a9a9a" };
         }
-        var style = cadre.style || "carre";
-        var variante = cadre.variante;
-        if (style === "arrondis" || style === "carre" || style === "mgstyle") {
-          return { from: cadre.couleur || "#ffffff", to: cadre.couleurFin || cadre.couleur || "#000000" };
-        }
-        if (style === "cyberpunk") {
-          var pal = CYBERPUNK_VARIANTES[variante] || CYBERPUNK_VARIANTES.defaut;
-          return { from: pal.c1, to: pal.c2 };
-        }
-        if (style === "story") {
-          var pal = STORY_VARIANTES[variante] || STORY_VARIANTES.pink;
-          return { from: pal.vif, to: pal.profond };
-        }
-        if (style === "thin-line") {
-          var pal = THINLINE_VARIANTES[variante] || THINLINE_VARIANTES.graphite;
-          return { from: pal.principal, to: pal.accent };
-        }
-        if (style === "hexagon") {
-          var pal = HEXAGON_VARIANTES[variante] || HEXAGON_VARIANTES.ambre;
-          return { from: pal.principal, to: pal.profond };
-        }
-        return { from: "#e0e0e0", to: "#9a9a9a" };
+        var c1 = cadre.couleur || "#ffffff";
+        return { from: c1, to: cadre.couleurFin || c1 };
       }
 
       // Ombre de contraste (noir ou blanc) selon la luminance d'une couleur
@@ -4696,14 +5518,16 @@
 
       // Applique le cadre widget sur un élément .widget : clip-path sur el +
       // overlay SVG dans un div .cadre-overlay enfant. Recrée seulement si
-      // la clé a changé (style/variante/strokeWidth/dims).
+      // la clé a changé (style/couleurs/strokeWidth/dims).
       // w.sansCadre (widgets créés par drop) = opt-out : comme cadre inactif.
       function applyCadreWidget(el, entry, w, cadre) {
         var cadreActif = cadre && cadre.actif && (cadre.strokeWidth || 0) > 0 && w.sansCadre !== true;
         if (!cadreActif) {
-          // Nettoyer : retirer clip-path + overlay si présent.
+          // Nettoyer : retirer clip-path + overlay si présent + rendre la
+          // bordure à la règle CSS .widget (ne pas l'écraser en dur ici).
           el.style.clipPath = "";
           el.style.webkitClipPath = "";
+          el.style.border = "";
           if (entry.cadreOverlayEl) {
             entry.cadreOverlayEl.remove();
             entry.cadreOverlayEl = null;
@@ -4712,6 +5536,13 @@
           return;
         }
         var newKey = cadreKey(cadre, w.largeur, w.hauteur);
+        // Cadre actif : masquer la bordure native 1px de .widget (parité
+        // dashboard .avec-cadre). border:none (PAS border-color:transparent) :
+        // il faut aussi supprimer le décalage de 1px — la padding box redevient
+        // [0,W], sinon l'overlay (inset:0 sur la padding box) décale le SVG et
+        // overflow:hidden clippe le trait sur les bords droit/bas (anneau
+        // blanc résiduel autour du cadre dans OBS).
+        el.style.border = "none";
         // Clip-path : appliquer à chaque fois (cheap, pas de recréation DOM).
         var clip = genererCadreClipPath(cadre, w.largeur, w.hauteur);
         if (clip) {
@@ -4733,20 +5564,15 @@
         }
       }
 
-      // Applique le titre du widget (au-dessus ou en dessous) sur le .widget-wrap.
-      // Le titre est hors .widget (non clippé par le cadre SVG), avec un gradient
-      // de texte reprenant les couleurs du cadre actif (fallback blanc→gris).
-      // Crée/met à jour/supprime l'élément .widget-titre selon w.titre.
+      // Applique les titres du widget (haut/bas/gauche/droite — jusqu'à 4
+      // simultanés, style partagé) sur le .widget-wrap. Les titres sont hors
+      // .widget (non clippés par le cadre SVG), avec un gradient de texte
+      // reprenant les couleurs du cadre actif (fallback blanc→gris).
+      // Crée/met à jour/supprime un élément .widget-titre par position selon
+      // w.titreHaut/titreBas/titreGauche/titreDroite (gauche/droite =
+      // texte vertical writing-mode).
       function applyTitreWidget(entry, w, cadre) {
-        var titre = w.titre || "";
-        if (!titre) {
-          if (entry.titreEl) {
-            entry.titreEl.remove();
-            entry.titreEl = null;
-          }
-          return;
-        }
-        var position = w.titrePosition || "dessus";
+        if (!entry.titreEls) entry.titreEls = {};
         var police = w.titrePolice || "BebasNeue";
         var taille = w.titreTaille || 24;
         var gras = w.titreGras || false;
@@ -4757,51 +5583,99 @@
         var contourCouleur = w.titreContourCouleur || "#fff";
         var contourEpaisseur = w.titreContourEpaisseur;
         if (contourEpaisseur === undefined || contourEpaisseur === null) contourEpaisseur = 2;
-        // w.sansCadre = pas de cadre sur ce widget → gradient fallback
-        // blanc→gris (parité dashboard : titreGradient gâté par cadreActif).
-        var grad = gradientCadre(w.sansCadre === true ? null : cadre);
+        // Dégradé du texte : personnalisé si titreCouleur défini, sinon
+        // celui du cadre actif — w.sansCadre = pas de cadre sur ce widget →
+        // fallback blanc→gris (parité dashboard).
+        var grad = w.titreCouleur
+          ? { from: w.titreCouleur, to: w.titreCouleurFin || w.titreCouleur }
+          : gradientCadre(w.sansCadre === true ? null : cadre);
         var cx = w.x + w.largeur / 2;
-        if (!entry.titreEl) {
-          var el = document.createElement("div");
-          el.className = "widget-titre";
-          entry.wrapEl.appendChild(el);
-          entry.titreEl = el;
-        }
-        var el = entry.titreEl;
-        el.textContent = titre;
-        el.style.fontFamily = "'" + police + "', sans-serif";
-        el.style.fontSize = taille + "px";
-        el.style.fontStyle = italique ? "italic" : "normal";
-        el.style.fontWeight = gras ? "700" : "400";
-        el.style.textDecoration = souligne ? "underline" : "none";
-        el.style.letterSpacing = espacement + "px";
-        el.style.webkitTextStroke = contourEpaisseur + "px " + contourCouleur;
-        el.style.background = "linear-gradient(135deg, " + grad.from + ", " + grad.to + ")";
-        el.style.webkitBackgroundClip = "text";
-        el.style.backgroundClip = "text";
-        el.style.color = "transparent";
-        el.style.left = cx + "px";
-        if (position === "dessous") {
-          el.style.top = (w.y + w.hauteur) + "px";
-          el.style.bottom = "";
-          el.style.transform = "translateX(-50%)";
-          el.style.marginTop = "2px";
-          el.style.marginBottom = "";
-        } else {
-          el.style.top = w.y + "px";
-          el.style.bottom = "";
-          el.style.transform = "translate(-50%, -100%)";
-          el.style.marginTop = "-2px";
-          el.style.marginBottom = "";
+        var cy = w.y + w.hauteur / 2;
+        var positions = ["haut", "bas", "gauche", "droite"];
+        for (var i = 0; i < positions.length; i++) {
+          var pos = positions[i];
+          var champ = "titre" + pos.charAt(0).toUpperCase() + pos.slice(1);
+          var titre = w[champ] || "";
+          var el = entry.titreEls[pos];
+          if (!titre) {
+            if (el) {
+              el.remove();
+              delete entry.titreEls[pos];
+            }
+            continue;
+          }
+          if (!el) {
+            el = document.createElement("div");
+            el.className = "widget-titre";
+            entry.wrapEl.appendChild(el);
+            entry.titreEls[pos] = el;
+          }
+          el.textContent = titre;
+          el.style.fontFamily = "'" + police + "', sans-serif";
+          el.style.fontSize = taille + "px";
+          el.style.fontStyle = italique ? "italic" : "normal";
+          el.style.fontWeight = gras ? "700" : "400";
+          el.style.textDecoration = souligne ? "underline" : "none";
+          el.style.letterSpacing = espacement + "px";
+          el.style.webkitTextStroke = contourEpaisseur + "px " + contourCouleur;
+          el.style.background = "linear-gradient(135deg, " + grad.from + ", " + grad.to + ")";
+          el.style.webkitBackgroundClip = "text";
+          el.style.backgroundClip = "text";
+          el.style.color = "transparent";
+          if (pos === "haut") {
+            el.style.left = cx + "px";
+            el.style.right = "";
+            el.style.top = w.y + "px";
+            el.style.transform = "translate(-50%, -100%)";
+            el.style.marginTop = "-2px";
+            el.style.marginBottom = "";
+            el.style.marginLeft = "";
+            el.style.marginRight = "";
+            el.style.writingMode = "";
+          } else if (pos === "bas") {
+            el.style.left = cx + "px";
+            el.style.right = "";
+            el.style.top = (w.y + w.hauteur) + "px";
+            el.style.transform = "translateX(-50%)";
+            el.style.marginTop = "2px";
+            el.style.marginBottom = "";
+            el.style.marginLeft = "";
+            el.style.marginRight = "";
+            el.style.writingMode = "";
+          } else if (pos === "gauche") {
+            el.style.left = w.x + "px";
+            el.style.right = "";
+            el.style.top = cy + "px";
+            el.style.transform = "translate(-100%, -50%)";
+            el.style.marginTop = "";
+            el.style.marginBottom = "";
+            el.style.marginLeft = "";
+            el.style.marginRight = "2px";
+            el.style.writingMode = "vertical-rl";
+          } else {
+            el.style.left = (w.x + w.largeur) + "px";
+            el.style.right = "";
+            el.style.top = cy + "px";
+            el.style.transform = "translateY(-50%)";
+            el.style.marginTop = "";
+            el.style.marginBottom = "";
+            el.style.marginLeft = "2px";
+            el.style.marginRight = "";
+            el.style.writingMode = "vertical-rl";
+          }
         }
       }
 
-      // Applique le cadre app (bord canvas) sur #stage. Un seul overlay global.
+      // Applique le cadre unifié au bord du canvas sur #stage. Un seul overlay
+      // global. Source : scene.cadreWidget (champ canonique — le même cadre
+      // que les widgets ; cadreApp legacy migré côté Rust au chargement).
+      // bordActif === false → bord masqué, cadre widgets seuls conservé
+      // (absent = true, rétro-compat vieilles scènes).
       var cadreAppOverlayEl = null;
       var cadreAppKey = "";
       function applyCadreApp(scene) {
-        var cadre = scene.cadreApp;
-        var cadreActif = cadre && cadre.actif && (cadre.strokeWidth || 0) > 0;
+        var cadre = scene.cadreWidget;
+        var cadreActif = cadre && cadre.actif && (cadre.strokeWidth || 0) > 0 && cadre.bordActif !== false;
         if (!cadreActif) {
           if (cadreAppOverlayEl) {
             cadreAppOverlayEl.remove();
@@ -4823,21 +5697,14 @@
         cadreAppKey = newKey;
       }
 
-      // Applique le titre du fond de l'application (intérieur haut/bas) sur
-      // #stage. Le titre est hors #bg (non clippé), avec un gradient de texte
-      // reprenant les couleurs du cadre de l'application (cadreApp).
-      // Crée/met à jour/supprime l'élément #bg-titre selon scene.bgTitre.
-      var bgTitreEl = null;
+      // Applique les titres du fond de l'application (haut/bas/gauche/droite
+      // — intérieur du canvas, latéraux en texte vertical) sur #stage. Les
+      // titres sont hors #bg (non clippés), avec un gradient de texte
+      // reprenant les couleurs du cadre unifié (cadreWidget).
+      // Crée/met à jour/supprime un élément .bg-titre par position selon
+      // scene.bgTitreHaut/Bas/Gauche/Droite.
+      var bgTitreEls = {};
       function applyTitreFond(scene) {
-        var titre = scene.bgTitre || "";
-        if (!titre) {
-          if (bgTitreEl) {
-            bgTitreEl.remove();
-            bgTitreEl = null;
-          }
-          return;
-        }
-        var position = scene.bgTitrePosition || "haut";
         var police = scene.bgTitrePolice || "BebasNeue";
         var taille = scene.bgTitreTaille || 24;
         var gras = scene.bgTitreGras || false;
@@ -4848,34 +5715,71 @@
         var contourCouleur = scene.bgTitreContourCouleur || "#fff";
         var contourEpaisseur = scene.bgTitreContourEpaisseur;
         if (contourEpaisseur === undefined || contourEpaisseur === null) contourEpaisseur = 2;
-        var grad = gradientCadre(scene.cadreApp);
-        if (!bgTitreEl) {
-          var el = document.createElement("div");
-          el.id = "bg-titre";
-          stageEl.appendChild(el);
-          bgTitreEl = el;
-        }
-        var el = bgTitreEl;
-        el.textContent = titre;
-        el.style.fontFamily = "'" + police + "', sans-serif";
-        el.style.fontSize = taille + "px";
-        el.style.fontStyle = italique ? "italic" : "normal";
-        el.style.fontWeight = gras ? "700" : "400";
-        el.style.textDecoration = souligne ? "underline" : "none";
-        el.style.letterSpacing = espacement + "px";
-        el.style.webkitTextStroke = contourEpaisseur + "px " + contourCouleur;
-        el.style.background = "linear-gradient(135deg, " + grad.from + ", " + grad.to + ")";
-        el.style.webkitBackgroundClip = "text";
-        el.style.backgroundClip = "text";
-        el.style.color = "transparent";
-        el.style.left = "50%";
-        el.style.transform = "translateX(-50%)";
-        if (position === "bas") {
-          el.style.top = "";
-          el.style.bottom = "8px";
-        } else {
-          el.style.top = "8px";
-          el.style.bottom = "";
+        // Dégradé du texte : personnalisé si bgTitreCouleur défini, sinon
+        // celui du cadre unifié (parité dashboard).
+        var grad = scene.bgTitreCouleur
+          ? { from: scene.bgTitreCouleur, to: scene.bgTitreCouleurFin || scene.bgTitreCouleur }
+          : gradientCadre(scene.cadreWidget);
+        var positions = ["haut", "bas", "gauche", "droite"];
+        for (var i = 0; i < positions.length; i++) {
+          var pos = positions[i];
+          var champ = "bgTitre" + pos.charAt(0).toUpperCase() + pos.slice(1);
+          var titre = scene[champ] || "";
+          var el = bgTitreEls[pos];
+          if (!titre) {
+            if (el) {
+              el.remove();
+              delete bgTitreEls[pos];
+            }
+            continue;
+          }
+          if (!el) {
+            el = document.createElement("div");
+            el.className = "bg-titre";
+            stageEl.appendChild(el);
+            bgTitreEls[pos] = el;
+          }
+          el.textContent = titre;
+          el.style.fontFamily = "'" + police + "', sans-serif";
+          el.style.fontSize = taille + "px";
+          el.style.fontStyle = italique ? "italic" : "normal";
+          el.style.fontWeight = gras ? "700" : "400";
+          el.style.textDecoration = souligne ? "underline" : "none";
+          el.style.letterSpacing = espacement + "px";
+          el.style.webkitTextStroke = contourEpaisseur + "px " + contourCouleur;
+          el.style.background = "linear-gradient(135deg, " + grad.from + ", " + grad.to + ")";
+          el.style.webkitBackgroundClip = "text";
+          el.style.backgroundClip = "text";
+          el.style.color = "transparent";
+          if (pos === "haut") {
+            el.style.left = "50%";
+            el.style.right = "";
+            el.style.transform = "translateX(-50%)";
+            el.style.top = "8px";
+            el.style.bottom = "";
+            el.style.writingMode = "";
+          } else if (pos === "bas") {
+            el.style.left = "50%";
+            el.style.right = "";
+            el.style.transform = "translateX(-50%)";
+            el.style.top = "";
+            el.style.bottom = "8px";
+            el.style.writingMode = "";
+          } else if (pos === "gauche") {
+            el.style.left = "8px";
+            el.style.right = "";
+            el.style.transform = "translateY(-50%)";
+            el.style.top = "50%";
+            el.style.bottom = "";
+            el.style.writingMode = "vertical-rl";
+          } else {
+            el.style.left = "";
+            el.style.right = "8px";
+            el.style.transform = "translateY(-50%)";
+            el.style.top = "50%";
+            el.style.bottom = "";
+            el.style.writingMode = "vertical-rl";
+          }
         }
       }
 
@@ -4919,6 +5823,10 @@
           // couvrent la course, mais en pause il n'y a pas de tick :
           // re-push de la dernière frame par le serveur.
           ws.send(JSON.stringify({ type: "ecran-attente-resync" }));
+          // Resync Just Chatting : le serveur renvoie toujours une frame
+          // (actif:false si jamais togglé — couvre la connexion avant le 1er
+          // toggle).
+          ws.send(JSON.stringify({ type: "just-chatting-resync" }));
         };
         ws.onclose = () => {
           setTimeout(connect, 2000);
@@ -4983,6 +5891,12 @@
               // déjà dédupliqués côté Rust. Maj des widgets goal concernés.
               communauteParPlateforme[msg.plateforme] = msg;
               majGoalWidgets(msg.plateforme);
+            } else if (msg.type === "goal-twitch") {
+              // Creator Goal Twitch déclaré : progression d'un objectif lié
+              // (EventSub channel.goal.* temps réel + poll viewers.rs en
+              // secours). termine = le goal a pris fin côté Twitch.
+              goalsTwitchMap[msg.id] = msg;
+              majGoalWidgetsLies();
             } else if (msg.type === "goal-atteint") {
               // Objectif franchi (viewers.rs — une fois par crossing ≥ cible,
               // réarmé sous la cible). Célébration contenue dans le widget.
@@ -5036,6 +5950,13 @@
               // Écran d'attente BRB : frame auto-réparatrice (config + chrono
               // complets à chaque tick Rust 1 Hz + transitions).
               majEcranAttente(msg.etat);
+            } else if (msg.type === "just-chatting-etat") {
+              // Just Chatting : maj l'état puis re-render de la scène courante
+              // — jcDeriverScene applique/retire l'overlay à la volée.
+              if (msg.etat) {
+                jcEtat = msg.etat;
+                renderScene(currentScene);
+              }
             } else if (msg.type === "position-overlay-config") {
               // Squelette de position unifié (clip de bienvenue + alertes +
               // commandes). Applique la même position/taille aux trois.
@@ -5239,39 +6160,6 @@
       // Config courante (position + duree). MAJ via bandeau-premier-message-config.
       var bpmConfig = { duree_ms: 6000, position: "bas" };
 
-      // Map des couleurs { primaire, secondaire } par cadre + variante.
-      // Projection dérivée des palettes natives des cadres SVG de SOS_v0.
-      // Cadres personnalisables (arrondis, carre) → couleur/couleurFin utilisateur.
-      var BPM_MAP_CADRES = {
-        "cyberpunk": {
-          "defaut":       { p: "#00f0ff", s: "#ff00ff" },
-          "vert-magenta": { p: "#39ff14", s: "#ff00ff" },
-          "orange-cyan":  { p: "#ff8800", s: "#00f0ff" },
-          "violet-cyan":  { p: "#8c4dff", s: "#00f0ff" },
-          "rouge-cyan":   { p: "#ff2244", s: "#00f0ff" }
-        },
-        "story": {
-          "pink":   { p: "#ec4899", s: "#be185d" },
-          "blue":   { p: "#3b82f6", s: "#1e3a8a" },
-          "purple": { p: "#a855f7", s: "#6b21a8" },
-          "green":  { p: "#22c55e", s: "#15803d" },
-          "orange": { p: "#f97316", s: "#7c2d12" },
-          "yellow": { p: "#eab308", s: "#854d0e" }
-        },
-        "thin-line": {
-          "graphite":   { p: "#c0c0c0", s: "#e0e0e0" },
-          "argent":     { p: "#c0c0c0", s: "#e5e7eb" },
-          "blanc-pure": { p: "#f8fafc", s: "#cbd5e1" }
-        },
-        "hexagon": {
-          "ambre":   { p: "#f59e0b", s: "#92400e" },
-          "azure":   { p: "#3b82f6", s: "#1e3a8a" },
-          "emerald": { p: "#22c55e", s: "#15803d" },
-          "violet":  { p: "#a855f7", s: "#6b21a8" },
-          "steel":   { p: "#64748b", s: "#334155" }
-        }
-      };
-
       // Couleurs par défaut (noir & blanc) — utilisées si aucun cadre actif.
       var BPM_COULEURS_DEFAUT = { p: "#e0e0e0", s: "#a0a0a0" };
 
@@ -5300,29 +6188,29 @@
         return "#" + pad(rr) + pad(gg) + pad(bb);
       }
 
+      /// Éclaircit une couleur hex d'un ratio (0 = inchangé, 1 = blanc).
+      function bpmEclaircir(hex, ratio) {
+        var m = /^#([0-9a-f]{6})$/i.exec(String(hex || ""));
+        if (!m) return "#f5f5f5";
+        var r = Math.min(1, Math.max(0, Number(ratio) || 0));
+        var n = parseInt(m[1], 16);
+        var rr = Math.round(((n >> 16) & 0xff) + (255 - ((n >> 16) & 0xff)) * r);
+        var gg = Math.round(((n >> 8) & 0xff) + (255 - ((n >> 8) & 0xff)) * r);
+        var bb = Math.round((n & 0xff) + (255 - (n & 0xff)) * r);
+        function pad(v) { return v.toString(16).padStart(2, "0"); }
+        return "#" + pad(rr) + pad(gg) + pad(bb);
+      }
+
       /// Résout les couleurs { p, s } depuis le cadre widget de la scène active.
-      /// 1. cadre personnalisable (arrondis/carre) + couleurs valides → utilisées
-      /// 2. cadre preset → BPM_MAP_CADRES[id][variante || defaut]
-      /// 3. fallback → BPM_COULEURS_DEFAUT (noir & blanc)
+      /// Tous les styles utilisent couleur/couleurFin (couleurFin invalide →
+      /// dérivée de couleur, jamais de noir). Fallback → BPM_COULEURS_DEFAUT.
       function bpmResoudreCouleurs() {
         var cadre = currentScene && currentScene.cadreWidget;
         if (!cadre || !cadre.actif) return BPM_COULEURS_DEFAUT;
-        var style = cadre.style;
-        // Cadres personnalisables
-        if (style === "arrondis" || style === "carre" || style === "mgstyle") {
-          var c1 = bpmHexValide(cadre.couleur) ? cadre.couleur : null;
-          var c2 = bpmHexValide(cadre.couleurFin) ? cadre.couleurFin : null;
-          if (c1 && c2) return { p: c1, s: c2 };
-          if (c1) return { p: c1, s: bpmAssombrir(c1, 0.25) };
-          return BPM_COULEURS_DEFAUT;
-        }
-        // Presets
-        var map = BPM_MAP_CADRES[style];
-        if (map) {
-          var variante = cadre.variante || "defaut";
-          var col = map[variante] || map.defaut;
-          if (col) return { p: col.p, s: col.s };
-        }
+        var c1 = bpmHexValide(cadre.couleur) ? cadre.couleur : null;
+        var c2 = bpmHexValide(cadre.couleurFin) ? cadre.couleurFin : null;
+        if (c1 && c2) return { p: c1, s: c2 };
+        if (c1) return { p: c1, s: bpmAssombrir(c1, 0.25) };
         return BPM_COULEURS_DEFAUT;
       }
 
@@ -5334,8 +6222,10 @@
         bpmRoot.style.setProperty("--bpm-sec", col.s);
         bpmRoot.style.setProperty("--bpm-rgb-prim", bpmHexVersRgb(col.p));
         bpmRoot.style.setProperty("--bpm-rgb-sec", bpmHexVersRgb(col.s));
-        // Fond barre : version assombrie de la primaire (texte blanc lisible).
-        bpmRoot.style.setProperty("--bpm-rgb-fond", bpmHexVersRgb(bpmAssombrir(col.p, 0.82)));
+        // Fond barre : version assombrie de la primaire (teinte visible mais
+        // assez sombre pour le texte blanc). Rendue OPAQUE dans le gradient
+        // de .bandeau-pm-barre (noir -> teinte -> noir, fond solide).
+        bpmRoot.style.setProperty("--bpm-rgb-fond", bpmHexVersRgb(bpmAssombrir(col.p, 0.55)));
       }
 
       /// Crée l'overlay bandeau une fois (au démarrage). Idempotent.
@@ -5573,9 +6463,9 @@
         var type = a.type || "";
         var cfgType = alerteConfig[type] || {};
         alerteTexteEl.textContent = a.texte || "";
-        // Couleur du texte = couleur du cadre widget de la scène (si actif),
-        // sinon la couleur configurée du type d'alerte.
-        var couleur = a.couleur || cfgType.couleur || "#ffffff";
+        // Couleur du texte = couleur du cadre widget de la scène si actif,
+        // sinon blanc (plus de champ couleur sur les alertes).
+        var couleur = "#ffffff";
         var cadreW = currentScene && currentScene.cadreWidget;
         if (cadreW && cadreW.actif) {
           couleur = bpmResoudreCouleurs().p;
@@ -5738,9 +6628,9 @@
         }
         var c = msg.commande || {};
         commandeTexteEl.textContent = c.texte || "";
-        // Couleur du texte = couleur du cadre widget de la scène (si actif),
-        // sinon la couleur configurée de la commande.
-        var couleur = c.couleur || "#ffffff";
+        // Couleur du texte = couleur du cadre widget de la scène si actif,
+        // sinon blanc (plus de champ couleur sur les commandes).
+        var couleur = "#ffffff";
         var cadreW = currentScene && currentScene.cadreWidget;
         if (cadreW && cadreW.actif) {
           couleur = bpmResoudreCouleurs().p;
@@ -6060,6 +6950,12 @@
       var eaTempsEl = null;     // "9:58" / "1:02:33"
       var eaMediaSig = "";      // signature "media|kind" de l'élément courant
       var eaVisible = false;
+      // Layout « signature » (affichés uniquement si etat.layout !== "minimal")
+      var eaStriesEl = null;    // 4 stries néon diagonales + comètes
+      var eaStreamyWrap = null; // bloc mascotte (anneaux + image)
+      var eaStreamyImg = null;  // streamy-loading / streamy-offline (pause)
+      var eaWordmarkEl = null;  // wordmark StreamOS électrique
+      var eaMorseEl = null;     // ligne morse ···−−−···
 
       /// Crée l'overlay écran d'attente une fois. Idempotent.
       function initEcranAttenteOverlay() {
@@ -6087,18 +6983,65 @@
         eaMinuteurEl.appendChild(eaLabelEl);
         eaMinuteurEl.appendChild(eaTempsEl);
 
+        // ===== Layout « signature » : éléments de marque =====
+        // Stries néon diagonales (4 coins, une comète glissante chacune).
+        eaStriesEl = document.createElement("div");
+        eaStriesEl.className = "ecran-attente-sig-stries";
+        for (var i = 0; i < 4; i++) {
+          var strie = document.createElement("div");
+          strie.className = "sig-strie s" + (i + 1);
+          var comet = document.createElement("span");
+          comet.className = "sig-comet";
+          strie.appendChild(comet);
+          eaStriesEl.appendChild(strie);
+        }
+
+        // Mascotte Streamy + anneaux orbitaux (swap loading→offline en pause).
+        eaStreamyWrap = document.createElement("div");
+        eaStreamyWrap.className = "ecran-attente-sig-streamy";
+        var orbite = document.createElement("div");
+        orbite.className = "sig-orbite";
+        eaStreamyImg = document.createElement("img");
+        eaStreamyImg.className = "sig-mascotte";
+        eaStreamyImg.alt = "";
+        eaStreamyImg.src = "/brand/streamy-loading.png";
+        eaStreamyWrap.appendChild(orbite);
+        eaStreamyWrap.appendChild(eaStreamyImg);
+
+        // Wordmark StreamOS électrique (fond noir neutralisé par screen).
+        eaWordmarkEl = document.createElement("img");
+        eaWordmarkEl.className = "ecran-attente-sig-wordmark";
+        eaWordmarkEl.alt = "StreamOS";
+        eaWordmarkEl.src = "/brand/wordmark.png";
+
+        // Ligne morse ···−−−··· (3 points, 3 traits, 3 points).
+        eaMorseEl = document.createElement("div");
+        eaMorseEl.className = "ecran-attente-sig-morse";
+        var morseKinds = ["p", "p", "p", "t", "t", "t", "p", "p", "p"];
+        for (var mi = 0; mi < morseKinds.length; mi++) {
+          var seg = document.createElement("i");
+          seg.className = morseKinds[mi];
+          eaMorseEl.appendChild(seg);
+        }
+
         // Ordre de couche : fond → média (inséré avant le voile) → voile →
-        // titre → minuteur (le plus haut dans l'overlay).
+        // stries → streamy → wordmark → morse → titre → minuteur (le plus
+        // haut dans l'overlay). Les éléments signature sont display:none
+        // en layout minimal.
         eaRoot.appendChild(eaFondEl);
         eaRoot.appendChild(eaVoileEl);
+        eaRoot.appendChild(eaStriesEl);
+        eaRoot.appendChild(eaStreamyWrap);
+        eaRoot.appendChild(eaWordmarkEl);
+        eaRoot.appendChild(eaMorseEl);
         eaRoot.appendChild(eaTitreEl);
         eaRoot.appendChild(eaMinuteurEl);
         stageEl.appendChild(eaRoot);
       }
 
       /// Teinte le fond + le titre aux couleurs du cadre widget de la scène
-      /// (même résolution que le bandeau : cadre perso → couleur/couleurFin,
-      /// preset → palette de la variante, fallback neutre).
+      /// (même résolution que le bandeau : couleur/couleurFin unifiées,
+      /// fallback neutre).
       function eaAppliquerCouleurs() {
         if (!eaRoot) return;
         var col = bpmResoudreCouleurs();
@@ -6175,6 +7118,12 @@
           eaSetMedia(media, kind);
         }
 
+        // Layout : "signature" = marque StreamOS (défaut) ; "minimal" =
+        // rendu historique (dégradé + titre + minuteur seuls). La classe
+        // affiche/masque tout le bloc — live à chaque frame.
+        var isSignature = etat.layout !== "minimal";
+        eaRoot.classList.toggle("layout-signature", isSignature);
+
         // Son : porté par la vidéo (muted = !son) — appliqué à chaque frame
         // pour que les réglages son/volume soient live pendant l'attente.
         if (eaMediaEl && eaMediaEl.tagName === "VIDEO") {
@@ -6200,6 +7149,16 @@
         eaLabelEl.textContent = enPause ? "En pause" : "Début dans";
         eaTempsEl.textContent = eaFormatTemps(etat.temps_restant);
 
+        // Swap mascotte : Streamy endormie quand le chrono est en pause.
+        if (eaStreamyImg) {
+          var streamySrc = enPause
+            ? "/brand/streamy-offline.png"
+            : "/brand/streamy-loading.png";
+          if (eaStreamyImg.getAttribute("src") !== streamySrc) {
+            eaStreamyImg.src = streamySrc;
+          }
+        }
+
         // Position + échelle de la carte minuteur (config live — le
         // drag/resize de la modale commit pendant que l'écran est actif →
         // déplacement en direct sur la diffusion). left/top = CENTRE de la
@@ -6213,6 +7172,29 @@
         eaMinuteurEl.style.top = my + "px";
         eaMinuteurEl.style.transform =
           "translate(-50%, -50%) scale(" + mec + ")";
+
+        // Position + échelle de Streamy et du wordmark (même mécanique que
+        // le minuteur : left/top = centre, transform scale ; live à chaque
+        // frame — le drag/resize de la modale se voit en direct).
+        var stx = typeof etat.streamy_x === "number" ? etat.streamy_x : 170;
+        var sty = typeof etat.streamy_y === "number" ? etat.streamy_y : 180;
+        var ste =
+          typeof etat.streamy_echelle === "number" ? etat.streamy_echelle : 0.6;
+        ste = Math.max(0.3, Math.min(2, ste));
+        eaStreamyWrap.style.left = stx + "px";
+        eaStreamyWrap.style.top = sty + "px";
+        eaStreamyWrap.style.transform =
+          "translate(-50%, -50%) scale(" + ste + ")";
+
+        var lx = typeof etat.logo_x === "number" ? etat.logo_x : 960;
+        var ly = typeof etat.logo_y === "number" ? etat.logo_y : 140;
+        var le =
+          typeof etat.logo_echelle === "number" ? etat.logo_echelle : 1;
+        le = Math.max(0.3, Math.min(2, le));
+        eaWordmarkEl.style.left = lx + "px";
+        eaWordmarkEl.style.top = ly + "px";
+        eaWordmarkEl.style.transform =
+          "translate(-50%, -50%) scale(" + le + ")";
 
         // Affichage + cadre SVG sur la carte minuteur (mesure après display).
         if (!eaVisible) {

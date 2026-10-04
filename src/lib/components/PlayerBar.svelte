@@ -4,18 +4,24 @@
   // :4321 applique play/pause/seek/loop). Le dashboard reste figé (vignette
   // à mediaTime, jamais de play()). Aucun play()/pause() sur videoEl ici.
   // videoEl sert uniquement à lire la duration (loadedmetadata).
+  // Slider seek : oninput → onSeekLive (état local, la vignette suit) ;
+  // onchange (release) + boutons ±5 s → onSeek (commit, 1 update_scene).
+  import { t } from "../stores/langue";
+
   let {
     videoEl,
     mediaPaused,
     mediaTime,
     onTogglePlay,
     onSeek,
+    onSeekLive,
   }: {
     videoEl: HTMLVideoElement | undefined;
     mediaPaused: boolean;
     mediaTime: number;
     onTogglePlay: () => void;
     onSeek: (time: number) => void;
+    onSeekLive: (time: number) => void;
   } = $props();
 
   let duration = $state(0);
@@ -55,7 +61,14 @@
     onSeek(Math.min(duration || mediaTime, mediaTime + 5));
   }
 
+  // Drag : preview local (vignette + thumb suivent via mediaTime), zéro commit.
   function onSeekInput(e: Event) {
+    const t = parseFloat((e.target as HTMLInputElement).value);
+    if (Number.isFinite(t)) onSeekLive(t);
+  }
+
+  // Release (change) : UN commit → snapshot :4321 (seek effectif en diffusion).
+  function onSeekChange(e: Event) {
     const t = parseFloat((e.target as HTMLInputElement).value);
     if (Number.isFinite(t)) onSeek(t);
   }
@@ -65,7 +78,7 @@
   <div class="player-row">
     <button class="action" onclick={onMinus5}>−5 s</button>
     <button class="action" onclick={onTogglePlay}>
-      {mediaPaused ? "Lecture" : "Pause"}
+      {mediaPaused ? $t("commun.lecture") : $t("commun.pause")}
     </button>
     <button class="action" onclick={onPlus5}>+5 s</button>
   </div>
@@ -77,6 +90,7 @@
     step="0.1"
     value={mediaTime}
     oninput={onSeekInput}
+    onchange={onSeekChange}
   />
   <span class="player-time">{fmt(mediaTime)} / {fmt(duration)}</span>
 </div>

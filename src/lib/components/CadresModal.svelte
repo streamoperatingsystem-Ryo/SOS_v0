@@ -1,179 +1,128 @@
 <script lang="ts">
-  // CadresModal — modale galerie de cadres SVG (ouverte depuis Toolbar).
-  // Deux onglets : "widget" (cadre autour de chaque widget) et "app" (bord de
-  // l'application = autour de toute la scène). L'onglet courant = le store
-  // cadreModalOpen (source unique) : le prop mode vient de App.svelte, et la
-  // bascule d'onglet écrit dans le store (la modale reste ouverte tant que
-  // la valeur est non-null).
+  // CadresModal — modale galerie du cadre SVG unifié (ouverte depuis Toolbar).
+  // UN SEUL système depuis 2026-09-26 : une seule CadreConfig (cadreWidget)
+  // alimente en même temps le cadre de chaque widget ET le bord du canvas —
+  // plus d'onglets widget/app, plus de config divergente possible.
   import { cadreModalOpen } from "../stores/ui";
-  import {
-    sceneStore,
-    mettreAJourCadreScene,
-    mettreAJourCadreApp,
-  } from "../stores/scene";
-  import { REGISTRE_CADRES, trouverCadre, getVarianteColor } from "../cadres/registre";
+  import { sceneStore, mettreAJourCadre } from "../stores/scene";
+  import { REGISTRE_CADRES, trouverCadre } from "../cadres/registre";
+  import { t } from "../stores/langue";
   import CadreSVG from "./CadreSVG.svelte";
   import Modal from "./Modal.svelte";
-
-  let { mode }: { mode: "widget" | "app" } = $props();
-
-  /// Bascule d'onglet : écrit dans le store (source unique).
-  function changerOnglet(m: "widget" | "app") {
-    cadreModalOpen.set(m);
-  }
 
   const THUMB_W = 120;
   const THUMB_H = 68;
 
-  // Valeurs courantes selon le mode.
-  let cadreCourant = $derived(
-    mode === "widget" ? $sceneStore.cadreWidget : $sceneStore.cadreApp
-  );
+  // Valeurs courantes du cadre unifié (champ canonique cadreWidget).
+  let cadreCourant = $derived($sceneStore.cadreWidget);
   let styleCourant = $derived(cadreCourant?.style ?? "carre");
-  let varianteCourante = $derived(cadreCourant?.variante ?? null);
   let strokeWidthCourant = $derived(cadreCourant?.strokeWidth ?? 4);
   let couleurCourante = $derived(cadreCourant?.couleur ?? "#ffffff");
   let couleurFinCourante = $derived(cadreCourant?.couleurFin ?? "#000000");
   let gradientAngleCourant = $derived(cadreCourant?.gradientAngle ?? 135);
   let actifCourant = $derived(cadreCourant?.actif ?? false);
+  // Portée : le cadre s'applique aussi au bord du canvas (défaut true).
+  let bordActifCourant = $derived(cadreCourant?.bordActif ?? true);
 
   // Cadre sélectionné dans le registre.
   let cadreRegistre = $derived(trouverCadre(styleCourant));
-  let estPersonnalisable = $derived(cadreRegistre?.personnalisable ?? false);
+
+  // Noms de cadres traduits ($t scopé interdit dans un {#each} → map par id).
+  let nomsCadres = $derived.by(() => {
+    const tr = $t;
+    return Object.fromEntries(
+      REGISTRE_CADRES.map((c) => [c.id, tr("cadres.nom." + c.id)])
+    ) as Record<string, string>;
+  });
 
   // --- Handlers ---
   function selectionnerCadre(cadreId: string) {
-    const cadre = trouverCadre(cadreId);
-    const newVariante = cadre?.variantes && cadre.variantes.length > 0 ? cadre.variantes[0].id : undefined;
-    const patch: Record<string, unknown> = { style: cadreId, actif: true };
-    if (newVariante) patch.variante = newVariante;
-    if (mode === "widget") {
-      mettreAJourCadreScene(patch);
-    } else {
-      mettreAJourCadreApp(patch);
-    }
-  }
-
-  function selectionnerVariante(varianteId: string) {
-    if (mode === "widget") {
-      mettreAJourCadreScene({ variante: varianteId, actif: true });
-    } else {
-      mettreAJourCadreApp({ variante: varianteId, actif: true });
-    }
+    mettreAJourCadre({ style: cadreId, actif: true });
   }
 
   function changerStrokeWidth(val: number) {
     const n = Math.max(1, Math.min(20, Number(val)));
-    if (mode === "widget") {
-      mettreAJourCadreScene({ strokeWidth: n });
-    } else {
-      mettreAJourCadreApp({ strokeWidth: n });
-    }
+    mettreAJourCadre({ strokeWidth: n });
   }
 
   function changerCouleur(val: string) {
-    // Synchronise la couleur sur les deux cadres (widget + app).
-    mettreAJourCadreScene({ couleur: val });
-    mettreAJourCadreApp({ couleur: val });
+    mettreAJourCadre({ couleur: val });
   }
 
   function changerCouleurFin(val: string) {
-    mettreAJourCadreScene({ couleurFin: val });
-    mettreAJourCadreApp({ couleurFin: val });
+    mettreAJourCadre({ couleurFin: val });
   }
 
   function changerGradientAngle(val: number) {
     const n = Math.max(0, Math.min(360, Number(val)));
-    mettreAJourCadreScene({ gradientAngle: n });
-    mettreAJourCadreApp({ gradientAngle: n });
+    mettreAJourCadre({ gradientAngle: n });
   }
 
   function toggleActif() {
-    if (mode === "widget") {
-      mettreAJourCadreScene({ actif: !actifCourant });
-    } else {
-      mettreAJourCadreApp({ actif: !actifCourant });
-    }
+    mettreAJourCadre({ actif: !actifCourant });
+  }
+
+  function toggleBord() {
+    mettreAJourCadre({ bordActif: !bordActifCourant });
   }
 
   function fermer() {
-    cadreModalOpen.set(null);
+    cadreModalOpen.set(false);
   }
 </script>
 
 {#if $cadreModalOpen}
   <Modal
-    title="Vos cadres"
+    title={$t("cadresModal.titre")}
     onClose={fermer}
     maxWidth="720px"
-    hint={mode === "widget"
-      ? "Ce cadre entoure chaque widget (médias, chat, caméra…) individuellement. Choisissez un style ci-contre, ajustez-le, puis activez-le."
-      : "Ce cadre entoure le bord de toute la scène diffusée sur le stream. Choisissez un style ci-contre, ajustez-le, puis activez-le."}
+    hint={$t("cadresModal.hint")}
   >
     {#snippet headerExtra()}
-      <button
-        class="onglet {mode === 'widget' ? 'actif' : ''}"
-        onclick={() => changerOnglet("widget")}
-      >
-        Cadre des widgets
-      </button>
-      <button
-        class="onglet {mode === 'app' ? 'actif' : ''}"
-        onclick={() => changerOnglet("app")}
-      >
-        Bord de l'application
-      </button>
+      <span class="sous-titre">{$t("cadresModal.sousTitre")}</span>
     {/snippet}
 
     <!-- Corps : grille + panneau config -->
     <div class="modal-body-content">
-      <!-- Grille de miniatures -->
+      <!-- Grille de miniatures (rendues avec les couleurs courantes) -->
       <div class="grille">
         {#each REGISTRE_CADRES as cadre (cadre.id)}
-          <div class="cadre-item">
-            <button
-              class="thumb {styleCourant === cadre.id ? 'selectionne' : ''}"
-              onclick={() => selectionnerCadre(cadre.id)}
-            >
-              <div class="thumb-vignette">
-                <CadreSVG
-                  style={cadre.id}
-                  variante={cadre.variantes?.[0]?.id}
-                  largeur={THUMB_W}
-                  hauteur={THUMB_H}
-                  strokeWidth={3}
-                  idCadre="thumb-{cadre.id}"
-                />
-              </div>
-              <span class="thumb-nom">{cadre.nom}</span>
-            </button>
-            {#if cadre.variantes && cadre.variantes.length > 1}
-              <div class="variantes">
-                {#each cadre.variantes as v (v.id)}
-                  <button
-                    class="variante {styleCourant === cadre.id && varianteCourante === v.id ? 'actif' : ''}"
-                    title={v.nom}
-                    style="background-color: {getVarianteColor(cadre.id, v.id)};"
-                    onclick={() => selectionnerVariante(v.id)}
-                  ></button>
-                {/each}
-              </div>
-            {/if}
-          </div>
+          <button
+            class="thumb {styleCourant === cadre.id ? 'selectionne' : ''}"
+            onclick={() => selectionnerCadre(cadre.id)}
+          >
+            <div class="thumb-vignette">
+              <CadreSVG
+                style={cadre.id}
+                largeur={THUMB_W}
+                hauteur={THUMB_H}
+                strokeWidth={3}
+                couleur={couleurCourante}
+                couleurFin={couleurFinCourante}
+                gradientAngle={gradientAngleCourant}
+                idCadre="thumb-{cadre.id}"
+              />
+            </div>
+            <span class="thumb-nom">{nomsCadres[cadre.id] ?? cadre.nom}</span>
+          </button>
         {/each}
       </div>
 
       <!-- Panneau config -->
       <div class="config">
-        <div class="config-nom">{cadreRegistre?.nom ?? "Aucun cadre"}</div>
+        <div class="config-nom">{cadreRegistre ? (nomsCadres[cadreRegistre.id] ?? cadreRegistre.nom) : $t("cadresModal.aucun")}</div>
 
         <button class="toggle {actifCourant ? 'actif' : 'inactif'}" onclick={toggleActif}>
-          {actifCourant ? "Cadre activé" : "Cadre désactivé"}
+          {actifCourant ? $t("cadresModal.active") : $t("cadresModal.desactive")}
+        </button>
+
+        <button class="toggle {bordActifCourant ? 'actif' : 'inactif'}" onclick={toggleBord} disabled={!actifCourant}>
+          {bordActifCourant ? $t("cadresModal.bordActive") : $t("cadresModal.bordDesactive")}
         </button>
 
         <!-- Épaisseur -->
         <div class="config-section">
-          <span class="config-label">Épaisseur</span>
+          <span class="config-label">{$t("cadresModal.epaisseur")}</span>
           <div class="config-row">
             <input
               type="range"
@@ -188,9 +137,9 @@
           </div>
         </div>
 
-        <!-- Couleurs (si personnalisable) -->
-        <div class="config-section {estPersonnalisable ? '' : 'desactive'}">
-          <span class="config-label">Dégradé</span>
+        <!-- Couleurs (tous les cadres sont personnalisables) -->
+        <div class="config-section">
+          <span class="config-label">{$t("cadresModal.degrade")}</span>
           <div class="config-row">
             <input
               type="color"
@@ -198,7 +147,7 @@
               value={couleurCourante}
               oninput={(e) => changerCouleur((e.currentTarget as HTMLInputElement).value)}
             />
-            <span class="config-texte">Début</span>
+            <span class="config-texte">{$t("commun.debut")}</span>
             <span class="config-hex">{couleurCourante}</span>
           </div>
           <div class="config-row">
@@ -208,7 +157,7 @@
               value={couleurFinCourante}
               oninput={(e) => changerCouleurFin((e.currentTarget as HTMLInputElement).value)}
             />
-            <span class="config-texte">Fin</span>
+            <span class="config-texte">{$t("commun.fin")}</span>
             <span class="config-hex">{couleurFinCourante}</span>
           </div>
           <div class="config-row">
@@ -223,25 +172,21 @@
             />
             <span class="config-valeur">{gradientAngleCourant}°</span>
           </div>
-          {#if !estPersonnalisable}
-            <div class="config-info">Couleurs non modifiables (preset)</div>
-          {/if}
         </div>
 
         <!-- Aperçu -->
         <div class="config-section">
-          <span class="config-label">Aperçu</span>
+          <span class="config-label">{$t("commun.apercu")}</span>
           <div class="apercu">
             <CadreSVG
               style={styleCourant}
-              variante={varianteCourante ?? undefined}
               largeur={200}
               hauteur={112}
               strokeWidth={strokeWidthCourant}
               couleur={couleurCourante}
               couleurFin={couleurFinCourante}
               gradientAngle={gradientAngleCourant}
-              idCadre="apercu-{mode}"
+              idCadre="apercu"
             />
           </div>
         </div>
@@ -251,34 +196,11 @@
 {/if}
 
 <style>
-  /* Onglets de la modale : cible du cadre (widgets / bord de l'application).
-     Rendus via le slot headerExtra du wrapper Modal. */
-  .onglet {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon-petit);
-    padding: 0.3rem 0.7rem;
-    font: inherit;
+  /* Sous-titre dans le header (slot headerExtra du wrapper Modal) : rappelle
+     que le cadre unique s'applique aux widgets ET au bord du canvas. */
+  .sous-titre {
     font-size: 0.8rem;
-    cursor: pointer;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .onglet:hover {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-ui);
-  }
-  .onglet.actif {
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
-      );
-    color: var(--texte);
-    border-color: var(--accent-ui);
+    opacity: 0.7;
   }
   .modal-body-content {
     display: flex;
@@ -294,12 +216,6 @@
     grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
     gap: 0.4rem;
     align-content: start;
-  }
-  .cadre-item {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: 0.2rem;
   }
   .thumb {
     display: flex;
@@ -343,29 +259,6 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-  }
-  .variantes {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 3px;
-    justify-content: center;
-    width: 120px;
-    padding: 3px;
-    border: 1px solid var(--bordure-ui);
-    background: var(--fond);
-  }
-  .variante {
-    width: 12px;
-    height: 12px;
-    border: 1px solid var(--bordure-ui);
-    cursor: pointer;
-    padding: 0;
-  }
-  .variante:hover {
-    opacity: 0.7;
-  }
-  .variante.actif {
-    border-width: 2px;
   }
   /* Panneau config */
   .config {
@@ -412,14 +305,14 @@
     color: var(--texte);
     border-color: var(--accent-ui);
   }
+  .toggle:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
   .config-section {
     display: flex;
     flex-direction: column;
     gap: 0.3rem;
-  }
-  .config-section.desactive {
-    opacity: 0.4;
-    pointer-events: none;
   }
   .config-label {
     font-size: 0.65rem;
@@ -456,11 +349,6 @@
     font-size: 0.65rem;
     opacity: 0.5;
     font-family: monospace;
-  }
-  .config-info {
-    font-size: 0.65rem;
-    opacity: 0.5;
-    font-style: italic;
   }
   .apercu {
     width: 200px;

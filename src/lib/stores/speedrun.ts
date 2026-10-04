@@ -23,8 +23,14 @@ export const indexSplitCourant = writable<number | null>(null);
 /// Nombre total de splits.
 export const totalSplits = writable<number>(0);
 
-/// Liste des temps de split (String formaté, index = numéro du split).
+/// Liste des durées de segment enregistrées (String formaté, index = segment
+/// 0-based). Vidée par started/reset/goto/stopped — retry de segment ou
+/// nouveau run = les précédents ne comptent pas comme finis.
 export const splits = writable<string[]>([]);
+
+/// Temps vivant du segment courant (event `time.segmentTime`, formaté).
+/// null quand le timer ne tourne pas (la ligne armée affiche 0:00.00).
+export const tempsSegment = writable<string | null>(null);
 
 /// Segments LSS chargés (nom + PB). Vide si pas de .lss chargé.
 /// pbRealTime/pbGameTime sont des secondes cumulées (f64 Rust), pas des strings.
@@ -71,63 +77,6 @@ export const nomsSplitsAsl = writable<Record<string, string>>({});
 /// Erreur speedrun (affichage discret). null = pas d'erreur.
 export const erreurSpeedrun = writable<string | null>(null);
 
-/// Référence de comparaison de la colonne delta (temps de split CUMULÉS en
-/// secondes par segment) : baseline « dernière fois » (speedrun_baselines.json)
-/// mergée avec les PB du .lss. Figée à chaque départ de run — les splits
-/// enregistrés en cours de run préparent la référence du run SUIVANT sans
-/// modifier celle affichée.
-export const referenceSplits = writable<(number | null)[]>([]);
-
-/// Parse un temps formaté "MM:SS.cc" / "HH:MM:SS.cc" vers des secondes.
-/// Retourne null si vide ou placeholder ("--/--/--").
-function parseTempsSecondes(str: string | null | undefined): number | null {
-  if (!str || str === "--/--/--") return null;
-  const parts = str.split(":");
-  let h = 0, m = 0, s = 0;
-  if (parts.length === 3) {
-    h = parseFloat(parts[0]) || 0;
-    m = parseFloat(parts[1]) || 0;
-    s = parseFloat(parts[2]) || 0;
-  } else if (parts.length === 2) {
-    m = parseFloat(parts[0]) || 0;
-    s = parseFloat(parts[1]) || 0;
-  } else {
-    s = parseFloat(parts[0]) || 0;
-  }
-  const total = h * 3600 + m * 60 + s;
-  return isNaN(total) ? null : total;
-}
-
-/// Recharge la référence de comparaison (baseline « dernière fois » mergée
-/// avec les PB du .lss : priorité au temps enregistré) et la fige dans
-/// referenceSplits. Appelée au chargement du .lss et à chaque départ de run.
-export async function chargerBaseline() {
-  const path = get(cheminLss);
-  const segs = get(segmentsLss);
-  if (!path || segs.length === 0) {
-    referenceSplits.set([]);
-    return;
-  }
-  try {
-    const saved = await tauri.speedrunBaselineLire(path);
-    referenceSplits.set(
-      segs.map((s, i) => saved[i] ?? s.pbRealTime ?? s.pbGameTime)
-    );
-  } catch {
-    // Non-fatal : fallback sur les PB du .lss uniquement
-    referenceSplits.set(segs.map((s) => s.pbRealTime ?? s.pbGameTime));
-  }
-}
-
-/// Enregistre le temps cumulé d'un split réalisé dans la baseline du .lss
-/// (référence « dernière fois » du prochain run). Non-fatal, fire-and-forget.
-function enregistrerSplitBaseline(segIdx: number, timeStr: string) {
-  const path = get(cheminLss);
-  const secs = parseTempsSecondes(timeStr);
-  if (!path || secs === null) return;
-  tauri.speedrunBaselineEnregistrer(path, segIdx, secs).catch(() => {});
-}
-
 // ===== Init =====
 
 let unlisten: (() => void) | null = null;
@@ -142,27 +91,25 @@ export async function initSpeedrun() {
       case "started":
         phaseTimer.set("Running");
         estActif.set(true);
-        indexSplitCourant.set(0);
-        // Refiger la référence delta : elle intègre les temps enregistrés
-        // pendant le run précédent (« dernière fois »).
-        chargerBaseline().catch(() => {});
+        // index = split de départ (armé par clic en NotRunning, sinon 0).
+        indexSplitCourant.set(event.index ?? 0);
+        splits.set([]);
+        tempsSegment.set(null);
         break;
       case "split":
         if (event.index !== undefined) {
           indexSplitCourant.set(event.index);
         }
         if (event.time && event.index !== undefined) {
-          // event.index est 1-based après incrément (current_split_index Rust).
-          // Stocker à 0-based : segIdx = event.index - 1.
+          // event.index = current_split_index après incrément → le segment
+          // bouclé est à 0-based = index − 1. event.time = durée du segment
+          // (le cumul de run voyage dans event.cumul).
           const segIdx = event.index - 1;
           splits.update((s) => {
             while (s.length <= segIdx) s.push("");
             s[segIdx] = event.time!;
             return s;
           });
-          // Enregistrer le split dans la baseline « dernière fois » (fichier) —
-          // la référence affichée (referenceSplits) reste figée pour ce run.
-          enregistrerSplitBaseline(segIdx, event.time);
         }
         break;
       case "splitSkipped":
@@ -187,23 +134,43 @@ export async function initSpeedrun() {
         splits.set([]);
         tempsJeu.set(null);
         tempsReel.set("00:00.00");
+        tempsSegment.set(null);
         break;
       case "ended":
         phaseTimer.set("Ended");
-        // Le DERNIER split émet "ended" (pas "split") côté moteur — son temps
-        // cumulé est dans event.time. Le stocker dans splits (colonne droite)
-        // et l'enregistrer dans la baseline, comme les autres splits.
+        // Le DERNIER split émet "ended" (pas "split") côté moteur —
+        // event.time = durée du dernier segment, event.index = total.
+        if (event.index !== undefined) indexSplitCourant.set(event.index);
         if (event.time) {
-          const lastIdx = get(totalSplits) - 1;
-          if (lastIdx >= 0) {
+          const segIdx = (event.index ?? get(totalSplits)) - 1;
+          if (segIdx >= 0) {
             splits.update((s) => {
-              while (s.length <= lastIdx) s.push("");
-              s[lastIdx] = event.time!;
+              while (s.length <= segIdx) s.push("");
+              s[segIdx] = event.time!;
               return s;
             });
-            enregistrerSplitBaseline(lastIdx, event.time);
           }
         }
+        break;
+      case "goto":
+        // Clic sur une ligne : armement (NotRunning) ou retry de segment.
+        // Tous les temps de la tentative sont effacés — les précédents ne
+        // comptent pas comme finis (le PB reste affiché via segmentsLss).
+        if (event.phase) phaseTimer.set(event.phase);
+        if (event.index !== undefined) indexSplitCourant.set(event.index);
+        splits.set([]);
+        tempsSegment.set(null);
+        break;
+      case "etat":
+        // Resync complet (reload/reconnexion) : remplace tout l'état.
+        if (event.phase) phaseTimer.set(event.phase);
+        indexSplitCourant.set(
+          event.index !== undefined && event.index >= 0 ? event.index : null
+        );
+        splits.set((event.splitTimes ?? []).map((t) => t ?? ""));
+        if (event.realTime) tempsReel.set(event.realTime);
+        tempsJeu.set(event.gameTime ?? event.realTime ?? null);
+        tempsSegment.set(event.segmentTime ?? null);
         break;
       case "gameTime":
         if (event.time) tempsJeu.set(event.time);
@@ -212,14 +179,22 @@ export async function initSpeedrun() {
         if (event.realTime) tempsReel.set(event.realTime);
         if (event.gameTime !== undefined) tempsJeu.set(event.gameTime);
         else if (event.realTime) tempsJeu.set(event.realTime);
+        if (event.segmentTime !== undefined) tempsSegment.set(event.segmentTime);
         break;
       case "connected":
         estConnecte.set(true);
         if (event.process) nomProcessus.set(event.process);
         break;
       case "disconnected":
+        // Sortie du jeu : le timer Rust a reset → l'affichage suit.
         estConnecte.set(false);
         nomProcessus.set(null);
+        phaseTimer.set("NotRunning");
+        indexSplitCourant.set(null);
+        splits.set([]);
+        tempsJeu.set(null);
+        tempsReel.set("00:00.00");
+        tempsSegment.set(null);
         break;
       case "error":
         if (event.message) erreurSpeedrun.set(event.message);
@@ -230,6 +205,7 @@ export async function initSpeedrun() {
         phaseTimer.set("NotRunning");
         indexSplitCourant.set(null);
         splits.set([]);
+        tempsSegment.set(null);
         break;
       case "paused":
         phaseTimer.set("Paused");
@@ -342,9 +318,6 @@ export async function chargerLss(path: string) {
       }))
     );
     totalSplits.set(run.segments?.length || 0);
-    // Charger la référence delta (baseline « dernière fois » mergée avec les
-    // PB du .lss) — figée jusqu'au prochain départ de run.
-    await chargerBaseline();
     erreurSpeedrun.set(null);
   } catch (e) {
     erreurSpeedrun.set(String(e));
@@ -375,6 +348,7 @@ export async function arreterSpeedrun() {
     phaseTimer.set("NotRunning");
     indexSplitCourant.set(null);
     splits.set([]);
+    tempsSegment.set(null);
   } catch (e) {
     erreurSpeedrun.set(String(e));
     throw e;
@@ -386,6 +360,19 @@ export async function majSettings(start: boolean, split: boolean, reset: boolean
   try {
     await tauri.speedrunMajSettings(start, split, reset);
     settingsAsl.set({ start, split, reset });
+  } catch (e) {
+    erreurSpeedrun.set(String(e));
+    throw e;
+  }
+}
+
+/// Clic sur une ligne de split : arme l'index si le timer est arrêté (le
+/// prochain start ASL/manuel part de là), sinon saute à l'index en retry
+/// de segment — chrono de segment à zéro, temps de la tentative effacés.
+export async function allerSplit(index: number) {
+  try {
+    await tauri.speedrunAllerSplit(index);
+    erreurSpeedrun.set(null);
   } catch (e) {
     erreurSpeedrun.set(String(e));
     throw e;

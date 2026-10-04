@@ -16,8 +16,10 @@
   // pointer-events: none → ne bloque pas les interactions.
   // Portage de AlignmentGuides.svelte du projet référence (RUST_SOS_2026v0.1).
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import { guidesEtat } from "../stores/guides";
   import { sceneStore } from "../stores/scene";
+  import { t } from "../stores/langue";
 
   let canvasW = $derived($sceneStore.canvasW ?? 1920);
   let canvasH = $derived($sceneStore.canvasH ?? 1080);
@@ -168,7 +170,7 @@
       ctx.textBaseline = "middle";
       const tx = cx + 22;
       const ty = cy - 14;
-      const texteCentre = "CENTRE";
+      const texteCentre = get(t)("guides.centre");
       ctx.strokeText(texteCentre, tx, ty);
       ctx.fillText(texteCentre, tx, ty);
       ctx.restore();

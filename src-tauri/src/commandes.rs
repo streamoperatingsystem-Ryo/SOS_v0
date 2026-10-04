@@ -54,10 +54,6 @@ pub struct CommandeConfig {
     /// Variables : {pseudo} {commande} {message} (reste de la ligne).
     #[serde(default)]
     pub texte_template: String,
-    /// Couleur de fallback du texte (si aucun cadre SVG actif — sinon la
-    /// couleur du cadre widget est utilisée côté diffusion).
-    #[serde(default = "default_couleur")]
-    pub couleur: String,
     #[serde(default = "default_taille_px")]
     pub taille_px: u32,
     #[serde(default)]
@@ -81,9 +77,6 @@ fn default_true() -> bool {
 fn default_duree_ms() -> u64 {
     5000
 }
-fn default_couleur() -> String {
-    "#ffffff".to_string()
-}
 fn default_taille_px() -> u32 {
     48
 }
@@ -96,7 +89,6 @@ impl Default for CommandeConfig {
             commande: String::new(),
             duree_ms: default_duree_ms(),
             texte_template: "{pseudo} lance {commande} !".to_string(),
-            couleur: default_couleur(),
             taille_px: default_taille_px(),
             cooldown_viewer_s: 0,
             cooldown_global_s: 0,
@@ -116,7 +108,6 @@ struct CommandeItem {
     son: Option<String>,
     media: Option<String>,
     media_kind: Option<String>,
-    couleur: String,
     taille_px: u32,
     duree_ms: u64,
 }
@@ -143,11 +134,11 @@ pub struct CommandesState {
 impl CommandesState {
     /// Crée l'état + charge la config depuis le disque.
     pub fn new(app: AppHandle, chat_tx: broadcast::Sender<String>) -> Self {
-        let file = load_file(&app).unwrap_or_default();
+        let commandes = load_file(&app).unwrap_or_default();
         Self {
             app,
             chat_tx,
-            config: Arc::new(Mutex::new(file.commandes)),
+            config: Arc::new(Mutex::new(commandes)),
             file: Arc::new(Mutex::new(VecDeque::new())),
             en_cours: Arc::new(Mutex::new(false)),
             timer_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
@@ -215,7 +206,6 @@ impl CommandesState {
             son: cfg.son.clone(),
             media: cfg.media.clone(),
             media_kind: cfg.media_kind.clone(),
-            couleur: cfg.couleur.clone(),
             taille_px: cfg.taille_px,
             duree_ms: cfg.duree_ms.max(1000),
         };
@@ -249,7 +239,6 @@ impl CommandesState {
                 "son": item.son,
                 "media": item.media,
                 "media_kind": item.media_kind,
-                "couleur": item.couleur,
                 "taille_px": item.taille_px,
                 "duree_ms": item.duree_ms,
             },
@@ -318,7 +307,6 @@ impl CommandesState {
             son: cfg.son.clone(),
             media: cfg.media.clone(),
             media_kind: cfg.media_kind.clone(),
-            couleur: cfg.couleur.clone(),
             taille_px: cfg.taille_px,
             duree_ms: cfg.duree_ms.max(1000),
         };
@@ -405,23 +393,18 @@ impl CommandesState {
     }
 }
 
-/// Format du fichier commandes_config.json sur disque.
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-struct CommandesFile {
-    #[serde(default)]
-    commandes: Vec<CommandeConfig>,
-}
-
 /// Charge commandes_config.json (absent → liste vide).
-fn load_file(app: &AppHandle) -> Result<CommandesFile, String> {
+/// Le fichier contient le tableau CommandeConfig sérialisé tel quel par
+/// save_to_disk (pas d'enveloppe).
+fn load_file(app: &AppHandle) -> Result<Vec<CommandeConfig>, String> {
     let dir = data_dir(app)?;
     let path = dir.join("commandes_config.json");
     if !path.exists() {
-        return Ok(CommandesFile::default());
+        return Ok(Vec::new());
     }
     let content = fs::read_to_string(&path)
         .map_err(|e| format!("Lire commandes_config.json: {}", e))?;
-    let cfg: CommandesFile = serde_json::from_str(&content)
+    let cfg: Vec<CommandeConfig> = serde_json::from_str(&content)
         .map_err(|e| format!("Parse commandes_config.json: {}", e))?;
     Ok(cfg)
 }

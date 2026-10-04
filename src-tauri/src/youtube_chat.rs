@@ -320,6 +320,7 @@ async fn fetch_messages(
             avatar,
             color: None,
             message_id: None,
+            emotes: None,
         });
     }
 

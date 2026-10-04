@@ -9,10 +9,12 @@
 ///
 /// Reconnexion avec backoff. Arrêt propre via Cancel (AtomicBool).
 use crate::twitch_auth::{is_cancelled, Cancel, CLIENT_ID};
+use crate::twitch_emotes::{construire_segments, CacheEmotes};
 use futures_util::{SinkExt, StreamExt};
 use serde::Serialize;
 use serde_json::json;
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::sync::{broadcast, mpsc};
 use tokio_tungstenite::tungstenite::Message;
@@ -42,17 +44,25 @@ pub struct ChatMessage {
     /// None pour les plateformes qui ne fournissent pas d'ID de message.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message_id: Option<String>,
+    /// Segments d'emotes Twitch (officielles tag IRC + tierces BTTV/7TV/FFZ)
+    /// rendus en images par diffusion.html et chat-popout.html : `debut`
+    /// inclusif, `fin` EXCLUSIVE, unités UTF-16 (String.slice JS direct).
+    /// None = message sans emote (et toutes les autres plateformes).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub emotes: Option<Vec<crate::twitch_emotes::EmoteSeg>>,
 }
 
 /// Démarre la tâche IRC. Retourne le JoinHandle (pour arrêt propre).
 /// `cancel` : passer un AtomicBool partagé — set true pour arrêter.
 /// `cmd_rx` : canal de commandes IRC à envoyer (ex: "/clear", "/ban user").
 ///            None si pas de canal (rétrocompatibilité).
+/// `user_id` : id Twitch du compte (emotes de chaine BTTV/7TV).
 pub fn demarrer(
     app: AppHandle,
     chat_tx: broadcast::Sender<String>,
     token: String,
     login: String,
+    user_id: String,
     cancel: Cancel,
     cmd_rx: Option<mpsc::Receiver<String>>,
 ) -> tokio::task::JoinHandle<()> {
@@ -62,13 +72,30 @@ pub fn demarrer(
         // un chatter n'est fetché qu'une seule fois à vie (pas par re-rendu).
         let client = reqwest::Client::new();
         let mut avatar_cache: HashMap<String, (String, String)> = HashMap::new();
+        // Cache des emotes tierces (BTTV/7TV/FFZ, global + chaine) : chargé
+        // en tâche parallèle — le chat démarre immédiatement, les emotes
+        // tierces s'activent dès que les listes sont là (quelques centaines
+        // de ms). Un seul chargement par tâche IRC : les reconnexions d'une
+        // même session réutilisent le même cache.
+        let cache_emotes: Arc<RwLock<CacheEmotes>> = Arc::new(RwLock::new(CacheEmotes::default()));
+        {
+            let cache_tache = cache_emotes.clone();
+            let client_tache = client.clone();
+            let login_tache = login.clone();
+            let user_id_tache = user_id.clone();
+            tokio::spawn(async move {
+                let chargee =
+                    CacheEmotes::charger(&client_tache, &user_id_tache, &login_tache).await;
+                *cache_tache.write().unwrap() = chargee;
+            });
+        }
         let mut backoff = 1u64;
         let mut cmd_rx = cmd_rx;
         loop {
             if is_cancelled(&cancel) {
                 return;
             }
-            match connect_irc(&app, &chat_tx, &client, &mut avatar_cache, &token, &login, &cancel, cmd_rx.as_mut()).await {
+            match connect_irc(&app, &chat_tx, &client, &mut avatar_cache, &cache_emotes, &token, &login, &cancel, cmd_rx.as_mut()).await {
                 Ok(()) => {
                     return;
                 }
@@ -87,6 +114,8 @@ pub fn demarrer(
 
 /// Une session IRC : connect, auth, join, boucle de lecture, PING/PONG.
 /// `cmd_rx` : canal de commandes IRC à envoyer (ex: "/clear"). None si pas de canal.
+/// `cache_emotes` : emotes tierces (BTTV/7TV/FFZ) — lu par message, rempli au
+/// démarrage de la tâche IRC.
 /// Retourne Ok si la connexion se termine proprement (annulation).
 #[allow(clippy::too_many_arguments)]
 async fn connect_irc(
@@ -94,6 +123,7 @@ async fn connect_irc(
     chat_tx: &broadcast::Sender<String>,
     client: &reqwest::Client,
     avatar_cache: &mut HashMap<String, (String, String)>,
+    cache_emotes: &Arc<RwLock<CacheEmotes>>,
     token: &str,
     login: &str,
     cancel: &Cancel,
@@ -107,9 +137,11 @@ async fn connect_irc(
     // Login en minuscules (Twitch exige NICK/JOIN lowercase).
     let login_lower = login.to_lowercase();
 
-    // CAP REQ :twitch.tv/tags (pour les badges)
+    // CAP REQ :twitch.tv/tags (badges/emotes) + commands (USERNOTICE = alertes)
     write
-        .send(Message::Text("CAP REQ :twitch.tv/tags".into()))
+        .send(Message::Text(
+            "CAP REQ :twitch.tv/tags twitch.tv/commands".into(),
+        ))
         .await
         .map_err(|e| format!("CAP: {}", e))?;
     // PASS oauth:<token>
@@ -220,6 +252,20 @@ async fn connect_irc(
                         alertes.on_event(evt);
                     }
                 }
+                // Emotes : segments officiels (tag IRC `emotes` — positions
+                // en codepoints converties en UTF-16 par twitch_emotes) +
+                // tierces (cache BTTV/7TV/FFZ). Guard borné au sous-bloc :
+                // relâché AVANT l'await avatar (RwLockReadGuard n'est pas
+                // Send — sinon tokio::spawn rejette la future).
+                {
+                    let cache_lu = cache_emotes.read().unwrap();
+                    payload.emotes = Some(construire_segments(
+                        &payload.texte,
+                        tags.get("emotes").map(|v| v.as_str()),
+                        &cache_lu,
+                    ))
+                    .filter(|v| !v.is_empty());
+                }
                 // Avatar + bio Helix : cache par login (lowercase). Fetch sur miss
                 // uniquement — jamais un GET par re-rendu. Échec → "" stocké
                 // pour ne pas re-fetch à l'infini (message part sans avatar).
@@ -319,16 +365,21 @@ fn parse_irc_tags(line: &str) -> HashMap<String, String> {
 }
 
 /// Parse une ligne IRC USERNOTICE (événements de chaîne Twitch).
-/// Tag `msg-id` identifie le type : sub | resub | subgift | raid — les autres
-/// (ritual, announcement, …) sont ignorés silencieusement. Tags `msg-param-*`
-/// portent les détails (viewerCount raid, sub-plan, mois cumulés, destinataire).
+/// Tag `msg-id` identifie le type : sub | resub | subgift | raid, plus les
+/// variantes — continuations (giftpaidupgrade / primepaidupgrade / extendsub
+/// → resub) et dons à la communauté (submysterygift / standardpayforward /
+/// communitypayforward → subgift). Les autres (ritual, announcement,
+/// viewermilestone, bitsbadgetier, unraid…) sont ignorés silencieusement.
+/// Tags `msg-param-*` portent les détails (viewerCount raid, sub-plan, mois
+/// cumulés, destinataire).
 fn parse_usernotice(line: &str) -> Option<crate::alertes::EventTwitch> {
     let tags = parse_irc_tags(line);
     let msg_id = tags.get("msg-id")?.as_str();
     let type_alerte = match msg_id {
         "sub" => "sub",
-        "resub" => "resub",
-        "subgift" => "subgift",
+        "resub" | "giftpaidupgrade" | "primepaidupgrade" | "extendsub" => "resub",
+        "subgift" | "submysterygift" | "standardpayforward"
+        | "communitypayforward" => "subgift",
         "raid" => "raid",
         _ => return None,
     };
@@ -376,7 +427,15 @@ fn parse_usernotice(line: &str) -> Option<crate::alertes::EventTwitch> {
     let destinataire = if type_alerte == "subgift" {
         tags.get("msg-param-recipient-display-name")
             .cloned()
-            .unwrap_or_default()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| {
+                // Dons communautaires (submysterygift/payforward) : pas de
+                // destinataire nominatif — le volume est dans mass-gift-count.
+                tags.get("msg-param-mass-gift-count")
+                    .and_then(|v| v.parse::<i64>().ok())
+                    .map(|n| format!("{} viewers", n))
+                    .unwrap_or_else(|| "la communauté".to_string())
+            })
     } else {
         String::new()
     };
@@ -456,6 +515,7 @@ fn parse_privmsg(line: &str) -> Option<ChatMessage> {
         avatar: None,
         color,
         message_id,
+        emotes: None,
     })
 }
 

@@ -136,6 +136,12 @@
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
         <span class="dot"></span>
       </button>
+      <!-- JUST CHATTING (toggle overlay diffusion — caméra + chat seuls,
+           non destructif ; pastille = mode actif, OFF au boot) -->
+      <button class="ico" data-id="just-chatting" data-plat="justchatting" title="Just Chatting (caméra + chat seuls)">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="12" height="14" rx="2"/><circle cx="8" cy="11" r="2.5"/><path d="M15 10h6.5v6H19l-2 2v-2h-2"/></svg>
+        <span class="dot"></span>
+      </button>
       <span class="sep"></span>
       <!-- MODALES -->
       <button class="ico" data-id="modale-interactions" title="Interactions chat">
@@ -155,6 +161,10 @@
     </div>
     <script>
       var TAURI = window.__TAURI__;
+
+      // Neutralise le menu contextuel natif de la webview (parité dashboard
+      // — voir src/main.ts). user-select:none déjà posé sur body (CSS).
+      window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
       function setBord(bord) {
         if (bord !== "gauche" && bord !== "droite" && bord !== "haut" && bord !== "bas") {

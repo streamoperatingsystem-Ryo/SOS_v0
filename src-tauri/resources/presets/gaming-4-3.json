@@ -1,0 +1,104 @@
+{
+  "id": "gaming-4-3",
+  "nom": "Gaming 4/3",
+  "description": "Fenêtre de capture 4:3 au centre, manette et chat en colonne à gauche, caméra en haut à droite, trois objectifs Twitch en bas.",
+  "description_en": "4:3 capture window in the center, gamepad and chat stacked on the left, camera top-right, three Twitch goals at the bottom.",
+  "scene": {
+    "widgets": [
+      {
+        "id": "preset-g43-chat",
+        "type": "chat",
+        "x": 60.07476558774576,
+        "y": 336.47836936563584,
+        "largeur": 434.3577010868233,
+        "hauteur": 705.4270079275908,
+        "z": 1,
+        "chatFiltre": "unifie",
+        "taillePolice": 16
+      },
+      {
+        "id": "preset-g43-input",
+        "type": "input-viewer",
+        "x": 61.50840591065008,
+        "y": 38.09462270677329,
+        "largeur": 432.924060763919,
+        "hauteur": 279.645194824378,
+        "z": 2,
+        "inputMode": "manette",
+        "inputLayout": "azerty",
+        "inputSkin": "8bitdo",
+        "inputCouleur": "#5c0f0f"
+      },
+      {
+        "id": "preset-g43-trou",
+        "type": "media",
+        "x": 550.9510429845591,
+        "y": 80.78669145806731,
+        "largeur": 1241.7888144962042,
+        "hauteur": 869.8699800989823,
+        "z": 3,
+        "trou": true
+      },
+      {
+        "id": "preset-g43-goal-followers",
+        "type": "goal",
+        "x": 550.9510429845591,
+        "y": 970.643929127711,
+        "largeur": 280,
+        "hauteur": 90,
+        "z": 4,
+        "goalPlateforme": "twitch",
+        "goalMetrique": "followers",
+        "goalCible": 10
+      },
+      {
+        "id": "preset-g43-goal-subs",
+        "type": "goal",
+        "x": 844.3031683578379,
+        "y": 970.6439291277112,
+        "largeur": 280,
+        "hauteur": 90,
+        "z": 5,
+        "goalPlateforme": "twitch",
+        "goalMetrique": "subs",
+        "goalCible": 10
+      },
+      {
+        "id": "preset-g43-goal-viewers",
+        "type": "goal",
+        "x": 1137.655293731117,
+        "y": 970.6439291277112,
+        "largeur": 280,
+        "hauteur": 90,
+        "z": 6,
+        "goalPlateforme": "twitch",
+        "goalMetrique": "viewers",
+        "goalCible": 10
+      },
+      {
+        "id": "preset-g43-camera",
+        "type": "camera",
+        "x": 1630.886731392597,
+        "y": 30.8136121455803,
+        "largeur": 250.22157796645268,
+        "hauteur": 200.6378132118451,
+        "z": 5000,
+        "obsSource": "SOS-Caméra"
+      }
+    ],
+    "canvasW": 1920,
+    "canvasH": 1080,
+    "aideFond": true,
+    "aideObjectifs": true,
+    "aideCadres": true,
+    "cadreWidget": {
+      "style": "mgstyle",
+      "strokeWidth": 20,
+      "couleur": "#4c0606",
+      "couleurFin": "#000000",
+      "gradientAngle": 135,
+      "actif": true,
+      "bordActif": true
+    }
+  }
+}

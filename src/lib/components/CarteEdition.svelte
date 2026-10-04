@@ -18,15 +18,18 @@
     setBgOffsetYLocal, setBgLumLocal, setBgContrasteLocal, setBgTeinteLocal,
     setBgFlouLocal, setBgPixelLocal, resetFondTransformation, resetFondEffets,
     clearFond, retirerFondCapture,
-    setWidgetMediaPaused, setWidgetMediaTime, setBgPaused, setBgTime,
+    setWidgetMediaPaused, setWidgetMediaTime, setWidgetMediaTimeLocal,
+    setBgPaused, setBgTime, setBgTimeLocal,
     setWidgetTrou, deleteObsTrouSource, dupliquerWidget, rotateWidgetLocal,
-    setChatFiltre, setChatTaillePolice, setSpeedrunPolice, setSpeedrunConfig,
-    setInputViewerConfig, setCameraDevice, setGoalConfig,
+    setWidgetSansCadre, mettreAJourCadre,
+    setChatFiltre, setChatStyle, setChatTaillePoliceLocal,
+    setSpeedrunPolice, setSpeedrunPoliceLocal, setSpeedrunConfig,
+    setInputViewerConfig, setInputViewerConfigLocal, setCameraDevice, setGoalConfig,
     resetMorphsWidget, resetMorphsFond,
   } from "../stores/scene";
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
   import { videoRegistry } from "../stores/video";
-  import { carteEditionCible, confirmDeleteWidget, titreFondModalOpen } from "../stores/ui";
+  import { carteEditionCible, confirmDeleteWidget, titreFondModalOpen, cadreModalOpen } from "../stores/ui";
   import { type ChatFiltre } from "../stores/chat";
   import {
     phaseTimer, totalSplits, segmentsLss,
@@ -37,10 +40,12 @@
   } from "../stores/speedrun";
   import { tauri } from "../tauri";
   import {
-    GOAL_METRIQUES, GOAL_METRIQUE_LABELS, goalSuggestion,
-    type GoalPlateforme, type GoalMetrique,
+    GOAL_METRIQUES, goalSuggestion,
+    type GoalPlateforme, type GoalMetrique, type TwitchGoal,
   } from "../tauri";
-  import { valeursGoals } from "../stores/objectifs";
+  import { valeursGoals, goalsTwitch } from "../stores/objectifs";
+  import { connexions, connecterTwitch } from "../stores/chat";
+  import { t, localeTag } from "../stores/langue";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
@@ -126,6 +131,7 @@
   let isGoalWidget = $derived(selectedType === "goal");
   let isMediaWidget = $derived(selectedType === "media");
   let chatFiltreVal = $derived(selectedWidget?.chatFiltre ?? "unifie");
+  let chatStyleVal = $derived(selectedWidget?.chatStyle ?? "compact");
   let chatTaille = $derived(selectedWidget?.taillePolice ?? 16);
 
   // ===== Widget goal : config dérivée + valeur live =====
@@ -150,11 +156,60 @@
     if (!selectedId) return;
     // Métrique absente de la nouvelle plateforme → bascule sur la 1re dispo
     // (pas de valeur fabriquée : seules les métriques réellement mesurées).
+    // Hors Twitch → goalId effacé : les Creator Goals déclarés n'existent
+    // que chez Twitch.
     const patch: Parameters<typeof setGoalConfig>[1] = { goalPlateforme: p };
+    if (p !== "twitch") {
+      patch.goalId = undefined;
+    }
     if (!GOAL_METRIQUES[p].includes(goalMet)) {
       patch.goalMetrique = GOAL_METRIQUES[p][0];
     }
     void setGoalConfig(selectedId, patch);
+  }
+
+  // ===== Widget goal : Creator Goals Twitch déclarés (mode lié) =====
+  // Liste relue à l'ouverture de la carte (zéro persistance — GET /goals).
+  // Les valeurs live (EventSub + poll viewers.rs) arrivent via goalsTwitch :
+  // l'affichage prend la plus fraîche des deux sources.
+  let goalsTwitchListe = $state<TwitchGoal[] | null>(null);
+  let goalsErreur = $state<string | null>(null);
+  let goalsChargement = $state(false);
+  let goalLie = $derived(selectedWidget?.goalId);
+  let twitchConnecte = $derived($connexions.twitch);
+
+  async function chargerGoalsTwitch(): Promise<void> {
+    goalsChargement = true;
+    goalsErreur = null;
+    try {
+      goalsTwitchListe = await tauri.twitchGoalsLister();
+    } catch (e) {
+      goalsTwitchListe = null;
+      goalsErreur = typeof e === "string" ? e : String(e);
+    } finally {
+      goalsChargement = false;
+    }
+  }
+
+  // Auto-fetch : carte d'un widget goal + plateforme twitch + connecté →
+  // GET /goals ; re-fetch au retour de la connexion (false → true).
+  $effect(() => {
+    if (isGoalWidget && goalPlat === "twitch" && twitchConnecte) {
+      void chargerGoalsTwitch();
+    } else {
+      goalsTwitchListe = null;
+      goalsErreur = null;
+    }
+  });
+
+  // Clic sur un goal : lier ; re-clic sur le goal déjà lié : délier (toggle).
+  function onGoalLier(g: TwitchGoal): void {
+    if (!selectedId) return;
+    if (goalLie === g.id) {
+      void setGoalConfig(selectedId, { goalId: undefined });
+    } else {
+      void setGoalConfig(selectedId, { goalPlateforme: "twitch", goalId: g.id });
+    }
   }
 
   function onGoalCibleChange(e: Event): void {
@@ -171,21 +226,21 @@
   // lieu de l'ID technique. Si l'utilisateur a défini un titre personnalisé
   // (champ titre du widget), on l'utilise en priorité. Pour les widgets média,
   // on ajoute le nom du fichier importé si disponible (mediaNom).
-  const TYPE_LABELS: Record<string, string> = {
-    media: "Média",
-    chat: "Chat",
-    camera: "Caméra",
-    "welcome-clip": "Clip de bienvenue",
-    "input-viewer": "Input Viewer",
-    speedrun: "Splitter",
-    goal: "Objectif",
-  };
+  const TYPES_WIDGET = [
+    "media", "chat", "camera", "welcome-clip", "input-viewer", "speedrun", "goal",
+  ];
+  let nomsTypes = $derived.by(() => {
+    const tr = $t;
+    return Object.fromEntries(
+      TYPES_WIDGET.map((ty) => [ty, tr("carteEdition.type." + ty)])
+    ) as Record<string, string>;
+  });
   let widgetLabel = $derived.by(() => {
     // Titre perso prioritaire.
     if (selectedWidget?.titre && selectedWidget.titre.length > 0) {
       return selectedWidget.titre;
     }
-    const typeLabel = TYPE_LABELS[selectedWidget?.type ?? "media"] ?? "Widget";
+    const typeLabel = nomsTypes[selectedWidget?.type ?? "media"] ?? $t("commun.widget");
     // Pour les widgets média avec un nom de fichier, afficher le nom.
     if (selectedWidget?.type === "media" && selectedWidget?.mediaNom) {
       return selectedWidget.mediaNom;
@@ -238,16 +293,31 @@
   let bgTime = $derived($sceneStore.bgTime ?? 0);
 
   // ===== Cadres SVG =====
-  // (cadreWidget/cadreApp non utilisés ici — l'activation se fait dans la
-  // section Personnalisation de Toolbar.)
+  // Toggle par widget (sansCadre — opt-out par instance, tous types) +
+  // toggle du bord du canvas (bordActif sur la CadreConfig unifiée) +
+  // bouton ouvrant la modale Cadres pour le reste des réglages.
+  let cadreSceneActif = $derived(
+    !!$sceneStore.cadreWidget?.actif && ($sceneStore.cadreWidget?.strokeWidth ?? 0) > 0
+  );
+  let cadreBordActif = $derived($sceneStore.cadreWidget?.bordActif ?? true);
+  // Cadre sur CE widget = !sansCadre.
+  let widgetAvecCadre = $derived(selectedWidget?.sansCadre !== true);
+  async function onToggleCadreWidget() {
+    if (!selectedId) return;
+    await setWidgetSansCadre(selectedId, widgetAvecCadre);
+  }
+  async function onToggleCadreBord() { await mettreAJourCadre({ bordActif: !cadreBordActif }); }
+  function onOuvrirCadres() { cadreModalOpen.set(true); }
 
   // ===== Modes d'affichage (fit) =====
   const FIT_MODES = ["ajuster", "remplir", "etendre", "etirer", "centrer", "vignette"];
-  const FIT_LABELS: Record<string, string> = {
-    ajuster: "Ajuster", remplir: "Remplir", etendre: "Étendre",
-    etirer: "Étirer", centrer: "Centrer", vignette: "Vignette",
-  };
-  function labelFit(mode: string): string { return FIT_LABELS[mode] ?? mode; }
+  let nomsFit = $derived.by(() => {
+    const tr = $t;
+    return Object.fromEntries(
+      FIT_MODES.map((m) => [m, tr("carteEdition.fit." + m)])
+    ) as Record<string, string>;
+  });
+  function labelFit(mode: string): string { return nomsFit[mode] ?? mode; }
 
   // ===== Handlers widget =====
   function onFitClick(fit: string) { if (selectedId) setMediaFit(selectedId, fit); }
@@ -271,6 +341,9 @@
   async function onClearMedia() { if (selectedId) await clearWidgetMedia(selectedId); }
   function onWidgetTogglePlay() { if (selectedId) setWidgetMediaPaused(selectedId, !widgetMediaPaused); }
   function onWidgetSeek(t: number) { if (selectedId) setWidgetMediaTime(selectedId, t); }
+  // Pendant le drag du slider : état local seul (la vignette suit) ; le
+  // commit (snapshot :4321) part au release via onSeek — pas 1/frame.
+  function onWidgetSeekLive(t: number) { if (selectedId) setWidgetMediaTimeLocal(selectedId, t); }
   function onToggleTrou() { if (selectedId) setWidgetTrou(selectedId, !selectedTrou); }
   function onSupprimerClick() { confirmDeleteWidget.set(true); }
 
@@ -311,11 +384,31 @@
   async function onResetMorphsFond() { await resetMorphsFond(); }
   function onBgTogglePlay() { setBgPaused(!bgPaused); }
   function onBgSeek(t: number) { setBgTime(t); }
+  // Idem widget : drag = local, release = commit.
+  function onBgSeekLive(t: number) { setBgTimeLocal(t); }
 
   // ===== Chat widget =====
   const FILTRES: ChatFiltre[] = ["unifie", "twitch", "youtube", "kick", "tiktok"];
+  let nomsFiltres = $derived.by(() => {
+    const tr = $t;
+    return Object.fromEntries(
+      FILTRES.map((f) => [f, tr("carteEdition.filtre." + f)])
+    ) as Record<string, string>;
+  });
   function onFiltreClick(f: ChatFiltre) { if (selectedId) setChatFiltre(selectedId, f); }
-  function onTailleInput(e: Event) { if (selectedId) setChatTaillePolice(selectedId, parseFloat((e.target as HTMLInputElement).value)); }
+  // Mise en forme des messages : "compact" (joints, zébrage) | "bulles"
+  // (détachés, cadre SVG de scène par message — comme un widget objectif).
+  const CHAT_STYLES = ["compact", "bulles"] as const;
+  let nomsChatStyles = $derived.by(() => {
+    const tr = $t;
+    return Object.fromEntries(
+      CHAT_STYLES.map((s) => [s, tr("carteEdition.chatStyle." + s)])
+    ) as Record<string, string>;
+  });
+  function onChatStyleClick(s: string) { if (selectedId) setChatStyle(selectedId, s); }
+  // Slider : oninput = état local (zéro commit par tick), onchange = commit.
+  function onTailleInput(e: Event) { if (selectedId) setChatTaillePoliceLocal(selectedId, parseFloat((e.target as HTMLInputElement).value)); }
+  async function onTailleChange() { await commitScene(); }
 
   // ===== Pop-out chat =====
   let popoutOpen = $state(false);
@@ -329,8 +422,11 @@
   // ===== Widget speedrun =====
   let srPoliceVal = $derived(selectedWidget?.srPolice ?? "Rajdhani");
   let srTailleVal = $derived(selectedWidget?.srTaillePolice ?? 27);
+  let srLayoutVal = $derived(selectedWidget?.srLayout ?? "auto");
+  function onSrLayoutChange(e: Event) { if (!selectedId) return; setSpeedrunConfig(selectedId, { srLayout: (e.target as HTMLSelectElement).value }); }
   function onSrPoliceChange(e: Event) { if (!selectedId) return; const p = (e.target as HTMLSelectElement).value; setSpeedrunPolice(selectedId, p, srTailleVal); }
-  function onSrTailleInput(e: Event) { if (!selectedId) return; setSpeedrunPolice(selectedId, srPoliceVal, parseFloat((e.target as HTMLInputElement).value)); }
+  function onSrTailleInput(e: Event) { if (!selectedId) return; setSpeedrunPoliceLocal(selectedId, srPoliceVal, parseFloat((e.target as HTMLInputElement).value)); }
+  async function onSrTailleChange() { await commitScene(); }
 
   let srStartActif = $state(true);
   let srSplitActif = $state(true);
@@ -390,13 +486,22 @@
   let inputSkinVal = $derived(selectedWidget?.inputSkin ?? "xbox");
   let bindingModalOpen = $state(false);
   let captureActive = $state(false);
+  // Relit l'état RÉEL côté Rust à chaque changement de widget sélectionné /
+  // affichage de la carte input-viewer : la capture peut avoir été coupée
+  // automatiquement (syncInputViewerCapture au changement de scène ou à la
+  // suppression du dernier widget) pendant que la carte restait montée.
   $effect(() => {
+    void selectedId;
+    void isInputViewerWidget;
     tauri.inputViewerEtatActif().then((a) => (captureActive = a)).catch(() => {});
   });
+  // Bascule puis RELIT l'état réel (pas de toggle optimiste : un échec
+  // d'installation du hook souris repasse actif=false côté Rust — afficher
+  // l'état lu évite un bouton « ON » mensonger).
   async function toggleCaptureInput() {
     try {
       await tauri.inputViewerSetActif(!captureActive);
-      captureActive = !captureActive;
+      captureActive = await tauri.inputViewerEtatActif();
     } catch {}
   }
 
@@ -416,6 +521,8 @@
     })();
     return () => { cancelled = true; };
   });
+  // Color picker : oninput continu = état local, onchange (fermeture) = commit.
+  async function onInputCouleurChange() { await commitScene(); }
   function onCameraDeviceChange(e: Event) {
     if (!selectedId) return;
     const val = (e.target as HTMLSelectElement).value;
@@ -452,11 +559,11 @@
           {#if cible === "widget"}
             {widgetLabel}{#if shortId} · {shortId}{/if}
           {:else}
-            Arrière-plan
+            {$t("carteEdition.arrierePlanTitre")}
           {/if}
         </span>
       </button>
-      <button type="button" class="carte-fermer" onclick={() => carteEditionCible.set(null)} title="Fermer" aria-label="Fermer la carte d'édition">✕</button>
+      <button type="button" class="carte-fermer" onclick={() => carteEditionCible.set(null)} title={$t("commun.fermer")} aria-label={$t("carteEdition.fermerAria")}>✕</button>
     </div>
 
     {#if ouverte}
@@ -464,7 +571,7 @@
         {#if cible === "widget"}
           <!-- ====== ÉDITION WIDGET ====== -->
           {#if !selectedId}
-            <p class="hint">Aucun widget sélectionné.</p>
+            <p class="hint">{$t("carteEdition.aucunWidget")}</p>
           {:else if isCameraWidget}
             <!-- Widget caméra : pas d'onglets -->
             {#if shortId}
@@ -474,27 +581,33 @@
               </label>
             {/if}
             <div class="field">
-              <span class="field-label">Device caméra</span>
+              <span class="field-label">{$t("carteEdition.deviceCamera")}</span>
               <select value={cameraDeviceId ?? ""} onchange={onCameraDeviceChange}>
-                <option value="">(device par défaut)</option>
+                <option value="">{$t("carteEdition.deviceDefaut")}</option>
                 {#each cameraDevices as dev}
                   <option value={dev}>{dev}</option>
                 {/each}
               </select>
             </div>
             {#if cameraDevices.length === 0}
-              <p class="hint">Aucune caméra détectée. Vérifier la webcam ?</p>
+              <p class="hint">{$t("carteEdition.aucuneCamera")}</p>
             {/if}
+            <!-- Cadre sur ce widget (sansCadre) + accès modale Cadres —
+                 les widgets caméra suivent les mêmes règles de cadre. -->
+            <button class="action" onclick={onToggleCadreWidget}>
+              {widgetAvecCadre ? $t("carteEdition.cadreWidgetRetirer") : $t("carteEdition.cadreWidgetRemettre")}
+            </button>
+            <button class="action" onclick={onOuvrirCadres}>{$t("carteEdition.cadrePersonnaliser")}</button>
           {:else}
             <!-- Onglets horizontaux -->
             <div class="tabs">
-              <button class="tab" class:active={tabWidget === "contenu"} onclick={() => tabWidget = "contenu"}>Contenu</button>
-              <button class="tab" class:active={tabWidget === "transformation"} onclick={() => tabWidget = "transformation"}>Transformation</button>
-              <button class="tab" class:active={tabWidget === "effets"} onclick={() => tabWidget = "effets"}>Effets</button>
+              <button class="tab" class:active={tabWidget === "contenu"} onclick={() => tabWidget = "contenu"}>{$t("carteEdition.tabContenu")}</button>
+              <button class="tab" class:active={tabWidget === "transformation"} onclick={() => tabWidget = "transformation"}>{$t("carteEdition.tabTransformation")}</button>
+              <button class="tab" class:active={tabWidget === "effets"} onclick={() => tabWidget = "effets"}>{$t("carteEdition.tabEffets")}</button>
               {#if selectedKind === "video"}
-                <button class="tab" class:active={tabWidget === "lecture"} onclick={() => tabWidget = "lecture"}>Lecture</button>
+                <button class="tab" class:active={tabWidget === "lecture"} onclick={() => tabWidget = "lecture"}>{$t("commun.lecture")}</button>
               {/if}
-              <button class="tab" class:active={tabWidget === "dupliquer"} onclick={() => tabWidget = "dupliquer"}>Dupliquer</button>
+              <button class="tab" class:active={tabWidget === "dupliquer"} onclick={() => tabWidget = "dupliquer"}>{$t("commun.dupliquer")}</button>
             </div>
 
             {#if tabWidget === "contenu"}
@@ -505,37 +618,45 @@
                 </label>
               {/if}
               {#if !isCameraWidget}
-                <button class="action" onclick={importMedia}>{selectedWidget?.media ? "Remplacer le média" : "Importer un média"}</button>
+                <button class="action" onclick={importMedia}>{selectedWidget?.media ? $t("carteEdition.remplacerMedia") : $t("carteEdition.importerMedia")}</button>
                 {#if selectedWidget?.media}
-                  <button class="action" onclick={onClearMedia}>Supprimer le média</button>
+                  <button class="action" onclick={onClearMedia}>{$t("carteEdition.supprimerMedia")}</button>
                 {/if}
               {/if}
               {#if isChatWidget}
                 <div class="fit-group">
-                  <span class="field-label">Filtre chat</span>
+                  <span class="field-label">{$t("carteEdition.filtreChat")}</span>
                   <div class="fit-buttons">
                     {#each FILTRES as f}
-                      <button class="fit-btn" class:active={chatFiltreVal === f} onclick={() => onFiltreClick(f)}>{f}</button>
+                      <button class="fit-btn" class:active={chatFiltreVal === f} onclick={() => onFiltreClick(f)}>{nomsFiltres[f]}</button>
                     {/each}
                   </div>
                 </div>
-                {@render sliderLigne("Taille police", chatTaille, 8, 48, 1, onTailleInput, () => {}, (v) => v + "px")}
+                <div class="fit-group">
+                  <span class="field-label">{$t("carteEdition.miseEnForme")}</span>
+                  <div class="fit-buttons">
+                    {#each CHAT_STYLES as s}
+                      <button class="fit-btn" class:active={chatStyleVal === s} onclick={() => onChatStyleClick(s)}>{nomsChatStyles[s]}</button>
+                    {/each}
+                  </div>
+                </div>
+                {@render sliderLigne($t("carteEdition.taillePolice"), chatTaille, 8, 48, 1, onTailleInput, onTailleChange, (v) => v + "px")}
                 <button class="action" onclick={onDetacher}>
-                  {popoutOpen ? "Réattacher" : "Détacher"}
+                  {popoutOpen ? $t("carteEdition.reattacher") : $t("carteEdition.detacher")}
                 </button>
               {:else if isInputViewerWidget}
                 <div class="fit-group">
-                  <span class="field-label">Mode</span>
+                  <span class="field-label">{$t("carteEdition.mode")}</span>
                   <div class="fit-buttons">
-                    <button class="fit-btn" class:active={inputModeVal === "clavier"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputMode: "clavier" })}>Clavier</button>
-                    <button class="fit-btn" class:active={inputModeVal === "souris"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputMode: "souris" })}>Souris</button>
+                    <button class="fit-btn" class:active={inputModeVal === "clavier"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputMode: "clavier" })}>{$t("carteEdition.modeClavier")}</button>
+                    <button class="fit-btn" class:active={inputModeVal === "souris"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputMode: "souris" })}>{$t("carteEdition.modeSouris")}</button>
                     <button class="fit-btn" class:active={inputModeVal === "numpad"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputMode: "numpad" })}>Numpad</button>
-                    <button class="fit-btn" class:active={inputModeVal === "manette"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputMode: "manette" })}>Manette</button>
+                    <button class="fit-btn" class:active={inputModeVal === "manette"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputMode: "manette" })}>{$t("carteEdition.modeManette")}</button>
                   </div>
                 </div>
                 {#if inputModeVal === "clavier"}
                   <div class="fit-group">
-                    <span class="field-label">Layout</span>
+                    <span class="field-label">{$t("carteEdition.layout")}</span>
                     <div class="fit-buttons">
                       <button class="fit-btn" class:active={inputLayoutVal === "azerty"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputLayout: "azerty" })}>AZERTY</button>
                       <button class="fit-btn" class:active={inputLayoutVal === "qwerty"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputLayout: "qwerty" })}>QWERTY</button>
@@ -544,127 +665,191 @@
                 {/if}
                 {#if inputModeVal === "manette"}
                   <div class="fit-group">
-                    <span class="field-label">Skin</span>
+                    <span class="field-label">{$t("carteEdition.skin")}</span>
                     <div class="fit-buttons">
                       <button class="fit-btn" class:active={inputSkinVal === "xbox"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputSkin: "xbox" })}>Xbox</button>
                       <button class="fit-btn" class:active={inputSkinVal === "ps"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputSkin: "ps" })}>PlayStation</button>
                       <button class="fit-btn" class:active={inputSkinVal === "8bitdo"} onclick={() => selectedId && setInputViewerConfig(selectedId, { inputSkin: "8bitdo" })}>8BitDo</button>
                     </div>
                   </div>
-                  <button class="action" onclick={() => (bindingModalOpen = true)}>Binder les touches</button>
+                  <button class="action" onclick={() => (bindingModalOpen = true)}>{$t("carteEdition.binderTouches")}</button>
                 {/if}
                 <div class="field">
-                  <span class="field-label">Couleur touches</span>
-                  <input type="color" value={inputCouleurVal} oninput={(e) => selectedId && setInputViewerConfig(selectedId, { inputCouleur: (e.target as HTMLInputElement).value })} />
+                  <span class="field-label">{$t("carteEdition.couleurTouches")}</span>
+                  <input type="color" value={inputCouleurVal} oninput={(e) => selectedId && setInputViewerConfigLocal(selectedId, { inputCouleur: (e.target as HTMLInputElement).value })} onchange={onInputCouleurChange} />
                 </div>
                 <button class="action" onclick={toggleCaptureInput}>
-                  {captureActive ? "Arrêter la capture" : "Démarrer la capture"}
+                  {captureActive ? $t("carteEdition.captureStop") : $t("carteEdition.captureStart")}
                 </button>
                 <p class="hint">
-                  {captureActive ? "Capture active : les entrées s'affichent côté diffusion." : "Capture arrêtée — aucun coût CPU."}
+                  {captureActive ? $t("carteEdition.captureActiveHint") : $t("carteEdition.captureInactiveHint")}
                 </p>
               {:else if isSpeedrunWidget}
                 {#if $erreurSpeedrun}
                   <p class="hint" style="color: var(--message-error-color);">⚠ {$erreurSpeedrun}</p>
                 {/if}
                 <div class="field">
-                  <span class="field-label">Jeu</span>
+                  <span class="field-label">{$t("carteEdition.jeu")}</span>
                   <span class="media-val">
                     {#if $nomJeuLss || $nomCategorieLss}
                       {$nomJeuLss}{#if $nomCategorieLss} — {$nomCategorieLss}{/if}
                     {:else}
-                      <span class="hint">Aucun splits chargé</span>
+                      <span class="hint">{$t("widgetSpeedrun.aucunSplits")}</span>
                     {/if}
                   </span>
                 </div>
                 {#if $estConnecte}
-                  <p class="hint" style="color: var(--message-ok-color);">● Connecté{$nomProcessus ? ` (${$nomProcessus})` : ""}</p>
+                  <p class="hint" style="color: var(--message-ok-color);">● {$t("carteEdition.connecte")}{$nomProcessus ? ` (${$nomProcessus})` : ""}</p>
                 {:else if $estActif}
-                  <p class="hint" style="color: var(--message-user-action-color);">○ En attente…</p>
+                  <p class="hint" style="color: var(--message-user-action-color);">○ {$t("widgetSpeedrun.enAttente")}</p>
                 {/if}
                 <button class="action" onclick={onSpeedrunChoisirAsl}>
-                  {#if $cheminAsl}✓ ASL chargé{:else}Charger .asl{/if}
+                  {#if $cheminAsl}{$t("carteEdition.aslCharge")}{:else}{$t("carteEdition.chargerAsl")}{/if}
                 </button>
                 <button class="action" onclick={onSpeedrunChoisirLss}>
-                  {#if $cheminLss}✓ LSS chargé{:else}Charger .lss{/if}
+                  {#if $cheminLss}{$t("carteEdition.lssCharge")}{:else}{$t("carteEdition.chargerLss")}{/if}
                 </button>
                 <div class="speedrun-ctrl-row">
                   {#if !$estActif}
-                    <button class="action speedrun-start" onclick={onSpeedrunDemarrer}>▶ Start</button>
+                    <button class="action speedrun-start" onclick={onSpeedrunDemarrer}>▶ {$t("widgetSpeedrun.start")}</button>
                   {:else}
-                    <button class="action speedrun-stop" onclick={onSpeedrunArreter}>■ Stop</button>
+                    <button class="action speedrun-stop" onclick={onSpeedrunArreter}>■ {$t("widgetSpeedrun.stop")}</button>
                   {/if}
-                  <button class="action" onclick={() => actionManuelle("split")} disabled={!$estActif}>Split</button>
-                  <button class="action" onclick={() => actionManuelle("skip")} disabled={!$estActif}>Skip</button>
-                  <button class="action" onclick={() => actionManuelle("undo")} disabled={!$estActif}>Undo</button>
-                  <button class="action" onclick={() => actionManuelle("reset")} disabled={!$estActif}>Reset</button>
+                  <button class="action" onclick={() => actionManuelle("split")} disabled={!$estActif}>{$t("widgetSpeedrun.split")}</button>
+                  <button class="action" onclick={() => actionManuelle("skip")} disabled={!$estActif}>{$t("widgetSpeedrun.skip")}</button>
+                  <button class="action" onclick={() => actionManuelle("undo")} disabled={!$estActif}>{$t("widgetSpeedrun.undo")}</button>
+                  <button class="action" onclick={() => actionManuelle("reset")} disabled={!$estActif}>{$t("widgetSpeedrun.reset")}</button>
                   <button class="action" onclick={() => actionManuelle("pause")} disabled={!$estActif}>
-                    {#if $phaseTimer === "Paused"}Resume{:else}Pause{/if}
+                    {#if $phaseTimer === "Paused"}{$t("widgetSpeedrun.resume")}{:else}{$t("commun.pause")}{/if}
                   </button>
                 </div>
                 <div class="speedrun-toggles">
                   <label class="setting-toggle" class:active={srStartActif}>
                     <input type="checkbox" checked={srStartActif} onchange={onSpeedrunToggleStart} />
-                    <span>Auto Start</span>
+                    <span>{$t("widgetSpeedrun.autoStart")}</span>
                   </label>
                   <label class="setting-toggle" class:active={srSplitActif}>
                     <input type="checkbox" checked={srSplitActif} onchange={onSpeedrunToggleSplit} />
-                    <span>Auto Split</span>
+                    <span>{$t("widgetSpeedrun.autoSplit")}</span>
                   </label>
                   <label class="setting-toggle" class:active={srResetActif}>
                     <input type="checkbox" checked={srResetActif} onchange={onSpeedrunToggleReset} />
-                    <span>Auto Reset</span>
+                    <span>{$t("widgetSpeedrun.autoReset")}</span>
                   </label>
                 </div>
                 <div class="field">
-                  <span class="field-label">Police</span>
+                  <span class="field-label">{$t("commun.police")}</span>
                   <select class="police-select" value={srPoliceVal} onchange={onSrPoliceChange}>
                     {#each POLICES_TITRE as p (p.id)}
                       <option value={p.id} style="font-family: '{p.id}', sans-serif;">{p.nom}</option>
                     {/each}
                   </select>
                 </div>
-                {@render sliderLigne("Taille police", srTailleVal, 8, 48, 1, onSrTailleInput, () => {}, (v) => v + "px")}
+                <div class="field">
+                  <span class="field-label">{$t("widgetSpeedrun.disposition")}</span>
+                  <select class="police-select" value={srLayoutVal} onchange={onSrLayoutChange}>
+                    <option value="auto">{$t("widgetSpeedrun.dispoAuto")}</option>
+                    <option value="colonne">{$t("widgetSpeedrun.dispoColonne")}</option>
+                    <option value="ligne">{$t("widgetSpeedrun.dispoLigne")}</option>
+                  </select>
+                </div>
+                {@render sliderLigne($t("carteEdition.taillePolice"), srTailleVal, 8, 48, 1, onSrTailleInput, onSrTailleChange, (v) => v + "px")}
               {:else if isGoalWidget}
                 <div class="fit-group">
-                  <span class="field-label">Plateforme</span>
+                  <span class="field-label">{$t("carteEdition.plateforme")}</span>
                   <div class="fit-buttons">
                     {#each GOAL_PLATEFORMES as p (p.id)}
                       <button class="fit-btn" class:active={goalPlat === p.id} onclick={() => onGoalPlateforme(p.id)}>{p.label}</button>
                     {/each}
                   </div>
                 </div>
-                <div class="fit-group">
-                  <span class="field-label">Métrique</span>
-                  <div class="fit-buttons">
-                    {#each GOAL_METRIQUES[goalPlat] as m (m)}
-                      <button class="fit-btn" class:active={goalMet === m} onclick={() => selectedId && setGoalConfig(selectedId, { goalMetrique: m })}>{GOAL_METRIQUE_LABELS[m]}</button>
-                    {/each}
+                {#if goalPlat === "twitch"}
+                  <!-- Creator Goals déclarés dans le Creator Dashboard Twitch :
+                       liste auto-fetchée à l'ouverture, clic = lier / re-clic =
+                       délier, valeurs live (frame goal-twitch → goalsTwitch). -->
+                  <div class="fit-group">
+                    <span class="field-label">{$t("carteEdition.goalsTwitch")}</span>
+                    {#if !twitchConnecte}
+                      <p class="hint">{$t("carteEdition.goalsNonConnecte")}</p>
+                    {:else if goalsChargement && goalsTwitchListe === null}
+                      <p class="hint">{$t("carteEdition.goalsChargement")}</p>
+                    {:else if goalsErreur === "need_reauth"}
+                      <p class="hint">{$t("carteEdition.goalsReauth")}</p>
+                      <button class="action" onclick={() => void connecterTwitch()}>{$t("carteEdition.reconnecterTwitch")}</button>
+                    {:else if goalsErreur}
+                      <p class="hint">{goalsErreur}</p>
+                      <button class="action" onclick={() => void chargerGoalsTwitch()}>{$t("carteEdition.goalsRecharger")}</button>
+                    {:else if goalsTwitchListe !== null && goalsTwitchListe.length === 0}
+                      <p class="hint">{$t("carteEdition.goalsVide")}</p>
+                    {:else if goalsTwitchListe !== null}
+                      <div class="goal-liste">
+                        {#each goalsTwitchListe as g (g.id)}
+                          {@const gl = $goalsTwitch[g.id] ?? g}
+                          <button class="goal-item" class:lie={goalLie === g.id} onclick={() => onGoalLier(gl)}>
+                            <span class="goal-item-haut">
+                              <span class="goal-item-nom">{gl.description || $t("goal.ttype." + gl.goal_type)}</span>
+                              {#if goalLie === g.id}<span class="goal-item-badge">{$t("carteEdition.goalLie")}</span>{/if}
+                              {#if gl.termine}<span class="goal-item-badge">{$t("carteEdition.goalTermine")}</span>{/if}
+                            </span>
+                            <span class="goal-item-chiffres">{gl.actuel.toLocaleString($localeTag)} / {gl.cible.toLocaleString($localeTag)}</span>
+                            <span class="goal-item-bar"><span class="goal-item-fill" style:width={(gl.cible > 0 ? Math.min(100, Math.round((gl.actuel / gl.cible) * 100)) : 0) + "%"}></span></span>
+                          </button>
+                        {/each}
+                      </div>
+                    {/if}
                   </div>
-                </div>
-                <div class="field">
-                  <span class="field-label">Cible</span>
-                  <input type="number" min="1" step="1" value={goalCibleVal} onchange={onGoalCibleChange} />
-                </div>
-                <p class="hint">
-                  Actuel : {goalActuel === undefined ? "N/A (plateforme non connectée ou jamais mesurée)" : goalActuel.toLocaleString("fr-FR")}
-                </p>
-                <button class="action" disabled={goalSuggere === undefined} onclick={() => selectedId && goalSuggere !== undefined && setGoalConfig(selectedId, { goalCible: goalSuggere })}>
-                  Suggérer : {goalSuggere === undefined ? "N/A" : goalSuggere.toLocaleString("fr-FR")}
-                </button>
-                <p class="hint">Palier « prochain chiffre reconnaissable » (algo Creator Goals : 10/100/1000 ; Path to Affiliate 25). La célébration se joue dans le widget en diffusion à l'atteinte.</p>
+                {/if}
+                {#if goalLie}
+                  <!-- Mode lié : actuel/cible viennent de Twitch — les
+                       contrôles manuels sont masqués. -->
+                  {#if goalsTwitchListe !== null && !goalsTwitchListe.some((g) => g.id === goalLie)}
+                    <p class="hint">{$t("carteEdition.goalDisparu")}</p>
+                  {/if}
+                  <button class="action" onclick={() => selectedId && setGoalConfig(selectedId, { goalId: undefined })}>{$t("carteEdition.goalDelier")}</button>
+                  <p class="hint">{$t("carteEdition.goalLieHint")}</p>
+                {:else}
+                  <div class="fit-group">
+                    <span class="field-label">{$t("carteEdition.metrique")}</span>
+                    <div class="fit-buttons">
+                      {#each GOAL_METRIQUES[goalPlat] as m (m)}
+                        <button class="fit-btn" class:active={goalMet === m} onclick={() => selectedId && setGoalConfig(selectedId, { goalMetrique: m })}>{$t("goal.metrique." + m)}</button>
+                      {/each}
+                    </div>
+                  </div>
+                  <div class="field">
+                    <span class="field-label">{$t("carteEdition.cible")}</span>
+                    <input type="number" min="1" step="1" value={goalCibleVal} onchange={onGoalCibleChange} />
+                  </div>
+                  <p class="hint">
+                    {$t("carteEdition.actuel", { v: goalActuel === undefined ? $t("carteEdition.actuelNA") : goalActuel.toLocaleString($localeTag) })}
+                  </p>
+                  <button class="action" disabled={goalSuggere === undefined} onclick={() => selectedId && goalSuggere !== undefined && setGoalConfig(selectedId, { goalCible: goalSuggere })}>
+                    {$t("carteEdition.suggerer", { v: goalSuggere === undefined ? "N/A" : goalSuggere.toLocaleString($localeTag) })}
+                  </button>
+                  <p class="hint">{$t("carteEdition.goalHint")}</p>
+                {/if}
               {:else}
                 <!-- Widget média : fenêtre de capture + source OBS -->
                 <button class="action" onclick={onToggleTrou}>
-                  {selectedTrou ? "Désactiver la fenêtre de capture" : "Activer la fenêtre de capture"}
+                  {selectedTrou ? $t("carteEdition.trouOff") : $t("carteEdition.trouOn")}
                 </button>
                 {#if selectedTrou}
                   {#if selectedObsSource}
-                    <button class="action" onclick={onDeleteObsSource}>Supprimer la source OBS</button>
+                    <button class="action" onclick={onDeleteObsSource}>{$t("carteEdition.sourceObsSupprimer")}</button>
                   {:else}
-                    <button class="action" onclick={onOpenObsDialog}>Lier une source OBS</button>
+                    <button class="action" onclick={onOpenObsDialog}>{$t("carteEdition.sourceObsLier")}</button>
                   {/if}
                 {/if}
+              {/if}
+              <!-- Cadre sur ce widget (sansCadre — opt-out par instance,
+                   tous types) + accès modale Cadres. Généralise l'ex-toggle
+                   « widget ↔ flottant » du DropBar. -->
+              <button class="action" onclick={onToggleCadreWidget}>
+                {widgetAvecCadre ? $t("carteEdition.cadreWidgetRetirer") : $t("carteEdition.cadreWidgetRemettre")}
+              </button>
+              <button class="action" onclick={onOuvrirCadres}>{$t("carteEdition.cadrePersonnaliser")}</button>
+              {#if !cadreSceneActif}
+                <p class="hint">{$t("carteEdition.cadreSceneInactive")}</p>
               {/if}
             {:else if tabWidget === "transformation"}
               <Gizmo3D />
@@ -672,83 +857,84 @@
             {:else if tabWidget === "effets"}
               {@render controlesEffetsWidget()}
             {:else if tabWidget === "dupliquer"}
-              <button class="action" onclick={onDupliquer}>Dupliquer le widget</button>
-              <p class="hint">La copie apparaît en miroir sur l'axe vertical du canvas et devient le widget sélectionné — les guides symétriques aident à la caler.</p>
+              <button class="action" onclick={onDupliquer}>{$t("carteEdition.dupliquerWidget")}</button>
+              <p class="hint">{$t("carteEdition.dupliquerHint")}</p>
               <Gizmo3D maxDeg={180} />
               <div class="fit-group">
-                <span class="field-label">Retournement</span>
+                <span class="field-label">{$t("carteEdition.retournement")}</span>
                 <div class="fit-buttons">
-                  <button class="fit-btn" onclick={() => onMiroir("h")}>Miroir →</button>
-                  <button class="fit-btn" onclick={() => onMiroir("v")}>Miroir ↓</button>
-                  <button class="fit-btn" onclick={() => onMiroir("reset")}>Reset</button>
+                  <button class="fit-btn" onclick={() => onMiroir("h")}>{$t("carteEdition.miroirH")}</button>
+                  <button class="fit-btn" onclick={() => onMiroir("v")}>{$t("carteEdition.miroirV")}</button>
+                  <button class="fit-btn" onclick={() => onMiroir("reset")}>{$t("carteEdition.reset")}</button>
                 </div>
               </div>
-              <p class="hint">Le gizmo oriente le widget sélectionné : ±90° = inclinaison, ±180° = miroir.</p>
+              <p class="hint">{$t("carteEdition.gizmoHint")}</p>
             {:else if tabWidget === "lecture"}
               {@render controlesLecture()}
             {/if}
-            <button class="action" onclick={onSupprimerClick}>Supprimer le widget</button>
+            <button class="action" onclick={onSupprimerClick}>{$t("carteEdition.supprimerWidget")}</button>
           {/if}
         {:else}
           <!-- ====== ÉDITION FOND ====== -->
           {#if bgObsSource}
             <!-- Fond = capture app/jeu (prioritaire sur le média — le média
                  stocké n'est pas peint tant que la capture est active). -->
-            <p class="hint">Fond = capture app/jeu, rendue par OBS plein canvas.</p>
-            <button class="action" onclick={() => (obsFondDialogOpen = true)}>Changer l'app/jeu capturé</button>
-            <button class="action" onclick={() => { void retirerFondCapture(); }}>Retirer la capture</button>
+            <p class="hint">{$t("carteEdition.fondCaptureHint")}</p>
+            <button class="action" onclick={() => (obsFondDialogOpen = true)}>{$t("carteEdition.changerCapture")}</button>
+            <button class="action" onclick={() => { void retirerFondCapture(); }}>{$t("carteEdition.retirerCapture")}</button>
             <button class="action" onclick={() => titreFondModalOpen.set(true)}>
-              {hasBgTitre ? "Modifier le titre du fond" : "Ajouter un titre au fond"}
+              {hasBgTitre ? $t("carteEdition.titreFondModifier") : $t("carteEdition.titreFondAjouter")}
             </button>
           {:else if !hasFond}
-            <button class="action" onclick={importFond}>Importer un fond</button>
-            <button class="action" onclick={() => (obsFondDialogOpen = true)}>Mettre une app/jeu en fond</button>
-            <p class="hint">Aucun fond. Importer une image/vidéo, ou lier une app/jeu.</p>
+            <button class="action" onclick={importFond}>{$t("carteEdition.importerFond")}</button>
+            <button class="action" onclick={() => (obsFondDialogOpen = true)}>{$t("carteEdition.appEnFond")}</button>
+            <p class="hint">{$t("carteEdition.aucunFond")}</p>
           {:else}
             <div class="tabs">
-              <button class="tab" class:active={tabFond === "contenu"} onclick={() => tabFond = "contenu"}>Contenu</button>
-              <button class="tab" class:active={tabFond === "transformation"} onclick={() => tabFond = "transformation"}>Transformation</button>
-              <button class="tab" class:active={tabFond === "effets"} onclick={() => tabFond = "effets"}>Effets</button>
+              <button class="tab" class:active={tabFond === "contenu"} onclick={() => tabFond = "contenu"}>{$t("carteEdition.tabContenu")}</button>
+              <button class="tab" class:active={tabFond === "transformation"} onclick={() => tabFond = "transformation"}>{$t("carteEdition.tabTransformation")}</button>
+              <button class="tab" class:active={tabFond === "effets"} onclick={() => tabFond = "effets"}>{$t("carteEdition.tabEffets")}</button>
               {#if bgKind === "video"}
-                <button class="tab" class:active={tabFond === "lecture"} onclick={() => tabFond = "lecture"}>Lecture</button>
+                <button class="tab" class:active={tabFond === "lecture"} onclick={() => tabFond = "lecture"}>{$t("commun.lecture")}</button>
               {/if}
             </div>
 
             {#if tabFond === "contenu"}
-              <button class="action" onclick={importFond}>Remplacer le fond</button>
-              <button class="action" onclick={() => clearFond()}>Supprimer le fond</button>
-              <button class="action" onclick={() => (obsFondDialogOpen = true)}>Mettre une app/jeu en fond</button>
+              <button class="action" onclick={importFond}>{$t("carteEdition.remplacerFond")}</button>
+              <button class="action" onclick={() => clearFond()}>{$t("carteEdition.supprimerFond")}</button>
+              <button class="action" onclick={() => (obsFondDialogOpen = true)}>{$t("carteEdition.appEnFond")}</button>
               <button class="action" onclick={() => titreFondModalOpen.set(true)}>
-                {hasBgTitre ? "Modifier le titre du fond" : "Ajouter un titre au fond"}
+                {hasBgTitre ? $t("carteEdition.titreFondModifier") : $t("carteEdition.titreFondAjouter")}
               </button>
             {:else if tabFond === "transformation"}
+              <Gizmo3D cible="fond" />
               <div class="fit-group">
-                <span class="field-label">Affichage fond</span>
+                <span class="field-label">{$t("carteEdition.affichageFond")}</span>
                 <div class="fit-buttons">
                   {#each FIT_MODES as mode}
                     <button class="fit-btn" class:active={bgFit === mode} onclick={() => onBgFitClick(mode)}>{labelFit(mode)}</button>
                   {/each}
                 </div>
               </div>
-              {@render sliderLigne("Zoom", bgZoom, 0.2, 5, 0.1, onBgZoomInput, onBgZoomChange, (v) => v.toFixed(2))}
-              {@render sliderLigne("Rotation", bgRot, -180, 180, 5, onBgRotInput, onBgRotChange, (v) => Math.round(v) + "°")}
-              {@render sliderLigne("Offset X", bgOffsetX, -2000, 2000, 1, onBgOffsetXInput, onBgOffsetChange, (v) => Math.round(v) + "px")}
-              {@render sliderLigne("Offset Y", bgOffsetY, -2000, 2000, 1, onBgOffsetYInput, onBgOffsetChange, (v) => Math.round(v) + "px")}
-              <button class="action" onclick={onBgReset}>Reset transformation</button>
+              {@render sliderLigne($t("carteEdition.zoom"), bgZoom, 0.2, 5, 0.1, onBgZoomInput, onBgZoomChange, (v) => v.toFixed(2))}
+              {@render sliderLigne($t("carteEdition.rotation"), bgRot, -180, 180, 5, onBgRotInput, onBgRotChange, (v) => Math.round(v) + "°")}
+              {@render sliderLigne($t("carteEdition.offsetX"), bgOffsetX, -2000, 2000, 1, onBgOffsetXInput, onBgOffsetChange, (v) => Math.round(v) + "px")}
+              {@render sliderLigne($t("carteEdition.offsetY"), bgOffsetY, -2000, 2000, 1, onBgOffsetYInput, onBgOffsetChange, (v) => Math.round(v) + "px")}
+              <button class="action" onclick={onBgReset}>{$t("carteEdition.resetTransformation")}</button>
             {:else if tabFond === "effets"}
-              {@render sliderLigne("Luminosité", bgLum, -100, 100, 1, onBgLumInput, onBgEffetChange, (v) => String(Math.round(v)))}
-              {@render sliderLigne("Contraste", bgContraste, -100, 100, 1, onBgContrasteInput, onBgEffetChange, (v) => String(Math.round(v)))}
-              {@render sliderLigne("Teinte", bgTeinte, 0, 360, 1, onBgTeinteInput, onBgEffetChange, (v) => Math.round(v) + "°")}
-              {@render sliderLigne("Flou", bgFlou, 0, 20, 0.5, onBgFlouInput, onBgEffetChange, (v) => v.toFixed(1) + "px")}
-              {@render sliderLigne("Pixelisation", bgPixel, 0, 50, 1, onBgPixelInput, onBgEffetChange, (v) => String(Math.round(v)))}
+              {@render sliderLigne($t("carteEdition.luminosite"), bgLum, -100, 100, 1, onBgLumInput, onBgEffetChange, (v) => String(Math.round(v)))}
+              {@render sliderLigne($t("carteEdition.contraste"), bgContraste, -100, 100, 1, onBgContrasteInput, onBgEffetChange, (v) => String(Math.round(v)))}
+              {@render sliderLigne($t("carteEdition.teinte"), bgTeinte, 0, 360, 1, onBgTeinteInput, onBgEffetChange, (v) => Math.round(v) + "°")}
+              {@render sliderLigne($t("carteEdition.flou"), bgFlou, 0, 20, 0.5, onBgFlouInput, onBgEffetChange, (v) => v.toFixed(1) + "px")}
+              {@render sliderLigne($t("carteEdition.pixelisation"), bgPixel, 0, 50, 1, onBgPixelInput, onBgEffetChange, (v) => String(Math.round(v)))}
               <div class="fit-group">
-                <span class="field-label">Miroir fond</span>
+                <span class="field-label">{$t("carteEdition.miroirFond")}</span>
                 <div class="fit-buttons">
-                  <button class="fit-btn" class:active={bgMiroirH} onclick={() => onBgMiroir("h")}>Miroir →</button>
-                  <button class="fit-btn" class:active={bgMiroirV} onclick={() => onBgMiroir("v")}>Miroir ↓</button>
+                  <button class="fit-btn" class:active={bgMiroirH} onclick={() => onBgMiroir("h")}>{$t("carteEdition.miroirH")}</button>
+                  <button class="fit-btn" class:active={bgMiroirV} onclick={() => onBgMiroir("v")}>{$t("carteEdition.miroirV")}</button>
                 </div>
               </div>
-              <button class="action" onclick={onBgResetEffets}>Reset effets</button>
+              <button class="action" onclick={onBgResetEffets}>{$t("carteEdition.resetEffets")}</button>
               {#if bgKind === "image"}
                 <div class="fit-group">
                   <span class="field-label">Morphing</span>
@@ -759,21 +945,32 @@
                 {#if $morphMode}
                   <div class="morph-bloc">
                     <div class="fit-buttons">
-                      <button class="fit-btn" class:active={$morphSens === "agrandir"} onclick={() => morphSens.set("agrandir")}>Agrandir</button>
-                      <button class="fit-btn" class:active={$morphSens === "retrecir"} onclick={() => morphSens.set("retrecir")}>Rétrécir</button>
+                      <button class="fit-btn" class:active={$morphSens === "agrandir"} onclick={() => morphSens.set("agrandir")}>{$t("carteEdition.agrandir")}</button>
+                      <button class="fit-btn" class:active={$morphSens === "retrecir"} onclick={() => morphSens.set("retrecir")}>{$t("carteEdition.retrecir")}</button>
                     </div>
-                    {@render sliderLigne("Intensité", $morphIntensite, 10, 200, 5, (e) => morphIntensite.set(+(e.target as HTMLInputElement).value), () => {}, (v) => v + "%")}
-                    {@render sliderLigne("Rayon", Math.round($morphRayon * 100), 5, 50, 1, (e) => morphRayon.set(+(e.target as HTMLInputElement).value / 100), () => {}, (v) => v + "%")}
-                    <button class="action" onclick={onResetMorphsFond}>Réinitialiser le morphing</button>
-                    <p class="hint">Cliquez sur le fond (canvas) pour déformer. Échap = quitter.</p>
+                    {@render sliderLigne($t("carteEdition.intensite"), $morphIntensite, 10, 200, 5, (e) => morphIntensite.set(+(e.target as HTMLInputElement).value), () => {}, (v) => v + "%")}
+                    {@render sliderLigne($t("carteEdition.rayon"), Math.round($morphRayon * 100), 5, 50, 1, (e) => morphRayon.set(+(e.target as HTMLInputElement).value / 100), () => {}, (v) => v + "%")}
+                    <button class="action" onclick={onResetMorphsFond}>{$t("carteEdition.resetMorphing")}</button>
+                    <p class="hint">{$t("carteEdition.morphHintFond")}</p>
                   </div>
                 {/if}
               {/if}
             {:else if tabFond === "lecture"}
               {#if bgKind === "video"}
-                <PlayerBar videoEl={fondVideoEl} mediaPaused={bgPaused} mediaTime={bgTime} onTogglePlay={onBgTogglePlay} onSeek={onBgSeek} />
+                <PlayerBar videoEl={fondVideoEl} mediaPaused={bgPaused} mediaTime={bgTime} onTogglePlay={onBgTogglePlay} onSeek={onBgSeek} onSeekLive={onBgSeekLive} />
               {/if}
             {/if}
+          {/if}
+          <!-- Cadre sur le bord du canvas (bordActif — portée de la
+               CadreConfig unifiée) + accès modale Cadres. -->
+          {#if cadreSceneActif}
+            <button class="action" onclick={onToggleCadreBord}>
+              {cadreBordActif ? $t("carteEdition.cadreBordRetirer") : $t("carteEdition.cadreBordAjouter")}
+            </button>
+          {/if}
+          <button class="action" onclick={onOuvrirCadres}>{$t("carteEdition.cadrePersonnaliser")}</button>
+          {#if !cadreSceneActif}
+            <p class="hint">{$t("carteEdition.cadreSceneInactive")}</p>
           {/if}
         {/if}
       </div>
@@ -809,36 +1006,36 @@
 
 {#snippet controlesTransformation()}
   <div class="fit-group">
-    <span class="field-label">Affichage</span>
+    <span class="field-label">{$t("carteEdition.affichage")}</span>
     <div class="fit-buttons">
       {#each FIT_MODES as mode}
         <button class="fit-btn" class:active={currentFit === mode} onclick={() => onFitClick(mode)}>{labelFit(mode)}</button>
       {/each}
     </div>
   </div>
-  {@render sliderLigne("Zoom", currentZoom, 0.2, 5, 0.1, onZoomInput, onZoomChange, (v) => v.toFixed(2))}
-  {@render sliderLigne("Rotation", currentRot, -180, 180, 5, onRotInput, onRotChange, (v) => Math.round(v) + "°")}
-  {@render sliderLigne("Offset X", currentOffsetX, -2000, 2000, 1, onOffsetXInput, onOffsetChange, (v) => Math.round(v) + "px")}
-  {@render sliderLigne("Offset Y", currentOffsetY, -2000, 2000, 1, onOffsetYInput, onOffsetChange, (v) => Math.round(v) + "px")}
-  <button class="action" onclick={onResetMediaTransformation}>Reset transformation</button>
+  {@render sliderLigne($t("carteEdition.zoom"), currentZoom, 0.2, 5, 0.1, onZoomInput, onZoomChange, (v) => v.toFixed(2))}
+  {@render sliderLigne($t("carteEdition.rotation"), currentRot, -180, 180, 5, onRotInput, onRotChange, (v) => Math.round(v) + "°")}
+  {@render sliderLigne($t("carteEdition.offsetX"), currentOffsetX, -2000, 2000, 1, onOffsetXInput, onOffsetChange, (v) => Math.round(v) + "px")}
+  {@render sliderLigne($t("carteEdition.offsetY"), currentOffsetY, -2000, 2000, 1, onOffsetYInput, onOffsetChange, (v) => Math.round(v) + "px")}
+  <button class="action" onclick={onResetMediaTransformation}>{$t("carteEdition.resetTransformation")}</button>
 {/snippet}
 
 {#snippet controlesEffetsWidget()}
-  {@render sliderLigne("Luminosité", currentLum, -100, 100, 1, onLumInput, onEffetChange, (v) => String(Math.round(v)))}
-  {@render sliderLigne("Contraste", currentContraste, -100, 100, 1, onContrasteInput, onEffetChange, (v) => String(Math.round(v)))}
-  {@render sliderLigne("Teinte", currentTeinte, 0, 360, 1, onTeinteInput, onEffetChange, (v) => Math.round(v) + "°")}
-  {@render sliderLigne("Flou", currentFlou, 0, 20, 0.5, onFlouInput, onEffetChange, (v) => v.toFixed(1) + "px")}
-  {@render sliderLigne("Pixelisation", currentPixel, 0, 50, 1, onPixelInput, onEffetChange, (v) => String(Math.round(v)))}
+  {@render sliderLigne($t("carteEdition.luminosite"), currentLum, -100, 100, 1, onLumInput, onEffetChange, (v) => String(Math.round(v)))}
+  {@render sliderLigne($t("carteEdition.contraste"), currentContraste, -100, 100, 1, onContrasteInput, onEffetChange, (v) => String(Math.round(v)))}
+  {@render sliderLigne($t("carteEdition.teinte"), currentTeinte, 0, 360, 1, onTeinteInput, onEffetChange, (v) => Math.round(v) + "°")}
+  {@render sliderLigne($t("carteEdition.flou"), currentFlou, 0, 20, 0.5, onFlouInput, onEffetChange, (v) => v.toFixed(1) + "px")}
+  {@render sliderLigne($t("carteEdition.pixelisation"), currentPixel, 0, 50, 1, onPixelInput, onEffetChange, (v) => String(Math.round(v)))}
   {#if selectedWidget?.media}
     <div class="fit-group">
-      <span class="field-label">Miroir média</span>
+      <span class="field-label">{$t("carteEdition.miroirMedia")}</span>
       <div class="fit-buttons">
-        <button class="fit-btn" class:active={currentMiroirH} onclick={() => onMiroirMedia("h")}>Miroir →</button>
-        <button class="fit-btn" class:active={currentMiroirV} onclick={() => onMiroirMedia("v")}>Miroir ↓</button>
+        <button class="fit-btn" class:active={currentMiroirH} onclick={() => onMiroirMedia("h")}>{$t("carteEdition.miroirH")}</button>
+        <button class="fit-btn" class:active={currentMiroirV} onclick={() => onMiroirMedia("v")}>{$t("carteEdition.miroirV")}</button>
       </div>
     </div>
   {/if}
-  <button class="action" onclick={onResetMediaEffets}>Reset effets</button>
+  <button class="action" onclick={onResetMediaEffets}>{$t("carteEdition.resetEffets")}</button>
   {#if isMediaWidget && selectedKind === "image" && selectedWidget?.media}
     <div class="fit-group">
       <span class="field-label">Morphing</span>
@@ -849,13 +1046,13 @@
     {#if $morphMode}
       <div class="morph-bloc">
         <div class="fit-buttons">
-          <button class="fit-btn" class:active={$morphSens === "agrandir"} onclick={() => morphSens.set("agrandir")}>Agrandir</button>
-          <button class="fit-btn" class:active={$morphSens === "retrecir"} onclick={() => morphSens.set("retrecir")}>Rétrécir</button>
+          <button class="fit-btn" class:active={$morphSens === "agrandir"} onclick={() => morphSens.set("agrandir")}>{$t("carteEdition.agrandir")}</button>
+          <button class="fit-btn" class:active={$morphSens === "retrecir"} onclick={() => morphSens.set("retrecir")}>{$t("carteEdition.retrecir")}</button>
         </div>
-        {@render sliderLigne("Intensité", $morphIntensite, 10, 200, 5, (e) => morphIntensite.set(+(e.target as HTMLInputElement).value), () => {}, (v) => v + "%")}
-        {@render sliderLigne("Rayon", Math.round($morphRayon * 100), 5, 50, 1, (e) => morphRayon.set(+(e.target as HTMLInputElement).value / 100), () => {}, (v) => v + "%")}
-        <button class="action" onclick={() => selectedId && resetMorphsWidget(selectedId)}>Réinitialiser le morphing</button>
-        <p class="hint">Cliquez sur le média pour déformer (effets cumulés). Échap = quitter.</p>
+        {@render sliderLigne($t("carteEdition.intensite"), $morphIntensite, 10, 200, 5, (e) => morphIntensite.set(+(e.target as HTMLInputElement).value), () => {}, (v) => v + "%")}
+        {@render sliderLigne($t("carteEdition.rayon"), Math.round($morphRayon * 100), 5, 50, 1, (e) => morphRayon.set(+(e.target as HTMLInputElement).value / 100), () => {}, (v) => v + "%")}
+        <button class="action" onclick={() => selectedId && resetMorphsWidget(selectedId)}>{$t("carteEdition.resetMorphing")}</button>
+        <p class="hint">{$t("carteEdition.morphHintWidget")}</p>
       </div>
     {/if}
   {/if}
@@ -863,28 +1060,17 @@
 
 {#snippet controlesLecture()}
   {#if selectedKind === "video"}
-    <PlayerBar videoEl={widgetVideoEl} mediaPaused={widgetMediaPaused} mediaTime={widgetMediaTime} onTogglePlay={onWidgetTogglePlay} onSeek={onWidgetSeek} />
+    <PlayerBar videoEl={widgetVideoEl} mediaPaused={widgetMediaPaused} mediaTime={widgetMediaTime} onTogglePlay={onWidgetTogglePlay} onSeek={onWidgetSeek} onSeekLive={onWidgetSeekLive} />
   {:else}
-    <p class="hint">Pas de vidéo en lecture.</p>
+    <p class="hint">{$t("carteEdition.pasDeVideo")}</p>
   {/if}
 {/snippet}
 
 <style>
-  .carte-edition {
-    display: flex;
-    flex-direction: column;
-    width: 100%;
-    min-width: 0;
-    border-radius: var(--rayon);
-    border: 2px dashed var(--accent-carte);
-    background: color-mix(in srgb, var(--accent-carte) 22%, var(--fond-panneau));
-    box-shadow: 0 0 16px var(--accent-carte-glow), 0 8px 24px rgba(0, 0, 0, 0.4);
-    overflow: hidden;
-    flex-shrink: 0;
-    /* Les boutons internes gardent le fill glace neutre commun ; la couleur
-       de la carte (--accent-carte) vit dans les bordures/glows/états actifs
-       uniquement (IDEA02 — repère de cible conservé). */
-  }
+  /* La recette de base .carte-edition est globale (app.css — partagée avec
+     la sidebar). Les boutons internes gardent le fill glace neutre commun ;
+     la couleur de la carte (--accent-carte) vit dans les bordures/glows/états
+     actifs uniquement (IDEA02 — repère de cible conservé). */
 
   /* Cible widget = bordeaux foncé (pointillés + glow, palette --dash-*) */
   .cible-widget {
@@ -1127,6 +1313,73 @@
   .field-label {
     font-size: 0.7rem;
     opacity: 0.6;
+  }
+
+  /* ===== Widget goal : liste des Creator Goals Twitch ===== */
+  .goal-liste {
+    display: flex;
+    flex-direction: column;
+    gap: 0.3rem;
+  }
+  .goal-item {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    text-align: left;
+    background: var(--btn-surface);
+    color: var(--texte);
+    border: 1px solid var(--bordure);
+    box-shadow: var(--btn-inset);
+    padding: 0.4rem 0.5rem;
+    font: inherit;
+    cursor: pointer;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .goal-item:hover {
+    background: var(--btn-surface-hover);
+    border-color: var(--bordure-active);
+  }
+  /* Goal lié : même repère actif que .fit-btn.active (bord + liseret). */
+  .goal-item.lie {
+    border-color: var(--accent-carte);
+    box-shadow: var(--btn-inset-hover), inset 0 -2px 0 var(--accent-carte);
+  }
+  .goal-item-haut {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+  .goal-item-nom {
+    flex: 1;
+    font-size: 0.82rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .goal-item-badge {
+    flex-shrink: 0;
+    font-size: 0.62rem;
+    padding: 0.05rem 0.3rem;
+    border: 1px solid var(--accent-carte);
+    color: var(--accent-carte);
+    border-radius: 3px;
+  }
+  .goal-item-chiffres {
+    font-size: 0.75rem;
+    opacity: 0.75;
+    font-variant-numeric: tabular-nums;
+  }
+  .goal-item-bar {
+    height: 4px;
+    background: var(--fond-controle);
+    overflow: hidden;
+  }
+  .goal-item-fill {
+    display: block;
+    height: 100%;
+    background: var(--accent-carte);
+    transition: width 0.3s ease;
   }
   input {
     background: var(--fond-controle);

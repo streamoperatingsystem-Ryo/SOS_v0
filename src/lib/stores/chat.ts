@@ -12,6 +12,17 @@ export interface ChatMessage {
   badges?: string;
   /// ID du message (Twitch uniquement, pour la suppression via Helix).
   message_id?: string;
+  /// Segments d'emotes Twitch (officielles + BTTV/7TV/FFZ) : offsets UTF-16,
+  /// fin EXCLUSIVE. Rendus en <img> par diffusion.html et chat-popout.html.
+  emotes?: EmoteSeg[];
+}
+
+/// Un segment d'emote dans le texte d'un ChatMessage (sérialisé par Rust).
+export interface EmoteSeg {
+  debut: number;
+  fin: number;
+  url: string;
+  nom: string;
 }
 
 export interface Connexions {

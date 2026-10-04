@@ -7,7 +7,8 @@ export type Section =
   | "communaute"
   | "obs"
   | "personnalisation"
-  | "raccourcis";
+  | "raccourcis"
+  | "ergonomie";
 // NB : "Interactions chat" n'est PAS une section d'accordéon — c'est un
 // lanceur direct qui ouvre interactionModalOpen (modale à onglets).
 // NB : "scene" (Arrière-plan de l'application) a été retiré de l'accordéon —
@@ -61,9 +62,9 @@ export function setCarteEdition(cible: Exclude<CibleEdition, null>): void {
 /// true = affiche les boutons "Oui/Non" dans la Toolbar.
 export const confirmDeleteWidget = writable(false);
 
-/// Modale galerie de cadres : null = fermée, "widget" = galerie cadre widget,
-/// "app" = galerie cadre application.
-export const cadreModalOpen = writable<"widget" | "app" | null>(null);
+/// Modale galerie de cadres : true = ouverte. UN SEUL cadre unifié depuis
+/// 2026-09-26 (widgets + bord du canvas) — plus d'onglets widget/app.
+export const cadreModalOpen = writable(false);
 
 /// Modale Interactions chat : true = ouverte (onglets Clip de bienvenue /
 /// Bandeau premier message / Alertes).
@@ -77,10 +78,16 @@ export const moderationModalOpen = writable(false);
 /// `conso_etat` ne tourne que pendant qu'elle est montée (ConsoModal).
 export const consoModalOpen = writable(false);
 
-/// Modale d'édition du titre d'un widget : null = fermée, sinon contient
-/// l'id du widget à éditer. Ouverte par double-clic sur le haut/bas d'un
-/// widget (Widget.svelte ondblclick).
-export const titreModalOpen = writable<string | null>(null);
+/// Position d'un titre — vocabulaire unifié widget + fond. Pour un widget,
+/// le titre est affiché HORS du widget (au-dessus/en dessous/à côté) ; pour
+/// le fond, à l'INTÉRIEUR le long du bord correspondant. Gauche/droite =
+/// texte vertical (writing-mode).
+export type PositionTitre = "haut" | "bas" | "gauche" | "droite";
+
+/// Modale d'édition des titres d'un widget : null = fermée, sinon contient
+/// l'id du widget + la position à focus à l'ouverture (bord le plus proche
+/// du double-clic, Widget.svelte ondblclick).
+export const titreModalOpen = writable<{ id: string; position?: PositionTitre } | null>(null);
 
 /// Modale d'édition du titre du fond de l'application : false = fermée,
 /// true = ouverte. Ouverte par le bouton "Titre du fond" dans la Toolbar
@@ -108,3 +115,7 @@ export const dupliquerSceneModalOpen = writable<string | null>(null);
 /// titre, son, source audio) + contrôles (lancer/pause/arrêter). Le média
 /// n'est JAMAIS rendu dans le dashboard — affichage diffusion uniquement.
 export const ecranAttenteModalOpen = writable(false);
+
+/// Overlay plein écran du Guide du streamer (livre feuilletable) :
+/// true = ouvert. Dashboard uniquement — jamais en diffusion.
+export const guideLivreOpen = writable(false);

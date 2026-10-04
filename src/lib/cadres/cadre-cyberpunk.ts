@@ -1,27 +1,14 @@
 // Cadre SVG Cyberpunk — bordure néon avec coins biseautés, plaques HUD,
-// circuits et diodes. Variantes : defaut, vert-magenta, orange-cyan,
-// violet-cyan, rouge-cyan.
+// circuits et diodes. Tons dérivés des couleurs utilisateur :
+// couleur = néon principal, couleurFin = néon secondaire, highlight blanc.
 
-interface Variante {
-  c1: string; // couleur néon principale
-  c2: string; // couleur néon secondaire
-  c3: string; // blanc highlight
-}
-
-const VARIANTES: Record<string, Variante> = {
-  defaut: { c1: "#00f0ff", c2: "#ff00ff", c3: "#ffffff" },
-  "vert-magenta": { c1: "#39ff14", c2: "#ff00ff", c3: "#ffffff" },
-  "orange-cyan": { c1: "#ff8800", c2: "#00f0ff", c3: "#ffffff" },
-  "violet-cyan": { c1: "#8c4dff", c2: "#00f0ff", c3: "#ffffff" },
-  "rouge-cyan": { c1: "#ff2244", c2: "#00f0ff", c3: "#ffffff" },
-};
+import { angleVersCoords, assombrir, couleurOu } from "./couleurs";
 
 export interface CadreOpts {
   largeur: number;
   hauteur: number;
   idCadre?: string;
   strokeWidth?: number;
-  variante?: string;
   couleur?: string;
   couleurFin?: string;
   gradientAngle?: number;
@@ -39,8 +26,7 @@ export function getCyberpunkBevelSize(strokeWidth = 4): number {
 export function getCyberpunkClipPath(
   W: number,
   H: number,
-  strokeWidth = 4,
-  _variante?: string
+  strokeWidth = 4
 ): string {
   const s = Math.min(getCyberpunkBevelSize(strokeWidth), W / 4, H / 4);
   return `path('M ${s} 0 L ${W - s} 0 L ${W} ${s} L ${W} ${H - s} L ${W - s} ${H} L ${s} ${H} L 0 ${H - s} L 0 ${s} Z')`;
@@ -48,8 +34,11 @@ export function getCyberpunkClipPath(
 
 export default function renderCyberpunk(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const pal = VARIANTES[opts.variante ?? "defaut"] ?? VARIANTES.defaut;
-  const { c1, c2, c3 } = pal;
+  const c1 = couleurOu(opts.couleur, "#ffffff");
+  const c2 = couleurOu(opts.couleurFin, assombrir(c1, 0.35));
+  const c3 = "#ffffff";
+  const angle = Number.isFinite(Number(opts.gradientAngle)) ? Number(opts.gradientAngle) : 135;
+  const { x1: gx1, y1: gy1, x2: gx2, y2: gy2 } = angleVersCoords(angle);
   const ep = clampStrokeWidth(opts.strokeWidth ?? 4);
   const offset = ep / 2;
   const bevel = Math.max(8, Math.round(ep * 3.5));
@@ -146,12 +135,12 @@ export default function renderCyberpunk(opts: CadreOpts): string {
     <clipPath id="${clipPathId}">
       <path d="${pathBorder}" />
     </clipPath>
-    <linearGradient id="${gradId}" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
       <stop offset="0%" stop-color="${c1}" />
       <stop offset="50%" stop-color="${c2}" />
       <stop offset="100%" stop-color="${c1}" />
     </linearGradient>
-    <linearGradient id="${gradInnerId}" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="${gradInnerId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
       <stop offset="0%" stop-color="${c3}" stop-opacity="0.9" />
       <stop offset="50%" stop-color="${c1}" stop-opacity="0.6" />
       <stop offset="100%" stop-color="${c3}" stop-opacity="0.9" />

@@ -18,6 +18,23 @@
   padding: 0;
 }
 
+/* Sélection de texte désactivée dans tout le dashboard (clic/drag) —
+   règle globale, au même niveau que le reset. Les champs de saisie
+   gardent user-select:text : sinon impossible de surligner le contenu
+   d'un input/textarea pour le remplacer (spécificité 0-0-1 > 0-0-0). */
+*,
+*::before,
+*::after {
+  -webkit-user-select: none;
+  user-select: none;
+}
+input,
+textarea,
+[contenteditable] {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
 html,
 body,
 #app {
@@ -296,6 +313,22 @@ input[type="radio"] {
   background: var(--accent-ui);
 }
 
+/* Carte contextuelle pointillée — recette partagée (carte d'édition +
+   groupes de la sidebar). La couleur vit dans --accent-carte /
+   --accent-carte-glow, assignés par les variantes .cible-*. */
+.carte-edition {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  border-radius: var(--rayon);
+  border: 2px dashed var(--accent-carte);
+  background: color-mix(in srgb, var(--accent-carte) 22%, var(--fond-panneau));
+  box-shadow: 0 0 16px var(--accent-carte-glow), 0 8px 24px rgba(0, 0, 0, 0.4);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+
 /* ===== Modales — éléments internes partagés =====
    Source unique pour les classes utilisées à l'intérieur des modales (le
    wrapper Modal.svelte gère la structure externe : overlay + header + ✕).
@@ -459,4 +492,200 @@ input[type="radio"] {
   font-size: 1.08em;
   line-height: 1;
   flex-shrink: 0;
+}
+
+/* ===== Menus contextuels clic droit — recette .ctx-* (2026-10-03) =====
+   Partagée par les 3 menus : pastilles de scènes (SceneBar), fond et widget
+   (Canvas). Unifie les 2 copies dupliquées — ne jamais re-copier ce bloc
+   dans un composant.
+   Verre dépoli teinté par l'accent utilisateur : --accent-ui = couleur du
+   cadre SVG actif (poussée sur :root par App.svelte, fallback violet),
+   --gradient-cadre = son dégradé 2 couleurs. Recettes verre --btn-* et
+   arrondis --rayon-* du thème — les mêmes que les boutons de la carte.
+   Usage : .ctx-menu (positionné en inline left/top, fixed) > .ctx-item /
+   .ctx-sep / .ctx-label + .ctx-fit-grid > .ctx-fit-btn / .ctx-confirm. */
+.ctx-menu {
+  position: fixed;
+  z-index: 9999;
+  /* Panneau translucide : l'aurora/canvas transparaît flouté ; léger
+     voile de l'accent utilisateur en haut qui s'éteint vers le bas. */
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-ui) 7%, var(--fond-panneau)) 0%,
+      color-mix(in srgb, var(--accent-ui) 2%, var(--fond-panneau)) 100%
+    );
+  backdrop-filter: blur(14px) saturate(1.15);
+  border: 1px solid var(--bordure-ui-active);
+  border-radius: var(--rayon);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.55),
+    var(--glow-ui),
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
+  display: flex;
+  flex-direction: column;
+  min-width: 11rem;
+  max-height: 82vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 0.3rem;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bordure-ui-active) transparent;
+  animation: ctx-pop 0.12s ease-out;
+  transform-origin: top left;
+}
+/* Filet signature : le dégradé du cadre utilisateur, bord à bord. */
+.ctx-menu::before {
+  content: "";
+  margin: -0.3rem -0.3rem 0.2rem;
+  height: 2px;
+  flex-shrink: 0;
+  background: var(--gradient-cadre);
+}
+@keyframes ctx-pop {
+  from {
+    opacity: 0;
+    transform: translateY(-3px) scale(0.98);
+  }
+}
+.ctx-item {
+  background: transparent;
+  color: var(--texte);
+  border: none;
+  border-radius: var(--rayon-petit);
+  padding: 0.35rem 0.6rem;
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: left;
+  white-space: nowrap;
+  opacity: 0.85;
+  transition:
+    background 0.12s ease,
+    box-shadow 0.12s ease,
+    opacity 0.12s ease;
+}
+/* Hover = pill teintée accent + soulignement bas (recette .fit-btn.active
+   de la carte, transposée à l'accent utilisateur). */
+.ctx-item:hover {
+  opacity: 1;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-ui) 16%, var(--fond-controle)) 0%,
+      color-mix(in srgb, var(--accent-ui) 8%, var(--fond-controle)) 100%
+    );
+  box-shadow:
+    var(--btn-inset),
+    inset 0 -2px 0 var(--accent-ui);
+}
+/* Toggle enclenché (fenêtre de capture, morphing) : barre gauche accent +
+   voile permanent — distinct du hover (soulignement bas). */
+.ctx-item.active {
+  opacity: 1;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle));
+  box-shadow: inset 2px 0 0 var(--accent-ui);
+}
+.ctx-item.danger:hover {
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--message-error-color) 80%, #000) 0%,
+      var(--message-error-color) 100%
+    );
+  color: #fff;
+  box-shadow:
+    var(--btn-inset),
+    inset 0 -2px 0 color-mix(in srgb, var(--message-error-color) 55%, #fff);
+}
+/* Confirmation destructive inline : carte d'alerte teintée rouge. */
+.ctx-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.35rem 0.4rem;
+  background: color-mix(in srgb, var(--message-error-color) 9%, transparent);
+  border: 1px solid color-mix(in srgb, var(--message-error-color) 35%, transparent);
+  border-radius: var(--rayon-petit);
+}
+.ctx-confirm-label {
+  font-size: 0.75rem;
+  padding: 0 0.2rem;
+  opacity: 0.85;
+}
+.ctx-confirm-buttons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.2rem;
+}
+/* Séparateur : filet accentué fondu aux extrémités. */
+.ctx-sep {
+  height: 1px;
+  margin: 0.25rem 0.2rem;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    var(--bordure-ui-active) 15%,
+    var(--bordure-ui-active) 85%,
+    transparent
+  );
+}
+/* Micro-label de groupe : capitales espacées, teinté accent + gris. */
+.ctx-label {
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: color-mix(in srgb, var(--accent-ui) 55%, var(--gris));
+  padding: 0.3rem 0.5rem 0.1rem;
+}
+.ctx-fit-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.25rem;
+  padding: 0.1rem 0.35rem 0.35rem;
+}
+.ctx-fit-grid.deux {
+  grid-template-columns: 1fr 1fr;
+}
+/* Boutons fit/miroir : même recette verre que .fit-btn de la carte
+   (btn-surface + btn-inset), état actif = anneau + voile + soulignement
+   de l'accent utilisateur. */
+.ctx-fit-btn {
+  background: var(--btn-surface);
+  color: var(--texte);
+  border: 1px solid var(--bordure-ui);
+  border-radius: var(--rayon-petit);
+  box-shadow: var(--btn-inset);
+  font: inherit;
+  font-size: 0.72rem;
+  padding: 0.25rem 0.3rem;
+  cursor: pointer;
+  white-space: nowrap;
+  opacity: 0.8;
+  transition:
+    background 0.15s ease,
+    box-shadow 0.15s ease,
+    border-color 0.15s ease,
+    opacity 0.15s ease;
+}
+.ctx-fit-btn:hover {
+  background: var(--btn-surface-hover);
+  box-shadow: var(--btn-inset-hover);
+  border-color: var(--bordure-ui-active);
+  opacity: 1;
+}
+.ctx-fit-btn.active {
+  opacity: 1;
+  font-weight: 600;
+  border-color: var(--accent-ui);
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-ui) 20%, var(--fond-controle)) 0%,
+      color-mix(in srgb, var(--accent-ui) 9%, var(--fond-controle)) 100%
+    );
+  box-shadow:
+    var(--btn-inset-hover),
+    inset 0 -2px 0 var(--accent-ui);
 }

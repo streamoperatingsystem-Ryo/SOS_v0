@@ -7,28 +7,11 @@
 // jamais n'obscurcit le contenu (règle AGENTS.md).
 
 import type { CadreOpts } from "./cadre-cyberpunk";
+import { angleVersCoords, couleurOu } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
   return Number.isFinite(n) ? Math.max(1, Math.min(20, n)) : 4;
-}
-
-function validColor(c: string | undefined, fallback: string): string {
-  return c && /^#[0-9a-f]{6}$/i.test(c) ? c : fallback;
-}
-
-function angleToGradientCoords(angle: number): { x1: number; y1: number; x2: number; y2: number } {
-  const rad = (angle * Math.PI) / 180;
-  const dx = Math.cos(rad);
-  const dy = Math.sin(rad);
-  const scale = 50 / Math.max(Math.abs(dx), Math.abs(dy), 0.001);
-  const cx = 50, cy = 50;
-  return {
-    x1: Math.round(cx - dx * scale),
-    y1: Math.round(cy - dy * scale),
-    x2: Math.round(cx + dx * scale),
-    y2: Math.round(cy + dy * scale),
-  };
 }
 
 export function getMGStyleClipSize(strokeWidth = 4): number {
@@ -38,8 +21,7 @@ export function getMGStyleClipSize(strokeWidth = 4): number {
 export function getMGStyleClipPath(
   W: number,
   H: number,
-  strokeWidth = 4,
-  _variante = "codec"
+  strokeWidth = 4
 ): string {
   const s = Math.min(getMGStyleClipSize(strokeWidth), W / 4, H / 4);
   const sx = s;
@@ -56,10 +38,10 @@ export default function renderMGStyle(opts: CadreOpts): string {
   const sy = s * 0.7;
 
   // Couleurs utilisateur : couleur = principal, couleurFin = accent/alerte.
-  const cPrincipal = validColor(opts.couleur, "#ffffff");
-  const cAccent = validColor(opts.couleurFin, "#000000");
+  const cPrincipal = couleurOu(opts.couleur, "#ffffff");
+  const cAccent = couleurOu(opts.couleurFin, "#000000");
   const angle = Number.isFinite(Number(opts.gradientAngle)) ? Number(opts.gradientAngle) : 135;
-  const { x1: gx1, y1: gy1, x2: gx2, y2: gy2 } = angleToGradientCoords(angle);
+  const { x1: gx1, y1: gy1, x2: gx2, y2: gy2 } = angleVersCoords(angle);
 
   const margin = Math.max(10, ep * 2.5);
   const svgW = largeur + offset * 2 + margin * 2;

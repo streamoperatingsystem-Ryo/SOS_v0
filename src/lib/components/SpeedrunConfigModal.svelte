@@ -16,6 +16,7 @@
     segmentsLss,
     majSettingsAslEtPersister,
   } from "../stores/speedrun";
+  import { t } from "../stores/langue";
 
   let { onFermer }: { onFermer: () => void } = $props();
 
@@ -147,9 +148,9 @@
 </script>
 
 <Modal
-  title="Configuration de l'Auto-Splitter"
+  title={$t("speedrunConfig.titre")}
   maxWidth="700px"
-  hint="Cochez les splits que vous souhaitez activer. Les splits cochés se déclencheront automatiquement quand les conditions du jeu sont remplies. Cliquez sur « Auto depuis LSS » pour cocher automatiquement les splits correspondant à votre fichier de splits."
+  hint={$t("speedrunConfig.hint")}
   onClose={onFermer}
 >
   <div class="asl-config">
@@ -157,22 +158,22 @@
     <div class="asl-toolbar">
       <div class="asl-presets">
         <button class="preset-btn" onclick={autoDepuisLss} disabled={$segmentsLss.length === 0}>
-          Auto depuis LSS
+          {$t("speedrunConfig.autoLss")}
         </button>
-        <button class="preset-btn" onclick={toutCocher}>Tout cocher</button>
-        <button class="preset-btn" onclick={toutDecocher}>Tout décocher</button>
+        <button class="preset-btn" onclick={toutCocher}>{$t("speedrunConfig.toutCocher")}</button>
+        <button class="preset-btn" onclick={toutDecocher}>{$t("speedrunConfig.toutDecocher")}</button>
       </div>
       <input
         class="asl-recherche"
         type="text"
-        placeholder="Rechercher un split…"
+        placeholder={$t("speedrunConfig.rechercher")}
         bind:value={recherche}
       />
     </div>
 
     <!-- Compteur -->
     <div class="asl-compteur">
-      {nbCoche} / {nbTotal} splits activés
+      {$t("speedrunConfig.compteur", { coches: nbCoche, total: nbTotal })}
     </div>
 
     <!-- Liste des settings groupés par parent -->
@@ -206,10 +207,10 @@
     <!-- Boutons -->
     <div class="asl-actions">
       <button class="asl-btn annuler" onclick={onFermer} disabled={enCours}>
-        Annuler
+        {$t("commun.annuler")}
       </button>
       <button class="asl-btn valider" onclick={valider} disabled={enCours}>
-        {enCours ? "Application…" : "Valider"}
+        {enCours ? $t("speedrunConfig.application") : $t("commun.valider")}
       </button>
     </div>
   </div>

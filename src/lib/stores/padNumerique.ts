@@ -59,12 +59,6 @@ export const NOMS_AFFICHAGE: Record<string, string> = {
   NumpadSubtract: "-",
 };
 
-/// Libellés des touches réservées (navigation plages).
-export const LIBELLES_RESERVEES: Record<string, string> = {
-  NumpadAdd: "Plage suivante",
-  NumpadSubtract: "Plage précédente",
-};
-
 /// Nombre de plages (0, 1, 2).
 export const NB_PLAGES = 3;
 

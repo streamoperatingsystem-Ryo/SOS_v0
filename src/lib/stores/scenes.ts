@@ -3,8 +3,8 @@
 // (sceneStore dans scene.ts). Pas de préchargement des autres scènes.
 import { writable, get } from "svelte/store";
 import { tauri, type SceneIndex } from "../tauri";
-import { loadScene, selectWidget } from "./scene";
-import { obsHost, obsPort, obsPassword } from "./obs";
+import { loadScene, selectWidget, syncCapturesOBS } from "./scene";
+import { t } from "./langue";
 
 export const scenesIndexStore = writable<SceneIndex[]>([]);
 export const currentSceneIdStore = writable<string>("");
@@ -40,7 +40,7 @@ export async function createScene(nom: string): Promise<void> {
     await loadScene();
     selectWidget(null);
   } catch (e) {
-    alert("Création scène refusée : " + e);
+    alert(get(t)("scenes.creationRefusee", { erreur: String(e) }));
   }
 }
 
@@ -53,15 +53,11 @@ export async function openScene(id: string): Promise<void> {
     await loadCurrentScene();
     await loadScene();
     selectWidget(null);
-    // Sync captures OBS : activer les SOS-Trou-* de cette scène, cacher les autres.
-    try {
-      await tauri.sceneSyncCaptures(
-        get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
-      );
-    } catch {
-    }
+    // Sync captures OBS : activer les SOS-Trou-* de cette scène, cacher les
+    // autres + masque caméra à la forme du cadre de cette scène.
+    await syncCapturesOBS();
   } catch (e) {
-    alert("Ouverture scène refusée : " + e);
+    alert(get(t)("scenes.ouvertureRefusee", { erreur: String(e) }));
   }
 }
 
@@ -72,7 +68,7 @@ export async function renameScene(id: string, nom: string): Promise<void> {
     await loadScenesIndex();
     currentSceneNomStore.update((cur) => (cur ? nom : cur));
   } catch (e) {
-    alert("Renommage refusé : " + e);
+    alert(get(t)("scenes.renommageRefuse", { erreur: String(e) }));
   }
 }
 
@@ -83,7 +79,7 @@ export async function deplacerScene(id: string, position: number): Promise<void>
   try {
     await tauri.sceneDeplacer(id, position);
   } catch (e) {
-    alert("Réordonnancement refusé : " + e);
+    alert(get(t)("scenes.reordonnancementRefuse", { erreur: String(e) }));
     await loadScenesIndex();
   }
 }
@@ -97,7 +93,7 @@ export async function masquerNomScene(id: string, masque: boolean): Promise<void
       idx.map((s) => (s.id === id ? { ...s, nomMasque: masque } : s))
     );
   } catch (e) {
-    alert("Masquage refusé : " + e);
+    alert(get(t)("scenes.masquageRefuse", { erreur: String(e) }));
   }
 }
 
@@ -114,7 +110,7 @@ export async function deleteScene(id: string): Promise<void> {
       selectWidget(null);
     }
   } catch (e) {
-    alert("Suppression refusée : " + e);
+    alert(get(t)("scenes.suppressionRefusee", { erreur: String(e) }));
   }
 }
 
@@ -128,14 +124,10 @@ export async function duplicateScene(id: string, nom: string): Promise<void> {
     await loadCurrentScene();
     await loadScene();
     selectWidget(null);
-    try {
-      await tauri.sceneSyncCaptures(
-        get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
-      );
-    } catch {
-    }
+    // Sync captures + masque caméra (la copie peut avoir un widget caméra).
+    await syncCapturesOBS();
   } catch (e) {
-    alert("Duplication refusée : " + e);
+    alert(get(t)("scenes.duplicationRefusee", { erreur: String(e) }));
   }
 }
 
@@ -144,16 +136,16 @@ export async function duplicateScene(id: string, nom: string): Promise<void> {
 /// Dialog = dossier PARENT. Crée <parent>/<nom-pack>/scene.json + medias/.
 export async function exportScene(): Promise<void> {
   const defaut = get(currentSceneNomStore) || "scene";
-  const nomPack = prompt("Nom du pack ?", defaut);
+  const nomPack = prompt(get(t)("scenes.nomPackPrompt"), defaut);
   if (nomPack === null) return; // dialog annulé
   if (nomPack.trim().length === 0) {
-    alert("Nom du pack vide");
+    alert(get(t)("scenes.nomPackVide"));
     return;
   }
   try {
     await tauri.sceneExporter(nomPack.trim());
   } catch (e) {
-    alert("Export refusé : " + e);
+    alert(get(t)("scenes.exportRefuse", { erreur: String(e) }));
   }
 }
 
@@ -168,6 +160,6 @@ export async function importScene(): Promise<void> {
       selectWidget(null);
     }
   } catch (e) {
-    alert("Import refusé : " + e);
+    alert(get(t)("commun.importRefuse", { erreur: String(e) }));
   }
 }

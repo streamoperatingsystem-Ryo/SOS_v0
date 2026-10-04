@@ -2,7 +2,9 @@
 // invoke update_scene (save + snapshot :4321) seulement au create + pointerup.
 import { writable, get } from "svelte/store";
 import { tauri, type Scene, type Widget, type CadreConfig, type MorphPoint } from "../tauri";
+import { pointsClipPathCadre } from "../cadres/points";
 import { obsHost, obsPort, obsPassword } from "./obs";
+import { t } from "./langue";
 
 export const sceneStore = writable<Scene>({
   widgets: [],
@@ -13,6 +15,8 @@ export const sceneStore = writable<Scene>({
   bgFit: "remplir",
   bgZoom: 1,
   bgRot: 0,
+  bgRotX: 0,
+  bgRotY: 0,
   bgOffsetX: 0,
   bgOffsetY: 0,
   bgPaused: true,
@@ -21,16 +25,47 @@ export const sceneStore = writable<Scene>({
 export const loadedStore = writable(false);
 export const selectedIdStore = writable<string | null>(null);
 
+/// Coupe la capture input-viewer quand la scène chargée n'a plus de widget
+/// input-viewer (économie : pas de poll clavier/manette 60Hz ni de hook
+/// souris WH_MOUSE_LL sans rendu). Ne DÉMARRE jamais la capture — si la
+/// scène a un widget, le bouton ON/OFF de sa carte reste le choix de
+/// l'utilisateur. Non-fatal : set_actif(false) no-op côté Rust si déjà OFF.
+async function syncInputViewerCapture(): Promise<void> {
+  const aWidget = get(sceneStore).widgets.some((w) => w.type === "input-viewer");
+  if (aWidget) return;
+  try {
+    await tauri.inputViewerSetActif(false);
+  } catch {
+    // Backend indisponible → silencieux (la capture sera recoupée au
+    // prochain chargement/suppression).
+  }
+}
+
 /// Charge la scène initiale depuis Rust (config.json).
 export async function loadScene(): Promise<void> {
   try {
     const scene = await tauri.getScene();
     sceneStore.set(scene);
+    // La nouvelle scène n'a peut-être pas de widget input-viewer → couper
+    // la capture si elle tournait encore pour une scène précédente.
+    await syncInputViewerCapture();
   } catch (e) {
     console.error("loadScene:", e);
   } finally {
     loadedStore.set(true);
   }
+}
+
+/// Ajoute un widget à la scène. Si la scène n'a JAMAIS eu de cadre configuré
+/// (cadreWidget absent), applique le cadre par défaut MGStyle — un cadre
+/// désactivé par l'utilisateur (actif:false) n'est PAS réactivé : son choix
+/// prime sur le défaut. Un seul update → un seul commitScene.
+function sceneAvecWidget(s: Scene, w: Widget): Scene {
+  return {
+    ...s,
+    cadreWidget: s.cadreWidget ?? { ...CADRE_WIDGET_DEFAUT },
+    widgets: [...s.widgets, w],
+  };
 }
 
 /// Ajoute un widget par défaut (200×150, type media, z auto, id unique).
@@ -59,7 +94,7 @@ export async function createWidget(): Promise<string> {
     mediaPaused: true,
     mediaTime: 0,
   };
-  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  sceneStore.update((s) => sceneAvecWidget(s, w));
   await commitScene();
   return w.id;
 }
@@ -82,8 +117,9 @@ export async function createChatWidget(): Promise<void> {
     rotateY: 0,
     chatFiltre: "unifie",
     taillePolice: 16,
+    chatStyle: "compact",
   };
-  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  sceneStore.update((s) => sceneAvecWidget(s, w));
   await commitScene();
 }
 
@@ -110,7 +146,7 @@ export async function createInputViewerWidget(): Promise<void> {
     inputSkin: "xbox",
     inputCouleur: "#8b5cf6",
   };
-  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  sceneStore.update((s) => sceneAvecWidget(s, w));
   await commitScene();
 }
 
@@ -135,7 +171,7 @@ export async function createSpeedrunWidget(): Promise<void> {
     srPolice: "Rajdhani",
     srTaillePolice: 27,
   };
-  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  sceneStore.update((s) => sceneAvecWidget(s, w));
   await commitScene();
 }
 
@@ -162,7 +198,7 @@ export async function createGoalWidget(): Promise<void> {
     goalMetrique: "followers",
     goalCible: 10,
   };
-  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  sceneStore.update((s) => sceneAvecWidget(s, w));
   await commitScene();
 }
 
@@ -192,7 +228,7 @@ export async function createCameraWidget(): Promise<void> {
     rotateY: 0,
     obsSource: "SOS-Caméra",
   };
-  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, w] }));
+  sceneStore.update((s) => sceneAvecWidget(s, w));
   await commitScene();
   // Création de la source OBS "SOS-Caméra" (device par défaut d'OBS).
   // Non-fatal : OBS offline → sync différé (auto-guérison au connect).
@@ -203,6 +239,10 @@ export async function createCameraWidget(): Promise<void> {
     );
   } catch {
   }
+  // Découpe la caméra à la forme du cadre dès la création (retry interne
+  // Rust si le capteur démarre ; non-fatal → auto-guérison au prochain
+  // commit si le masque n'a pas pu être appliqué).
+  await syncCameraMask();
 }
 
 /// Change le device caméra d'un widget camera. Maj locale + commit, puis
@@ -227,6 +267,113 @@ export async function setCameraDevice(id: string, deviceId: string | null): Prom
     );
   } catch {
   }
+  // forcer : un nouveau device peut changer la résolution native de la
+  // source → le masque doit être recalculé même si la forme n'a pas bougé.
+  await syncCameraMask(true);
+}
+
+/// Points du polygone du masque caméra (coords widget-local) — la forme
+/// EXACTE du trou destination-out découpé par diffusion.html : mêmes
+/// conditions (cadre actif + strokeWidth > 0 + pas de sansCadre), même
+/// générateur (registre TS = port du vanilla JS de diffusion.html).
+/// null = pas de forme → Rust retire les filtres, caméra rectangulaire.
+function pointsMasqueCamera(scene: Scene): [number, number][] | null {
+  const cam = scene.widgets.find((w) => w.type === "camera");
+  if (!cam || cam.sansCadre === true) return null;
+  const cadre = scene.cadreWidget;
+  if (!cadre || !cadre.actif || (cadre.strokeWidth || 0) <= 0) return null;
+  return pointsClipPathCadre(cadre.style, cam.largeur, cam.hauteur, cadre.strokeWidth || 4);
+}
+
+/// Clé du dernier masque synchronisé (JSON des points ou "sans-forme") :
+/// un commit sans changement de forme ne re-synchronise rien.
+let cleMasqueCamera = "";
+
+/// Découpe SOS-Caméra + SOS-Caméra-Fond à la forme du cadre du widget
+/// caméra (filtre OBS « Image mask/Blend », PNG généré par Rust en pixels
+/// de la source). Cache par forme : le masque ne dépend NI de la position
+/// (pixels de la source) NI des autres widgets — un move pur est un no-op.
+/// `forcer` = bust du cache (changement de device : résolution native
+/// potentiellement différente). La clé n'est mémorisée que si Rust
+/// retourne true (false = capteur en démarrage → retente au prochain
+/// commit, auto-guérison). Non-fatal : OBS offline → silencieux.
+export async function syncCameraMask(forcer = false): Promise<void> {
+  const scene = get(sceneStore);
+  const cam = scene.widgets.find((w) => w.type === "camera");
+  if (!cam) {
+    // Plus de caméra : reset (les filtres restent sur les inputs cachés,
+    // inoffensifs — la recréation du widget re-synchronisera).
+    cleMasqueCamera = "";
+    return;
+  }
+  const points = pointsMasqueCamera(scene);
+  const cle = points ? JSON.stringify(points) : "sans-forme";
+  if (!forcer && cle === cleMasqueCamera) return;
+  try {
+    // fit/zoom : les constantes de l'item caméra de commitScene (« remplir »,
+    // pas de zoom/rot/offset en v1) — Rust mappe via le même pipeline.
+    const applique = await tauri.cameraMaskSync(
+      get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+      points, cam.largeur, cam.hauteur, "remplir", 1
+    );
+    if (applique) {
+      cleMasqueCamera = cle;
+    }
+  } catch {
+    // OBS offline → silencieux (auto-guérison au prochain sync).
+  }
+}
+
+/// Hooks post-sync captures (ex. Just Chatting : renvoyer la scène DÉRIVÉE
+/// après le sync normal pour re-cacher les trous/fond de la nouvelle scène).
+/// Enregistrés via registerApresSyncCaptures — évite l'import inverse
+/// (justChatting.ts importe déjà scene.ts). Un hook appelle le wrapper Tauri
+/// directement, JAMAIS syncCapturesOBS (sinon re-enchaînement → boucle).
+const apresSyncCapturesHooks: Array<() => Promise<void> | void> = [];
+export function registerApresSyncCaptures(
+  fn: () => Promise<void> | void
+): void {
+  apresSyncCapturesHooks.push(fn);
+}
+
+/// Exécute les hooks post-sync (séquentiel, non-fatal chacun).
+async function runApresSyncCaptures(): Promise<void> {
+  for (const fn of apresSyncCapturesHooks) {
+    try {
+      await fn();
+    } catch {
+      // Hook non-fatal (ex. sync dérivée Just Chatting).
+    }
+  }
+}
+
+/// Sync captures OBS de la scène chargée + masque caméra. Remplace les
+/// appels directs tauri.sceneSyncCaptures des chargements de scène (boot,
+/// openScene, preset, connexion OBS) : le masque doit suivre la scène
+/// chargée (forme/taille du cadre caméra de CETTE scène). Non-fatal.
+export async function syncCapturesOBS(): Promise<void> {
+  try {
+    await tauri.sceneSyncCaptures(
+      get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
+    );
+  } catch {
+    // OBS offline → sources caméra créées à la prochaine connexion
+    // (ensure_camera au scene_sync_captures du connect — auto-guérison).
+  }
+  await syncCameraMask();
+  await runApresSyncCaptures();
+}
+
+/// Change la mise en forme des messages d'un widget chat ("compact" |
+/// "bulles"). Maj locale + commit.
+export async function setChatStyle(id: string, style: string): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, chatStyle: style } : w
+    ),
+  }));
+  await commitScene();
 }
 
 /// Change le filtre chat d'un widget. Maj locale + commit.
@@ -240,8 +387,10 @@ export async function setChatFiltre(id: string, filtre: string): Promise<void> {
   await commitScene();
 }
 
-/// Change la taille de police d'un widget chat. Maj locale + commit.
-export async function setChatTaillePolice(id: string, px: number): Promise<void> {
+/// Maj locale de la taille de police chat (pendant le geste slider). PAS
+/// d'invoke — le commit se fait au change/pointerup (pattern setMediaZoomLocal).
+/// Clamp 8–48.
+export function setChatTaillePoliceLocal(id: string, px: number): void {
   const p = Math.max(8, Math.min(48, Math.round(px)));
   sceneStore.update((s) => ({
     ...s,
@@ -249,6 +398,11 @@ export async function setChatTaillePolice(id: string, px: number): Promise<void>
       w.id === id ? { ...w, taillePolice: p } : w
     ),
   }));
+}
+
+/// Change la taille de police d'un widget chat. Maj locale + commit.
+export async function setChatTaillePolice(id: string, px: number): Promise<void> {
+  setChatTaillePoliceLocal(id, px);
   await commitScene();
 }
 
@@ -256,11 +410,9 @@ export async function setChatTaillePolice(id: string, px: number): Promise<void>
 /// police = id de police (voir POLICES_TITRE dans fonts.ts). taille = px (8-48).
 /// Maj locale + commit. Toutes les tailles internes du splitter sont en em →
 /// suit cette base (comme la taille de police du chat).
-export async function setSpeedrunPolice(
-  id: string,
-  police: string,
-  taille: number
-): Promise<void> {
+/// Maj locale police + taille speedrun (pendant le geste slider). PAS
+/// d'invoke — commit au change. Clamp taille 8–48.
+export function setSpeedrunPoliceLocal(id: string, police: string, taille: number): void {
   const t = Math.max(8, Math.min(48, Math.round(taille)));
   sceneStore.update((s) => ({
     ...s,
@@ -268,14 +420,24 @@ export async function setSpeedrunPolice(
       w.id === id ? { ...w, srPolice: police, srTaillePolice: t } : w
     ),
   }));
+}
+
+export async function setSpeedrunPolice(
+  id: string,
+  police: string,
+  taille: number
+): Promise<void> {
+  setSpeedrunPoliceLocal(id, police, taille);
   await commitScene();
 }
 
-/// Change la config du titre d'un widget (merge partiel + commit).
-/// Passer titre = "" ou undefined pour supprimer le titre.
+/// Change la config des titres d'un widget (merge partiel + commit).
+/// Jusqu'à 4 textes (titreHaut/Bas/Gauche/Droite, vide/undefined = aucun
+/// titre à cette position) + style partagé. Passer un texte undefined
+/// supprime le titre de cette position.
 export async function setWidgetTitre(
   id: string,
-  patch: Partial<Pick<Widget, "titre" | "titrePosition" | "titrePolice" | "titreTaille" | "titreGras" | "titreItalique" | "titreSouligne" | "titreEspacement" | "titreContourCouleur" | "titreContourEpaisseur">>
+  patch: Partial<Pick<Widget, "titreHaut" | "titreBas" | "titreGauche" | "titreDroite" | "titreCouleur" | "titreCouleurFin" | "titrePolice" | "titreTaille" | "titreGras" | "titreItalique" | "titreSouligne" | "titreEspacement" | "titreContourCouleur" | "titreContourEpaisseur">>
 ): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
@@ -284,13 +446,27 @@ export async function setWidgetTitre(
   await commitScene();
 }
 
-/// Change la config du titre du fond de l'application (merge partiel + commit).
-/// Passer bgTitre = "" ou undefined pour supprimer le titre du fond.
+/// Change la config des titres du fond de l'application (merge partiel +
+/// commit). Jusqu'à 4 textes (bgTitreHaut/Bas/Gauche/Droite, vide/undefined =
+/// aucun titre à cette position) + style partagé. Passer un texte undefined
+/// supprime le titre de cette position.
 export async function setBgTitre(
-  patch: Partial<Pick<Scene, "bgTitre" | "bgTitrePosition" | "bgTitrePolice" | "bgTitreTaille" | "bgTitreGras" | "bgTitreItalique" | "bgTitreSouligne" | "bgTitreEspacement" | "bgTitreContourCouleur" | "bgTitreContourEpaisseur">>
+  patch: Partial<Pick<Scene, "bgTitreHaut" | "bgTitreBas" | "bgTitreGauche" | "bgTitreDroite" | "bgTitreCouleur" | "bgTitreCouleurFin" | "bgTitrePolice" | "bgTitreTaille" | "bgTitreGras" | "bgTitreItalique" | "bgTitreSouligne" | "bgTitreEspacement" | "bgTitreContourCouleur" | "bgTitreContourEpaisseur">>
 ): Promise<void> {
   sceneStore.update((s) => ({ ...s, ...patch }));
   await commitScene();
+}
+
+/// Maj locale de la config input viewer (pendant le geste — ex. color picker
+/// oninput continu). PAS d'invoke — commit au change.
+export function setInputViewerConfigLocal(
+  id: string,
+  patch: Partial<Pick<Widget, "inputMode" | "inputLayout" | "inputSkin" | "inputCouleur" | "inputMapping">>
+): void {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, ...patch } : w)),
+  }));
 }
 
 /// Change la config d'un widget input viewer (merge partiel + commit).
@@ -298,19 +474,17 @@ export async function setInputViewerConfig(
   id: string,
   patch: Partial<Pick<Widget, "inputMode" | "inputLayout" | "inputSkin" | "inputCouleur" | "inputMapping">>
 ): Promise<void> {
-  sceneStore.update((s) => ({
-    ...s,
-    widgets: s.widgets.map((w) => (w.id === id ? { ...w, ...patch } : w)),
-  }));
+  setInputViewerConfigLocal(id, patch);
   await commitScene();
 }
 
-/// Change la config d'un widget speedrun (chemins ASL/LSS + settings ASL).
-/// Merge partiel + commit. Les chemins permettent le rechargement auto au
-/// montage du widget ; les settings sont aussi globaux (moteur unique).
+/// Change la config d'un widget speedrun (chemins ASL/LSS + settings ASL +
+/// disposition). Merge partiel + commit. Les chemins permettent le
+/// rechargement auto au montage du widget ; les settings sont aussi globaux
+/// (moteur unique).
 export async function setSpeedrunConfig(
   id: string,
-  patch: Partial<Pick<Widget, "speedrunCheminAsl" | "speedrunCheminLss" | "speedrunSettings">>
+  patch: Partial<Pick<Widget, "speedrunCheminAsl" | "speedrunCheminLss" | "speedrunSettings" | "srLayout">>
 ): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
@@ -319,13 +493,19 @@ export async function setSpeedrunConfig(
   await commitScene();
 }
 
-/// Change la config d'un widget goal (plateforme, métrique, cible).
+/// Change la config d'un widget goal (plateforme, métrique, cible, goal lié).
 /// Merge partiel + commit → snapshot WS → la diffusion met à jour le rendu.
 /// Passer goalCible: undefined dans le patch ne supprime pas la clé (merge
 /// {...w, ...patch}) — utiliser la forme { goalCible: <nombre> }.
+/// goalId: id du Creator Goal Twitch à lier (mode lié) ; goalId: undefined
+/// DÉLIE le widget (retour mode manuel — la clé est omise à la sérialisation).
+/// Changer de plateforme hors twitch doit accompagner goalId: undefined
+/// (les Creator Goals n'existent que sur Twitch).
 export async function setGoalConfig(
   id: string,
-  patch: Partial<Pick<Widget, "goalPlateforme" | "goalMetrique" | "goalCible">>
+  patch: Partial<
+    Pick<Widget, "goalPlateforme" | "goalMetrique" | "goalCible" | "goalId">
+  >
 ): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
@@ -628,6 +808,13 @@ export async function commitScene(): Promise<void> {
       // OBS offline → message discret, pas de crash. La scène reste OK.
     }
   }
+  // Masque caméra : découpe SOS-Caméra/SOS-Caméra-Fond à la forme du cadre
+  // (cache-skip interne — un move pur ne re-synchronise rien, le masque est
+  // en pixels de la source, indépendant de la position).
+  await syncCameraMask();
+  // Just Chatting actif : obsSyncTrous vient de recaler SOS-Caméra sur le
+  // rect réel du widget → le hook renvoie la scène dérivée + rect JC.
+  await runApresSyncCaptures();
 }
 
 /// ===== Morphing (bulge/pinch — widgets média + fond de scène) =====
@@ -715,6 +902,9 @@ export async function deleteWidget(id: string): Promise<void> {
   }));
   selectedIdStore.set(null);
   await commitScene();
+  // Le widget supprimé était peut-être le dernier input-viewer → couper la
+  // capture si elle tournait (plus de rendu possible).
+  await syncInputViewerCapture();
 }
 
 /// Duplique un widget : copie tous les champs sauf id (nouvel uuid), z
@@ -743,10 +933,47 @@ export async function dupliquerWidget(id: string): Promise<string | null> {
     canvasW,
     canvasH
   );
-  sceneStore.update((s) => ({ ...s, widgets: [...s.widgets, copie] }));
+  sceneStore.update((s) => sceneAvecWidget(s, copie));
   selectedIdStore.set(copie.id);
   await commitScene();
   return copie.id;
+}
+
+/// Place un widget tout au premier plan ("avant") ou tout en arrière-plan
+/// ("arriere") de la pile. La caméra (z=5000, plage réservée) est EXCLUE du
+/// tri : les widgets normaux restent dans la bande 0..N-1, jamais au-dessus
+/// d'elle, et elle n'a pas de boutons -/+ (Widget.svelte).
+/// La bande non-caméra est renumérotée à chaque appel → z contigus, les
+/// trous laissés par les deletes sont comblés au passage (z négatif
+/// impossible : un widget < 0 passerait SOUS le fond .bg-layer z:0).
+/// Maj locale + commit (save + snapshot :4321 — le z est « style seulement »
+/// côté diffusion, aucun rebuild). No-op sur la caméra.
+export async function mettreWidgetPlan(
+  id: string,
+  sens: "avant" | "arriere"
+): Promise<void> {
+  sceneStore.update((s) => {
+    const tri = s.widgets
+      .filter((w) => w.type !== "camera")
+      .sort((a, b) => a.z - b.z);
+    const idx = tri.findIndex((w) => w.id === id);
+    if (idx === -1) return s;
+    const [w] = tri.splice(idx, 1);
+    if (sens === "avant") {
+      tri.push(w);
+    } else {
+      tri.unshift(w);
+    }
+    const zParId = new Map(tri.map((x, i) => [x.id, i]));
+    return {
+      ...s,
+      widgets: s.widgets.map((x) => {
+        const z = zParId.get(x.id);
+        return z !== undefined && z !== x.z ? { ...x, z } : x;
+      }),
+    };
+  });
+  await commitScene();
 }
 
 /// Déduit le kind ("image"|"video") d'un chemin relatif média.
@@ -780,7 +1007,7 @@ export async function importMedia(): Promise<void> {
       await commitScene();
     }
   } catch (e) {
-    alert("Import refusé : " + e);
+    alert(get(t)("commun.importRefuse", { erreur: String(e) }));
   }
 }
 
@@ -828,10 +1055,10 @@ export async function ajouterALaBibliotheque(paths: string[]): Promise<void> {
       }
     }
     if (res.erreurs.length > 0) {
-      alert("Import refusé :\n" + res.erreurs.join("\n"));
+      alert(get(t)("commun.importRefuseListe", { erreurs: res.erreurs.join("\n") }));
     }
   } catch (e) {
-    alert("Import refusé : " + e);
+    alert(get(t)("commun.importRefuse", { erreur: String(e) }));
   }
 }
 
@@ -879,6 +1106,91 @@ export async function transformerEnWidget(rel: string): Promise<void> {
   await commitScene();
 }
 
+/// Repasse un widget média en « flottant » (sansCadre: true — opt-out du
+/// cadre de scène, affichage brut comme au drop). Symétrique de
+/// transformerEnWidget, sans toucher la bibliothèque : l'entrée drop a déjà
+/// été consommée au passage en widget, et un média posé hors bibliothèque
+/// n'a pas de ligne à recréer. Puis commit.
+export async function transformerEnFlottant(id: string): Promise<void> {
+  await setWidgetSansCadre(id, true);
+}
+
+/// Active/retire le cadre de scène sur UN widget (flag sansCadre — opt-out
+/// par instance, valable pour tous les types : média, chat, caméra, …).
+/// Réactivation (v=false) : si le widget porte un média encore listé dans la
+/// bibliothèque (drop), l'entrée est consommée — sémantique identique à
+/// transformerEnWidget. Commit immédiat.
+export async function setWidgetSansCadre(id: string, v: boolean): Promise<void> {
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((x) =>
+      x.id === id ? { ...x, sansCadre: v } : x
+    ),
+  }));
+  if (!v && w?.media) {
+    bibliothequeMedias.update((l) => l.filter((m) => m.rel !== w.media));
+  }
+  await commitScene();
+}
+
+/// Pose la jacquette du jeu Twitch sur la scène courante. Ordre fixe :
+/// 1) twitch_live_poser_jacquette télécharge le JPEG dans
+///    medias/jacquette-<gameId>.jpg (écrasé) — échec ⇒ scène intacte ;
+/// 2) upsert : un widget image dont `media` finit par ce nom de fichier est
+///    mis à jour (media + kind + mediaNom seulement), sinon créé ~190×253
+///    en haut à gauche (z hors plage caméra, mêmes défauts que createWidget) ;
+/// 3) un seul commitScene. Pas de game_id persisté sur le widget — le nom
+///    de fichier sert de clé de déduplication (un second clic n'empile pas).
+export async function poserJacquette(
+  boxArtUrl: string,
+  gameId: string,
+  nom: string
+): Promise<void> {
+  const rel = await tauri.twitchLivePoserJacquette(boxArtUrl, gameId);
+  const nomFichier = `jacquette-${gameId}.jpg`;
+  const estJacquette = (w: Widget): boolean =>
+    w.type === "media" && (w.media ?? "").endsWith(nomFichier);
+  const current = get(sceneStore);
+  if (current.widgets.some(estJacquette)) {
+    sceneStore.update((s) => ({
+      ...s,
+      widgets: s.widgets.map((w) =>
+        estJacquette(w) ? { ...w, media: rel, kind: "image", mediaNom: nom } : w
+      ),
+    }));
+  } else {
+    const z = current.widgets
+      .filter((w) => w.type !== "camera")
+      .reduce((m, w) => Math.max(m, w.z), -1) + 1;
+    const w: Widget = {
+      id: crypto.randomUUID(),
+      type: "media",
+      x: 100,
+      y: 100,
+      largeur: 190,
+      hauteur: 253,
+      z,
+      rotateX: 0,
+      rotateY: 0,
+      mediaFit: "ajuster",
+      mediaZoom: 1,
+      mediaRot: 0,
+      mediaOffsetX: 0,
+      mediaOffsetY: 0,
+      mediaMiroirH: false,
+      mediaMiroirV: false,
+      mediaPaused: true,
+      mediaTime: 0,
+      media: rel,
+      kind: "image",
+      mediaNom: nom,
+    };
+    sceneStore.update((s) => sceneAvecWidget(s, w));
+  }
+  await commitScene();
+}
+
 /// Retire le média d'un widget (widgets chat / input viewer / speedrun :
 /// média de fond ; widgets média : retour au fond par défaut). Maj locale +
 /// commit. Ne supprime PAS le fichier dans medias/ (un autre widget peut le
@@ -907,7 +1219,7 @@ export async function importFond(): Promise<void> {
       await commitScene();
     }
   } catch (e) {
-    alert("Import refusé : " + e);
+    alert(get(t)("commun.importRefuse", { erreur: String(e) }));
   }
 }
 
@@ -930,6 +1242,16 @@ export function setBgZoomLocal(zoom: number): void {
 export function setBgRotLocal(rotDeg: number): void {
   const r = Math.max(-180, Math.min(180, rotDeg));
   sceneStore.update((s) => ({ ...s, bgRot: r }));
+}
+
+/// Maj locale de l'inclinaison 3D du fond (pendant le drag boule gizmo).
+/// PAS d'invoke — commit au pointerup. Clamp -90 … 90 (tilt seul, pas de
+/// miroir : les flips du fond sont les toggles bgMiroirH/V). Miroir de
+/// rotateWidgetLocal côté widgets.
+export function rotateFondLocal(rx: number, ry: number): void {
+  const cx = Math.max(-90, Math.min(90, rx));
+  const cy = Math.max(-90, Math.min(90, ry));
+  sceneStore.update((s) => ({ ...s, bgRotX: cx, bgRotY: cy }));
 }
 
 /// Maj locale de l'offset X fond (pendant le geste range). PAS d'invoke.
@@ -972,7 +1294,7 @@ export function setBgPixelLocal(v: number): void { setBgEffetLocal("bgPixel", v,
 /// commit. NE touche PAS les effets (cf. resetFondEffets) — même découpage
 /// que les widgets média.
 export async function resetFondTransformation(): Promise<void> {
-  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0, bgOffsetX: 0, bgOffsetY: 0 }));
+  sceneStore.update((s) => ({ ...s, bgZoom: 1, bgRot: 0, bgRotX: 0, bgRotY: 0, bgOffsetX: 0, bgOffsetY: 0 }));
   await commitScene();
 }
 
@@ -1049,9 +1371,10 @@ export async function setWidgetMediaPaused(id: string, paused: boolean): Promise
   await commitScene();
 }
 
-/// Change la position (seek) d'un widget vidéo → commit (snapshot :4321).
-/// Dashboard : applique mediaTime une fois pour la vignette (frame figée).
-export async function setWidgetMediaTime(id: string, time: number): Promise<void> {
+/// Maj locale de la position vidéo (pendant le drag du slider seek). PAS
+/// d'invoke — la vignette dashboard suit en live, le commit (snapshot :4321)
+/// se fait au release (onchange). Clamp ≥ 0.
+export function setWidgetMediaTimeLocal(id: string, time: number): void {
   const t = Math.max(0, time);
   sceneStore.update((s) => ({
     ...s,
@@ -1059,6 +1382,12 @@ export async function setWidgetMediaTime(id: string, time: number): Promise<void
       w.id === id ? { ...w, mediaTime: t } : w
     ),
   }));
+}
+
+/// Change la position (seek) d'un widget vidéo → commit (snapshot :4321).
+/// Dashboard : applique mediaTime une fois pour la vignette (frame figée).
+export async function setWidgetMediaTime(id: string, time: number): Promise<void> {
+  setWidgetMediaTimeLocal(id, time);
   await commitScene();
 }
 
@@ -1068,10 +1397,16 @@ export async function setBgPaused(paused: boolean): Promise<void> {
   await commitScene();
 }
 
-/// Change la position (seek) du fond vidéo → commit (snapshot :4321).
-export async function setBgTime(time: number): Promise<void> {
+/// Maj locale de la position du fond vidéo (pendant le drag du slider seek).
+/// PAS d'invoke — commit au release. Même règle que setWidgetMediaTimeLocal.
+export function setBgTimeLocal(time: number): void {
   const t = Math.max(0, time);
   sceneStore.update((s) => ({ ...s, bgTime: t }));
+}
+
+/// Change la position (seek) du fond vidéo → commit (snapshot :4321).
+export async function setBgTime(time: number): Promise<void> {
+  setBgTimeLocal(time);
   await commitScene();
 }
 
@@ -1085,7 +1420,7 @@ export async function createObsTrouSource(
   target: string | null
 ): Promise<string> {
   const w = get(sceneStore).widgets.find((x) => x.id === id);
-  if (!w) throw new Error("Widget introuvable");
+  if (!w) throw new Error(get(t)("scene.widgetIntrouvable"));
   const sourceName = "SOS-Trou-" + id.slice(0, 8);
   const name = await tauri.obsCreateTrouSource(
     get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
@@ -1128,7 +1463,7 @@ export async function linkExistingObsSource(
   sourceName: string
 ): Promise<string> {
   const w = get(sceneStore).widgets.find((x) => x.id === id);
-  if (!w) throw new Error("Widget introuvable");
+  if (!w) throw new Error(get(t)("scene.widgetIntrouvable"));
   const name = await tauri.obsLinkExistingSource(
     get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
     sourceName, w.x, w.y, w.largeur, w.hauteur
@@ -1153,7 +1488,7 @@ export async function createObsTrouFromPc(
   target: string | null
 ): Promise<string> {
   const w = get(sceneStore).widgets.find((x) => x.id === id);
-  if (!w) throw new Error("Widget introuvable");
+  if (!w) throw new Error(get(t)("scene.widgetIntrouvable"));
   const sourceName = "SOS-Trou-" + id.slice(0, 8);
   const name = await tauri.obsCreateTrouFromPc(
     get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
@@ -1309,7 +1644,7 @@ export function computeSnap(
   };
 }
 
-// ===== Cadres SVG (widget + app) =====
+// ===== Cadre SVG unifié (widgets + bord du canvas) =====
 
 const CADRE_DEFAUT: CadreConfig = {
   style: "carre",
@@ -1320,20 +1655,27 @@ const CADRE_DEFAUT: CadreConfig = {
   actif: false,
 };
 
-/// Met à jour le cadre des widgets (merge partiel + commit).
-export async function mettreAJourCadreScene(patch: Partial<CadreConfig>): Promise<void> {
-  sceneStore.update((s) => {
-    const cadreActuel = s.cadreWidget ?? { ...CADRE_DEFAUT };
-    return { ...s, cadreWidget: { ...cadreActuel, ...patch } };
-  });
-  await commitScene();
-}
+/// Cadre posé automatiquement à la création d'un widget quand la scène n'a
+/// jamais eu de cadre configuré (voir sceneAvecWidget) : MGStyle, bordure
+/// noire + accent violet marque StreamOS, épaisseur renforcée (50 px — test).
+const CADRE_WIDGET_DEFAUT: CadreConfig = {
+  ...CADRE_DEFAUT,
+  style: "mgstyle",
+  strokeWidth: 50,
+  couleur: "#000000",
+  couleurFin: "#8b5cf6",
+  actif: true,
+  bordActif: true,
+};
 
-/// Met à jour le cadre de l'application (bord canvas, merge partiel + commit).
-export async function mettreAJourCadreApp(patch: Partial<CadreConfig>): Promise<void> {
+/// Met à jour LE cadre de la scène (un seul système : widgets + bord canvas).
+/// Écrit cadreWidget (champ canonique) et purge cadreApp (champ legacy —
+/// migré par le Rust au chargement, plus jamais une vérité séparée).
+/// `variante` (legacy presets) n'est plus écrit : purgé à chaque update.
+export async function mettreAJourCadre(patch: Partial<CadreConfig>): Promise<void> {
   sceneStore.update((s) => {
-    const cadreActuel = s.cadreApp ?? { ...CADRE_DEFAUT };
-    return { ...s, cadreApp: { ...cadreActuel, ...patch } };
+    const cadreActuel = s.cadreWidget ?? { ...CADRE_WIDGET_DEFAUT };
+    return { ...s, cadreWidget: { ...cadreActuel, ...patch, variante: undefined }, cadreApp: undefined };
   });
   await commitScene();
 }

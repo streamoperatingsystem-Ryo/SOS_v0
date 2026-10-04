@@ -24,6 +24,11 @@
 //! + Détection « objectif atteint » : les widgets `goal` de la scène courante
 //!   sont vérifiés à chaque mesure fraîche (viewers ET communauté) → frame
 //!   `goal-atteint` au crossing ≥ cible, réarmée quand le compteur redescend.
+//! + Creator Goals Twitch (widgets goal LIÉS par goalId) : GET /goals au
+//!   tick twitch → frames `{"type":"goal-twitch",id,goal_type,description,
+//!   actuel,cible,atteint,termine}` dédupliquées par goal ; disparus du GET =
+//!   terminés → termine:true. Temps réel : EventSub channel.goal.* appelle
+//!   `on_goal_event` (mêmes frames + atteinte). Scope channel:read:goals.
 
 use serde_json::json;
 use std::collections::{HashMap, HashSet};
@@ -98,6 +103,19 @@ pub fn demarrer(app: AppHandle, chat_tx: broadcast::Sender<String>) -> tauri::as
                     }
                     publier_communaute(&app, &chat_tx, "twitch", &c, &mut commus);
                     verifier_objectifs(&app, &chat_tx, "twitch", &metriques_commu(&c));
+                    // Creator Goals déclarés (widgets liés par goalId) : 1 GET,
+                    // non-fatal. 403 = vieux token sans channel:read:goals →
+                    // need_reauth (même mécanique que les sections En direct).
+                    match crate::twitch_helix::creator_goals(&uid, &access).await {
+                        Ok(goals) => {
+                            publier_goals(&app, &chat_tx, &goals);
+                            verifier_objectifs_goals(&app, &chat_tx, &goals);
+                        }
+                        Err(crate::twitch_helix::HelixError::NeedReauth) => {
+                            let _ = app.emit("twitch:need_reauth", ());
+                        }
+                        Err(e) => eprintln!("[Viewers] twitch goals err: {:?}", e),
+                    }
                 }
             } else {
                 deconnecte(&app, &chat_tx, &mut plats, "twitch");
@@ -352,6 +370,11 @@ pub fn verifier_objectifs(
         if w.widget_type != "goal" {
             continue;
         }
+        // Widget LIÉ à un Creator Goal Twitch : sa valeur vient des frames
+        // goal-twitch (verifier_objectifs_goals), pas des métriques mesurées.
+        if w.goalId.is_some() {
+            continue;
+        }
         let (Some(p), Some(m), Some(cible)) = (
             w.goalPlateforme.as_deref(),
             w.goalMetrique.as_deref(),
@@ -373,6 +396,174 @@ pub fn verifier_objectifs(
                 "metrique": m,
                 "count": valeur,
                 "cible": cible,
+            });
+            let _ = chat_tx.send(msg.to_string());
+            let _ = app.emit("goal-atteint", &msg);
+        }
+    }
+}
+
+// =============================================================================
+// CREATOR GOALS TWITCH (widgets goal LIÉS par goalId — frame "goal-twitch")
+// =============================================================================
+
+/// Dernières valeurs publiées par goal id (dedup par tuple complet, comme
+/// `commus` — partagé entre le poll du tick ET les events EventSub).
+fn goals_publies() -> &'static Mutex<HashMap<String, crate::twitch_helix::CreatorGoal>> {
+    static S: OnceLock<Mutex<HashMap<String, crate::twitch_helix::CreatorGoal>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Envoie UNE frame `{"type":"goal-twitch",...}` sur chat_tx + emit miroir
+/// dashboard. Pas de dedup ici (fait par l'appelant).
+fn envoyer_goal(
+    app: &AppHandle,
+    chat_tx: &broadcast::Sender<String>,
+    g: &crate::twitch_helix::CreatorGoal,
+) {
+    let msg = json!({
+        "type": "goal-twitch",
+        "id": g.id,
+        "goal_type": g.goal_type,
+        "description": g.description,
+        "actuel": g.actuel,
+        "cible": g.cible,
+        "atteint": g.atteint,
+        "termine": g.termine,
+    });
+    let _ = chat_tx.send(msg.to_string());
+    let _ = app.emit("goal-twitch", &msg);
+}
+
+/// Un goal frais (poll ou EventSub) : frame si le tuple a changé (dedup par
+/// la map partagée) puis mémorisation.
+fn publier_un_goal(
+    app: &AppHandle,
+    chat_tx: &broadcast::Sender<String>,
+    g: &crate::twitch_helix::CreatorGoal,
+) {
+    {
+        let mut map = goals_publies().lock().unwrap();
+        if map.get(&g.id) == Some(g) {
+            return;
+        }
+        map.insert(g.id.clone(), g.clone());
+    }
+    envoyer_goal(app, chat_tx, g);
+}
+
+/// Lot de goals issu du GET /goals (ne retourne que les actifs) : publish
+/// des changés + frame `termine:true` pour ceux qui ont disparu (fin du
+/// goal ratée par EventSub, ou suppression dans le Creator Dashboard).
+fn publier_goals(
+    app: &AppHandle,
+    chat_tx: &broadcast::Sender<String>,
+    goals: &[crate::twitch_helix::CreatorGoal],
+) {
+    let mut map = goals_publies().lock().unwrap();
+    let actifs: HashSet<&str> = goals.iter().map(|g| g.id.as_str()).collect();
+    let termines: Vec<crate::twitch_helix::CreatorGoal> = map
+        .iter()
+        .filter(|(id, _)| !actifs.contains(id.as_str()))
+        .map(|(_, g)| g.clone())
+        .collect();
+    for g in &termines {
+        map.remove(&g.id);
+    }
+    for g in goals {
+        if map.get(&g.id) == Some(g) {
+            continue;
+        }
+        map.insert(g.id.clone(), g.clone());
+    }
+    drop(map); // hors du lock : envois WS/emit
+    for mut g in termines {
+        g.termine = true;
+        envoyer_goal(app, chat_tx, &g);
+    }
+    for g in goals {
+        envoyer_goal(app, chat_tx, g);
+    }
+}
+
+/// Entrée EventSub (twitch_eventsub.rs) : un event channel.goal.begin/
+/// progress/end → parse → frame goal-twitch + atteinte des widgets liés.
+/// `termine` = true pour channel.goal.end (is_achieved = verdict final de
+/// Twitch ; null sur les events begin/progress → dérivé actuel >= cible).
+/// Non-fatal : event malformé ignoré (un goal cassé ne coupe pas la socket).
+pub fn on_goal_event(app: &AppHandle, termine: bool, event: &serde_json::Value) {
+    let Some(chat_tx) = app
+        .try_state::<crate::scenes::ScenesState>()
+        .map(|s| s.chat_tx.clone())
+    else {
+        return;
+    };
+    let (Some(id), Some(goal_type), Some(actuel), Some(cible)) = (
+        event["id"].as_str(),
+        event["type"].as_str(),
+        event["current_amount"].as_u64(),
+        event["target_amount"].as_u64(),
+    ) else {
+        return;
+    };
+    let g = crate::twitch_helix::CreatorGoal {
+        id: id.to_string(),
+        goal_type: goal_type.to_string(),
+        description: event["description"].as_str().unwrap_or_default().to_string(),
+        actuel,
+        cible,
+        atteint: event["is_achieved"].as_bool().unwrap_or(actuel >= cible),
+        termine,
+    };
+    publier_un_goal(app, &chat_tx, &g);
+    verifier_objectifs_goals(app, &chat_tx, &[g]);
+}
+
+/// Widgets `goal` LIÉS (goalId présent) : l'atteinte se lit sur le goal
+/// Twitch lui-même (is_achieved / actuel>=cible — les régressions réarment,
+/// même règle que le mode manuel). Clé d'atteinte `widget_id:goal_id` :
+/// relier un AUTRE goal réarme la célébration naturellement.
+pub fn verifier_objectifs_goals(
+    app: &AppHandle,
+    chat_tx: &broadcast::Sender<String>,
+    goals: &[crate::twitch_helix::CreatorGoal],
+) {
+    if goals.is_empty() {
+        return;
+    }
+    let Some(state) = app.try_state::<crate::scenes::ScenesState>() else {
+        return;
+    };
+    let scene = state.scene.lock().unwrap().clone();
+    let mut atteints = objectifs_atteints().lock().unwrap();
+    // Nettoyage : clés de widgets goal supprimés → sortie du set. La clé liée
+    // est "widget_id:goal_id" → on teste le préfixe avant ':'.
+    let ids_goal: HashSet<&str> = scene
+        .widgets
+        .iter()
+        .filter(|w| w.widget_type == "goal")
+        .map(|w| w.id.as_str())
+        .collect();
+    atteints.retain(|k| ids_goal.contains(k.split(':').next().unwrap_or(k.as_str())));
+    for w in &scene.widgets {
+        if w.widget_type != "goal" {
+            continue;
+        }
+        let Some(gid) = w.goalId.as_deref() else {
+            continue;
+        };
+        let Some(g) = goals.iter().find(|g| g.id == gid) else {
+            continue;
+        };
+        let cle = format!("{}:{}", w.id, g.id);
+        if evaluer_objectif(&mut atteints, &cle, g.actuel, g.cible) {
+            let msg = json!({
+                "type": "goal-atteint",
+                "widget_id": w.id,
+                "plateforme": "twitch",
+                "metrique": g.goal_type,
+                "count": g.actuel,
+                "cible": g.cible,
             });
             let _ = chat_tx.send(msg.to_string());
             let _ = app.emit("goal-atteint", &msg);

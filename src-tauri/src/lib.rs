@@ -3,9 +3,11 @@ mod alertes;
 mod commandes;
 mod config;
 mod ecran_attente;
+mod just_chatting;
 mod pad_numerique;
 mod input_viewer;
 mod kick;
+mod mask_png;
 mod obs;
 mod obs_trou;
 mod pc_enum;
@@ -15,6 +17,7 @@ mod scenes;
 mod server;
 mod twitch_auth;
 mod twitch_chat;
+mod twitch_emotes;
 mod twitch_eventsub;
 mod viewers;
 mod twitch_helix;
@@ -38,8 +41,8 @@ use raccourcis::{
     raccourcis_appliquer, raccourcis_etat, raccourcis_masquer, raccourcis_moniteurs,
 };
 use speedrun::commands::{
-    speedrun_action_manuelle, speedrun_arreter, speedrun_baseline_enregistrer,
-    speedrun_baseline_lire, speedrun_charger_asl, speedrun_charger_lss,
+    speedrun_action_manuelle, speedrun_aller_split, speedrun_arreter,
+    speedrun_charger_asl, speedrun_charger_lss,
     speedrun_demarrer, speedrun_est_actif, speedrun_lire_config,
     speedrun_maj_settings, speedrun_maj_settings_asl, speedrun_sauver_config,
 };
@@ -58,7 +61,7 @@ fn get_scene(state: tauri::State<ScenesState>) -> scene::Scene {
 }
 
 #[tauri::command]
-fn update_scene(app: AppHandle, state: tauri::State<ScenesState>, scene: scene::Scene) -> Result<(), String> {
+async fn update_scene(app: AppHandle, state: tauri::State<'_, ScenesState>, scene: scene::Scene) -> Result<(), String> {
     // 1. Muter l'état unique
     {
         let mut current = state.scene.lock().unwrap();
@@ -125,8 +128,8 @@ fn scene_courante(app: AppHandle, state: tauri::State<ScenesState>) -> Result<Sc
 /// Liste les métadonnées des presets embarqués (galerie). Parse non-fatal :
 /// un JSON cassé est loggé + absent de la liste.
 #[tauri::command]
-fn presets_lister() -> Vec<presets::PresetInfo> {
-    presets::lister()
+fn presets_lister(app: AppHandle) -> Vec<presets::PresetInfo> {
+    presets::lister(&app)
 }
 
 /// Crée une NOUVELLE scène depuis un preset embarqué (bouton « + Scène » →
@@ -166,6 +169,24 @@ fn onboarding_etat(app: AppHandle) -> bool {
 #[tauri::command]
 fn onboarding_marquer_fait(app: AppHandle) -> Result<(), String> {
     config::marquer_onboarding_fait(&app)
+}
+
+/// Langue de l'UI persistée (langue.json). None = jamais choisie → le front
+/// détecte navigator.language (fallback "fr").
+#[tauri::command]
+fn langue_etat(app: AppHandle) -> Option<String> {
+    config::lire_langue(&app)
+}
+
+/// Persiste la langue de l'UI (langue.json). Garde-fou minimal : code court
+/// non vide — la whitelist des langues vit côté front (stores/langue.ts).
+#[tauri::command]
+fn langue_sauver(app: AppHandle, langue: String) -> Result<(), String> {
+    let l = langue.trim();
+    if l.is_empty() || l.len() > 10 {
+        return Err("code langue invalide".to_string());
+    }
+    config::sauver_langue(&app, l)
 }
 
 #[tauri::command]
@@ -309,8 +330,9 @@ fn validate_and_copy_media_limite(
 
 /// Remuxe un MKV en MP4 via le sidecar ffmpeg (`-c copy -sn -movflags
 /// +faststart`). Sans réencodage — rapide, préserve la qualité. Échoue si un
-/// flux n'est pas compatible MP4 (ex. HEVC, Opus hors profil). Blocking sync :
-/// tourne sur un thread worker Tauri (pas le thread UI) → pas de gel.
+/// flux n'est pas compatible MP4 (ex. HEVC, Opus hors profil). Bloquant :
+/// atteint uniquement via les commandes `async` + `spawn_blocking` des imports
+/// — JAMAIS sur le thread UI (gel « Ne répond plus », corrigé 2026-09-27).
 fn remux_to_mp4(app: &AppHandle, src: &std::path::Path, dest: &std::path::Path) -> Result<(), String> {
     use tauri_plugin_shell::ShellExt;
 
@@ -347,6 +369,8 @@ fn remux_to_mp4(app: &AppHandle, src: &std::path::Path, dest: &std::path::Path) 
 /// (mkv remuxé en mp4 via sidecar ffmpeg) — sauf `video_sans_limite`
 /// (écran d'attente : pas de cap vidéo). Aucune mutation de la scène —
 /// l'appelant mutera le widget ciblé ou les champs fond après coup.
+/// ⚠️ BLOQUANT (dialog natif + I/O disque + remux) : n'appeler que depuis
+/// `spawn_blocking` dans une commande `async` — jamais sur le thread UI.
 fn pick_and_copy_media(
     app: &AppHandle,
     video_sans_limite: bool,
@@ -383,12 +407,18 @@ fn pick_and_copy_media(
 /// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo. Vidéo : mp4/webm/mkv ≤ 80 Mo
 /// (mkv remuxé en mp4 via sidecar ffmpeg).
 #[tauri::command]
-fn import_media(app: AppHandle, _widget_id: String) -> Result<Option<(String, String)>, String> {
-    // Helper commun : dialog + validation + copie (pas de mutation scène).
-    let Some((rel, _kind, nom)) = pick_and_copy_media(&app, false)? else {
-        return Ok(None); // dialog annulé
-    };
-    Ok(Some((rel, nom)))
+async fn import_media(app: AppHandle, _widget_id: String) -> Result<Option<(String, String)>, String> {
+    // Dialog natif + copie/remux sur le pool bloquant Tokio — jamais sur le
+    // thread UI (la fenêtre reste déplaçable pendant l'import).
+    tauri::async_runtime::spawn_blocking(move || {
+        // Helper commun : dialog + validation + copie (pas de mutation scène).
+        let Some((rel, _kind, nom)) = pick_and_copy_media(&app, false)? else {
+            return Ok(None); // dialog annulé
+        };
+        Ok(Some((rel, nom)))
+    })
+    .await
+    .map_err(|e| format!("import_media: {}", e))?
 }
 
 /// Résultat d'un import multi-fichiers : succès + erreurs concaténées.
@@ -406,25 +436,31 @@ struct ImportCheminsResult {
 /// bytes + copie/remux MKV→MP4 vers medias/. AUCUNE mutation de scène —
 /// le frontend range les résultats dans la bibliothèque médias.
 #[tauri::command]
-fn import_media_from_paths(
+async fn import_media_from_paths(
     app: AppHandle,
     paths: Vec<String>,
 ) -> Result<ImportCheminsResult, String> {
-    let mut ok = Vec::new();
-    let mut erreurs = Vec::new();
-    for p in &paths {
-        let src = std::path::Path::new(p);
-        let nom = src
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or(p.as_str())
-            .to_string();
-        match validate_and_copy_media(&app, src) {
-            Ok(t) => ok.push(t),
-            Err(e) => erreurs.push(format!("{} : {}", nom, e)),
+    // Boucle de copie/remux (jusqu'à N fichiers) sur le pool bloquant Tokio —
+    // jamais sur le thread UI.
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut ok = Vec::new();
+        let mut erreurs = Vec::new();
+        for p in &paths {
+            let src = std::path::Path::new(p);
+            let nom = src
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or(p.as_str())
+                .to_string();
+            match validate_and_copy_media(&app, src) {
+                Ok(t) => ok.push(t),
+                Err(e) => erreurs.push(format!("{} : {}", nom, e)),
+            }
         }
-    }
-    Ok(ImportCheminsResult { ok, erreurs })
+        Ok(ImportCheminsResult { ok, erreurs })
+    })
+    .await
+    .map_err(|e| format!("import_media_from_paths: {}", e))?
 }
 
 /// Importe un média (image OU vidéo) comme fond de scène : dialog → validation
@@ -433,12 +469,17 @@ fn import_media_from_paths(
 /// store puis commit via update_scene (un seul écrivain, cf. import_media).
 /// Mêmes limites que import_media (helper commun pick_and_copy_media).
 #[tauri::command]
-fn import_fond(app: AppHandle) -> Result<Option<String>, String> {
-    // Helper commun : dialog + validation + copie (pas de mutation scène).
-    let Some((rel, _kind, _nom)) = pick_and_copy_media(&app, false)? else {
-        return Ok(None); // dialog annulé
-    };
-    Ok(Some(rel))
+async fn import_fond(app: AppHandle) -> Result<Option<String>, String> {
+    // Dialog + copie/remux sur le pool bloquant Tokio (pas le thread UI).
+    tauri::async_runtime::spawn_blocking(move || {
+        // Helper commun : dialog + validation + copie (pas de mutation scène).
+        let Some((rel, _kind, _nom)) = pick_and_copy_media(&app, false)? else {
+            return Ok(None); // dialog annulé
+        };
+        Ok(Some(rel))
+    })
+    .await
+    .map_err(|e| format!("import_fond: {}", e))?
 }
 
 /// Importe un média (image OU vidéo) pour une alerte : dialog filtré selon le
@@ -450,39 +491,44 @@ fn import_fond(app: AppHandle) -> Result<Option<String>, String> {
 /// Le média est servi par :4321 sur /medias/. Vidéo mkv acceptée (remuxée en
 /// mp4 via sidecar ffmpeg).
 #[tauri::command]
-fn import_alerte_media(
+async fn import_alerte_media(
     app: AppHandle,
     kind_attendu: String,
 ) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
+    // Dialog natif + copie/remux sur le pool bloquant Tokio (pas le thread UI).
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
 
-    // 1. Dialog fichier filtré selon le kind attendu.
-    let (filtre_nom, exts): (&str, &[&str]) = if kind_attendu == "video" {
-        ("Vidéos", VIDEO_EXT)
-    } else {
-        ("Images", IMG_EXT)
-    };
-    let file = app
-        .dialog()
-        .file()
-        .add_filter(filtre_nom, exts)
-        .blocking_pick_file();
-    let Some(file) = file else {
-        return Ok(None); // dialog annulé
-    };
-    let src: std::path::PathBuf = file
-        .into_path()
-        .map_err(|e| format!("Chemin invalide: {}", e))?;
+        // 1. Dialog fichier filtré selon le kind attendu.
+        let (filtre_nom, exts): (&str, &[&str]) = if kind_attendu == "video" {
+            ("Vidéos", VIDEO_EXT)
+        } else {
+            ("Images", IMG_EXT)
+        };
+        let file = app
+            .dialog()
+            .file()
+            .add_filter(filtre_nom, exts)
+            .blocking_pick_file();
+        let Some(file) = file else {
+            return Ok(None); // dialog annulé
+        };
+        let src: std::path::PathBuf = file
+            .into_path()
+            .map_err(|e| format!("Chemin invalide: {}", e))?;
 
-    // 2. Validation + copie (helper commun) + garde-fou kind.
-    let (rel, kind, _nom) = validate_and_copy_media(&app, &src)?;
-    if kind != kind_attendu {
-        return Err(format!(
-            "Type de fichier inattendu : {} attendu, {} reçu",
-            kind_attendu, kind
-        ));
-    }
-    Ok(Some(rel))
+        // 2. Validation + copie (helper commun) + garde-fou kind.
+        let (rel, kind, _nom) = validate_and_copy_media(&app, &src)?;
+        if kind != kind_attendu {
+            return Err(format!(
+                "Type de fichier inattendu : {} attendu, {} reçu",
+                kind_attendu, kind
+            ));
+        }
+        Ok(Some(rel))
+    })
+    .await
+    .map_err(|e| format!("import_alerte_media: {}", e))?
 }
 
 /// Importe un son (mp3/ogg/wav ≤ 10 Mo) pour une alerte : dialog fichier
@@ -491,60 +537,65 @@ fn import_alerte_media(
 /// `None` si dialog annulé. Le son est servi par :4321 sur /medias/ (le même
 /// dossier que les médias de scène).
 #[tauri::command]
-fn import_son(app: AppHandle) -> Result<Option<String>, String> {
-    use std::fs;
-    use std::io::Read;
-    use tauri_plugin_dialog::DialogExt;
+async fn import_son(app: AppHandle) -> Result<Option<String>, String> {
+    // Dialog natif + copie sur le pool bloquant Tokio (pas le thread UI).
+    tauri::async_runtime::spawn_blocking(move || {
+        use std::fs;
+        use std::io::Read;
+        use tauri_plugin_dialog::DialogExt;
 
-    // 1. Dialog fichier (filtre « Sons »)
-    let file = app
-        .dialog()
-        .file()
-        .add_filter("Sons", AUDIO_EXT)
-        .blocking_pick_file();
-    let Some(file) = file else {
-        return Ok(None); // dialog annulé
-    };
-    let src: std::path::PathBuf = file
-        .into_path()
-        .map_err(|e| format!("Chemin invalide: {}", e))?;
+        // 1. Dialog fichier (filtre « Sons »)
+        let file = app
+            .dialog()
+            .file()
+            .add_filter("Sons", AUDIO_EXT)
+            .blocking_pick_file();
+        let Some(file) = file else {
+            return Ok(None); // dialog annulé
+        };
+        let src: std::path::PathBuf = file
+            .into_path()
+            .map_err(|e| format!("Chemin invalide: {}", e))?;
 
-    // 2. Extension autorisée
-    let ext = src
-        .extension()
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_lowercase())
-        .ok_or_else(|| "Extension manquante".to_string())?;
-    if !AUDIO_EXT.contains(&ext.as_str()) {
-        return Err(format!("Extension .{} non autorisée", ext));
-    }
+        // 2. Extension autorisée
+        let ext = src
+            .extension()
+            .and_then(|e| e.to_str())
+            .map(|s| s.to_lowercase())
+            .ok_or_else(|| "Extension manquante".to_string())?;
+        if !AUDIO_EXT.contains(&ext.as_str()) {
+            return Err(format!("Extension .{} non autorisée", ext));
+        }
 
-    // 3. Taille ≤ limite
-    let meta = fs::metadata(&src).map_err(|e| format!("metadata: {}", e))?;
-    if meta.len() > MAX_AUDIO_BYTES {
-        return Err(format!(
-            "Fichier trop volumineux ({} octets > {} Mo)",
-            meta.len(),
-            MAX_AUDIO_BYTES / 1024 / 1024
-        ));
-    }
+        // 3. Taille ≤ limite
+        let meta = fs::metadata(&src).map_err(|e| format!("metadata: {}", e))?;
+        if meta.len() > MAX_AUDIO_BYTES {
+            return Err(format!(
+                "Fichier trop volumineux ({} octets > {} Mo)",
+                meta.len(),
+                MAX_AUDIO_BYTES / 1024 / 1024
+            ));
+        }
 
-    // 4. Magic bytes
-    let mut f = fs::File::open(&src).map_err(|e| format!("open: {}", e))?;
-    let mut head = [0u8; 32];
-    let n = f.read(&mut head).map_err(|e| format!("read: {}", e))?;
-    if !check_magic_audio(&head[..n]) {
-        return Err("Format audio non supporté (magic bytes invalides)".into());
-    }
+        // 4. Magic bytes
+        let mut f = fs::File::open(&src).map_err(|e| format!("open: {}", e))?;
+        let mut head = [0u8; 32];
+        let n = f.read(&mut head).map_err(|e| format!("read: {}", e))?;
+        if !check_magic_audio(&head[..n]) {
+            return Err("Format audio non supporté (magic bytes invalides)".into());
+        }
 
-    // 5. Copie vers AppData/StreamOS/medias/<uuid>.<ext>
-    let dir = config::data_dir(&app)?;
-    let uuid = uuid::Uuid::new_v4().simple().to_string();
-    let dest_name = format!("{}.{}", uuid, ext);
-    let dest = dir.join("medias").join(&dest_name);
-    fs::copy(&src, &dest).map_err(|e| format!("copy: {}", e))?;
+        // 5. Copie vers AppData/StreamOS/medias/<uuid>.<ext>
+        let dir = config::data_dir(&app)?;
+        let uuid = uuid::Uuid::new_v4().simple().to_string();
+        let dest_name = format!("{}.{}", uuid, ext);
+        let dest = dir.join("medias").join(&dest_name);
+        fs::copy(&src, &dest).map_err(|e| format!("copy: {}", e))?;
 
-    Ok(Some(format!("medias/{}", dest_name)))
+        Ok(Some(format!("medias/{}", dest_name)))
+    })
+    .await
+    .map_err(|e| format!("import_son: {}", e))?
 }
 
 /// Connecte à OBS WebSocket (host:port, password), authentifie, lit la
@@ -728,17 +779,26 @@ fn app_redemarrer(app: AppHandle) -> Result<(), String> {
 /// la scène + la capture de fond (bgObsSource, plein canvas). Cache
 /// (SetSceneItemEnabled false) les items orphelins des autres scènes.
 /// Non-fatal : si OBS offline → erreur remontée (pas de crash).
+/// `scene` optionnel : présent (mode Just Chatting) → synchroniser avec la
+/// scène FOURNIE (copie dérivée non persistée : caméra/chat au layout JC,
+/// autres widgets absents, bgObsSource vidé) ; absent → scène chargée,
+/// comportement historique. La copie n'est JAMAIS écrite dans state.scene
+/// ni passée à save_current/update_scene.
 #[tauri::command]
 async fn scene_sync_captures(
     state: tauri::State<'_, ScenesState>,
     host: String,
     port: u16,
     password: String,
+    scene: Option<scene::Scene>,
 ) -> Result<(), String> {
     // Scène COMPLÈTE (widgets + bgObsSource + canvas) — un seul lock, clone.
-    let scene: scene::Scene = {
-        let s = state.scene.lock().unwrap();
-        s.clone()
+    let scene: scene::Scene = match scene {
+        Some(s) => s,
+        None => {
+            let s = state.scene.lock().unwrap();
+            s.clone()
+        }
     };
     obs_trou::sync_scene_captures(&host, port, &password, &scene).await
 }
@@ -864,6 +924,30 @@ async fn camera_sync(
 #[tauri::command]
 async fn camera_hide(host: String, port: u16, password: String) -> Result<(), String> {
     obs_trou::camera_hide(&host, port, &password).await
+}
+
+/// Découpe les sources OBS "SOS-Caméra" et "SOS-Caméra-Fond" à la forme du
+/// cadre SVG du widget caméra (filtre « Image mask/Blend » + PNG régénéré
+/// dans <data>/obs, nom versionné par hash du contenu). points = polygone
+/// widget-local (null/vide = cadre sans forme → filtres retirés, caméra
+/// rectangulaire). Retourne false si la source n'était pas encore prête
+/// (capteur en démarrage) — le dashboard ne met pas en cache et retente au
+/// prochain commit. One-shot, non-fatal si OBS offline.
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+async fn camera_mask_sync(
+    app: AppHandle,
+    host: String,
+    port: u16,
+    password: String,
+    points: Option<Vec<(f64, f64)>>,
+    w: f64,
+    h: f64,
+    fit: String,
+    zoom: f64,
+) -> Result<bool, String> {
+    let dossier = config::data_dir(&app)?.join("obs");
+    obs_trou::camera_mask_sync(&host, port, &password, points, w, h, &fit, zoom, &dossier).await
 }
 
 // ===== Connexions réseau (Lot réseau) =====
@@ -1272,6 +1356,7 @@ async fn connect_with_tokens(
         chat_tx,
         tokens.access.clone(),
         tokens.login.clone(),
+        tokens.user_id.clone(),
         cancel.clone(),
         Some(irc_cmd_rx),
     );
@@ -1741,6 +1826,302 @@ fn twitch_envoyer_commande_chat(
     commande: String,
 ) -> bool {
     state.envoyer_commande_irc(&commande)
+}
+
+// ===== Contrôles en direct Twitch (Helix — section « En direct ») =====
+
+/// Infos de la chaîne (titre, jeu, tags) : GET /channels.
+#[tauri::command]
+async fn twitch_live_channel_info(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<twitch_helix::ChannelInfo, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::channel_info(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Modifier titre/catégorie/tags : PATCH /channels. Corps partiel —
+/// un champ None n'est pas sérialisé vers Helix.
+#[tauri::command]
+async fn twitch_live_maj_channel(
+    state: tauri::State<'_, TwitchState>,
+    title: Option<String>,
+    game_id: Option<String>,
+    tags: Option<Vec<String>>,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::maj_channel(&uid, &access, title.as_deref(), game_id.as_deref(), tags)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Recherche de catégorie (jeu) : GET /search/categories.
+#[tauri::command]
+async fn twitch_live_search_categories(
+    state: tauri::State<'_, TwitchState>,
+    query: String,
+) -> Result<Vec<twitch_helix::CategoryEntry>, String> {
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::search_categories(&query, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Infos d'un jeu par id (jacquette) : GET /games?id=<id>. Relaie
+/// twitch_helix::game_info — box_art_url quand la section s'ouvre avec
+/// un game_id déjà connu. `None` si l'id n'existe plus.
+#[tauri::command]
+async fn twitch_live_game_info(
+    state: tauri::State<'_, TwitchState>,
+    game_id: String,
+) -> Result<Option<twitch_helix::CategoryEntry>, String> {
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::game_info(&game_id, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Recherche de chaîne (suggestions raid) : GET /search/channels.
+#[tauri::command]
+async fn twitch_live_search_channels(
+    state: tauri::State<'_, TwitchState>,
+    query: String,
+) -> Result<Vec<twitch_helix::ChannelSearchEntry>, String> {
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::search_channels(&query, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Créer un marqueur de stream : POST /streams/markers. Hors-ligne →
+/// message Helix remonté (pas de retry).
+#[tauri::command]
+async fn twitch_live_marker(
+    state: tauri::State<'_, TwitchState>,
+    description: Option<String>,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::create_marker(&uid, &access, description.as_deref())
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Lancer une pub : POST /channels/commercial. La durée est relayée —
+/// le refus hors {30,60,90,120,150,180} est dans start_commercial.
+#[tauri::command]
+async fn twitch_live_pub(
+    state: tauri::State<'_, TwitchState>,
+    duree: u32,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::start_commercial(&uid, &access, duree)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Lancer un raid vers un login : résolution (resolve_user_id) puis
+/// POST /raids. Chaîne introuvable ou pas en live → message clair.
+#[tauri::command]
+async fn twitch_live_raid_lancer(
+    state: tauri::State<'_, TwitchState>,
+    login: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    let cible = twitch_helix::resolve_user_id(&login, &access)
+        .await
+        .map_err(helix_err_to_string)?
+        .ok_or_else(|| format!("Chaîne introuvable : {}", login))?;
+    twitch_helix::start_raid(&uid, &cible.user_id, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Annuler le raid en cours : DELETE /raids.
+#[tauri::command]
+async fn twitch_live_raid_annuler(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::cancel_raid(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Lire les modes de chat : GET /chat/settings.
+#[tauri::command]
+async fn twitch_live_chat_settings(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<twitch_helix::ChatSettings, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::chat_settings(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Modifier les modes de chat : PATCH /chat/settings. Corps partiel —
+/// les champs None ne sont pas envoyés à Helix.
+#[tauri::command]
+async fn twitch_live_chat_settings_maj(
+    state: tauri::State<'_, TwitchState>,
+    settings: twitch_helix::ChatSettingsPatch,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::patch_chat_settings(&uid, &access, &settings)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Envoyer une annonce colorée : POST /chat/announcements.
+#[tauri::command]
+async fn twitch_live_annonce(
+    state: tauri::State<'_, TwitchState>,
+    message: String,
+    couleur: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::send_announcement(&uid, &access, &message, &couleur)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Shield Mode actif ? : GET /moderation/shield_mode.
+#[tauri::command]
+async fn twitch_live_shield_status(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<bool, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::shield_status(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Activer/désactiver le Shield Mode : PUT /moderation/shield_mode.
+/// La confirmation avant activation est côté frontend.
+#[tauri::command]
+async fn twitch_live_shield_set(
+    state: tauri::State<'_, TwitchState>,
+    actif: bool,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::set_shield(&uid, &access, actif)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Demandes d'unban en attente : GET /moderation/unban_requests.
+#[tauri::command]
+async fn twitch_live_unban_requests(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<Vec<twitch_helix::UnbanRequestEntry>, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::unban_requests(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Approuver/refuser une demande d'unban : PATCH /moderation/unban_requests.
+#[tauri::command]
+async fn twitch_live_unban_resoudre(
+    state: tauri::State<'_, TwitchState>,
+    unban_request_id: String,
+    approuver: bool,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::resolve_unban_request(&uid, &access, &unban_request_id, approuver)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Autoriser/refuser un message retenu par AutoMod : POST
+/// /moderation/automod/message. La file arrive via EventSub.
+#[tauri::command]
+async fn twitch_live_automod_resoudre(
+    state: tauri::State<'_, TwitchState>,
+    msg_id: String,
+    autoriser: bool,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::automod_resolve(&uid, &access, &msg_id, autoriser)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Télécharge la jacquette du jeu dans medias/ : `jacquette-<game_id>.jpg`,
+/// écrasé à chaque pose. Commande dédiée — pas d'import par URL générique.
+/// Gardes AVANT toute requête : schéma https + hôte exactement
+/// static-cdn.jtvnw.net (CDN box art Twitch), game_id alphanumérique
+/// (jamais de séparateur dans un nom de fichier). Corps plafonné à
+/// MAX_IMG_BYTES et JPEG vérifié par magic bytes (FF D8 FF) — sinon rien
+/// n'est écrit. Retourne le chemin relatif "medias/jacquette-<game_id>.jpg" ;
+/// la pose du widget et le commitScene relèvent du store scène.
+#[tauri::command]
+async fn twitch_live_poser_jacquette(
+    app: AppHandle,
+    box_art_url: String,
+    game_id: String,
+) -> Result<String, String> {
+    if game_id.is_empty() || !game_id.chars().all(|c| c.is_ascii_alphanumeric()) {
+        return Err("game_id invalide".into());
+    }
+    // URL à trous reconstruite à 285x380 puis hôte figé : refus avant requête.
+    let url = box_art_url.replace("{width}", "285").replace("{height}", "380");
+    let u = reqwest::Url::parse(&url).map_err(|e| format!("URL jacquette: {}", e))?;
+    if u.scheme() != "https" || u.host_str() != Some("static-cdn.jtvnw.net") {
+        return Err("URL jacquette refusée (hôte non Twitch)".into());
+    }
+    let resp = reqwest::get(u)
+        .await
+        .map_err(|e| format!("GET jacquette: {}", e))?;
+    if !resp.status().is_success() {
+        return Err(format!("Jacquette HTTP {}", resp.status()));
+    }
+    let bytes = resp
+        .bytes()
+        .await
+        .map_err(|e| format!("Lecture jacquette: {}", e))?;
+    if bytes.len() > MAX_IMG_BYTES as usize {
+        return Err(format!("Jacquette trop volumineuse ({} octets)", bytes.len()));
+    }
+    if !bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
+        return Err("Jacquette non-JPEG (magic bytes invalides)".into());
+    }
+    let dest = config::data_dir(&app)?
+        .join("medias")
+        .join(format!("jacquette-{}.jpg", game_id));
+    std::fs::write(&dest, &bytes).map_err(|e| format!("write jacquette: {}", e))?;
+    Ok(format!("medias/jacquette-{}.jpg", game_id))
+}
+
+/// Creator Goals Twitch déclarés : GET /goals (objectifs ACTIFS seulement —
+/// un par type max, déclarés dans le Creator Dashboard ; aucune API
+/// d'écriture). Appelée à l'ouverture de la carte d'édition d'un widget
+/// goal (choix du goal à lier) — zéro persistance, Helix relu à chaque
+/// ouverture. Scope channel:read:goals ; 403 → helix_err_to_string mappe
+/// NeedReauth → l'UI propose la reconnexion.
+#[tauri::command]
+async fn twitch_goals_lister(
+    state: tauri::State<'_, TwitchState>,
+) -> Result<Vec<twitch_helix::CreatorGoal>, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::creator_goals(&uid, &access)
+        .await
+        .map_err(helix_err_to_string)
 }
 
 // ===== Kick (lecture seule, WS côté Rust) =====
@@ -2561,37 +2942,42 @@ fn pad_tester_touche(
 /// AppData/StreamOS/medias/<uuid>.<ext>. Retourne `Some(rel)` si importé,
 /// `None` si dialog annulé. Même mécanique que `import_alerte_media`.
 #[tauri::command]
-fn pad_importer_media(
+async fn pad_importer_media(
     app: AppHandle,
     kind_attendu: String,
 ) -> Result<Option<String>, String> {
-    use tauri_plugin_dialog::DialogExt;
+    // Dialog natif + copie/remux sur le pool bloquant Tokio (pas le thread UI).
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
 
-    let (filtre_nom, exts): (&str, &[&str]) = if kind_attendu == "video" {
-        ("Vidéos", VIDEO_EXT)
-    } else {
-        ("Images", IMG_EXT)
-    };
-    let file = app
-        .dialog()
-        .file()
-        .add_filter(filtre_nom, exts)
-        .blocking_pick_file();
-    let Some(file) = file else {
-        return Ok(None);
-    };
-    let src: std::path::PathBuf = file
-        .into_path()
-        .map_err(|e| format!("Chemin invalide: {}", e))?;
+        let (filtre_nom, exts): (&str, &[&str]) = if kind_attendu == "video" {
+            ("Vidéos", VIDEO_EXT)
+        } else {
+            ("Images", IMG_EXT)
+        };
+        let file = app
+            .dialog()
+            .file()
+            .add_filter(filtre_nom, exts)
+            .blocking_pick_file();
+        let Some(file) = file else {
+            return Ok(None);
+        };
+        let src: std::path::PathBuf = file
+            .into_path()
+            .map_err(|e| format!("Chemin invalide: {}", e))?;
 
-    let (rel, kind, _nom) = validate_and_copy_media(&app, &src)?;
-    if kind != kind_attendu {
-        return Err(format!(
-            "Type de fichier inattendu : {} attendu, {} reçu",
-            kind_attendu, kind
-        ));
-    }
-    Ok(Some(rel))
+        let (rel, kind, _nom) = validate_and_copy_media(&app, &src)?;
+        if kind != kind_attendu {
+            return Err(format!(
+                "Type de fichier inattendu : {} attendu, {} reçu",
+                kind_attendu, kind
+            ));
+        }
+        Ok(Some(rel))
+    })
+    .await
+    .map_err(|e| format!("pad_importer_media: {}", e))?
 }
 
 /// Importe un son (mp3/ogg/wav ≤ 10 Mo) pour une touche du pad : dialog
@@ -2600,9 +2986,9 @@ fn pad_importer_media(
 /// NB : on expose une commande dédiée pour la clarté de l'API frontend,
 /// mais elle délègue à la logique commune de `import_son`.
 #[tauri::command]
-fn pad_importer_son(app: AppHandle) -> Result<Option<String>, String> {
+async fn pad_importer_son(app: AppHandle) -> Result<Option<String>, String> {
     // Délègue à import_son (même logique de validation + copie).
-    import_son(app)
+    import_son(app).await
 }
 
 // ===== Écran d'attente (BRB — overlay plein écran diffusion :4321) =====
@@ -2661,10 +3047,14 @@ fn ecran_attente_arreter(
 /// SAUF la limite de taille : pas de cap sur les vidéos (consigne
 /// utilisateur — la vidéo BRB peut être longue ; les images gardent 10 Mo).
 #[tauri::command]
-fn ecran_attente_importer_media(
+async fn ecran_attente_importer_media(
     app: AppHandle,
 ) -> Result<Option<(String, String, String)>, String> {
-    pick_and_copy_media(&app, true)
+    // Vidéo BRB sans cap de taille : la copie/remux peut être LONGUE →
+    // impérativement sur le pool bloquant Tokio, jamais sur le thread UI.
+    tauri::async_runtime::spawn_blocking(move || pick_and_copy_media(&app, true))
+        .await
+        .map_err(|e| format!("ecran_attente_importer_media: {}", e))?
 }
 
 /// Liste les sources audio de sortie OBS (`wasapi_output_capture`) pour le
@@ -2676,6 +3066,25 @@ async fn ecran_attente_lister_sources_audio(
     password: String,
 ) -> Result<Vec<String>, String> {
     ecran_attente::lister_sources_audio(&host, port, &password).await
+}
+
+// ===== Just Chatting (overlay non-destructif, état runtime non persisté) =====
+
+/// Snapshot (actif + layouts paysage/portrait). OFF au boot.
+#[tauri::command]
+fn just_chatting_etat(
+    state: tauri::State<'_, just_chatting::JustChattingState>,
+) -> just_chatting::JustChattingEtat {
+    state.etat()
+}
+
+/// Active ou coupe le mode. N'écrit pas la scène, pas de JSON.
+#[tauri::command]
+fn just_chatting_set_actif(
+    state: tauri::State<'_, just_chatting::JustChattingState>,
+    actif: bool,
+) {
+    state.set_actif(actif);
 }
 
 // ===== Alertes (follow/raid/sub/resub/subgift/bits) =====
@@ -2910,6 +3319,12 @@ pub fn run() {
             let ecran_attente_state =
                 ecran_attente::EcranAttenteState::new(handle.clone(), chat_tx.clone());
             app.manage(ecran_attente_state.clone());
+
+            // Just Chatting — état runtime pur (OFF au boot, non persisté).
+            // Frames WS `just-chatting-etat` sur chat_tx. Ne touche pas la scène.
+            let just_chatting_state =
+                just_chatting::JustChattingState::new(handle.clone(), chat_tx.clone());
+            app.manage(just_chatting_state.clone());
 
             // Speedrun Splitter — initialise le canal WS pour la diffusion.
             // Le moteur émet l'état du timer via chat_tx (speedrun-etat) vers
@@ -3147,6 +3562,8 @@ pub fn run() {
             scene_initialiser_preset,
             onboarding_etat,
             onboarding_marquer_fait,
+            langue_etat,
+            langue_sauver,
             scene_exporter,
             scene_importer,
             obs_enumerate_targets,
@@ -3157,6 +3574,7 @@ pub fn run() {
             obs_link_existing_source,
             camera_sync,
             camera_hide,
+            camera_mask_sync,
             pc_enumerate_cameras,
             pc_enumerate_windows,
             pc_enumerate_games,
@@ -3184,6 +3602,25 @@ pub fn run() {
             twitch_retirer_moderateur,
             twitch_supprimer_message,
             twitch_envoyer_commande_chat,
+            twitch_live_channel_info,
+            twitch_live_maj_channel,
+            twitch_live_search_categories,
+            twitch_live_game_info,
+            twitch_live_search_channels,
+            twitch_live_marker,
+            twitch_live_pub,
+            twitch_live_raid_lancer,
+            twitch_live_raid_annuler,
+            twitch_live_chat_settings,
+            twitch_live_chat_settings_maj,
+            twitch_live_annonce,
+            twitch_live_shield_status,
+            twitch_live_shield_set,
+            twitch_live_unban_requests,
+            twitch_live_unban_resoudre,
+            twitch_live_automod_resoudre,
+            twitch_live_poser_jacquette,
+            twitch_goals_lister,
             kick_connecter,
             kick_deconnecter,
             kick_etat,
@@ -3246,6 +3683,8 @@ pub fn run() {
             ecran_attente_arreter,
             ecran_attente_importer_media,
             ecran_attente_lister_sources_audio,
+            just_chatting_etat,
+            just_chatting_set_actif,
             alertes_etat,
             alertes_set_config,
             alertes_set_overlay_config,
@@ -3263,8 +3702,7 @@ pub fn run() {
             speedrun_lire_config,
             speedrun_sauver_config,
             speedrun_maj_settings_asl,
-            speedrun_baseline_lire,
-            speedrun_baseline_enregistrer,
+            speedrun_aller_split,
             telemetrie_etat,
             telemetrie_derniers,
             conso_etat

@@ -5,8 +5,8 @@
 import { writable, get } from "svelte/store";
 import { tauri, type PresetInfo } from "../tauri";
 import { loadScenesIndex, loadCurrentScene } from "./scenes";
-import { loadScene, selectWidget } from "./scene";
-import { obsHost, obsPort, obsPassword } from "./obs";
+import { loadScene, selectWidget, syncCapturesOBS } from "./scene";
+import { t } from "./langue";
 
 export const presetsStore = writable<PresetInfo[]>([]);
 
@@ -27,14 +27,7 @@ async function rechargerApresPreset(): Promise<void> {
   await loadCurrentScene();
   await loadScene();
   selectWidget(null);
-  try {
-    await tauri.sceneSyncCaptures(
-      get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
-    );
-  } catch {
-    // OBS offline → sources caméra créées à la prochaine connexion
-    // (ensure_camera au scene_sync_captures du connect — auto-guérison).
-  }
+  await syncCapturesOBS();
 }
 
 /// Crée une NOUVELLE scène depuis un preset (bouton « + Scène » → galerie).
@@ -45,7 +38,7 @@ export async function creerSceneDepuisPreset(presetId: string, nom: string): Pro
     await rechargerApresPreset();
     return true;
   } catch (e) {
-    alert("Création depuis preset refusée : " + e);
+    alert(get(t)("presets.creationRefusee", { erreur: String(e) }));
     return false;
   }
 }
@@ -59,7 +52,7 @@ export async function initialiserSceneDepuisPreset(presetId: string): Promise<bo
     await tauri.onboardingMarquerFait();
     return true;
   } catch (e) {
-    alert("Initialisation du preset refusée : " + e);
+    alert(get(t)("presets.initRefusee", { erreur: String(e) }));
     return false;
   }
 }

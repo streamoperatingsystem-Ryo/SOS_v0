@@ -4,6 +4,7 @@
 import { writable, get, type Writable } from "svelte/store";
 import { tauri } from "../tauri";
 import { openSectionExplicit } from "./ui";
+import { t } from "./langue";
 
 export type ObsStatus = "idle" | "connecting" | "connected" | "error";
 
@@ -56,10 +57,10 @@ persister(obsPassword, LS_PASSWORD);
 function messageClair(e: unknown): string {
   const s = String(e);
   if (s.includes("authentification échouée")) {
-    return "Mot de passe OBS manquant ou invalide. Dans OBS : Outils → WebSocket Server Settings → Show Connect Info, copiez le mot de passe puis collez-le dans le champ ci-dessus.";
+    return get(t)("obs.erreurAuth");
   }
   if (s.includes("10061") || s.includes("refus")) {
-    return "OBS est injoignable. Vérifiez qu'OBS est ouvert et que le serveur WebSocket est activé (Outils → WebSocket Server Settings).";
+    return get(t)("obs.erreurInjoignable");
   }
   return s;
 }
@@ -75,7 +76,7 @@ export async function obsConnect(
   const portNum = parseInt(port, 10);
   if (isNaN(portNum) || portNum < 1 || portNum > 65535) {
     obsStatus.set("error");
-    obsError.set("Port invalide");
+    obsError.set(get(t)("obs.portInvalide"));
     return;
   }
 
@@ -95,7 +96,7 @@ export async function obsConnect(
     // Échec d'auth → ouvrir la section OBS : le champ mot de passe et le
     // message correctif sont immédiatement visibles (sinon l'erreur reste
     // cachée dans une section fermée).
-    if (msg.startsWith("Mot de passe OBS")) {
+    if (String(e).includes("authentification échouée")) {
       openSectionExplicit("obs");
     }
     // Propager l'échec : les appelants (bootObs, onConnect) skip les appels

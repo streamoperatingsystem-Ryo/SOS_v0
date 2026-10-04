@@ -11,6 +11,7 @@
   // via l'event `ecran-attente:etat` — la modale ne fait que l'afficher.
   import { get } from "svelte/store";
   import { ecranAttenteModalOpen } from "../stores/ui";
+  import { t } from "../stores/langue";
   import { sceneStore } from "../stores/scene";
   import {
     ecranAttenteStore,
@@ -39,13 +40,23 @@
   let son = $state(true);
   let volume = $state(50);
   let sourceAudio = $state("");
+  let layout = $state("signature");
 
-  // Position/échelle de la carte minuteur (centre x/y en px canvas + échelle).
-  // Éditée via le mini-canvas ci-dessous (drag = déplacer, coin = resize) —
-  // même mécanique que le « Squelette de position » d'InteractionViewerModal.
-  let mx = $state(960);
-  let my = $state(540);
-  let mechelle = $state(1);
+  // Position/échelle des éléments de l'overlay (centre x/y en px canvas +
+  // échelle) — minuteur, Streamy et wordmark logo. Éditées via le mini-canvas
+  // ci-dessous (drag = déplacer, coin = resize) — même mécanique que le
+  // « Squelette de position » d'InteractionViewerModal.
+  type EaElem = "minuteur" | "streamy" | "logo";
+  interface EaPos {
+    x: number;
+    y: number;
+    e: number;
+  }
+  let eaPos = $state<Record<EaElem, EaPos>>({
+    minuteur: { x: 960, y: 540, e: 1 },
+    streamy: { x: 170, y: 180, e: 0.6 },
+    logo: { x: 960, y: 140, e: 1 },
+  });
 
   // Picker de source audio OBS (liste chargée à l'ouverture, non-fatal).
   let sourcesAudio = $state<string[]>([]);
@@ -69,9 +80,12 @@
     son = c.son;
     volume = Math.round(c.volume * 100);
     sourceAudio = c.source_audio ?? "";
-    mx = c.minuteur_x;
-    my = c.minuteur_y;
-    mechelle = c.minuteur_echelle;
+    layout = c.layout;
+    eaPos = {
+      minuteur: { x: c.minuteur_x, y: c.minuteur_y, e: c.minuteur_echelle },
+      streamy: { x: c.streamy_x, y: c.streamy_y, e: c.streamy_echelle },
+      logo: { x: c.logo_x, y: c.logo_y, e: c.logo_echelle },
+    };
   }
 
   // À l'ouverture : init listeners + chargement état + sync champs + liste
@@ -109,72 +123,114 @@
     void commitConfig({ duree_s: total });
   }
 
-  // ===== Mini-canvas : drag/resize de la carte minuteur =====
-  // Canvas de référence = la scène courante (fallback 1920×1080). Le
-  // squelette représente la carte minuteur (~320×170 px à échelle 1) ;
-  // left/top stockés = CENTRE de la carte (même convention que diffusion).
+  // ===== Mini-canvas : drag/resize des éléments de l'overlay =====
+  // Canvas de référence = la scène courante (fallback 1920×1080). Chaque
+  // squelette représente un élément (repère px à échelle 1, couleur
+  // distincte) ; x/y stockés = CENTRE de l'élément (convention diffusion).
   let miniW = $state(300);
   let canvasW = $derived($sceneStore.canvasW ?? 1920);
   let canvasH = $derived($sceneStore.canvasH ?? 1080);
   let miniScale = $derived(miniW / canvasW);
-  // Taille approximative de la carte à l'échelle courante (repère visuel —
-  // ~380×160 px à échelle 1 avec le padding 24/64 de la diffusion).
-  let skelW = $derived(380 * mechelle);
-  let skelH = $derived(160 * mechelle);
+
+  // Repères px à échelle 1 + bornes d'échelle + couleur par élément.
+  const EA_SKELS: {
+    id: EaElem;
+    baseW: number;
+    baseH: number;
+    minE: number;
+    maxE: number;
+    color: string;
+  }[] = [
+    { id: "minuteur", baseW: 380, baseH: 160, minE: 0.4, maxE: 3, color: "var(--accent-ui)" },
+    { id: "streamy", baseW: 300, baseH: 430, minE: 0.3, maxE: 2, color: "#22d3ee" },
+    { id: "logo", baseW: 480, baseH: 262, minE: 0.3, maxE: 2, color: "#ec4899" },
+  ];
+
+  function eaSkelDef(id: EaElem) {
+    return EA_SKELS.find((s) => s.id === id)!;
+  }
 
   type EaDragMode = "move" | "resize" | null;
+  let eaDragElem = $state<EaElem | null>(null);
   let eaDragMode = $state<EaDragMode>(null);
-  let eaDragStart = { px: 0, py: 0, mx: 0, my: 0, echelle: 1 };
+  let eaDragStart = { px: 0, py: 0, x: 0, y: 0, e: 1 };
 
-  function eaOnRectDown(e: PointerEvent) {
+  function eaOnRectDown(e: PointerEvent, id: EaElem) {
     e.stopPropagation();
     e.preventDefault();
+    eaDragElem = id;
     eaDragMode = "move";
-    eaDragStart = { px: e.clientX, py: e.clientY, mx, my, echelle: mechelle };
+    eaDragStart = { px: e.clientX, py: e.clientY, ...eaPos[id] };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }
 
-  function eaOnHandleDown(e: PointerEvent) {
+  function eaOnHandleDown(e: PointerEvent, id: EaElem) {
     e.stopPropagation();
     e.preventDefault();
+    eaDragElem = id;
     eaDragMode = "resize";
-    eaDragStart = { px: e.clientX, py: e.clientY, mx, my, echelle: mechelle };
+    eaDragStart = { px: e.clientX, py: e.clientY, ...eaPos[id] };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function eaOnPointerMove(e: PointerEvent) {
-    if (!eaDragMode) return;
+    if (!eaDragMode || !eaDragElem) return;
+    const sk = eaSkelDef(eaDragElem);
+    const pos = eaPos[eaDragElem];
     const dx = (e.clientX - eaDragStart.px) / miniScale;
     const dy = (e.clientY - eaDragStart.py) / miniScale;
 
     if (eaDragMode === "move") {
-      // Centre borné pour que la carte reste entièrement dans le canvas.
-      mx = Math.max(skelW / 2, Math.min(canvasW - skelW / 2, eaDragStart.mx + dx));
-      my = Math.max(skelH / 2, Math.min(canvasH - skelH / 2, eaDragStart.my + dy));
+      // Centre borné pour que l'élément reste entièrement dans le canvas.
+      pos.x = Math.max((sk.baseW * pos.e) / 2, Math.min(canvasW - (sk.baseW * pos.e) / 2, eaDragStart.x + dx));
+      pos.y = Math.max((sk.baseH * pos.e) / 2, Math.min(canvasH - (sk.baseH * pos.e) / 2, eaDragStart.y + dy));
     } else {
       // Resize par le coin SE : échelle proportionnelle à la largeur.
-      const newW = Math.max(152, eaDragStart.echelle * 380 + dx);
-      mechelle = Math.max(0.4, Math.min(3, newW / 380));
+      const newW = Math.max(60, eaDragStart.e * sk.baseW + dx);
+      pos.e = Math.max(sk.minE, Math.min(sk.maxE, newW / sk.baseW));
       // Re-borner le centre avec la nouvelle taille.
-      mx = Math.max(skelW / 2, Math.min(canvasW - skelW / 2, mx));
-      my = Math.max(skelH / 2, Math.min(canvasH - skelH / 2, my));
+      pos.x = Math.max((sk.baseW * pos.e) / 2, Math.min(canvasW - (sk.baseW * pos.e) / 2, pos.x));
+      pos.y = Math.max((sk.baseH * pos.e) / 2, Math.min(canvasH - (sk.baseH * pos.e) / 2, pos.y));
     }
   }
 
   async function eaOnPointerUp() {
-    if (!eaDragMode) return;
+    if (!eaDragMode || !eaDragElem) return;
+    const id = eaDragElem;
     eaDragMode = null;
-    await commitConfig({
-      minuteur_x: Math.round(mx),
-      minuteur_y: Math.round(my),
-      minuteur_echelle: Math.round(mechelle * 100) / 100,
-    });
+    eaDragElem = null;
+    const p = eaPos[id];
+    const rx = Math.round(p.x);
+    const ry = Math.round(p.y);
+    const re = Math.round(p.e * 100) / 100;
+    if (id === "minuteur") {
+      await commitConfig({ minuteur_x: rx, minuteur_y: ry, minuteur_echelle: re });
+    } else if (id === "streamy") {
+      await commitConfig({ streamy_x: rx, streamy_y: ry, streamy_echelle: re });
+    } else {
+      await commitConfig({ logo_x: rx, logo_y: ry, logo_echelle: re });
+    }
   }
 
-  function eaCentrer() {
-    mx = Math.round(canvasW / 2);
-    my = Math.round(canvasH / 2);
-    void commitConfig({ minuteur_x: mx, minuteur_y: my });
+  /// Réinitialise les positions aux valeurs par défaut (minuteur centré,
+  /// Streamy haut-gauche, logo haut-centre).
+  function eaResetPos() {
+    eaPos = {
+      minuteur: { x: Math.round(canvasW / 2), y: Math.round(canvasH / 2), e: 1 },
+      streamy: { x: 170, y: 180, e: 0.6 },
+      logo: { x: Math.round(canvasW / 2), y: 140, e: 1 },
+    };
+    void commitConfig({
+      minuteur_x: eaPos.minuteur.x,
+      minuteur_y: eaPos.minuteur.y,
+      minuteur_echelle: 1,
+      streamy_x: 170,
+      streamy_y: 180,
+      streamy_echelle: 0.6,
+      logo_x: eaPos.logo.x,
+      logo_y: 140,
+      logo_echelle: 1,
+    });
   }
 
   /// Formate des secondes → "M:SS" ou "H:MM:SS" (affichage dashboard).
@@ -266,10 +322,10 @@
 
 {#if $ecranAttenteModalOpen}
   <Modal
-    title="Écran d'attente"
+    title={$t("ecranAttenteModal.titre")}
     onClose={onFermer}
     maxWidth="560px"
-    hint="Affiché uniquement sur la diffusion OBS (écran « on revient ») — rien n'est rendu dans le dashboard. Le cadre et les couleurs reprennent ceux de la scène en cours."
+    hint={$t("ecranAttenteModal.hint")}
   >
     <div class="ea-modal-body">
       <!-- État courant -->
@@ -277,37 +333,50 @@
         <div class="ea-statut">
           <span class="ea-pastille" class:pause={enPause}></span>
           <span class="ea-statut-texte">
-            {enPause ? "En pause" : "Écran actif"} — {formatTemps(etat?.temps_restant ?? 0)}
+            {enPause ? $t("ecranAttenteModal.enPause") : $t("ecranAttenteModal.ecranActif")} — {formatTemps(etat?.temps_restant ?? 0)}
           </span>
         </div>
       {/if}
 
       <!-- Média -->
       <div class="modal-bloc">
-        <div class="modal-bloc-titre">Média (diffusion uniquement)</div>
+        <div class="modal-bloc-titre">{$t("ecranAttenteModal.mediaTitre")}</div>
         {#if mediaNom}
           <div class="ea-media-ligne">
             <span class="ea-media-nom" title={mediaNom}>{mediaNom}</span>
-            <span class="ea-media-kind">{mediaKind === "video" ? "Vidéo" : "Image"}</span>
+            <span class="ea-media-kind">{mediaKind === "video" ? $t("commun.video") : $t("commun.image")}</span>
           </div>
         {:else}
-          <p class="ea-info">Aucun média — un dégradé aux couleurs du cadre sera affiché.</p>
+          <p class="ea-info">{$t("ecranAttenteModal.aucunMedia")}</p>
         {/if}
         <div class="ea-boutons">
           <button class="modal-action" disabled={enCours} onclick={onImporter}>
-            {mediaNom ? "Remplacer" : "Importer un média"}
+            {mediaNom ? $t("ecranAttenteModal.remplacer") : $t("ecranAttenteModal.importerMedia")}
           </button>
           {#if mediaNom}
             <button class="modal-action danger" disabled={enCours} onclick={onRetirerMedia}>
-              Retirer
+              {$t("commun.retirer")}
             </button>
           {/if}
         </div>
       </div>
 
+      <!-- Style d'écran (signature = marque StreamOS / minimal = historique) -->
+      <div class="modal-bloc">
+        <div class="modal-bloc-titre">{$t("ecranAttenteModal.style")}</div>
+        <select
+          class="ea-select"
+          bind:value={layout}
+          onchange={() => commitConfig({ layout })}
+        >
+          <option value="signature">{$t("ecranAttenteModal.styleSignature")}</option>
+          <option value="minimal">{$t("ecranAttenteModal.styleMinimal")}</option>
+        </select>
+      </div>
+
       <!-- Durée -->
       <div class="modal-bloc">
-        <div class="modal-bloc-titre">Durée du chrono</div>
+        <div class="modal-bloc-titre">{$t("ecranAttenteModal.duree")}</div>
         <div class="ea-duree-row">
           <input
             class="ea-num"
@@ -332,7 +401,7 @@
 
       <!-- Position du minuteur (mini-canvas drag/resize) -->
       <div class="modal-bloc">
-        <div class="modal-bloc-titre">Position du minuteur</div>
+        <div class="modal-bloc-titre">{$t("ecranAttenteModal.position")}</div>
         <div
           class="ea-mini-canvas"
           bind:clientWidth={miniW}
@@ -340,31 +409,42 @@
           onpointerup={eaOnPointerUp}
           role="presentation"
         >
-          <div
-            class="ea-skel"
-            style="left: {(mx - skelW / 2) * miniScale}px; top: {(my - skelH / 2) * miniScale}px; width: {skelW * miniScale}px; height: {skelH * miniScale}px;"
-            onpointerdown={eaOnRectDown}
-            role="presentation"
-          >
-            <span class="ea-skel-label">Minuteur</span>
+          {#each EA_SKELS as sk (sk.id)}
+            {@const p = eaPos[sk.id]}
+            {@const w = sk.baseW * p.e}
+            {@const h = sk.baseH * p.e}
             <div
-              class="ea-handle-se"
-              onpointerdown={eaOnHandleDown}
+              class="ea-skel"
+              style="left: {(p.x - w / 2) * miniScale}px; top: {(p.y - h / 2) * miniScale}px; width: {w * miniScale}px; height: {h * miniScale}px; border-color: {sk.color};"
+              onpointerdown={(e) => eaOnRectDown(e, sk.id)}
               role="presentation"
-            ></div>
-          </div>
+            >
+              <span class="ea-skel-label">
+                {sk.id === "minuteur"
+                  ? $t("ecranAttenteModal.minuteur")
+                  : sk.id === "streamy"
+                    ? "Streamy"
+                    : "Logo"}
+              </span>
+              <div
+                class="ea-handle-se"
+                onpointerdown={(e) => eaOnHandleDown(e, sk.id)}
+                role="presentation"
+              ></div>
+            </div>
+          {/each}
         </div>
         <div class="ea-pos-row">
           <p class="ea-info">
-            Glisser pour déplacer · coin pour redimensionner · {Math.round(mx)}, {Math.round(my)} · ×{mechelle.toFixed(2)}
+            {$t("ecranAttenteModal.glisserInfo")}
           </p>
-          <button class="modal-action ea-btn-centrer" onclick={eaCentrer}>Centrer</button>
+          <button class="modal-action ea-btn-centrer" onclick={eaResetPos}>{$t("ecranAttenteModal.resetPos")}</button>
         </div>
       </div>
 
       <!-- Titre -->
       <div class="modal-bloc">
-        <div class="modal-bloc-titre">Titre affiché</div>
+        <div class="modal-bloc-titre">{$t("ecranAttenteModal.titreAffiche")}</div>
         <input
           class="ea-input"
           type="text"
@@ -379,20 +459,20 @@
             bind:checked={afficherTitre}
             onchange={() => commitConfig({ afficher_titre: afficherTitre })}
           />
-          Afficher le titre (dégradé aux couleurs du cadre)
+          {$t("ecranAttenteModal.afficherTitre")}
         </label>
       </div>
 
       <!-- Son -->
       <div class="modal-bloc">
-        <div class="modal-bloc-titre">Son</div>
+        <div class="modal-bloc-titre">{$t("ecranAttenteModal.son")}</div>
         <label class="ea-check">
           <input
             type="checkbox"
             bind:checked={son}
             onchange={() => commitConfig({ son })}
           />
-          Son activé (vidéo sur la diffusion)
+          {$t("ecranAttenteModal.sonActif")}
         </label>
         <div class="ea-volume-row">
           <input
@@ -411,28 +491,28 @@
 
       <!-- Source audio OBS (routage — optionnel) -->
       <div class="modal-bloc">
-        <div class="modal-bloc-titre">Source audio OBS</div>
+        <div class="modal-bloc-titre">{$t("ecranAttenteModal.sourceAudio")}</div>
         <div class="ea-source-row">
           <select
             class="ea-select"
             bind:value={sourceAudio}
             onchange={() => commitConfig({ source_audio: sourceAudio || undefined })}
           >
-            <option value="">Automatique (SOS Audio Écran d'attente)</option>
+            <option value="">{$t("ecranAttenteModal.sourceAuto")}</option>
             {#each sourcesAudio as nom (nom)}
               <option value={nom}>{nom}</option>
             {/each}
           </select>
           <button
             class="modal-action ea-btn-refresh"
-            title="Recharger la liste (connexion OBS one-shot)"
+            title={$t("ecranAttenteModal.rechargerSources")}
             onclick={() => void refreshSourcesAudio()}
           >↻</button>
         </div>
         {#if sourcesErreur}
-          <p class="ea-info">Liste indisponible — OBS non connecté (le routage audio sera tenté au lancement).</p>
+          <p class="ea-info">{$t("ecranAttenteModal.listeIndispo")}</p>
         {:else if $obsStatus !== "connected"}
-          <p class="ea-info">OBS non connecté — le routage audio sera tenté avec les identifiants enregistrés.</p>
+          <p class="ea-info">{$t("ecranAttenteModal.obsNonConnecte")}</p>
         {/if}
       </div>
 
@@ -444,17 +524,17 @@
       <div class="modal-actions">
         {#if actif}
           <button class="modal-action" disabled={enCours} onclick={onPauseToggle}>
-            {enPause ? "Reprendre" : "Pause"}
+            {enPause ? $t("ecranAttenteModal.reprendre") : $t("commun.pause")}
           </button>
           <button class="modal-action danger" disabled={enCours} onclick={onArreter}>
-            Arrêter
+            {$t("commun.arreter")}
           </button>
           <button class="modal-action primary" disabled={enCours} onclick={onLancer}>
-            Relancer
+            {$t("ecranAttenteModal.relancer")}
           </button>
         {:else}
           <button class="modal-action primary" disabled={enCours} onclick={onLancer}>
-            Lancer l'écran d'attente
+            {$t("ecranAttenteModal.lancer")}
           </button>
         {/if}
       </div>

@@ -15,6 +15,10 @@
         font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji",
           "Noto Color Emoji", sans-serif;
         overflow: hidden;
+        /* Sélection de texte désactivée (parité dashboard — aucun champ
+           de saisie dans cette fenêtre, exemption inutile). */
+        -webkit-user-select: none;
+        user-select: none;
       }
       /* Chat body : même style que diffusion.html (bulles + zébrage). */
       .chat-body {
@@ -92,6 +96,26 @@
         flex: 1;
         min-width: 0;
       }
+      /* Emote inline dans le texte (officielles Twitch + BTTV/7TV/FFZ).
+         Hauteur 1.5em = convention chat Twitch (~taille ligne). width:auto
+         préserve le ratio des emotes larges. */
+      .chat-msg .emote {
+        width: auto;
+        height: 1.5em;
+        vertical-align: middle;
+        margin: -0.1em 0.1em;
+      }
+      /* Mode « bulles » (parité diffusion.html : ≥1 widget chat de la scène
+         en chatStyle "bulles") — messages détachés, zébrage off, vrai cadre
+         SVG par message via .cadre-overlay (position:relative requis). */
+      .chat-body.bulles { gap: 0.45rem; }
+      .chat-body.bulles .chat-msg { position: relative; }
+      .cadre-overlay {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+        z-index: 5;
+      }
     </style>
   </head>
   <body style="background:#0e0e10;color:#efeff1;margin:0">
@@ -99,6 +123,11 @@
     <script>
       // Pop-out chat : WS :4321 en dur, bulles seulement (pas de scène, pas d'OBS).
       // Même rendu que diffusion.html (avatar + badges + logo + pseudo + texte).
+
+      // Neutralise le menu contextuel natif de la webview (parité dashboard
+      // — voir src/main.ts).
+      window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
       var chatMessages = [];
       var MAX_CHAT = 200;
       var chatBody = document.getElementById("chatBody");
@@ -151,7 +180,9 @@
         for (var i = 0; i < chatMessages.length; i++) {
           var m = chatMessages[i];
           var div = document.createElement("div");
-          div.className = "chat-msg" + (i % 2 === 0 ? " pair" : "");
+          // Zébrage pair seulement en mode compact — en bulles, chaque
+          // message est une carte autonome au fond uniforme.
+          div.className = "chat-msg" + (!chatBulles && i % 2 === 0 ? " pair" : "");
           var logo = logoPlateforme(m.plateforme);
           var avatar = m.avatar
             ? '<img class="avatar" src="' + escapeHtml(m.avatar) + '" width="24" height="24" alt="" referrerpolicy="no-referrer">'
@@ -161,10 +192,577 @@
             + badges
             + logo
             + '<span class="pseudo">' + escapeHtml(m.pseudo) + "</span>"
-            + '<span class="texte">' + escapeHtml(m.texte) + "</span>";
+            + '<span class="texte">' + renderTexte(m) + "</span>";
           chatBody.appendChild(div);
         }
+        // Cadre SVG réel par bulle : mesures en lecture seule puis
+        // écritures (évite un reflow synchrone par message).
+        if (chatBulles && sceneCadre) {
+          var kids = chatBody.children;
+          var dims = [];
+          for (var k = 0; k < kids.length; k++) {
+            dims.push([kids[k].offsetWidth, kids[k].offsetHeight]);
+          }
+          for (k = 0; k < kids.length; k++) {
+            decorerCadreMsg(kids[k], sceneCadre, dims[k][0], dims[k][1]);
+          }
+        }
         chatBody.scrollTop = chatBody.scrollHeight;
+      }
+
+      // Remplace les emotes par des <img> aux positions fournies par Rust
+      // (m.emotes : offsets UTF-16, fin EXCLUSIVE — unités de String.slice).
+      // Texte entre segments échappé (XSS-safe). URL contrainte à https:// :
+      // jamais d'URL chatter. Identique à renderTexte de diffusion.html.
+      function renderTexte(m) {
+        if (!m.emotes || m.emotes.length === 0) return escapeHtml(m.texte);
+        var html = "";
+        var pos = 0;
+        var n = m.texte.length;
+        for (var i = 0; i < m.emotes.length; i++) {
+          var e = m.emotes[i];
+          // Segment invalide/chevauchant → ignoré (défense, Rust trie déjà).
+          if (e.debut < pos || e.debut >= e.fin || e.fin > n) continue;
+          html += escapeHtml(m.texte.slice(pos, e.debut));
+          if (typeof e.url === "string" && e.url.indexOf("https://") === 0) {
+            html += '<img class="emote" src="' + escapeHtml(e.url) + '"'
+              + ' alt="' + escapeHtml(e.nom) + '"'
+              + ' title="' + escapeHtml(e.nom) + '"'
+              + ' referrerpolicy="no-referrer">';
+          } else {
+            html += escapeHtml(m.texte.slice(e.debut, e.fin));
+          }
+          pos = e.fin;
+        }
+        html += escapeHtml(m.texte.slice(pos));
+        return html;
+      }
+
+      // ===== Cadres SVG — port de diffusion.html (parité mode « bulles ») =====
+      // Bloc dupliqué volontairement : pas de module JS partagé entre les
+      // pages statiques (même convention que renderTexte/parseBadges).
+      // Toute évolution des cadres doit être reportée ici.
+
+      function clampStrokeWidth(sw) {
+        var n = Number(sw);
+        return Number.isFinite(n) ? Math.max(1, Math.min(20, n)) : 4;
+      }
+      function bpmHexValide(h) {
+        return /^#[0-9a-f]{6}$/i.test(String(h || ""));
+      }
+      function bpmAssombrir(hex, ratio) {
+        var m = /^#([0-9a-f]{6})$/i.exec(String(hex || ""));
+        if (!m) return "#0a0a0a";
+        var r = Math.min(1, Math.max(0, Number(ratio) || 0));
+        var n = parseInt(m[1], 16);
+        var rr = Math.round(((n >> 16) & 0xff) * (1 - r));
+        var gg = Math.round(((n >> 8) & 0xff) * (1 - r));
+        var bb = Math.round((n & 0xff) * (1 - r));
+        function pad(v) { return v.toString(16).padStart(2, "0"); }
+        return "#" + pad(rr) + pad(gg) + pad(bb);
+      }
+      function bpmEclaircir(hex, ratio) {
+        var m = /^#([0-9a-f]{6})$/i.exec(String(hex || ""));
+        if (!m) return "#f5f5f5";
+        var r = Math.min(1, Math.max(0, Number(ratio) || 0));
+        var n = parseInt(m[1], 16);
+        var rr = Math.round(((n >> 16) & 0xff) + (255 - ((n >> 16) & 0xff)) * r);
+        var gg = Math.round(((n >> 8) & 0xff) + (255 - ((n >> 8) & 0xff)) * r);
+        var bb = Math.round((n & 0xff) + (255 - (n & 0xff)) * r);
+        function pad(v) { return v.toString(16).padStart(2, "0"); }
+        return "#" + pad(rr) + pad(gg) + pad(bb);
+      }
+      function mgAngleToCoords(angle) {
+        var rad = angle * Math.PI / 180;
+        var dx = Math.cos(rad), dy = Math.sin(rad);
+        var scale = 50 / Math.max(Math.abs(dx), Math.abs(dy), 0.001);
+        return {
+          x1: Math.round(50 - dx * scale), y1: Math.round(50 - dy * scale),
+          x2: Math.round(50 + dx * scale), y2: Math.round(50 + dy * scale)
+        };
+      }
+
+      function renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle) {
+        var c = /^#[0-9a-f]{6}$/i.test(couleur || "") ? couleur : "#ffffff";
+        var cFin = /^#[0-9a-f]{6}$/i.test(couleurFin || "") ? couleurFin : c;
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var rx = style === "arrondis" ? 8 : 0;
+        var angle = isFinite(gradientAngle) ? gradientAngle : 135;
+        var rad = angle * Math.PI / 180;
+        var dx = Math.cos(rad), dy = Math.sin(rad);
+        var scale = 50 / Math.max(Math.abs(dx), Math.abs(dy), 0.001);
+        var gx1 = Math.round(50 - dx * scale), gy1 = Math.round(50 - dy * scale);
+        var gx2 = Math.round(50 + dx * scale), gy2 = Math.round(50 + dy * scale);
+        var gradId = "grad-cadre-" + (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + style;
+        return '<svg width="' + (W + offset * 2) + '" height="' + (H + offset * 2) + '" viewBox="-' + offset + ' -' + offset + ' ' + (W + offset * 2) + ' ' + (H + offset * 2) + '" preserveAspectRatio="none" style="position:absolute;top:-' + offset + 'px;left:-' + offset + 'px;pointer-events:none;z-index:5;">'
+          + '<defs><linearGradient id="' + gradId + '" x1="' + gx1 + '%" y1="' + gy1 + '%" x2="' + gx2 + '%" y2="' + gy2 + '%">'
+          + '<stop offset="0%" stop-color="' + c + '" stop-opacity="1"/>'
+          + '<stop offset="100%" stop-color="' + cFin + '" stop-opacity="1"/>'
+          + '</linearGradient></defs>'
+          + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + rx + '" ry="' + rx + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '"/>'
+          + '</svg>';
+      }
+
+      function getCyberpunkBevelSize(sw) {
+        return Math.max(8, Math.round(clampStrokeWidth(sw) * 3.5));
+      }
+      function getCyberpunkClipPath(W, H, sw) {
+        var s = Math.min(getCyberpunkBevelSize(sw), W / 4, H / 4);
+        return "path('M " + s + " 0 L " + (W - s) + " 0 L " + W + " " + s + " L " + W + " " + (H - s) + " L " + (W - s) + " " + H + " L " + s + " " + H + " L 0 " + (H - s) + " L 0 " + s + " Z')";
+      }
+      function renderCyberpunk(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var c2 = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.35);
+        var c3 = "#ffffff";
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var bevel = getCyberpunkBevelSize(ep);
+        var margin = Math.max(4, ep);
+        var svgW = W + offset * 2 + margin * 2;
+        var svgH = H + offset * 2 + margin * 2;
+        var viewX = -(offset + margin);
+        var viewY = -(offset + margin);
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-cyberpunk-" + uid;
+        var gradInnerId = "grad-inner-" + uid;
+        var clipPathId = "clip-cyberpunk-" + uid;
+        var pathBorder = "M " + bevel + " 0 L " + (W - bevel) + " 0 L " + W + " " + bevel + " L " + W + " " + (H - bevel) + " L " + (W - bevel) + " " + H + " L " + bevel + " " + H + " L 0 " + (H - bevel) + " L 0 " + bevel + " Z";
+        var d = Math.max(2, ep * 0.8);
+        var b = Math.min(bevel * 1.6, W / 5, H / 5);
+        var traitFin = Math.max(0.8, ep * 0.22);
+        function bracketCoin(cx, cy, sx, sy) {
+          var X = function (x) { return cx + x * sx; };
+          var Y = function (y) { return cy + y * sy; };
+          var plaque = "M " + X(b + d) + " " + Y(-d) + " L " + X(bevel * 0.55) + " " + Y(-d) + " L " + X(-d) + " " + Y(bevel * 0.55) + " L " + X(-d) + " " + Y(b + d) + " L " + X(-d * 2.2) + " " + Y(b + d) + " L " + X(-d * 2.2) + " " + Y(bevel * 0.35) + " L " + X(bevel * 0.35) + " " + Y(-d * 2.2) + " L " + X(b + d) + " " + Y(-d * 2.2) + " Z";
+          var chevron = "M " + X(bevel * 0.9) + " " + Y(-d * 3.4) + " L " + X(bevel * 0.28) + " " + Y(-d * 3.4) + " L " + X(-d * 3.4) + " " + Y(bevel * 0.28) + " L " + X(-d * 3.4) + " " + Y(bevel * 0.9);
+          var dx = X(bevel * 0.62), dy = Y(bevel * 0.62);
+          var dr = Math.max(1.4, ep * 0.4);
+          return "<g>" +
+            '<path d="' + plaque + '" fill="' + c2 + '" fill-opacity="0.28" stroke="' + c1 + '" stroke-width="' + traitFin + '" stroke-linejoin="miter"/>' +
+            '<path d="' + chevron + '" fill="none" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.85"/>' +
+            '<circle cx="' + dx + '" cy="' + dy + '" r="' + dr + '" fill="' + c3 + '" stroke="' + c1 + '" stroke-width="' + Math.max(0.6, ep * 0.12) + '"/>' +
+            "</g>";
+        }
+        var brackets = bracketCoin(0, 0, 1, 1) + bracketCoin(W, 0, -1, 1) + bracketCoin(W, H, -1, -1) + bracketCoin(0, H, 1, -1);
+        var co = Math.max(2, ep);
+        var pr = Math.max(1, ep * 0.28);
+        var midX = W / 2, midY = H / 2;
+        var segH = Math.min(bevel * 1.4, W / 8);
+        var segV = Math.min(bevel * 1.4, H / 8);
+        var circuits = [
+          '<path d="M ' + (midX - segH * 2.2) + " " + -co + " L " + (midX - segH * 0.4) + " " + -co + '" stroke="' + c1 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (midX - segH * 2.2) + '" cy="' + -co + '" r="' + pr + '" fill="' + c1 + '"/>',
+          '<path d="M ' + (midX + segH * 0.4) + " " + -co + " L " + (midX + segH * 2.2) + " " + -co + '" stroke="' + c1 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (midX + segH * 2.2) + '" cy="' + -co + '" r="' + pr + '" fill="' + c1 + '"/>',
+          '<path d="M ' + (midX - segH * 2.2) + " " + (H + co) + " L " + (midX - segH * 0.4) + " " + (H + co) + '" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (midX - segH * 2.2) + '" cy="' + (H + co) + '" r="' + pr + '" fill="' + c2 + '"/>',
+          '<path d="M ' + (midX + segH * 0.4) + " " + (H + co) + " L " + (midX + segH * 2.2) + " " + (H + co) + '" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (midX + segH * 2.2) + '" cy="' + (H + co) + '" r="' + pr + '" fill="' + c2 + '"/>',
+          '<path d="M ' + -co + " " + (midY - segV) + " L " + -co + " " + (midY + segV) + '" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + -co + '" cy="' + (midY + segV) + '" r="' + pr + '" fill="' + c2 + '"/>',
+          '<path d="M ' + (W + co) + " " + (midY - segV) + " L " + (W + co) + " " + (midY + segV) + '" stroke="' + c1 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
+          '<circle cx="' + (W + co) + '" cy="' + (midY - segV) + '" r="' + pr + '" fill="' + c1 + '"/>'
+        ].join("\n    ");
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<clipPath id="' + clipPathId + '"><path d="' + pathBorder + '"/></clipPath>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c1 + '"/><stop offset="50%" stop-color="' + c2 + '"/><stop offset="100%" stop-color="' + c1 + '"/></linearGradient>'
+          + '<linearGradient id="' + gradInnerId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c3 + '" stop-opacity="0.9"/><stop offset="50%" stop-color="' + c1 + '" stop-opacity="0.6"/><stop offset="100%" stop-color="' + c3 + '" stop-opacity="0.9"/></linearGradient>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipPathId + ')">'
+          + '<path d="' + pathBorder + '" fill="none" stroke="' + c1 + '" stroke-width="' + (ep * 2.2) + '" stroke-linejoin="miter" opacity="0.25"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradInnerId + ')" stroke-width="' + Math.max(1, ep * 0.35) + '" stroke-linejoin="miter" opacity="0.8"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="' + c3 + '" stroke-width="' + Math.max(0.8, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.4"/>'
+          + "</g><g>" + circuits + "</g>" + brackets
+          + "</svg>";
+      }
+
+      function getStoryClipSize(sw) {
+        return Math.max(12, Math.round(clampStrokeWidth(sw) * 4));
+      }
+      function getStoryClipPath(W, H, sw) {
+        var s = Math.min(getStoryClipSize(sw), W / 4, H / 4);
+        var parts = [
+          "M " + s + " 0", "L " + (W - s) + " 0",
+          "C " + (W - s * 0.65) + " " + (-s * 0.12) + " " + (W - s * 0.12) + " " + (-s * 0.12) + " " + (W - s * 0.4) + " " + (s * 0.08),
+          "C " + (W - s * 0.68) + " " + (s * 0.28) + " " + (W + s * 0.12) + " " + (s * 0.65) + " " + W + " " + s,
+          "L " + W + " " + (H - s),
+          "C " + (W + s * 0.12) + " " + (H - s * 0.65) + " " + (W - s * 0.68) + " " + (H - s * 0.28) + " " + (W - s * 0.4) + " " + (H - s * 0.08),
+          "C " + (W - s * 0.12) + " " + (H + s * 0.12) + " " + (W - s * 0.65) + " " + (H + s * 0.12) + " " + (W - s) + " " + H,
+          "L " + s + " " + H,
+          "C " + (s * 0.65) + " " + (H + s * 0.12) + " " + (s * 0.12) + " " + (H + s * 0.12) + " " + (s * 0.4) + " " + (H - s * 0.08),
+          "C " + (s * 0.68) + " " + (H - s * 0.28) + " " + (-s * 0.12) + " " + (H - s * 0.65) + " 0 " + (H - s),
+          "L 0 " + s,
+          "C " + (-s * 0.12) + " " + (s * 0.65) + " " + (s * 0.68) + " " + (s * 0.28) + " " + (s * 0.4) + " " + (s * 0.08),
+          "C " + (s * 0.12) + " " + (-s * 0.12) + " " + (s * 0.65) + " " + (-s * 0.12) + " " + s + " 0", "Z"
+        ];
+        return "path('" + parts.join(" ") + "')";
+      }
+      function heartShape(cx, cy, s) {
+        return "M " + cx + " " + (cy + s * 0.25) + " C " + (cx - s * 0.42) + " " + (cy - s * 0.08) + " " + (cx - s * 0.42) + " " + (cy - s * 0.42) + " " + cx + " " + (cy - s * 0.18) + " C " + (cx + s * 0.42) + " " + (cy - s * 0.42) + " " + (cx + s * 0.42) + " " + (cy - s * 0.08) + " " + cx + " " + (cy + s * 0.25) + " Z";
+      }
+      function renderStory(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+        var vif = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var palette = {
+          vif: vif,
+          clair: bpmEclaircir(vif, 0.35),
+          profond: bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(vif, 0.2),
+          pale: bpmEclaircir(vif, 0.75)
+        };
+        var blanc = "#ffffff";
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
+        var ep = clampStrokeWidth(strokeWidth);
+        var s = Math.min(getStoryClipSize(ep), W / 4, H / 4);
+        var margin = Math.max(10, ep * 2.5);
+        var svgW = W + margin * 2, svgH = H + margin * 2;
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-story-" + uid, innerGradId = "grad-inner-story-" + uid, clipId = "clip-story-" + uid;
+        var borderPath = [
+          "M " + s + " 0", "L " + (W - s) + " 0",
+          "C " + (W - s * 0.65) + " " + (-s * 0.12) + " " + (W - s * 0.12) + " " + (-s * 0.12) + " " + (W - s * 0.4) + " " + (s * 0.08),
+          "C " + (W - s * 0.68) + " " + (s * 0.28) + " " + (W + s * 0.12) + " " + (s * 0.65) + " " + W + " " + s,
+          "L " + W + " " + (H - s),
+          "C " + (W + s * 0.12) + " " + (H - s * 0.65) + " " + (W - s * 0.68) + " " + (H - s * 0.28) + " " + (W - s * 0.4) + " " + (H - s * 0.08),
+          "C " + (W - s * 0.12) + " " + (H + s * 0.12) + " " + (W - s * 0.65) + " " + (H + s * 0.12) + " " + (W - s) + " " + H,
+          "L " + s + " " + H,
+          "C " + (s * 0.65) + " " + (H + s * 0.12) + " " + (s * 0.12) + " " + (H + s * 0.12) + " " + (s * 0.4) + " " + (H - s * 0.08),
+          "C " + (s * 0.68) + " " + (H - s * 0.28) + " " + (-s * 0.12) + " " + (H - s * 0.65) + " 0 " + (H - s),
+          "L 0 " + s,
+          "C " + (-s * 0.12) + " " + (s * 0.65) + " " + (s * 0.68) + " " + (s * 0.28) + " " + (s * 0.4) + " " + (s * 0.08),
+          "C " + (s * 0.12) + " " + (-s * 0.12) + " " + (s * 0.65) + " " + (-s * 0.12) + " " + s + " 0", "Z"
+        ].join(" ");
+        var cornerHeartSize = Math.max(6, ep * 1.5);
+        var smallHeartSize = Math.max(3, ep * 0.7);
+        var cornerHearts = [
+          { cx: s * 0.25, cy: s * 0.25 }, { cx: W - s * 0.25, cy: s * 0.25 },
+          { cx: s * 0.25, cy: H - s * 0.25 }, { cx: W - s * 0.25, cy: H - s * 0.25 }
+        ];
+        var cornerHeartsSvg = cornerHearts.map(function (h) {
+          return '<path d="' + heartShape(h.cx, h.cy, cornerHeartSize) + '" fill="' + blanc + '" opacity="0.92"/>';
+        }).join("");
+        var safeStart = s + Math.max(15, ep * 3);
+        var safeEndTop = W - s - Math.max(15, ep * 3);
+        var safeEndSide = H - s - Math.max(15, ep * 3);
+        var numTop = Math.max(0, Math.floor((safeEndTop - safeStart) / 70));
+        var numSide = Math.max(0, Math.floor((safeEndSide - safeStart) / 70));
+        var smallHeartsSvg = "";
+        for (var i = 0; i < numTop; i++) {
+          var x = safeStart + (numTop > 0 ? (i + 1) * (safeEndTop - safeStart) / (numTop + 1) : 0);
+          smallHeartsSvg += '<path d="' + heartShape(x, 0, smallHeartSize) + '" fill="' + blanc + '"/>';
+          smallHeartsSvg += '<path d="' + heartShape(x, H, smallHeartSize) + '" fill="' + blanc + '"/>';
+        }
+        for (var j = 0; j < numSide; j++) {
+          var y = safeStart + (numSide > 0 ? (j + 1) * (safeEndSide - safeStart) / (numSide + 1) : 0);
+          smallHeartsSvg += '<path d="' + heartShape(0, y, smallHeartSize) + '" fill="' + blanc + '"/>';
+          smallHeartsSvg += '<path d="' + heartShape(W, y, smallHeartSize) + '" fill="' + blanc + '"/>';
+        }
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + palette.vif + '"/><stop offset="50%" stop-color="' + palette.clair + '"/><stop offset="100%" stop-color="' + palette.profond + '"/></linearGradient>'
+          + '<linearGradient id="' + innerGradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + blanc + '" stop-opacity="0.7"/><stop offset="50%" stop-color="' + palette.pale + '" stop-opacity="0.5"/><stop offset="100%" stop-color="' + blanc + '" stop-opacity="0.7"/></linearGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + palette.vif + '" stroke-width="' + (ep * 2) + '" stroke-linejoin="round" opacity="0.2"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="round"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + innerGradId + ')" stroke-width="' + Math.max(1, ep * 0.3) + '" stroke-linejoin="round" opacity="0.7"/>'
+          + "</g>"
+          + "<g>" + cornerHeartsSvg + "</g>"
+          + '<g opacity="0.75">' + smallHeartsSvg + "</g>"
+          + "</svg>";
+      }
+
+      function getThinLineClipSize(sw) {
+        return Math.max(6, Math.round(clampStrokeWidth(sw) * 1.5));
+      }
+      function getThinLineClipPath(W, H, sw) {
+        var r = getThinLineClipSize(sw);
+        var rEff = Math.min(r, W / 4, H / 4);
+        return "path('M " + rEff + " 0 L " + (W - rEff) + " 0 Q " + W + " 0 " + W + " " + rEff + " L " + W + " " + (H - rEff) + " Q " + W + " " + H + " " + (W - rEff) + " " + H + " L " + rEff + " " + H + " Q 0 " + H + " 0 " + (H - rEff) + " L 0 " + rEff + " Q 0 0 " + rEff + " 0 Z')";
+      }
+      function renderThinLine(W, H, idCadre, strokeWidth, couleur, couleurFin) {
+        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var p = {
+          principal: c1,
+          accent: bpmHexValide(couleurFin) ? couleurFin : bpmEclaircir(c1, 0.3)
+        };
+        var ep = clampStrokeWidth(strokeWidth);
+        var r = Math.min(getThinLineClipSize(ep), W / 4, H / 4);
+        var margin = Math.max(4, ep);
+        var svgW = W + margin * 2, svgH = H + margin * 2;
+        var cornerLen = Math.max(10, ep * 3);
+        var cornerGap = Math.max(3, ep * 0.8);
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
+          + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + r + '" ry="' + r + '" fill="none" stroke="' + p.principal + '" stroke-width="' + ep + '"/>'
+          + '<g stroke="' + p.accent + '" stroke-width="' + Math.max(1, ep * 0.6) + '" fill="none" stroke-linecap="square">'
+          + '<path d="M ' + (-cornerGap) + " " + (cornerLen + cornerGap) + " L " + (-cornerGap) + " " + (-cornerGap) + " L " + (cornerLen + cornerGap) + " " + (-cornerGap) + '"/>'
+          + '<path d="M ' + (W - cornerLen - cornerGap) + " " + (-cornerGap) + " L " + (W + cornerGap) + " " + (-cornerGap) + " L " + (W + cornerGap) + " " + (cornerLen + cornerGap) + '"/>'
+          + '<path d="M ' + (-cornerGap) + " " + (H - cornerLen - cornerGap) + " L " + (-cornerGap) + " " + (H + cornerGap) + " L " + (cornerLen + cornerGap) + " " + (H + cornerGap) + '"/>'
+          + '<path d="M ' + (W - cornerLen - cornerGap) + " " + (H + cornerGap) + " L " + (W + cornerGap) + " " + (H + cornerGap) + " L " + (W + cornerGap) + " " + (H - cornerLen - cornerGap) + '"/>'
+          + "</g>"
+          + '<g fill="' + p.accent + '">'
+          + '<circle cx="' + (W / 2) + '" cy="0" r="' + Math.max(2, ep * 0.5) + '"/>'
+          + '<circle cx="' + (W / 2) + '" cy="' + H + '" r="' + Math.max(2, ep * 0.5) + '"/>'
+          + '<circle cx="0" cy="' + (H / 2) + '" r="' + Math.max(2, ep * 0.5) + '"/>'
+          + '<circle cx="' + W + '" cy="' + (H / 2) + '" r="' + Math.max(2, ep * 0.5) + '"/>'
+          + "</g></svg>";
+      }
+
+      function getHexagonClipSize(sw) {
+        return Math.max(12, Math.round(clampStrokeWidth(sw) * 4));
+      }
+      function getHexagonClipPath(W, H, sw) {
+        var s = Math.min(getHexagonClipSize(sw), W / 4, H / 4);
+        var parts = ["M " + s + " 0", "L " + (W - s) + " 0", "L " + W + " " + (s * 0.5), "L " + W + " " + (H - s * 0.5), "L " + (W - s) + " " + H, "L " + s + " " + H, "L 0 " + (H - s * 0.5), "L 0 " + (s * 0.5), "Z"];
+        return "path('" + parts.join(" ") + "')";
+      }
+      function hexPath(cx, cy, r) {
+        var pts = [];
+        for (var i = 0; i < 6; i++) {
+          var angle = (Math.PI / 3) * i - Math.PI / 6;
+          pts.push((cx + r * Math.cos(angle)) + " " + (cy + r * Math.sin(angle)));
+        }
+        return "M " + pts.join(" L ") + " Z";
+      }
+      function renderHexagon(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var p = {
+          principal: c1,
+          profond: bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.3),
+          clair: bpmEclaircir(c1, 0.45)
+        };
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
+        var ep = clampStrokeWidth(strokeWidth);
+        var s = Math.min(getHexagonClipSize(ep), W / 4, H / 4);
+        var margin = Math.max(10, ep * 2.5);
+        var svgW = W + margin * 2, svgH = H + margin * 2;
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-hex-" + uid, clipId = "clip-hex-" + uid;
+        var borderPath = ["M " + s + " 0", "L " + (W - s) + " 0", "L " + W + " " + (s * 0.5), "L " + W + " " + (H - s * 0.5), "L " + (W - s) + " " + H, "L " + s + " " + H, "L 0 " + (H - s * 0.5), "L 0 " + (s * 0.5), "Z"].join(" ");
+        var hexR = Math.max(5, ep * 1.4);
+        var corners = [
+          { cx: s * 0.5, cy: s * 0.35 }, { cx: W - s * 0.5, cy: s * 0.35 },
+          { cx: s * 0.5, cy: H - s * 0.35 }, { cx: W - s * 0.5, cy: H - s * 0.35 }
+        ];
+        var cornerHexes = corners.map(function (c) {
+          return '<path d="' + hexPath(c.cx, c.cy, hexR) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.35) + '"/>';
+        }).join("");
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + p.principal + '"/><stop offset="100%" stop-color="' + p.profond + '"/></linearGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + p.principal + '" stroke-width="' + (ep * 2) + '" stroke-linejoin="miter" opacity="0.2"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" stroke-linejoin="miter" opacity="0.6"/>'
+          + "</g>"
+          + '<g opacity="0.7">' + cornerHexes
+          + '<path d="' + hexPath(W / 2, 0, hexR * 0.7) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" opacity="0.5"/>'
+          + '<path d="' + hexPath(W / 2, H, hexR * 0.7) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" opacity="0.5"/></g>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.4" transform="translate(' + (ep * 0.6) + " " + (ep * 0.6) + ") scale(" + Math.max(0.01, 1 - (ep * 1.2) / W) + " " + Math.max(0.01, 1 - (ep * 1.2) / H) + ')"/>'
+          + "</svg>";
+      }
+
+      function getMGStyleClipSize(sw) {
+        return Math.max(10, Math.round(clampStrokeWidth(sw) * 3));
+      }
+      function getMGStyleClipPath(W, H, sw) {
+        var s = Math.min(getMGStyleClipSize(sw), W / 4, H / 4);
+        var sx = s, sy = s * 0.7;
+        return "path('M " + sx + " 0 L " + (W - sx) + " 0 L " + W + " " + sy + " L " + W + " " + (H - sy) + " L " + (W - sx) + " " + H + " L " + sx + " " + H + " L 0 " + (H - sy) + " L 0 " + sy + " Z')";
+      }
+      function renderMGStyle(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+        var cPrincipal = (couleur && /^#[0-9a-f]{6}$/i.test(couleur)) ? couleur : "#ffffff";
+        var cAccent = (couleurFin && /^#[0-9a-f]{6}$/i.test(couleurFin)) ? couleurFin : "#000000";
+        var angle = isFinite(gradientAngle) ? gradientAngle : 135;
+        var gc = mgAngleToCoords(angle);
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var s = Math.min(getMGStyleClipSize(ep), W / 4, H / 4);
+        var sx = s, sy = s * 0.7;
+        var margin = Math.max(10, ep * 2.5);
+        var svgW = W + offset * 2 + margin * 2, svgH = H + offset * 2 + margin * 2;
+        var viewX = -(offset + margin), viewY = -(offset + margin);
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-mg-" + uid, clipId = "clip-mg-" + uid, stripeId = "stripe-mg-" + uid;
+        var x0 = 0, y0 = 0, x1 = W, y1 = H, midX = W / 2, midY = H / 2;
+        var borderPath = ["M " + (x0 + sx) + " " + y0, "L " + (x1 - sx) + " " + y0, "L " + x1 + " " + (y0 + sy), "L " + x1 + " " + (y1 - sy), "L " + (x1 - sx) + " " + y1, "L " + (x0 + sx) + " " + y1, "L " + x0 + " " + (y1 - sy), "L " + x0 + " " + (y0 + sy), "Z"].join(" ");
+        var stripeSize = Math.max(5, ep * 1.5);
+        var cornerTriangles = [
+          "M " + x0 + " " + y0 + " L " + (x0 + sx) + " " + y0 + " L " + x0 + " " + (y0 + sy) + " Z",
+          "M " + x1 + " " + y0 + " L " + (x1 - sx) + " " + y0 + " L " + x1 + " " + (y0 + sy) + " Z",
+          "M " + x1 + " " + y1 + " L " + (x1 - sx) + " " + y1 + " L " + x1 + " " + (y1 - sy) + " Z",
+          "M " + x0 + " " + y1 + " L " + (x0 + sx) + " " + y1 + " L " + x0 + " " + (y1 - sy) + " Z"
+        ].map(function (d) { return '<path d="' + d + '" fill="url(#' + stripeId + ')" opacity="0.85"/>'; }).join("\n    ");
+        var bracketLen = Math.max(14, ep * 4), bracketGap = Math.max(4, ep * 1.2), traitFin = Math.max(1, ep * 0.45);
+        function bracketCoin(cx, cy, dx, dy) {
+          var X = function (x) { return cx + x * dx; };
+          var Y = function (y) { return cy + y * dy; };
+          return "M " + X(-bracketGap) + " " + Y(bracketLen) + " L " + X(-bracketGap) + " " + Y(-bracketGap) + " L " + X(bracketLen) + " " + Y(-bracketGap);
+        }
+        var brackets = [bracketCoin(x0, y0, 1, 1), bracketCoin(x1, y0, -1, 1), bracketCoin(x1, y1, -1, -1), bracketCoin(x0, y1, 1, -1)]
+          .map(function (d) { return '<path d="' + d + '" fill="none" stroke="' + cAccent + '" stroke-width="' + traitFin + '" stroke-linecap="square"/>'; }).join("");
+        var angleMarkR = Math.max(4, ep * 1.2);
+        var angleMarks = [
+          { cx: x0 + sx, cy: y0, rot: 0 }, { cx: x1 - sx, cy: y0, rot: 90 },
+          { cx: x1 - sx, cy: y1, rot: 180 }, { cx: x0 + sx, cy: y1, rot: 270 }
+        ].map(function (m) {
+          var rad = (m.rot + 90) * Math.PI / 180;
+          var ex = m.cx + angleMarkR * Math.cos(rad), ey = m.cy + angleMarkR * Math.sin(rad);
+          return '<path d="M ' + (m.cx + angleMarkR) + ' ' + m.cy + ' A ' + angleMarkR + ' ' + angleMarkR + ' 0 0 1 ' + ex + ' ' + ey + '" fill="none" stroke="' + cAccent + '" stroke-width="' + traitFin + '" opacity="0.6"/>';
+        }).join("");
+        var circuitStroke = Math.max(0.8, ep * 0.3), circuitPad = Math.max(6, ep * 1.8);
+        var circuits = [
+          "M " + (-circuitPad) + " " + (sy + 20) + " L " + (-circuitPad) + " " + (midY - 30) + " L " + (-circuitPad + 8) + " " + (midY - 22) + " L " + (-circuitPad + 8) + " " + (midY + 22) + " L " + (-circuitPad) + " " + (midY + 30) + " L " + (-circuitPad) + " " + (H - sy - 20),
+          "M " + (W + circuitPad) + " " + (sy + 20) + " L " + (W + circuitPad) + " " + (midY - 30) + " L " + (W + circuitPad - 8) + " " + (midY - 22) + " L " + (W + circuitPad - 8) + " " + (midY + 22) + " L " + (W + circuitPad) + " " + (midY + 30) + " L " + (W + circuitPad) + " " + (H - sy - 20)
+        ].map(function (d) { return '<path d="' + d + '" fill="none" stroke="' + cAccent + '" stroke-width="' + circuitStroke + '" opacity="0.35" stroke-linejoin="miter"/>'; }).join("\n    ");
+        var circuitNodes = [
+          { x: -circuitPad, y: sy + 20 }, { x: -circuitPad, y: H - sy - 20 },
+          { x: W + circuitPad, y: sy + 20 }, { x: W + circuitPad, y: H - sy - 20 },
+          { x: -circuitPad + 8, y: midY - 22 }, { x: -circuitPad + 8, y: midY + 22 },
+          { x: W + circuitPad - 8, y: midY - 22 }, { x: W + circuitPad - 8, y: midY + 22 }
+        ].map(function (n) { return '<circle cx="' + n.x + '" cy="' + n.y + '" r="' + Math.max(1.5, ep * 0.35) + '" fill="' + cAccent + '" opacity="0.5"/>'; }).join("");
+        var diodeR = Math.max(2.5, ep * 0.6), diodeX = midX, diodeY = -margin * 0.4;
+        var bangW = Math.max(2, ep * 0.55), bangH = Math.max(12, ep * 3.5), bangX = W + margin * 0.3, bangY = -margin * 0.25;
+        var tickCount = 9, tickW = Math.max(1, ep * 0.25), tickH = Math.max(3, ep * 0.8), tickStart = sx + 4, tickEnd = W - sx - 4;
+        var ticks = [];
+        for (var ti = 0; ti < tickCount; ti++) {
+          var tt = tickCount > 1 ? ti / (tickCount - 1) : 0.5;
+          var tx = tickStart + tt * (tickEnd - tickStart);
+          var isMajor = ti === Math.floor(tickCount / 2);
+          var isMid = ti % 2 === 0;
+          var th = isMajor ? tickH * 1.8 : isMid ? tickH * 1.2 : tickH;
+          ticks.push('<rect x="' + (tx - tickW / 2) + '" y="' + (H + ep * 0.3) + '" width="' + tickW + '" height="' + th + '" fill="' + cAccent + '" opacity="' + (isMajor ? 0.9 : isMid ? 0.6 : 0.35) + '"/>');
+        }
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + cPrincipal + '"/><stop offset="100%" stop-color="' + cAccent + '"/></linearGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + '<pattern id="' + stripeId + '" patternUnits="userSpaceOnUse" width="' + stripeSize + '" height="' + stripeSize + '" patternTransform="rotate(45)"><rect width="' + (stripeSize / 2) + '" height="' + stripeSize + '" fill="' + cPrincipal + '"/><rect x="' + (stripeSize / 2) + '" width="' + (stripeSize / 2) + '" height="' + stripeSize + '" fill="' + cAccent + '"/></pattern>'
+          + "</defs>"
+          + cornerTriangles
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + cPrincipal + '" stroke-width="' + (ep * 2) + '" stroke-linejoin="miter" opacity="0.18"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + cAccent + '" stroke-width="' + Math.max(0.8, ep * 0.25) + '" stroke-linejoin="miter" opacity="0.55"/>'
+          + "</g>"
+          + brackets
+          + angleMarks
+          + circuits
+          + circuitNodes
+          + '<circle cx="' + diodeX + '" cy="' + diodeY + '" r="' + (diodeR * 2) + '" fill="' + cAccent + '" opacity="0.2"/>'
+          + '<circle cx="' + diodeX + '" cy="' + diodeY + '" r="' + diodeR + '" fill="' + cAccent + '" stroke="' + cPrincipal + '" stroke-width="' + Math.max(0.5, ep * 0.15) + '"/>'
+          + '<g><rect x="' + (bangX - bangW / 2) + '" y="' + (bangY - bangH) + '" width="' + bangW + '" height="' + (bangH * 0.72) + '" fill="' + cAccent + '"/><rect x="' + (bangX - bangW / 2) + '" y="' + (bangY - bangH * 0.12) + '" width="' + bangW + '" height="' + bangW + '" fill="' + cAccent + '"/></g>'
+          + ticks.join("")
+          + "</svg>";
+      }
+
+      var CADRES_RENDERERS = {
+        cyberpunk: renderCyberpunk,
+        story: renderStory,
+        "thin-line": renderThinLine,
+        hexagon: renderHexagon,
+        mgstyle: renderMGStyle
+      };
+      var CADRES_CLIP_PATHS = {
+        cyberpunk: getCyberpunkClipPath,
+        story: getStoryClipPath,
+        "thin-line": getThinLineClipPath,
+        hexagon: getHexagonClipPath,
+        mgstyle: getMGStyleClipPath
+      };
+
+      function genererCadreSVG(cadre, W, H, idCadre) {
+        if (!cadre) return "";
+        var style = cadre.style || "carre";
+        var strokeWidth = cadre.strokeWidth || 4;
+        var couleur = cadre.couleur || "#ffffff";
+        var couleurFin = cadre.couleurFin || "";
+        var gradientAngle = isFinite(cadre.gradientAngle) ? cadre.gradientAngle : 135;
+        if (style === "arrondis" || style === "carre") {
+          return renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle);
+        }
+        var fn = CADRES_RENDERERS[style];
+        if (fn) {
+          return fn(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle);
+        }
+        return "";
+      }
+
+      function genererCadreClipPath(cadre, W, H) {
+        if (!cadre) return null;
+        var style = cadre.style || "carre";
+        var strokeWidth = cadre.strokeWidth || 4;
+        if (style === "arrondis") {
+          var r = Math.min(8, W / 4, H / 4);
+          return "path('M " + r + " 0 L " + (W - r) + " 0 Q " + W + " 0 " + W + " " + r + " L " + W + " " + (H - r) + " Q " + W + " " + H + " " + (W - r) + " " + H + " L " + r + " " + H + " Q 0 " + H + " 0 " + (H - r) + " L 0 " + r + " Q 0 0 " + r + " 0 Z')";
+        }
+        if (style === "carre") return null;
+        var fn = CADRES_CLIP_PATHS[style];
+        if (!fn) return null;
+        try { return fn(W, H, strokeWidth); } catch (e) { return null; }
+      }
+
+      // ===== Mode « bulles » : cadre SVG par message (parité diffusion) =====
+      // sceneCadre = cadreWidget de la scène (cadre actif + strokeWidth > 0)
+      // — mêmes valeurs que sur un widget objectif. chatBulles = ≥1 widget
+      // chat de la scène en chatStyle "bulles" (le pop-out n'est lié à
+      // aucun widget précis → majorité simple).
+      var sceneCadre = null;
+      var chatBulles = false;
+      var dernierCadreKey = "";
+      var chatMsgUid = 0;
+
+      // Lit cadreWidget + chatStyle des widgets depuis un snapshot scène.
+      // Rebuild du chat seulement si la signature a changé.
+      function majEtatCadre(scene) {
+        var c = scene.cadreWidget;
+        if (!c || !c.actif || (c.strokeWidth || 0) <= 0) c = null;
+        var bulles = (scene.widgets || []).some(function (w) {
+          return (w.type || "media") === "chat" && w.chatStyle === "bulles";
+        });
+        var key = (bulles ? "b" : "c") + "|" + (c
+          ? [c.style, c.strokeWidth, c.couleur, c.couleurFin, c.gradientAngle].join("|")
+          : "");
+        if (key === dernierCadreKey) return;
+        dernierCadreKey = key;
+        sceneCadre = c;
+        chatBulles = bulles;
+        chatBody.classList.toggle("bulles", bulles);
+        fillChatBody();
+      }
+
+      // strokeWidth plafonné pour les bulles (parité diffusion) : 2px
+      // max quelle que soit la valeur scène — les renderers dessinent
+      // ~3×ep en bande visible et leurs ornements ont un plancher 8-12px.
+      function cadreMsgScale(cadre) {
+        var sw = cadre.strokeWidth || 4;
+        var scaled = Math.max(1, Math.min(sw, 2));
+        if (scaled === sw) return cadre;
+        var c = {};
+        for (var k in cadre) c[k] = cadre[k];
+        c.strokeWidth = scaled;
+        return c;
+      }
+
+      // Pose le cadre SVG réel sur une bulle aux dims connues : clip-path à
+      // la forme + enfant .cadre-overlay (même traitement qu'applyCadreWidget).
+      function decorerCadreMsg(div, cadre, W, H) {
+        if (W <= 0 || H <= 0) return;
+        cadre = cadreMsgScale(cadre);
+        var clip = genererCadreClipPath(cadre, W, H);
+        if (clip) {
+          div.style.clipPath = clip;
+          div.style.webkitClipPath = clip;
+        }
+        var overlay = document.createElement("div");
+        overlay.className = "cadre-overlay";
+        overlay.innerHTML = genererCadreSVG(cadre, W, H, "cm" + (chatMsgUid++));
+        div.appendChild(overlay);
       }
 
       // WS en dur sur :4321 (même path que diffusion.html = /ws).
@@ -189,8 +787,11 @@
                 chatMessages = chatMessages.slice(chatMessages.length - MAX_CHAT);
               }
               fillChatBody();
+            } else if (msg.type === "snapshot" && msg.scene) {
+              // Snapshot scène : cadreWidget + chatStyle des widgets →
+              // parité « bulles » avec diffusion (rebuild si changé).
+              majEtatCadre(msg.scene);
             }
-            // Snapshot ignoré : le pop-out n'affiche que le chat.
           } catch (e) {
           }
         };

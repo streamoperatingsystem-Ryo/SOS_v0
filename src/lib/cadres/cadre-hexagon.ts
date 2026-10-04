@@ -1,21 +1,9 @@
 // Cadre SVG Hexagone — bordure hexagonale avec alvéoles aux coins.
-// Variantes : ambre, azure, emerald, violet, steel.
+// Tons dérivés des couleurs utilisateur : couleur = principal, couleurFin =
+// profond ; clair = couleur éclaircie (aucune palette figée).
 
 import type { CadreOpts } from "./cadre-cyberpunk";
-
-interface Variante {
-  principal: string;
-  profond: string;
-  clair: string;
-}
-
-const VARIANTES: Record<string, Variante> = {
-  ambre: { principal: "#f59e0b", profond: "#b45309", clair: "#fcd34d" },
-  azure: { principal: "#0ea5e9", profond: "#0369a1", clair: "#7dd3fc" },
-  emerald: { principal: "#10b981", profond: "#047857", clair: "#6ee7b7" },
-  violet: { principal: "#8b5cf6", profond: "#6d28d9", clair: "#c4b5fd" },
-  steel: { principal: "#64748b", profond: "#334155", clair: "#cbd5e1" },
-};
+import { angleVersCoords, assombrir, couleurOu, eclaircir } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
@@ -29,8 +17,7 @@ export function getHexagonClipSize(strokeWidth = 4): number {
 export function getHexagonClipPath(
   W: number,
   H: number,
-  strokeWidth = 4,
-  _variante = "ambre"
+  strokeWidth = 4
 ): string {
   const s = Math.min(getHexagonClipSize(strokeWidth), W / 4, H / 4);
   const parts = [
@@ -58,7 +45,14 @@ function hexPath(cx: number, cy: number, r: number): string {
 
 export default function renderHexagon(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const p = VARIANTES[opts.variante ?? "ambre"] ?? VARIANTES.ambre;
+  const principal = couleurOu(opts.couleur, "#ffffff");
+  const p = {
+    principal,
+    profond: couleurOu(opts.couleurFin, assombrir(principal, 0.3)),
+    clair: eclaircir(principal, 0.45),
+  };
+  const angle = Number.isFinite(Number(opts.gradientAngle)) ? Number(opts.gradientAngle) : 135;
+  const { x1: gx1, y1: gy1, x2: gx2, y2: gy2 } = angleVersCoords(angle);
   const ep = clampStrokeWidth(opts.strokeWidth ?? 4);
   const s = Math.min(getHexagonClipSize(ep), largeur / 4, hauteur / 4);
 
@@ -98,7 +92,7 @@ export default function renderHexagon(opts: CadreOpts): string {
 
   return `<svg width="${svgW}" height="${svgH}" viewBox="${vx} ${vy} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${margin}px; left:-${margin}px; pointer-events:none; z-index:5;">
   <defs>
-    <linearGradient id="${gradId}" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
       <stop offset="0%" stop-color="${p.principal}" />
       <stop offset="100%" stop-color="${p.profond}" />
     </linearGradient>

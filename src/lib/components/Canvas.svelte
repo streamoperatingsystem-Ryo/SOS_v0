@@ -1,15 +1,30 @@
 <script lang="ts">
   import { onMount } from "svelte";
-  import { sceneStore, selectWidget, ajouterMorphFond } from "../stores/scene";
-  import { setCarteEdition } from "../stores/ui";
+  import {
+    sceneStore, selectWidget, ajouterMorphFond, importFond, clearFond,
+    setBgFit, toggleBgMiroir, resetFondTransformation, resetFondEffets,
+    resetMorphsFond, setBgPaused, retirerFondCapture,
+    dupliquerWidget, setMediaFit, toggleMediaMiroir, rotateWidgetLocal,
+    commitScene, setWidgetMediaPaused, resetMediaTransformation,
+    resetMediaEffets, resetMorphsWidget, importMedia, clearWidgetMedia,
+    setWidgetTrou, deleteObsTrouSource, transformerEnFlottant,
+    transformerEnWidget, mettreWidgetPlan,
+  } from "../stores/scene";
+  import {
+    setCarteEdition, titreFondModalOpen, titreModalOpen, confirmDeleteWidget,
+    cadreModalOpen,
+  } from "../stores/ui";
   import { registerVideo, unregisterVideo } from "../stores/video";
+  import { connexions, type Connexions } from "../stores/chat";
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
   import { creerRenduMorph, dessinerFitCanvas, chaineFilter, type RenduMorph } from "../morph/gl-morph";
   import WidgetComp from "./Widget.svelte";
   import AlignmentGuides from "./AlignmentGuides.svelte";
   import CadreSVG from "./CadreSVG.svelte";
-  import { couleurCadre, gradientCadre } from "../cadres/registre";
+  import ObsSourceDialog from "./ObsSourceDialog.svelte";
+  import { gradientCadre } from "../cadres/registre";
   import { POLICE_TITRE_DEFAUT, TAILLE_TITRE_DEFAUT, ESPACEMENT_TITRE_DEFAUT } from "../fonts";
+  import { t } from "../stores/langue";
 
   // Dims canvas = résolution OBS lue au connect (fallback 1920×1080).
   // Widgets existants jamais rescalés quand ces dims changent.
@@ -45,19 +60,85 @@
   let bgTeinte = $derived($sceneStore.bgTeinte ?? 0);
   let bgFlou = $derived($sceneStore.bgFlou ?? 0);
   let bgPixel = $derived($sceneStore.bgPixel ?? 0);
-  // Miroir du fond : flip H/V du média — scale ±1 combiné au zoom, dans
-  // l'espace local du média (après rotate dans la liste = flip de la source).
+  // Miroir du fond : flip H/V du média — scale ±1 dans l'espace local du
+  // média (après rotate dans la liste = flip de la source). Le zoom n'est
+  // plus ici : il est sur .bg-layer (post-tilt, voir bgTiltStyle).
   let bgMiroirH = $derived($sceneStore.bgMiroirH === true);
   let bgMiroirV = $derived($sceneStore.bgMiroirV === true);
+  // Zoom + tilt 3D du fond (gizmo, ±90°) : transform sur .bg-layer, identique
+  // à celui posé sur #bg en diffusion. scale(z) EN PREMIER dans la liste =
+  // appliqué EN DERNIER (espace écran, post-perspective) → le zoom agrandit
+  // le plan tilté entier et couvre tout le canvas même incliné.
+  // d = canvasW×2 : même ratio d/demi-largeur que les widgets (800px pour
+  // ~400px) → tilt doux ; le bord ne croise jamais le plan de fuite.
+  let bgTiltStyle = $derived.by(() => {
+    const rx = $sceneStore.bgRotX ?? 0;
+    const ry = $sceneStore.bgRotY ?? 0;
+    const z = bgZoom;
+    return rx !== 0 || ry !== 0 || z !== 1
+      ? `transform:scale(${z}) perspective(${canvasW * 2}px) rotateX(${rx}deg) rotateY(${ry}deg); transform-origin:center center;`
+      : "";
+  });
   let bgFilter = $derived(chaineFilter(bgLum, bgContraste, bgTeinte, bgFlou));
   // Fond = capture OBS (app/jeu plein canvas) : prioritaire sur le média.
   let bgObsSource = $derived($sceneStore.bgObsSource ?? null);
   let hasFond = $derived(bgMedia.length > 0 || !!bgObsSource);
+  // ===== Aides contextuelles (presets guidés — dashboard uniquement) =====
+  // Encadrés jaune-orangé auto-masqués : aideFond disparaît dès qu'un média
+  // ou une capture OBS est lié au fond ; aideObjectifs disparaît quand
+  // TOUTES les plateformes des widgets goal sont connectées (store
+  // connexions — même clés que goalPlateforme) ; aideCadres disparaît à la
+  // première ouverture de la modale Cadres. Les encadrés centrés (fond +
+  // cadres) sont empilés dans .aides-centre. Jamais rendus en diffusion.
+  let aideFondVisible = $derived($sceneStore.aideFond === true && !hasFond);
+  // Boîte englobante des widgets goal : l'encadré se pose juste au-dessus.
+  let goalsBox = $derived.by(() => {
+    const gs = $sceneStore.widgets.filter((w) => w.type === "goal");
+    if (gs.length === 0) return null;
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity;
+    for (const g of gs) {
+      x0 = Math.min(x0, g.x);
+      y0 = Math.min(y0, g.y);
+      x1 = Math.max(x1, g.x + g.largeur);
+    }
+    return { cx: (x0 + x1) / 2, top: y0 };
+  });
+  let goalsPlateformes = $derived(
+    new Set(
+      $sceneStore.widgets
+        .filter((w) => w.type === "goal" && w.goalPlateforme)
+        .map((w) => w.goalPlateforme as string)
+    )
+  );
+  let aideObjectifsVisible = $derived(
+    $sceneStore.aideObjectifs === true &&
+      !!goalsBox &&
+      goalsPlateformes.size > 0 &&
+      ![...goalsPlateformes].every((p) => $connexions[p as keyof Connexions])
+  );
+  let aideCadresVisible = $derived($sceneStore.aideCadres === true);
+  // Auto-masquage « mission accomplie » : la première ouverture de la modale
+  // Cadres agit comme la croix — dismiss persistant (commit scène).
+  $effect(() => {
+    if ($cadreModalOpen && aideCadresVisible) fermerAide("aideCadres");
+  });
+  // Croix de fermeture : dismiss PERSISTANT — le flag repasse à false et est
+  // commité (l'aide ne revient pas au reload). La croix est le seul élément
+  // cliquable de l'encadré (parent pointer-events:none).
+  function fermerAide(champ: "aideFond" | "aideObjectifs" | "aideCadres") {
+    sceneStore.update((s) => ({ ...s, [champ]: false }));
+    void commitScene();
+  }
   let bgIsVideo = $derived(bgKind === "video");
   // Badge « en lecture dans OBS » (fond) : bgPaused === false = la vidéo de
   // fond joue réellement côté diffusion (:4321) — vignette dashboard figée.
   let bgLecture = $derived(bgIsVideo && ($sceneStore.bgPaused ?? true) === false);
+  let bgPaused = $derived($sceneStore.bgPaused ?? true);
 
+  // Modes d'affichage proposés (même liste que la carte édition).
+  const FIT_MODES = ["ajuster", "remplir", "etendre", "etirer", "centrer", "vignette"];
+  // Extensions vidéo (même liste que Widget.svelte — kindFromMedia local).
+  const VIDEO_EXT = ["mp4", "webm"];
   // Mapping mode → object-fit (identique à Widget.svelte).
   const FIT_CSS: Record<string, string> = {
     ajuster: "contain",
@@ -68,25 +149,31 @@
     etendre: "cover",
   };
   let bgFitCss = $derived(FIT_CSS[bgFit] ?? "cover");
-  let bgMediaTransform = $derived(`translate(${bgOx}px, ${bgOy}px) rotate(${bgRot}deg) scale(${bgZoom * (bgMiroirH ? -1 : 1)}, ${bgZoom * (bgMiroirV ? -1 : 1)})`);
+  let bgMediaTransform = $derived(`translate(${bgOx}px, ${bgOy}px) rotate(${bgRot}deg) scale(${bgMiroirH ? -1 : 1}, ${bgMiroirV ? -1 : 1})`);
 
-  // ===== Cadre de l'application (bord extérieur du canvas) =====
-  let cadreApp = $derived($sceneStore.cadreApp ?? null);
-  let cadreAppActif = $derived(!!cadreApp?.actif && (cadreApp?.strokeWidth ?? 0) > 0);
-  // Couleur du badge « en lecture dans OBS » (fond) = couleur RÉELLE du
-  // cadre app choisi (couleur utilisateur si personnalisable, palette de la
-  // variante pour les presets). Fallback --texte si pas de cadre actif.
+  // ===== Cadre unifié (widgets + bord extérieur du canvas) =====
+  // Source unique : cadreWidget (champ canonique) — le même cadre que les
+  // widgets. Le bord du canvas n'est plus qu'une cible de rendu, masquable
+  // par bordActif (undefined = true, rétro-compat vieilles scènes).
+  let cadre = $derived($sceneStore.cadreWidget ?? null);
+  let cadreActif = $derived(!!cadre?.actif && (cadre?.strokeWidth ?? 0) > 0);
+  let cadreBordActif = $derived(cadreActif && (cadre?.bordActif ?? true));
+  // Couleur du badge « en lecture dans OBS » (fond) = couleur du cadre
+  // (couleur utilisateur). Fallback --texte si pas de cadre actif.
   let bgLectureCouleur = $derived(
-    cadreAppActif && cadreApp ? couleurCadre(cadreApp.style, cadreApp.variante, cadreApp.couleur) : "var(--texte)"
+    cadreActif && cadre ? cadre.couleur : "var(--texte)"
   );
 
   // ===== Titre du fond de l'application (intérieur haut/bas) =====
-  // Titre optionnel : texte + police Google Font + taille + position.
-  // Le gradient du texte reprend les couleurs du cadre de l'application
-  // (cadreApp) actif (fallback blanc→gris si aucun cadre actif).
-  let bgTitreTexte = $derived($sceneStore.bgTitre ?? "");
-  let bgTitreVisible = $derived(bgTitreTexte.length > 0);
-  let bgTitrePos = $derived($sceneStore.bgTitrePosition ?? "haut");
+  // Titres du fond (haut/bas/gauche/droite — intérieur du fond, latéraux en
+  // texte vertical). Jusqu'à 4 simultanés, style partagé (police/taille/…).
+  // Le gradient du texte reprend les couleurs du cadre unifié
+  // actif (fallback blanc→gris si aucun cadre actif).
+  let bgTitreHaut = $derived($sceneStore.bgTitreHaut ?? "");
+  let bgTitreBas = $derived($sceneStore.bgTitreBas ?? "");
+  let bgTitreGauche = $derived($sceneStore.bgTitreGauche ?? "");
+  let bgTitreDroite = $derived($sceneStore.bgTitreDroite ?? "");
+  let hasBgTitre = $derived(!!(bgTitreHaut || bgTitreBas || bgTitreGauche || bgTitreDroite));
   let bgTitrePolice = $derived($sceneStore.bgTitrePolice ?? POLICE_TITRE_DEFAUT);
   let bgTitreTaille = $derived($sceneStore.bgTitreTaille ?? TAILLE_TITRE_DEFAUT);
   let bgTitreGras = $derived($sceneStore.bgTitreGras ?? false);
@@ -95,10 +182,24 @@
   let bgTitreEspacement = $derived($sceneStore.bgTitreEspacement ?? ESPACEMENT_TITRE_DEFAUT);
   let bgTitreContourCouleur = $derived($sceneStore.bgTitreContourCouleur ?? "#fff");
   let bgTitreContourEpaisseur = $derived($sceneStore.bgTitreContourEpaisseur ?? 2);
-  let bgTitreGradient = $derived(gradientCadre(cadreAppActif ? cadreApp : null));
+  // Dégradé du texte : personnalisé si bgTitreCouleur défini, sinon cadre.
+  let bgTitreGradient = $derived(
+    $sceneStore.bgTitreCouleur
+      ? { from: $sceneStore.bgTitreCouleur, to: $sceneStore.bgTitreCouleurFin ?? $sceneStore.bgTitreCouleur }
+      : gradientCadre(cadreActif ? cadre : null)
+  );
   let bgTitreFontStyle = $derived(bgTitreItalique ? "italic" : "normal");
   let bgTitreFontWeight = $derived(bgTitreGras ? "700" : "400");
   let bgTitreTextDecoration = $derived(bgTitreSouligne ? "underline" : "none");
+  // Style inline partagé par les 4 titres du fond.
+  let bgTitreStyle = $derived(
+    "font-family: '" + bgTitrePolice + "', sans-serif; font-size: " + bgTitreTaille +
+    "px; font-style: " + bgTitreFontStyle + "; font-weight: " + bgTitreFontWeight +
+    "; text-decoration: " + bgTitreTextDecoration + "; letter-spacing: " + bgTitreEspacement +
+    "px; -webkit-text-stroke: " + bgTitreContourEpaisseur + "px " + bgTitreContourCouleur +
+    "; background: linear-gradient(135deg, " + bgTitreGradient.from + ", " + bgTitreGradient.to +
+    "); -webkit-background-clip: text; background-clip: text; color: transparent;"
+  );
 
   // <video> fond src set impérativement — Svelte ne touche JAMAIS à l'attribut
   // src du template. On ne set src QUE si bgMedia change (nom de fichier).
@@ -134,6 +235,9 @@
   //     cliqué (coords normalisées du canvas — indépendantes du scale).
   //   - Sinon → désélection + ouvre section Arrière-plan de l'application.
   function onCanvasPointerDown(e: PointerEvent) {
+    // Bouton gauche uniquement : le clic droit ouvre le menu contextuel du
+    // fond (oncontextmenu) — il ne doit ni désélectionner ni déposer un morph.
+    if (e.button !== 0) return;
     if ($morphMode && hasFond && !bgIsVideo) {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const nx = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
@@ -166,6 +270,118 @@
   function onCanvasPointerLeave() {
     bgMorphSurvol = false;
   }
+
+  // ===== Menus contextuels (clic droit sur le canvas) =====
+  // Recette .ctx-menu de SceneBar : fixed à la position souris, fermeture
+  // clic extérieur (svelte:window onclick — le clic droit n'émet pas click)
+  // + Escape. Deux menus mutuellement exclusifs pilotés par ctxWidgetId :
+  // null = menu FOND, sinon menu du widget identifié (data-widget-id posé
+  // sur .widget — contextmenu bouillonne jusqu'à .canvas). confirmDeleteFond
+  // = confirmation inline Oui/Non avant clearFond.
+  let fondMenuOpen = $state(false);
+  let fondMenuX = $state(0);
+  let fondMenuY = $state(0);
+  let confirmDeleteFond = $state(false);
+  let ctxWidgetId = $state<string | null>(null);
+  // Modale capture app/jeu en fond (ObsSourceDialog mode "fond", montée ici
+  // comme dans CarteEdition — la carte possède son propre état local).
+  let obsFondDialogOpen = $state(false);
+  // Modale source OBS d'un widget trou (ObsSourceDialog mode "widget").
+  let obsWidgetDialogId = $state<string | null>(null);
+
+  function onCanvasContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    // Clic droit sur un widget (ou son titre/poignées, tous dans .widget) :
+    // menu WIDGET — le widget est sélectionné pour que les actions qui
+    // visent selectedId (importMedia, carte, touche Suppr) tombent juste.
+    const wEl = (e.target as HTMLElement).closest(".widget");
+    const wId = wEl instanceof HTMLElement ? (wEl.dataset.widgetId ?? null) : null;
+    if (wEl && !wId) return;
+    if (wId) selectWidget(wId);
+    ctxWidgetId = wId;
+    fondMenuX = e.clientX;
+    fondMenuY = e.clientY;
+    confirmDeleteFond = false;
+    fondMenuOpen = true;
+  }
+
+  function fermerFondMenu() {
+    fondMenuOpen = false;
+    confirmDeleteFond = false;
+    ctxWidgetId = null;
+  }
+
+  function onWindowKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape" && fondMenuOpen) fermerFondMenu();
+  }
+
+  // Toggles : gardent le menu ouvert (essai rapide des réglages).
+  // Actions : ferment le menu (pattern SceneBar).
+  function ctxFit(mode: string) { void setBgFit(mode); }
+  function ctxMiroir(sens: "h" | "v") { void toggleBgMiroir(sens); }
+  function ctxToggleLecture() { void setBgPaused(!bgPaused); }
+  function ctxToggleMorph() { morphMode.update((m) => !m); }
+  async function ctxImportFond() { fermerFondMenu(); await importFond(); }
+  function ctxObsFond() { fermerFondMenu(); obsFondDialogOpen = true; }
+  async function ctxRetirerCapture() { fermerFondMenu(); await retirerFondCapture(); }
+  function ctxTitre() { fermerFondMenu(); titreFondModalOpen.set(true); }
+  async function ctxResetTransfo() { fermerFondMenu(); await resetFondTransformation(); }
+  async function ctxResetEffets() { fermerFondMenu(); await resetFondEffets(); }
+  async function ctxResetMorphs() { fermerFondMenu(); await resetMorphsFond(); }
+  async function ctxSupprimerConfirm() { fermerFondMenu(); await clearFond(); }
+
+  // ===== Menu contextuel WIDGET (clic droit sur un widget) =====
+  // Contenu miroir de la carte widget (CarteEdition, cible "widget") — mêmes
+  // conditions : branche média (trou/flottant) = types hors chat/input-viewer/
+  // speedrun/goal/camera ; morphable = type media + média image (le toggle
+  // active le mode morphing global, le clic suivant dépose le morph).
+  let ctxWidget = $derived(ctxWidgetId ? $sceneStore.widgets.find((x) => x.id === ctxWidgetId) : undefined);
+  let wgType = $derived(ctxWidget?.type ?? "media");
+  let wgMedia = $derived(ctxWidget?.media ?? "");
+  let wgHasMedia = $derived(wgMedia.length > 0);
+  let wgKind = $derived(
+    ctxWidget?.kind ??
+      (wgMedia && VIDEO_EXT.includes(wgMedia.split(".").pop()?.toLowerCase() ?? "") ? "video" : "image")
+  );
+  let wgIsVideo = $derived(wgKind === "video");
+  let wgIsTrou = $derived(ctxWidget?.trou === true);
+  let wgHasObsSource = $derived(!!ctxWidget?.obsSource);
+  let wgFlottant = $derived(ctxWidget?.sansCadre === true);
+  let wgFit = $derived(ctxWidget?.mediaFit ?? "ajuster");
+  let wgMiroirH = $derived(ctxWidget?.mediaMiroirH === true);
+  let wgMiroirV = $derived(ctxWidget?.mediaMiroirV === true);
+  let wgPaused = $derived(ctxWidget?.mediaPaused ?? true);
+  let wgHasMorphs = $derived((ctxWidget?.morphs?.length ?? 0) > 0);
+  let wgIsBrancheMedia = $derived(!["chat", "input-viewer", "speedrun", "goal", "camera"].includes(wgType));
+  let wgMorphable = $derived(wgType === "media" && wgHasMedia && !wgIsVideo);
+
+  // Toggles : gardent le menu ouvert. Actions : ferment le menu.
+  function ctxWgFit(id: string, mode: string) { void setMediaFit(id, mode); }
+  function ctxWgMiroirMedia(id: string, sens: "h" | "v") { void toggleMediaMiroir(id, sens); }
+  function ctxWgRetourne(id: string, sens: "h" | "v" | "reset") {
+    rotateWidgetLocal(id, sens === "v" ? 180 : 0, sens === "h" ? 180 : 0);
+    void commitScene();
+  }
+  function ctxWgLecture(id: string) { void setWidgetMediaPaused(id, !wgPaused); }
+  function ctxWgTrou(id: string) { void setWidgetTrou(id, !wgIsTrou); }
+  function ctxWgMorph() { morphMode.update((m) => !m); }
+  function ctxWgTitre(id: string) { fermerFondMenu(); titreModalOpen.set({ id }); }
+  async function ctxWgDupliquer(id: string) { fermerFondMenu(); await dupliquerWidget(id); }
+  async function ctxWgDevant(id: string) { fermerFondMenu(); await mettreWidgetPlan(id, "avant"); }
+  async function ctxWgDerriere(id: string) { fermerFondMenu(); await mettreWidgetPlan(id, "arriere"); }
+  async function ctxWgResetTransfo(id: string) { fermerFondMenu(); await resetMediaTransformation(id); }
+  async function ctxWgResetEffets(id: string) { fermerFondMenu(); await resetMediaEffets(id); }
+  async function ctxWgResetMorphs(id: string) { fermerFondMenu(); await resetMorphsWidget(id); }
+  // importMedia vise selectedId — le widget est sélectionné à l'ouverture du menu.
+  async function ctxWgImportMedia() { fermerFondMenu(); await importMedia(); }
+  async function ctxWgSupprMedia(id: string) { fermerFondMenu(); await clearWidgetMedia(id); }
+  function ctxWgObsDialog(id: string) { fermerFondMenu(); obsWidgetDialogId = id; }
+  async function ctxWgSupprObsSource(id: string) { fermerFondMenu(); await deleteObsTrouSource(id); }
+  async function ctxWgFlottant(id: string) { fermerFondMenu(); await transformerEnFlottant(id); }
+  async function ctxWgTransformerWidget(media: string) { fermerFondMenu(); await transformerEnWidget(media); }
+  // Supprimer = la modale ConfirmDeleteWidgetModal existante (vraie
+  // confirmation, pas le Oui/Non inline — pattern carte/App.touche Suppr).
+  function ctxWgSupprimer() { fermerFondMenu(); confirmDeleteWidget.set(true); }
 
   // ===== Morphing du fond (rendu canvas WebGL si bgMorphs) =====
   // Même pattern que les widgets : média → offscreen (fit + transforms fond) →
@@ -212,7 +428,7 @@
         pctx.translate(pw / 2, ph / 2);
         pctx.translate(bgOx / pf, bgOy / pf);
         pctx.rotate((bgRot * Math.PI) / 180);
-        pctx.scale(bgZoom * bhs, bgZoom * bvs);
+        pctx.scale(bhs, bvs);
         pctx.translate(-pw / 2, -ph / 2);
         dessinerFitCanvas(pctx, src, sw, sh, pw, ph, bgFitCss);
         pctx.restore();
@@ -229,7 +445,7 @@
     ctx.translate(canvasW / 2, canvasH / 2);
     ctx.translate(bgOx, bgOy);
     ctx.rotate((bgRot * Math.PI) / 180);
-    ctx.scale(bgZoom * bhs, bgZoom * bvs);
+    ctx.scale(bhs, bvs);
     ctx.translate(-canvasW / 2, -canvasH / 2);
     dessinerFitCanvas(ctx, src, sw, sh, canvasW, canvasH, bgFitCss);
     ctx.filter = "none";
@@ -245,7 +461,6 @@
     void bgMedia;
     canvasW;
     canvasH;
-    void bgZoom;
     void bgRot;
     void bgOx;
     void bgOy;
@@ -295,7 +510,7 @@
     pctx.translate(pw / 2, ph / 2);
     pctx.translate(bgOx / pf, bgOy / pf);
     pctx.rotate((bgRot * Math.PI) / 180);
-    pctx.scale(bgZoom * (bgMiroirH ? -1 : 1), bgZoom * (bgMiroirV ? -1 : 1));
+    pctx.scale(bgMiroirH ? -1 : 1, bgMiroirV ? -1 : 1);
     pctx.translate(-pw / 2, -ph / 2);
     dessinerFitCanvas(pctx, src, sw, sh, pw, ph, bgFitCss);
     pctx.restore();
@@ -313,7 +528,6 @@
     void bgMedia;
     canvasW;
     canvasH;
-    void bgZoom;
     void bgRot;
     void bgOx;
     void bgOy;
@@ -359,10 +573,11 @@
       onpointerdown={onCanvasPointerDown}
       onpointermove={onCanvasPointerMove}
       onpointerleave={onCanvasPointerLeave}
+      oncontextmenu={onCanvasContextMenu}
       role="presentation"
     >
       {#if hasFond}
-        <div class="bg-layer">
+        <div class="bg-layer" style={bgTiltStyle}>
           {#if bgObsSource}
             <!-- Fond = capture OBS (app/jeu plein canvas) : rien n'est rendu
                  côté dashboard (la diffusion :4321 ne peint pas le fond non
@@ -371,7 +586,7 @@
                  pattern .lecture-obs-fond). -->
             <div class="lecture-obs-fond msg-pill" style="color: {bgLectureCouleur};">
               <span class="msg-pill-icon">▶</span>
-              <span class="msg-pill-text">Capture app/jeu en fond — rendue par OBS</span>
+              <span class="msg-pill-text">{$t("canvas.captureFond")}</span>
             </div>
           {:else if bgAMorphs}
             <!-- Rendu morphé : canvas GL (le warp inclut fit + transforms fond) -->
@@ -443,7 +658,7 @@
                  pilote :4321 via bgPaused — la vignette dashboard reste figée. -->
             <div class="lecture-obs-fond msg-pill" style="color: {bgLectureCouleur};">
               <span class="msg-pill-icon">▶</span>
-              <span class="msg-pill-text">Votre vidéo de fond est en lecture dans OBS</span>
+              <span class="msg-pill-text">{$t("canvas.videoFondObs")}</span>
             </div>
           {/if}
         </div>
@@ -452,30 +667,86 @@
       <!-- Titre du fond de l'application (intérieur haut/bas) — hors .bg-layer
            pour ne pas être clippé par overflow:hidden. Au-dessus du fond
            (z-index 1), sous les widgets. Gradient de texte reprenant les
-           couleurs du cadre de l'application (cadreApp). -->
-      {#if bgTitreVisible}
-        <div
-          class="bg-titre {bgTitrePos}"
-          style="font-family: '{bgTitrePolice}', sans-serif; font-size: {bgTitreTaille}px; font-style: {bgTitreFontStyle}; font-weight: {bgTitreFontWeight}; text-decoration: {bgTitreTextDecoration}; letter-spacing: {bgTitreEspacement}px; -webkit-text-stroke: {bgTitreContourEpaisseur}px {bgTitreContourCouleur}; background: linear-gradient(135deg, {bgTitreGradient.from}, {bgTitreGradient.to}); -webkit-background-clip: text; background-clip: text; color: transparent;"
-        >{bgTitreTexte}</div>
+           couleurs du cadre unifié. -->
+      {#if bgTitreHaut}
+        <div class="bg-titre haut" style={bgTitreStyle}>{bgTitreHaut}</div>
+      {/if}
+      {#if bgTitreBas}
+        <div class="bg-titre bas" style={bgTitreStyle}>{bgTitreBas}</div>
+      {/if}
+      {#if bgTitreGauche}
+        <div class="bg-titre gauche" style={bgTitreStyle}>{bgTitreGauche}</div>
+      {/if}
+      {#if bgTitreDroite}
+        <div class="bg-titre droite" style={bgTitreStyle}>{bgTitreDroite}</div>
       {/if}
       {#each $sceneStore.widgets as w (w.id)}
         <WidgetComp {w} {scale} />
       {/each}
 
-      <!-- Cadre de l'application (overlay SVG bord canvas). Au-dessus des
-           widgets, pointer-events:none. Visible en dashboard ET diffusion. -->
-      {#if cadreAppActif && cadreApp}
+      <!-- Aides contextuelles (presets guidés — dashboard uniquement,
+           jamais en diffusion). Auto-masquées : fond → dès qu'un média ou
+           une capture OBS est lié ; objectifs → dès que toutes les
+           plateformes des goals sont connectées ; cadres → à la première
+           ouverture de la modale Cadres. pointer-events:none : les clics
+           traversent vers le fond/widgets qu'elles invitent à cliquer. -->
+      {#if aideFondVisible || aideCadresVisible}
+        <div class="aides-centre">
+          {#if aideFondVisible}
+            <div class="aide aide-fond">
+              <button
+                class="aide-fermer"
+                title={$t("commun.fermer")}
+                aria-label={$t("commun.fermer")}
+                onclick={() => fermerAide("aideFond")}
+              >✕</button>
+              <div class="aide-titre">{$t("canvas.aideFondTitre")}</div>
+              <div class="aide-texte">{$t("canvas.aideFond")}</div>
+            </div>
+          {/if}
+          {#if aideCadresVisible}
+            <div class="aide aide-cadres">
+              <button
+                class="aide-fermer"
+                title={$t("commun.fermer")}
+                aria-label={$t("commun.fermer")}
+                onclick={() => fermerAide("aideCadres")}
+              >✕</button>
+              <div class="aide-titre">{$t("canvas.aideCadresTitre")}</div>
+              <div class="aide-texte">{$t("canvas.aideCadres")}</div>
+            </div>
+          {/if}
+        </div>
+      {/if}
+      {#if aideObjectifsVisible && goalsBox}
+        <div
+          class="aide aide-objectifs"
+          style="left:{goalsBox.cx}px; top:{goalsBox.top - 18}px;"
+        >
+          <button
+            class="aide-fermer"
+            title={$t("commun.fermer")}
+            aria-label={$t("commun.fermer")}
+            onclick={() => fermerAide("aideObjectifs")}
+          >✕</button>
+          <div class="aide-titre">{$t("canvas.aideObjectifsTitre")}</div>
+          <div class="aide-texte">{$t("canvas.aideObjectifs")}</div>
+        </div>
+      {/if}
+
+      <!-- Cadre unifié — bord du canvas (overlay SVG). Même CadreConfig que
+           les widgets. Au-dessus des widgets, pointer-events:none. Visible
+           en dashboard ET diffusion. Masquable par bordActif. -->
+      {#if cadreBordActif && cadre}
         <div class="cadre-app-overlay">
           <CadreSVG
-            style={cadreApp.style}
-            variante={cadreApp.variante}
+            style={cadre.style}
             largeur={canvasW}
             hauteur={canvasH}
-            strokeWidth={cadreApp.strokeWidth}
-            couleur={cadreApp.couleur}
-            couleurFin={cadreApp.couleurFin}
-            gradientAngle={cadreApp.gradientAngle}
+            strokeWidth={cadre.strokeWidth}
+            couleur={cadre.couleur}
+            couleurFin={cadre.couleurFin}
+            gradientAngle={cadre.gradientAngle}
             idCadre="app"
           />
         </div>
@@ -489,6 +760,171 @@
     </div>
   {/if}
 </div>
+
+<!-- Clic n'importe où → ferme le menu fond (le menu stoppe sa propre
+     propagation). Escape idem. Coexiste avec les autres svelte:window
+     (App.svelte, SceneBar) — chacun ne ferme que son propre état. -->
+<svelte:window onclick={fermerFondMenu} onkeydown={onWindowKeydown} />
+
+{#if fondMenuOpen && ctxWidgetId === null}
+  <!-- Menu contextuel du fond de l'application (clic droit canvas hors
+       widget). Contenu miroir de la carte fond (CarteEdition, cible "fond") :
+       3 branches bgObsSource / !hasFond / média. "Morphing" hardcodé comme
+       dans CarteEdition. Les toggles (fit/miroir/lecture/morphing) gardent
+       le menu ouvert ; les actions le ferment. -->
+  <div
+    class="ctx-menu"
+    style="left:{fondMenuX}px; top:{fondMenuY}px;"
+    onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
+    onkeydown={(e) => e.stopPropagation()}
+    role="menu"
+    tabindex="-1"
+  >
+    {#if bgObsSource}
+      <button class="ctx-item" role="menuitem" onclick={ctxObsFond}>{$t("carteEdition.changerCapture")}</button>
+      <button class="ctx-item" role="menuitem" onclick={ctxRetirerCapture}>{$t("carteEdition.retirerCapture")}</button>
+      <button class="ctx-item" role="menuitem" onclick={ctxTitre}>{hasBgTitre ? $t("carteEdition.titreFondModifier") : $t("carteEdition.titreFondAjouter")}</button>
+    {:else if !hasFond}
+      <button class="ctx-item" role="menuitem" onclick={ctxImportFond}>{$t("carteEdition.importerFond")}</button>
+      <button class="ctx-item" role="menuitem" onclick={ctxObsFond}>{$t("carteEdition.appEnFond")}</button>
+    {:else}
+      <button class="ctx-item" role="menuitem" onclick={ctxImportFond}>{$t("carteEdition.remplacerFond")}</button>
+      <button class="ctx-item" role="menuitem" onclick={ctxObsFond}>{$t("carteEdition.appEnFond")}</button>
+      <button class="ctx-item" role="menuitem" onclick={ctxTitre}>{hasBgTitre ? $t("carteEdition.titreFondModifier") : $t("carteEdition.titreFondAjouter")}</button>
+      <div class="ctx-sep" role="separator"></div>
+      <span class="ctx-label">{$t("carteEdition.affichageFond")}</span>
+      <div class="ctx-fit-grid">
+        {#each FIT_MODES as mode}
+          <button class="ctx-fit-btn" class:active={bgFit === mode} onclick={() => ctxFit(mode)}>{$t("carteEdition.fit." + mode)}</button>
+        {/each}
+      </div>
+      <span class="ctx-label">{$t("carteEdition.miroirFond")}</span>
+      <div class="ctx-fit-grid deux">
+        <button class="ctx-fit-btn" class:active={bgMiroirH} onclick={() => ctxMiroir("h")}>{$t("carteEdition.miroirH")}</button>
+        <button class="ctx-fit-btn" class:active={bgMiroirV} onclick={() => ctxMiroir("v")}>{$t("carteEdition.miroirV")}</button>
+      </div>
+      <div class="ctx-sep" role="separator"></div>
+      {#if bgIsVideo}
+        <button class="ctx-item" role="menuitem" onclick={ctxToggleLecture}>{bgPaused ? $t("commun.lecture") : $t("commun.pause")}</button>
+      {:else}
+        <button class="ctx-item" class:active={$morphMode} role="menuitem" onclick={ctxToggleMorph}>Morphing</button>
+      {/if}
+      <div class="ctx-sep" role="separator"></div>
+      <button class="ctx-item" role="menuitem" onclick={ctxResetTransfo}>{$t("carteEdition.resetTransformation")}</button>
+      <button class="ctx-item" role="menuitem" onclick={ctxResetEffets}>{$t("carteEdition.resetEffets")}</button>
+      {#if bgAMorphs}
+        <button class="ctx-item" role="menuitem" onclick={ctxResetMorphs}>{$t("carteEdition.resetMorphing")}</button>
+      {/if}
+      <div class="ctx-sep" role="separator"></div>
+      {#if confirmDeleteFond}
+        <div class="ctx-confirm">
+          <span class="ctx-confirm-label">{$t("sceneBar.supprimerConfirm")}</span>
+          <div class="ctx-confirm-buttons">
+            <button class="ctx-item danger" role="menuitem" onclick={ctxSupprimerConfirm}>{$t("commun.oui")}</button>
+            <button class="ctx-item" role="menuitem" onclick={() => (confirmDeleteFond = false)}>{$t("commun.non")}</button>
+          </div>
+        </div>
+      {:else}
+        <button class="ctx-item danger" role="menuitem" onclick={() => (confirmDeleteFond = true)}>{$t("carteEdition.supprimerFond")}</button>
+      {/if}
+    {/if}
+  </div>
+{/if}
+
+{#if fondMenuOpen && ctxWidget}
+  <!-- Menu contextuel d'un widget (clic droit dessus). Contenu miroir de la
+       carte widget : actions communes d'abord, réglages média si w.media,
+       branche média (trou/OBS/flottant) pour les types média, suppression
+       via la modale ConfirmDeleteWidgetModal. -->
+  <div
+    class="ctx-menu"
+    style="left:{fondMenuX}px; top:{fondMenuY}px;"
+    onclick={(e) => e.stopPropagation()}
+    oncontextmenu={(e) => e.preventDefault()}
+    onkeydown={(e) => e.stopPropagation()}
+    role="menu"
+    tabindex="-1"
+  >
+    <button class="ctx-item" role="menuitem" onclick={() => ctxWgTitre(ctxWidget!.id)}>{$t("titreModal.titreWidget")}</button>
+    <button class="ctx-item" role="menuitem" onclick={() => ctxWgDupliquer(ctxWidget!.id)}>{$t("carteEdition.dupliquerWidget")}</button>
+    {#if wgType !== "camera"}
+      <!-- Plan (mêmes actions que les boutons -/+ au survol) — caméra
+           exclue : plage réservée z=5000 (mettreWidgetPlan est no-op dessus). -->
+      <button class="ctx-item" role="menuitem" onclick={() => ctxWgDevant(ctxWidget!.id)}>{$t("carteEdition.premierPlan")}</button>
+      <button class="ctx-item" role="menuitem" onclick={() => ctxWgDerriere(ctxWidget!.id)}>{$t("carteEdition.arrierePlan")}</button>
+    {/if}
+    <div class="ctx-sep" role="separator"></div>
+    {#if wgHasMedia}
+      <span class="ctx-label">{$t("carteEdition.affichage")}</span>
+      <div class="ctx-fit-grid">
+        {#each FIT_MODES as mode}
+          <button class="ctx-fit-btn" class:active={wgFit === mode} onclick={() => ctxWgFit(ctxWidget!.id, mode)}>{$t("carteEdition.fit." + mode)}</button>
+        {/each}
+      </div>
+      <span class="ctx-label">{$t("carteEdition.miroirMedia")}</span>
+      <div class="ctx-fit-grid deux">
+        <button class="ctx-fit-btn" class:active={wgMiroirH} onclick={() => ctxWgMiroirMedia(ctxWidget!.id, "h")}>{$t("carteEdition.miroirH")}</button>
+        <button class="ctx-fit-btn" class:active={wgMiroirV} onclick={() => ctxWgMiroirMedia(ctxWidget!.id, "v")}>{$t("carteEdition.miroirV")}</button>
+      </div>
+    {/if}
+    <span class="ctx-label">{$t("carteEdition.retournement")}</span>
+    <div class="ctx-fit-grid">
+      <button class="ctx-fit-btn" onclick={() => ctxWgRetourne(ctxWidget!.id, "h")}>{$t("carteEdition.miroirH")}</button>
+      <button class="ctx-fit-btn" onclick={() => ctxWgRetourne(ctxWidget!.id, "v")}>{$t("carteEdition.miroirV")}</button>
+      <button class="ctx-fit-btn" onclick={() => ctxWgRetourne(ctxWidget!.id, "reset")}>{$t("carteEdition.reset")}</button>
+    </div>
+    {#if wgHasMedia}
+      <div class="ctx-sep" role="separator"></div>
+      {#if wgIsVideo}
+        <button class="ctx-item" role="menuitem" onclick={() => ctxWgLecture(ctxWidget!.id)}>{wgPaused ? $t("commun.lecture") : $t("commun.pause")}</button>
+      {:else if wgMorphable}
+        <button class="ctx-item" class:active={$morphMode} role="menuitem" onclick={ctxWgMorph}>Morphing</button>
+      {/if}
+      <button class="ctx-item" role="menuitem" onclick={() => ctxWgResetTransfo(ctxWidget!.id)}>{$t("carteEdition.resetTransformation")}</button>
+      <button class="ctx-item" role="menuitem" onclick={() => ctxWgResetEffets(ctxWidget!.id)}>{$t("carteEdition.resetEffets")}</button>
+      {#if wgHasMorphs}
+        <button class="ctx-item" role="menuitem" onclick={() => ctxWgResetMorphs(ctxWidget!.id)}>{$t("carteEdition.resetMorphing")}</button>
+      {/if}
+    {/if}
+    {#if wgType !== "camera" || wgIsBrancheMedia}
+      <div class="ctx-sep" role="separator"></div>
+      {#if wgType !== "camera"}
+        <button class="ctx-item" role="menuitem" onclick={ctxWgImportMedia}>{wgHasMedia ? $t("carteEdition.remplacerMedia") : $t("carteEdition.importerMedia")}</button>
+        {#if wgHasMedia}
+          <button class="ctx-item" role="menuitem" onclick={() => ctxWgSupprMedia(ctxWidget!.id)}>{$t("carteEdition.supprimerMedia")}</button>
+        {/if}
+      {/if}
+      {#if wgIsBrancheMedia}
+        {#if wgHasMedia}
+          <button class="ctx-item" role="menuitem" onclick={() => (wgFlottant ? ctxWgTransformerWidget(wgMedia) : ctxWgFlottant(ctxWidget!.id))}>{wgFlottant ? $t("carteEdition.transformerWidget") : $t("carteEdition.transformerFlottant")}</button>
+        {/if}
+        <button class="ctx-item" class:active={wgIsTrou} role="menuitem" onclick={() => ctxWgTrou(ctxWidget!.id)}>{wgIsTrou ? $t("carteEdition.trouOff") : $t("carteEdition.trouOn")}</button>
+        {#if wgIsTrou}
+          {#if wgHasObsSource}
+            <button class="ctx-item" role="menuitem" onclick={() => ctxWgSupprObsSource(ctxWidget!.id)}>{$t("carteEdition.sourceObsSupprimer")}</button>
+          {:else}
+            <button class="ctx-item" role="menuitem" onclick={() => ctxWgObsDialog(ctxWidget!.id)}>{$t("carteEdition.sourceObsLier")}</button>
+          {/if}
+        {/if}
+      {/if}
+    {/if}
+    <div class="ctx-sep" role="separator"></div>
+    <button class="ctx-item danger" role="menuitem" onclick={ctxWgSupprimer}>{$t("carteEdition.supprimerWidget")}</button>
+  </div>
+{/if}
+
+{#if obsFondDialogOpen}
+  <!-- Capture app/jeu en fond — clic droit → « Mettre une app/jeu en fond »
+       ou « Changer l'app/jeu capturé ». -->
+  <ObsSourceDialog mode="fond" onClose={() => (obsFondDialogOpen = false)} />
+{/if}
+
+{#if obsWidgetDialogId}
+  <!-- Source OBS d'un widget trou — clic droit widget → « Lier une source
+       OBS ». -->
+  <ObsSourceDialog widgetId={obsWidgetDialogId} onClose={() => (obsWidgetDialogId = null)} />
+{/if}
 
 <style>
   .canvas-wrap {
@@ -524,14 +960,13 @@
        .msg-pill (.lecture-obs-fond) — recette app.css. */
     container-type: inline-size;
   }
-  /* ===== Titre du fond de l'application ===== */
-  /* Positionné à l'intérieur du canvas, en haut ou en bas, centré
-     horizontalement. Au-dessus du fond (z-index 1), sous les widgets.
-     pointer-events:none pour ne pas bloquer le drag/sélection. */
+  /* ===== Titres du fond de l'application ===== */
+  /* Positionnés à l'intérieur du canvas : haut/bas centrés horizontalement,
+     gauche/droite centrés verticalement en TEXTE VERTICAL (writing-mode).
+     Au-dessus du fond (z-index 1), sous les widgets. pointer-events:none
+     pour ne pas bloquer le drag/sélection. */
   .bg-titre {
     position: absolute;
-    left: 50%;
-    transform: translateX(-50%);
     white-space: nowrap;
     pointer-events: none;
     z-index: 1;
@@ -543,8 +978,103 @@
        remplissage (sinon il mange les glyphes). */
     paint-order: stroke fill;
   }
+  .bg-titre.haut,
+  .bg-titre.bas {
+    left: 50%;
+    transform: translateX(-50%);
+  }
   .bg-titre.haut { top: 8px; }
   .bg-titre.bas { bottom: 8px; }
+  .bg-titre.gauche,
+  .bg-titre.droite {
+    top: 50%;
+    transform: translateY(-50%);
+    writing-mode: vertical-rl;
+  }
+  .bg-titre.gauche { left: 8px; }
+  .bg-titre.droite { right: 8px; }
+  /* ===== Aides contextuelles (presets guidés) ===== */
+  /* Encadré jaune-orangé très visible, dashboard uniquement. pointer-events
+     none : les clics traversent vers le fond/widgets que l'aide invite à
+     cliquer. z-index au-dessus des widgets (z max 5000) et du cadre de bord. */
+  .aide {
+    position: absolute;
+    pointer-events: none;
+    max-width: 620px;
+    padding: 16px 26px;
+    border-radius: 16px;
+    background: rgba(24, 18, 6, 0.9);
+    border: 2.5px solid #ffb300;
+    box-shadow:
+      0 0 30px rgba(255, 170, 0, 0.45),
+      inset 0 0 24px rgba(255, 170, 0, 0.07);
+    text-align: center;
+    font-family: "Fredoka", sans-serif;
+    z-index: 9000;
+  }
+  .aide-titre {
+    font-size: 24px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    background: linear-gradient(135deg, #ffd54a, #ff8f00);
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  .aide-texte {
+    margin-top: 6px;
+    font-size: 16px;
+    line-height: 1.35;
+    color: #ffedb8;
+  }
+  /* Groupe centré : empile les encadrés centrés (aideFond, aideCadres) —
+     chacun se centre seul si l'autre est fermé. Les .aide enfants repassent
+     en relative pour que le ✕ se positionne sur son encadré, pas le groupe. */
+  .aides-centre {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    pointer-events: none;
+    z-index: 9000;
+  }
+  .aides-centre .aide {
+    position: relative;
+  }
+  .aide-objectifs {
+    transform: translate(-50%, -100%);
+  }
+  /* Croix de fermeture de l'aide : seul élément cliquable de l'encadré
+     (le parent reste pointer-events:none). Petit rond ambre en haut à
+     droite, hover lumineux. */
+  .aide-fermer {
+    position: absolute;
+    top: 6px;
+    right: 8px;
+    pointer-events: auto;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    border-radius: 50%;
+    border: 1.5px solid #ffb300;
+    background: rgba(255, 179, 0, 0.12);
+    color: #ffd54a;
+    font-size: 14px;
+    font-weight: 700;
+    line-height: 1;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .aide-fermer:hover {
+    background: rgba(255, 179, 0, 0.3);
+    box-shadow: 0 0 10px rgba(255, 170, 0, 0.5);
+  }
   .bg-media {
     width: 100%;
     height: 100%;
@@ -590,11 +1120,14 @@
   }
   /* Badge « en lecture dans OBS » (fond) : pastille .msg-pill (recette
      app.css), couleur inline bgLectureCouleur = couleur réelle du cadre. */
-  /* Overlay cadre app : bord extérieur du canvas, au-dessus des widgets. */
+  /* Overlay cadre unifié : bord extérieur du canvas, au-dessus des widgets. */
   .cadre-app-overlay {
     position: absolute;
     inset: 0;
     pointer-events: none;
     z-index: 100;
   }
+  /* Menus contextuels (clic droit fond / widget) : recette .ctx-* GLOBALE
+     dans app.css — ne jamais re-copier le bloc ici (même règle que
+     .msg-pill). */
 </style>

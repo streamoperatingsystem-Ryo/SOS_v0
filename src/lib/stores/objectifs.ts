@@ -5,7 +5,7 @@
 // « Suggestion » de palier) et l'aperçu dashboard du widget goal.
 import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
-import type { GoalMetrique, GoalPlateforme } from "../tauri";
+import type { GoalMetrique, GoalPlateforme, TwitchGoal } from "../tauri";
 
 export type ValeursPlateforme = Partial<Record<GoalMetrique, number>>;
 
@@ -14,6 +14,12 @@ export type ValeursPlateforme = Partial<Record<GoalMetrique, number>>;
 export const valeursGoals = writable<
   Partial<Record<GoalPlateforme, ValeursPlateforme>>
 >({});
+
+/// Creator Goals Twitch — dernière valeur connue par goal id (frames
+/// `goal-twitch` : EventSub channel.goal.* en temps réel + poll viewers.rs
+/// en secours). Source pour la carte d'édition (choix du goal à lier) et
+/// l'aperçu dashboard des widgets liés.
+export const goalsTwitch = writable<Record<string, TwitchGoal>>({});
 
 function setValeur(plat: GoalPlateforme, met: GoalMetrique, n: number | null): void {
   valeursGoals.update((m) => {
@@ -43,5 +49,10 @@ export async function initObjectifs(): Promise<void> {
       const v = e.payload[met];
       if (typeof v === "number") setValeur(plat, met, v);
     }
+  });
+  // Miroir des frames WS "goal-twitch" (viewers.rs / twitch_eventsub.rs).
+  await listen<TwitchGoal>("goal-twitch", (e) => {
+    const g = e.payload;
+    goalsTwitch.update((m) => ({ ...m, [g.id]: g }));
   });
 }

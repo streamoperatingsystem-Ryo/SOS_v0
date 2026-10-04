@@ -1,11 +1,12 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import { listen, emitTo } from "@tauri-apps/api/event";
-  import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore } from "./lib/stores/scene";
-  import { loadScenesIndex, loadCurrentScene } from "./lib/stores/scenes";
-  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, ecranAttenteModalOpen } from "./lib/stores/ui";
+  import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore, syncCapturesOBS } from "./lib/stores/scene";
+  import { loadScenesIndex, loadCurrentScene, exportScene, importScene } from "./lib/stores/scenes";
+  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, ecranAttenteModalOpen, guideLivreOpen } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "./lib/stores/obs";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
+  import { initTwitchLive } from "./lib/stores/twitchLive";
   import { connecterKick, deconnecterKick, lireSlugSauve } from "./lib/stores/kick";
   import { connecterYoutube, deconnecterYoutube } from "./lib/stores/youtube";
   import { connecterTiktok, deconnecterTiktok, lireUsernameSauve } from "./lib/stores/tiktok";
@@ -21,7 +22,6 @@
   import Canvas from "./lib/components/Canvas.svelte";
   import SceneBar from "./lib/components/SceneBar.svelte";
   import DropBar from "./lib/components/DropBar.svelte";
-  import DevPanel from "./lib/components/DevPanel.svelte";
   import TwitchDeviceModal from "./lib/components/TwitchDeviceModal.svelte";
   import ConfirmDeleteWidgetModal from "./lib/components/ConfirmDeleteWidgetModal.svelte";
   import CadresModal from "./lib/components/CadresModal.svelte";
@@ -34,6 +34,8 @@
   import ConsoModal from "./lib/components/ConsoModal.svelte";
   import DupliquerSceneModal from "./lib/components/DupliquerSceneModal.svelte";
   import EcranAttenteModal from "./lib/components/EcranAttenteModal.svelte";
+  import GuideLivre from "./lib/components/GuideLivre.svelte";
+  import Drapeau from "./lib/components/Drapeau.svelte";
   import { chargerPresets } from "./lib/stores/presets";
   import { initWelcome, chargerWelcome } from "./lib/stores/welcome";
   import { initBandeau, chargerBandeau } from "./lib/stores/bandeau";
@@ -41,12 +43,17 @@
   import { initPositionOverlay, chargerPositionOverlay } from "./lib/stores/positionOverlay";
   import { initPad, chargerPad } from "./lib/stores/padNumerique";
   import { ecranAttenteStore, initEcranAttente, chargerEcranAttente, toggleEcranAttente } from "./lib/stores/ecranAttente";
+  import { jcActif, initJustChatting, chargerJustChatting, toggleJustChatting } from "./lib/stores/justChatting";
   import { fondSidebar } from "./lib/stores/fondSidebar";
+  import { fondDash } from "./lib/stores/fondDash";
   import { gradientCadre } from "./lib/cadres/registre";
+  import { langue, LANGUES, setLangue, initLangue, t, type Langue } from "./lib/stores/langue";
+  import logoSOS from "./assets/logo/LogoSOSDashboardSmallSize.png";
 
   let serverError = $state<string | null>(null);
   let serverOk = $state(false);
-  let devOpen = $state(false);
+  // Dropdown langue topbar (bouton « Langue » du groupe outils à droite).
+  let languesOuvert = $state(false);
   // Timer auto-reconnect OBS (nettoyé au destroy/HMR pour éviter l'accumulation
   // d'intervals lors des reloads Vite en dev).
   let obsReconnectTimer: ReturnType<typeof setInterval> | null = null;
@@ -70,6 +77,8 @@
   // de push raccourcis suit eaActif (bool) pour ne pas émettre à chaque tick.
   let ea = $derived($ecranAttenteStore);
   let eaActif = $derived(ea?.actif ?? false);
+  // Just Chatting : pillule header quand actif + pastille barre raccourcis.
+  let jcOn = $derived($jcActif);
 
   /// Formate des secondes → "M:SS" ou "H:MM:SS" (pillule attente header).
   function formatTempsAttente(total: number): string {
@@ -83,23 +92,24 @@
     return `${m}:${String(s).padStart(2, "0")}`;
   }
 
-  // Couleur EFFECTIVE du cadre SVG → tout le chrome la suit : poussée dans
-  // --cadre-couleur / --cadre-couleur-fin sur :root, consommée par
+  // Couleur EFFECTIVE du cadre SVG unifié → tout le chrome la suit : poussée
+  // dans --cadre-couleur / --cadre-couleur-fin sur :root, consommée par
   // --accent-ui (bordures/hovers/focus), --fond-ambiance, .fond-decor et
   // le bouton « Vos scènes ». Résolue via gradientCadre() — le même
-  // resolver que le rendu : cadre personnalisable → couleur/couleurFin ;
-  // preset → palette de la variante (le champ couleur n'y est PAS la
-  // source de vérité). Fallback cadreWidget puis accents du thème.
+  // resolver que le rendu : couleur/couleurFin du cadre unifié.
+  // Source unique : cadreWidget (champ canonique).
   // Image de fond du dashboard (Personnalisation → « Image de fond ») —
   // servie par :4321 comme les médias de scène, sous tout le décor.
   let fondSidebarUrl = $derived($fondSidebar ? "http://127.0.0.1:4321/" + $fondSidebar : null);
+  // Fond image du CHROME dashboard (bouton « Fond du dashboard » en bas du
+  // panneau latéral) — posé en background de <main> : il transparaît dans
+  // les zones transparentes du chrome (header, sidebar, DropBar, marges
+  // autour du canvas) et le .canvas opaque le recouvre → la composition
+  // n'est jamais touchée. Servi par :4321 comme les médias de scène.
+  let fondDashUrl = $derived($fondDash ? "http://127.0.0.1:4321/" + $fondDash : null);
 
   let cadreActif = $derived(
-    $sceneStore.cadreApp?.actif
-      ? $sceneStore.cadreApp
-      : $sceneStore.cadreWidget?.actif
-        ? $sceneStore.cadreWidget
-        : null
+    $sceneStore.cadreWidget?.actif ? $sceneStore.cadreWidget : null
   );
   let cadreCouleur = $derived(cadreActif ? gradientCadre(cadreActif).from : null);
   let cadreCouleurFin = $derived(cadreActif ? gradientCadre(cadreActif).to : null);
@@ -136,11 +146,18 @@
     }
   });
 
-  function toggleDev() {
-    devOpen = !devOpen;
+  // ===== Sélecteur de langue (topbar, groupe outils à droite) =====
+  // Pattern « Vos scènes » : bouton toggle + dropdown absolu ; fermeture par
+  // sélection, clic extérieur (fermerLangues) ou Escape (onSupprKey).
+  function toggleLangues() {
+    languesOuvert = !languesOuvert;
   }
-  function closeDev() {
-    devOpen = false;
+  function fermerLangues() {
+    languesOuvert = false;
+  }
+  async function choisirLangue(id: Langue) {
+    fermerLangues();
+    await setLangue(id);
   }
 
   // ===== Barre de raccourcis : dispatch des actions =====
@@ -192,9 +209,7 @@
         // comme le bouton « Connecter » de la section OBS.
         try {
           await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
-          await tauri.sceneSyncCaptures(
-            get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
-          );
+          await syncCapturesOBS();
         } catch {
         }
         break;
@@ -208,11 +223,16 @@
         break;
       case "modale-interactions": interactionModalOpen.set(true); break;
       case "modale-moderation": moderationModalOpen.set(true); break;
-      case "modale-cadres": cadreModalOpen.set("widget"); break;
+      case "modale-cadres": cadreModalOpen.set(true); break;
       case "ecran-attente":
         // Toggle lancer/arrêter l'écran d'attente (chrono + overlay diffusion
         // + routage audio OBS). Erreur remontée dans ecranAttenteErreur.
         try { await toggleEcranAttente(); } catch {}
+        break;
+      case "just-chatting":
+        // Toggle overlay JC (caméra + chat seuls en diffusion, non
+        // destructif). Non-fatal OBS offline — même fonction que la Toolbar.
+        try { await toggleJustChatting(); } catch {}
         break;
       case "systeme-masquer": await masquerRaccourcis(); break;
     }
@@ -235,6 +255,8 @@
       record: get(obsRecording),
       // Écran d'attente : pastille du bouton BRB (vert = chrono en cours).
       attente: get(ecranAttenteStore)?.actif ?? false,
+      // Just Chatting : pastille du bouton (vert = overlay actif).
+      justchatting: get(jcActif),
     }).catch(() => {});
   }
 
@@ -245,6 +267,7 @@
     void obsStream;
     void obsRecord;
     void eaActif;
+    void jcOn;
     pushRaccourcisConnexions();
   });
 
@@ -316,13 +339,9 @@
       await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
       // obsConnect a mis obsStatus=connected. Refresh direct (pas de race).
       await refreshDiffusion();
-      // Sync captures : non-fatal (OBS offline ou scène SOS absente → skip).
-      try {
-        await tauri.sceneSyncCaptures(
-          get(obsHost), parseInt(get(obsPort), 10), get(obsPassword)
-        );
-      } catch {
-      }
+      // Sync captures + masque caméra : non-fatal (OBS offline ou scène SOS
+      // absente → skip).
+      await syncCapturesOBS();
     } catch {
     }
   }
@@ -344,6 +363,11 @@
     //    widgets (servies par :4321 sur /fonts/{name}).
     injecterFontsCSS();
 
+    // 0b. Langue UI : lit langue.json (choix persisté) ou navigator.language
+    //     (fallback "fr"). Avant tout le reste — les libellés du boot
+    //     (onboarding presets, erreurs) s'affichent dans la bonne langue.
+    await initLangue();
+
     // 1. Listeners server_ready + server_error EN PREMIER (avant initChat).
     //    Si le serveur bind avant le listener, l'event est perdu → fallback fetch.
     await listen<string>("server_error", (e) => {
@@ -361,6 +385,10 @@
 
     // 3. initChat (listeners twitch:connecte, chat:message, etc.)
     await initChat();
+
+    // 3a. initTwitchLive (listeners twitch:automod + twitch:need_reauth —
+    //     file AutoMod alimentée même modale fermée). Garde "une fois" dans le store.
+    await initTwitchLive();
 
     // 3b. initWelcome (listeners welcome:etat + welcome:attribution-progress)
     //     + charge l'état initial de la queue + registre.
@@ -400,6 +428,12 @@
     //     Le média est rendu côté diffusion uniquement (consigne utilisateur).
     await initEcranAttente();
     await chargerEcranAttente();
+
+    // 3f-ter. Just Chatting : listener (just-chatting:etat) + hook post-sync
+    //     captures (re-envoie la scène dérivée si la scène change pendant
+    //     que le mode est actif) + état initial (OFF au boot, runtime).
+    await initJustChatting();
+    await chargerJustChatting();
 
     // 3g. Barre de raccourcis : état initial (visible/bord/moniteur) + listener
     //     des actions émises par la fenêtre + handshake "ready" (la barre peut
@@ -465,6 +499,12 @@
   // propage ni ne prévient rien) : plusieurs <svelte:window onkeydown> coexistent.
   // Ignore si focus dans un input/contenteditable (rename scène, etc.).
   function onSupprKey(e: KeyboardEvent) {
+    // Escape : ferme le dropdown langue (pattern « Vos scènes » — aucune
+    // propagation à prévenir, plusieurs <svelte:window onkeydown> coexistent).
+    if (e.key === "Escape") {
+      if (languesOuvert) fermerLangues();
+      return;
+    }
     if (e.key !== "Delete") return;
     const t = e.target as HTMLElement;
     if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
@@ -477,11 +517,14 @@
   }
 </script>
 
-<!-- Clic hors du bloc Dev → ferme le panneau.
+<!-- Clic hors du menu Langue → ferme le dropdown.
      onkeydown : touche Suppr → confirmation suppression widget (handler onSupprKey). -->
-<svelte:window onclick={closeDev} onkeydown={onSupprKey} />
+<svelte:window onclick={fermerLangues} onkeydown={onSupprKey} />
 
-<main>
+<main
+  class:fond-dash={!!fondDashUrl}
+  style:--fond-dash-img={fondDashUrl ? `url('${fondDashUrl}')` : null}
+>
   <!-- Décor aurora : arcs orbitaux derrière tout le chrome (cf. app.css). -->
   <div class="fond-decor" aria-hidden="true">
     {#if fondSidebarUrl}
@@ -501,160 +544,183 @@
     <div class="boule b8"></div>
   </div>
   <header>
-    <span class="title">
-      <svg class="logo" viewBox="0 0 24 24" aria-hidden="true">
-        <defs>
-          <linearGradient id="logo-grad" x1="0" y1="0" x2="1" y2="1">
-            <stop offset="0" style="stop-color: var(--accent-orange)" />
-            <stop offset="0.5" style="stop-color: var(--accent-magenta)" />
-            <stop offset="1" style="stop-color: var(--accent-violet)" />
-          </linearGradient>
-        </defs>
-        <rect x="1.6" y="1.6" width="20.8" height="20.8" rx="6" fill="none" stroke="url(#logo-grad)" stroke-width="1.7" />
-        <path d="M9.5 7.4v9.2l7.6-4.6z" fill="url(#logo-grad)" />
-      </svg>
-      StreamOS <span class="v0">v0</span>
-    </span>
-    <div class="right">
-      <!-- Bandeau unique : Twitch / Kick / YouTube / TikTok / OBS / Diffusion (lecture seule) -->
-      <span class="bandeau">
-        <span class="indicateur plat-twitch" class:on={cx.twitch} class:off={!cx.twitch}>
-          <span class="dot plat-twitch" class:on={cx.twitch} class:off={!cx.twitch}></span>
-          Twitch{#if cx.twitch && login} : {login}{/if}
-        </span>
-        <span class="bandeau-sep"></span>
-        <span class="indicateur plat-kick" class:on={cx.kick} class:off={!cx.kick}>
-          <span class="dot plat-kick" class:on={cx.kick} class:off={!cx.kick}></span>
-          Kick{#if cx.kick && kickSl} : {kickSl}{/if}
-        </span>
-        <span class="bandeau-sep"></span>
-        <span class="indicateur plat-youtube" class:on={cx.youtube} class:off={!cx.youtube}>
-          <span class="dot plat-youtube" class:on={cx.youtube} class:off={!cx.youtube}></span>
-          YouTube{#if cx.youtube && ytLogin} : {ytLogin}{/if}
-        </span>
-        <span class="bandeau-sep"></span>
-        <span class="indicateur plat-tiktok" class:on={cx.tiktok} class:off={!cx.tiktok}>
-          <span class="dot plat-tiktok" class:on={cx.tiktok} class:off={!cx.tiktok}></span>
-          TikTok{#if cx.tiktok && ttUser} : {ttUser}{/if}
-        </span>
-        <span class="bandeau-sep"></span>
-        <span class="bandeau-sep"></span>
-        <span
-          class="indicateur plat-obs"
-          class:on={obsSt === "connected"}
-          class:off={obsSt !== "connected"}
-          title={obsErr ?? "OBS WebSocket (voir section OBS de la barre latérale)"}
+    <img class="logo-img" src={logoSOS} alt="StreamOS" />
+    <!-- Groupe 1 : identité + connexions — chaque état est un bouton qui
+         ouvre sa section de la barre latérale (connexions / obs). -->
+    <div class="tb-groupe tb-connexions">
+      <button
+        class="indicateur plat-twitch tb-ico"
+        class:on={cx.twitch}
+        class:off={!cx.twitch}
+        onclick={() => openSectionExplicit("connexions")}
+        title={cx.twitch && login ? `Twitch : ${login}` : "Twitch"}
+        aria-label={cx.twitch && login ? `Twitch : ${login}` : "Twitch"}
+      >
+        <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="#9146ff" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/><rect x="9" y="4" width="1" height="3" fill="#9146ff"/><rect x="6" y="4" width="1" height="3" fill="#9146ff"/></svg>
+      </button>
+      <button
+        class="indicateur plat-kick tb-ico"
+        class:on={cx.kick}
+        class:off={!cx.kick}
+        onclick={() => openSectionExplicit("connexions")}
+        title={cx.kick && kickSl ? `Kick : ${kickSl}` : "Kick"}
+        aria-label={cx.kick && kickSl ? `Kick : ${kickSl}` : "Kick"}
+      >
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="#53fc18" d="M5 2h4v6h2V6h2V4h2V2h4v6h-2v2h-2v4h2v2h2v6h-4v-2h-2v-2h-2v4H5z"/></svg>
+      </button>
+      <button
+        class="indicateur plat-youtube tb-ico"
+        class:on={cx.youtube}
+        class:off={!cx.youtube}
+        onclick={() => openSectionExplicit("connexions")}
+        title={cx.youtube && ytLogin ? `YouTube : ${ytLogin}` : "YouTube"}
+        aria-label={cx.youtube && ytLogin ? `YouTube : ${ytLogin}` : "YouTube"}
+      >
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4" fill="#ff0033"/><path d="M10 9.5l5 2.5-5 2.5z" fill="#fff"/></svg>
+      </button>
+      <button
+        class="indicateur plat-tiktok tb-ico"
+        class:on={cx.tiktok}
+        class:off={!cx.tiktok}
+        onclick={() => openSectionExplicit("connexions")}
+        title={cx.tiktok && ttUser ? `TikTok : ${ttUser}` : "TikTok"}
+        aria-label={cx.tiktok && ttUser ? `TikTok : ${ttUser}` : "TikTok"}
+      >
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="#25f4ee" d="M16.5 3c.3 1.8 1.6 3.2 3.5 3.5v3.1c-1.4 0-2.7-.5-3.7-1.2v6.3a5.6 5.6 0 1 1-5.6-5.6c.4 0 .8 0 1.2.1v3.2a2.5 2.5 0 1 0 1.4 2.3V3h3.2z"/></svg>
+      </button>
+      <button
+        class="indicateur plat-obs tb-ico"
+        class:on={obsSt === "connected"}
+        class:off={obsSt !== "connected"}
+        class:err={obsSt === "idle" || obsSt === "error"}
+        onclick={() => openSectionExplicit("obs")}
+        title={obsErr ?? $t("app.obsTitle")}
+        aria-label={obsErr ?? $t("app.obsTitle")}
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="#e8e8e8" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7a5 5 0 0 1 4.3 2.5M16.8 14a5 5 0 0 1-4.8 3M7.2 14a5 5 0 0 1-.2-4.3"/></svg>
+      </button>
+    </div>
+    <!-- Groupe 2 : diffusion + transport. Diffusion = statut pur (bouton
+         désactivé — pas de navigation). -->
+    <div class="tb-groupe tb-live">
+      <button
+        class="indicateur plat-diffusion tb-ico"
+        class:on={serverOk}
+        class:off={!serverOk}
+        class:err={!!serverError}
+        disabled
+        title={serverError ?? $t("app.diffusionTitle")}
+        aria-label={serverError ?? $t("app.diffusionTitle")}
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="5" cy="19" r="1.6" fill="currentColor" stroke="none"/><path d="M3 11a10 10 0 0 1 10 10"/><path d="M3 4a17 17 0 0 1 17 17"/></svg>
+      </button>
+      <!-- Pillule écran d'attente : visible seulement quand le chrono tourne
+           (état poussé par Rust à 1 Hz). Clic → ouvre la modale de contrôle
+           (pause / arrêt / config). -->
+      {#if ea?.actif}
+        <button
+          class="indicateur plat-attente"
+          class:pause={ea.en_pause}
+          title={ea.en_pause
+            ? $t("app.eaTitlePause")
+            : $t("app.eaTitleActif")}
+          onclick={() => ecranAttenteModalOpen.set(true)}
         >
-          <span class="dot plat-obs" class:on={obsSt === "connected"} class:off={obsSt !== "connected"}></span>
-          {#if obsSt === "connected"}
-            OBS
-          {:else if obsSt === "connecting"}
-            OBS (connexion…)
-          {:else}
-            OBS (non connecté)
-          {/if}
-        </span>
-        <span class="bandeau-sep"></span>
-        <span
-          class="indicateur plat-diffusion"
-          class:on={serverOk}
-          class:off={!serverOk}
-          title={serverError ?? "Serveur de diffusion local (consommé par OBS comme source navigateur)"}
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          {ea.en_pause ? $t("app.attentePause") : $t("app.attente")} {formatTempsAttente(ea.temps_restant)}
+        </button>
+      {/if}
+      <!-- Pillule Just Chatting : visible seulement quand l'overlay est
+           actif. Clic → coupe le mode (même toggle que la Toolbar). -->
+      {#if jcOn}
+        <button
+          class="indicateur"
+          title={$t("toolbar.justChattingTitle")}
+          onclick={() => { void toggleJustChatting(); }}
         >
-          <span class="dot plat-diffusion" class:on={serverOk} class:off={!serverOk}></span>
-          {#if serverError}
-            Diffusion (erreur)
-          {:else if serverOk}
-            Diffusion (prête)
-          {:else}
-            Diffusion (démarrage…)
-          {/if}
-        </span>
-        <!-- Pillule écran d'attente : visible seulement quand le chrono tourne
-             (état poussé par Rust à 1 Hz). Clic → ouvre la modale de contrôle
-             (pause / arrêt / config). -->
-        {#if ea?.actif}
-          <span class="bandeau-sep"></span>
-          <button
-            class="indicateur indicateur-btn plat-attente"
-            class:pause={ea.en_pause}
-            title={ea.en_pause
-              ? "Écran d'attente en pause — cliquer pour ouvrir le contrôle"
-              : "Écran d'attente actif — cliquer pour ouvrir le contrôle"}
-            onclick={() => ecranAttenteModalOpen.set(true)}
-          >
-            <span class="dot on"></span>
-            {ea.en_pause ? "Attente (pause)" : "Attente"} {formatTempsAttente(ea.temps_restant)}
-          </button>
-        {/if}
-      </span>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="2" y="5" width="12" height="14" rx="2"/><circle cx="8" cy="11" r="2.5"/><path d="M15 10h6.5v6H19l-2 2v-2h-2"/></svg>
+          {$t("toolbar.justChatting")}
+        </button>
+      {/if}
       <!-- Sorties OBS : stream + record (vert = prêt à démarrer, rouge = actif) -->
-      <span class="bandeau-sep"></span>
-      <div class="output-buttons">
-        <button
-          class="output-btn"
-          class:actif={obsStream}
-          onclick={onToggleStreamTop}
-          disabled={obsSt !== "connected" || streamBusy}
-          title={obsSt !== "connected"
-            ? "Connectez OBS d'abord (section OBS de la barre latérale)"
-            : obsStream
-              ? "Arrêter le streaming"
-              : "Démarrer le streaming"}
-          aria-label={obsStream ? "Arrêter le streaming" : "Démarrer le streaming"}
-        >
-          {#if obsStream}
-            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
-            Arrêter le streaming
-          {:else}
-            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5.5v13l11-6.5z"/></svg>
-            Démarrer le streaming
-          {/if}
-        </button>
-        <button
-          class="output-btn"
-          class:actif={obsRecord}
-          onclick={onToggleRecordTop}
-          disabled={obsSt !== "connected" || recordBusy}
-          title={obsSt !== "connected"
-            ? "Connectez OBS d'abord (section OBS de la barre latérale)"
-            : obsRecord
-              ? "Arrêter l'enregistrement"
-              : "Démarrer l'enregistrement"}
-          aria-label={obsRecord ? "Arrêter l'enregistrement" : "Démarrer l'enregistrement"}
-        >
-          {#if obsRecord}
-            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
-            Arrêter l'enregistrement
-          {:else}
-            <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="12" cy="12" r="5.5"/></svg>
-            Démarrer l'enregistrement
-          {/if}
-        </button>
-      </div>
-      <!-- Boutons contrôle : Arrêter / Redémarrer / Refresh OBS -->
-      <span class="bandeau-sep"></span>
-      <div class="ctrl-buttons">
-        <button class="ctrl-btn ctrl-arreter" onclick={onArreter} title="Arrêter l'application" aria-label="Arrêter l'application">
-          <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
-        </button>
-        <button class="ctrl-btn ctrl-redemarrer" onclick={onRedemarrer} title="Redémarrer l'application" aria-label="Redémarrer l'application">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>
-        </button>
-        <button class="ctrl-btn ctrl-refresh" onclick={onRefreshObs} title="Refresh OBS / SOS-Diffusion" aria-label="Refresh OBS / SOS-Diffusion">
-          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
-        </button>
-      </div>
-      <!-- TEMPORAIRE — bouton Dev. Retirer avant release. -->
+      <button
+        class="output-btn"
+        class:actif={obsStream}
+        onclick={onToggleStreamTop}
+        disabled={obsSt !== "connected" || streamBusy}
+        title={obsSt !== "connected"
+          ? $t("app.obsDabord")
+          : obsStream
+            ? $t("app.streamStop")
+            : $t("app.streamStart")}
+        aria-label={obsStream ? $t("app.streamStop") : $t("app.streamStart")}
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button
+        class="output-btn"
+        class:actif={obsRecord}
+        onclick={onToggleRecordTop}
+        disabled={obsSt !== "connected" || recordBusy}
+        title={obsSt !== "connected"
+          ? $t("app.obsDabord")
+          : obsRecord
+            ? $t("commun.arreterEnregistrement")
+            : $t("commun.demarrerEnregistrement")}
+        aria-label={obsRecord ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
+      >
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3.5" fill="#f43f5e"/></svg>
+      </button>
+    </div>
+    <!-- Groupe outils : scènes (Vos scènes = dropdown SceneBar, + Scène,
+         Exporter, Importer) puis contrôle app (Arrêter / Redémarrer /
+         Refresh OBS) puis Langue. Poussé à droite (margin-left: auto). -->
+    <div class="tb-groupe tb-outils">
+      <SceneBar />
+      <button class="indicateur" onclick={() => presetsModalOpen.set("creation")} title={$t("sceneBar.nouvelle")} aria-label={$t("sceneBar.nouvelle")}>+ {$t("sceneBar.nouvelle")}</button>
+      <button class="indicateur tb-action" onclick={exportScene} title={$t("commun.exporter")} aria-label={$t("commun.exporter")}>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        <span class="tb-label">{$t("commun.exporter")}</span>
+      </button>
+      <button class="indicateur tb-action" onclick={importScene} title={$t("commun.importer")} aria-label={$t("commun.importer")}>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        <span class="tb-label">{$t("commun.importer")}</span>
+      </button>
+      <button class="ctrl-btn ctrl-arreter" onclick={onArreter} title={$t("app.arreterApp")} aria-label={$t("app.arreterApp")}>
+        <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
+      </button>
+      <button class="ctrl-btn ctrl-redemarrer" onclick={onRedemarrer} title={$t("app.redemarrerApp")} aria-label={$t("app.redemarrerApp")}>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>
+      </button>
+      <button class="ctrl-btn ctrl-refresh" onclick={onRefreshObs} title={$t("app.refreshObs")} aria-label={$t("app.refreshObs")}>
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
+      </button>
+      <!-- Sélecteur de langue : petit bouton topbar du groupe outils.
+           Dropdown au clic — pattern « Vos scènes » (fermeture : sélection,
+           clic extérieur via fermerLangues, Escape via onSupprKey). Les noms
+           sont NATIFS (jamais traduits) pour que chacun retrouve sa langue
+           écrite chez lui. -->
       <div
-        class="dev-wrap"
+        class="langue-wrap"
         role="presentation"
         onclick={(e) => e.stopPropagation()}
         onkeydown={(e) => e.stopPropagation()}
       >
-        <button class="dev-btn" onclick={toggleDev}>Dev</button>
-        {#if devOpen}
-          <DevPanel />
+        <button class="langue-btn" onclick={toggleLangues} title={$t("langue.bouton")} aria-label={$t("langue.bouton")}><span class="lg-full">{$t("langue.bouton")}</span><span class="lg-court" aria-hidden="true">{$t("langue.bouton").slice(0, 1)}</span></button>
+        {#if languesOuvert}
+          <div class="langues-dropdown ctx-menu">
+            {#each LANGUES as l (l.id)}
+              <button
+                class="langue-item ctx-item"
+                class:active={$langue === l.id}
+                onclick={() => choisirLangue(l.id)}
+              >
+                <Drapeau id={l.id} />
+                <span class="langue-nom">{l.nom}</span>
+                {#if $langue === l.id}<span class="langue-coche">✓</span>{/if}
+              </button>
+            {/each}
+          </div>
         {/if}
       </div>
     </div>
@@ -666,7 +732,6 @@
       <Toolbar />
     </div>
     <div class="canvas-col">
-      <SceneBar />
       <DropBar />
       <Canvas />
     </div>
@@ -682,7 +747,7 @@
 
 <!-- Modale galerie de cadres SVG (section Personnalisation) -->
 {#if $cadreModalOpen}
-  <CadresModal mode={$cadreModalOpen} />
+  <CadresModal />
 {/if}
 
 <!-- Modale Interactions chat (onglets : Clip de bienvenue / Bandeau / Alertes) -->
@@ -728,130 +793,208 @@
      interne (même pattern que TitreModal). Média rendu diffusion uniquement. -->
 <EcranAttenteModal />
 
+<!-- Overlay plein écran « Guide du streamer » (livre feuilletable) —
+     lancé depuis la section Ergonomie du pied de sidebar. -->
+{#if $guideLivreOpen}
+  <GuideLivre />
+{/if}
+
 <style>
   main {
     display: flex;
     flex-direction: column;
     height: 100%;
+    /* Garde-fou anti scroll horizontal : le clip vit sur main (pas sur
+       header) pour ne pas rogner les dropdowns du header (Langue,
+       Vos scènes) qui débordent verticalement de la barre. */
+    overflow: clip;
+  }
+  /* Fond image du chrome (bouton « Fond du dashboard ») : image + voile
+     sombre empilés sur TOUT le main — le chrome transparent (header,
+     sidebar, DropBar, marges autour du canvas) la laisse transparaître,
+     le .canvas opaque la recouvre. Le voile (--fond à 55 %) garde la
+     lisibilité du texte, même esprit que .fond-image::after (app.css). */
+  main.fond-dash {
+    background-image:
+      linear-gradient(
+        color-mix(in srgb, var(--fond) 55%, transparent),
+        color-mix(in srgb, var(--fond) 55%, transparent)
+      ),
+      var(--fond-dash-img);
+    background-size: cover;
+    background-position: center;
   }
   header {
     flex-shrink: 0;
     display: flex;
     align-items: center;
-    justify-content: space-between;
+    gap: 0.5rem;
+    flex-wrap: nowrap;
     padding: 0.35rem 0.75rem;
     border-bottom: 1px solid var(--bordure-ui);
     background: transparent; /* laisse transparaître le fond d'ambiance */
     font-size: 0.85rem;
   }
-  /* Logo « StreamOS v0 » : marque SVG (carré arrondi + play) en dégradé
-     signature + « StreamOS » dégradé, « v0 » en gris secondaire. */
-  .title {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.4rem;
-    font-weight: 700;
-    background: var(--gradient-sig);
-    -webkit-background-clip: text;
-    background-clip: text;
-    color: transparent;
-  }
-  .title .logo {
-    width: 1.05rem;
-    height: 1.05rem;
+  /* Logo StreamOS : PNG officiel (fond transparent). L'artwork n'occupe
+     que ~le tiers central du PNG (lignes 116–241/369) ; les marges
+     négatives recentrent l'artwork sur la barre — le haut rogné par le
+     bord du webview est transparent. Boîte de layout ~32px : le header
+     garde sa hauteur. pointer-events: none : la zone transparente qui
+     déborde sous la barre ne doit pas avaler les clics du panneau. */
+  .logo-img {
+    height: 84px;
+    width: auto;
+    margin-top: -24px;
+    margin-bottom: -28px;
     flex-shrink: 0;
+    display: block;
+    position: relative;
+    z-index: 5;
+    pointer-events: none;
   }
-  .title .v0 {
-    background: none;
-    -webkit-text-fill-color: var(--gris);
-    color: var(--gris);
-    font-weight: 400;
-  }
-  .right {
+  /* Topbar : une seule ligne, 3 groupes flex (connexions / live / outils) —
+     gap 8px partout. .tb-outils pousse le groupe application à droite. */
+  .tb-groupe {
     display: flex;
     align-items: center;
-    gap: 0.6rem;
+    gap: 0.5rem;
   }
-  .bandeau {
-    display: flex;
-    align-items: center;
-    gap: 0.7rem;
-    font-size: 0.8rem;
+  .tb-outils {
+    margin-left: auto;
   }
-  .bandeau-sep {
-    width: 1px;
-    height: 0.9rem;
-    background: var(--bordure-ui-active);
-    opacity: 0.6;
-    flex-shrink: 0;
-  }
+  /* État de connexion : bouton icône de la même famille que Stream (verre
+     + inset + rayon global). Gris au repos — la bordure ne prend la
+     couleur plateforme (--plat-*) QUE connecté (.on) ; OBS déconnecté
+     (.err) et Diffusion en erreur = bordure rouge ; disabled (Diffusion)
+     = statut pur, pas de navigation. */
   .indicateur {
     display: inline-flex;
     align-items: center;
-    gap: 0.25rem;
-    opacity: 0.85;
-  }
-  .indicateur.off {
-    opacity: 0.4;
-    color: var(--gris);
-  }
-  /* Pillule écran d'attente : bouton déguisé en indicateur du bandeau —
-     cliquable (ouvre la modale de contrôle), temps en chiffres tabulaires. */
-  .indicateur-btn {
+    gap: 0.4rem;
+    height: 32px;
+    padding: 0 0.75rem;
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
-    border: 1px solid var(--bordure-ui);
-    color: var(--texte);
-    font: inherit;
-    font-size: inherit;
-    padding: 0.1rem 0.45rem;
-    cursor: pointer;
-    font-variant-numeric: tabular-nums;
-    transition: border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
-  }
-  .indicateur-btn:hover {
-    border-color: var(--accent-ui);
-    box-shadow: var(--btn-inset-hover), var(--glow-ui);
-  }
-  .indicateur-btn.pause {
-    opacity: 0.6;
-  }
-  /* .dot (pastille statut) : classe partagée définie dans app.css. */
-  .dev-wrap {
-    position: relative;
-  }
-  .dev-btn {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
     border: 1px solid var(--bordure-ui-active);
-    padding: 0.15rem 0.5rem;
+    color: var(--texte);
     font: inherit;
     font-size: 0.8rem;
     cursor: pointer;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
   }
-  .dev-btn:hover {
+  .indicateur:hover:not(:disabled) {
     background: var(--btn-surface-hover);
     border-color: var(--accent-ui);
     box-shadow: var(--btn-inset-hover), var(--glow-ui);
   }
-  .ctrl-buttons {
+  .indicateur.off {
+    color: var(--gris);
+    opacity: 0.55;
+  }
+  /* Icône marque en gris tant que la plateforme est déconnectée — la
+     couleur revient avec la bordure à l'état .on. */
+  .indicateur.off .ico {
+    filter: grayscale(1);
+  }
+  .indicateur .ico {
+    width: 0.95rem;
+    height: 0.95rem;
+    flex-shrink: 0;
+  }
+  /* Bordure = couleur plateforme UNIQUEMENT connecté (.on). Déconnecté =
+     bordure neutre --bordure-ui-active. .err = couleur d'erreur. */
+  .indicateur.plat-twitch.on { border-color: var(--plat-twitch); }
+  .indicateur.plat-kick.on { border-color: var(--plat-kick); }
+  .indicateur.plat-youtube.on { border-color: var(--plat-youtube); }
+  .indicateur.plat-tiktok.on { border-color: var(--plat-tiktok); }
+  .indicateur.plat-obs.on { border-color: var(--plat-obs); }
+  .indicateur.plat-obs.err,
+  .indicateur.plat-diffusion.err {
+    opacity: 1;
+    border-color: var(--message-error-color);
+  }
+  .indicateur.plat-diffusion.on {
+    border-color: var(--plat-diffusion);
+  }
+  /* Bouton icône seule permanent 32×32 : Kick/YouTube/TikTok/OBS/Diffusion
+     — l'état vit dans la bordure plateforme, le nom dans le title. */
+  .indicateur.tb-ico {
+    width: 32px;
+    padding: 0;
+    justify-content: center;
+  }
+  .indicateur:disabled {
+    cursor: default;
+  }
+  /* Pillule écran d'attente : temps en chiffres tabulaires. */
+  .indicateur.plat-attente {
+    font-variant-numeric: tabular-nums;
+  }
+  .indicateur.pause {
+    opacity: 0.6;
+  }
+  .langue-wrap {
+    position: relative;
+  }
+  .langue-btn {
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
+    color: var(--texte);
+    border: 1px solid var(--bordure-ui-active);
+    height: 32px;
+    padding: 0 0.75rem;
+    font: inherit;
+    font-size: 0.8rem;
+    white-space: nowrap;
+    flex-shrink: 0;
+    cursor: pointer;
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+  }
+  .langue-btn:hover {
+    background: var(--btn-surface-hover);
+    border-color: var(--accent-ui);
+    box-shadow: var(--btn-inset-hover), var(--glow-ui);
+  }
+  /* Libellé de repli topbar (<1000px) : .lg-court = initiale du bouton
+     Langue. */
+  .lg-court {
+    display: none;
+  }
+  /* Dropdown langue (bouton topbar « Langue ») : même recette visuelle
+     que les menus contextuels clic droit (.ctx-menu/.ctx-item, app.css) —
+     ancrage absolu sous le bouton à la place du fixed. */
+  .langues-dropdown {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 0;
+  }
+  .langue-item {
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: 0.55rem;
   }
-  /* Boutons contrôle app (stop/restart/refresh OBS) : icônes SVG neutres au
-     repos — la couleur --ctrl-* n'apparaît qu'au survol (icône + teinte du
-     verre + bordure + glow assorti), comme sur la maquette. Spécificité
-     .ctrl-btn.ctrl-X:hover (0,3,0) > .ctrl-btn:hover (0,2,0) → override le
-     glow violet générique. */
+  .langue-nom {
+    flex: 1;
+  }
+  .langue-coche {
+    font-weight: 600;
+    color: var(--accent-ui);
+  }
+  /* Boutons contrôle app (stop/restart/refresh OBS) : carrés 32px, icônes
+     SVG neutres au repos — la couleur --ctrl-* n'apparaît qu'au survol
+     (icône + teinte du verre + bordure + glow assorti), comme sur la
+     maquette. Spécificité .ctrl-btn.ctrl-X:hover (0,3,0) > .ctrl-btn:hover
+     (0,2,0) → override le glow violet générique. */
   .ctrl-btn {
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
     color: var(--gris);
     border: 1px solid var(--bordure-ui-active);
-    padding: 0.15rem 0.45rem;
+    width: 32px;
+    height: 32px;
+    padding: 0;
     font: inherit;
     line-height: 1;
     cursor: pointer;
@@ -859,11 +1002,12 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
+    flex-shrink: 0;
     transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
   }
   .ctrl-btn .ico {
-    width: 0.8rem;
-    height: 0.8rem;
+    width: 0.9rem;
+    height: 0.9rem;
   }
   .ctrl-btn:hover {
     background: var(--btn-surface-hover);
@@ -894,11 +1038,6 @@
      .ctrl-btn) mais proéminente — texte + icône. Vert --message-ok-color au
      repos = « prêt à démarrer » ; rouge --message-error-color quand .actif.
      Surcharge locale de --btn-tint (pattern .speedrun-start CarteEdition). */
-  .output-buttons {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
-  }
   .output-btn {
     --btn-tint: color-mix(in srgb, var(--message-ok-color) 12%, transparent);
     background: var(--btn-surface);
@@ -906,14 +1045,18 @@
     color: var(--message-ok-color);
     border: 1px solid var(--message-ok-color);
     border-radius: var(--rayon-petit);
-    padding: 0.3rem 0.75rem;
+    width: 32px;
+    height: 32px;
+    padding: 0;
     font: inherit;
     font-size: 0.8rem;
     line-height: 1;
     cursor: pointer;
     display: inline-flex;
     align-items: center;
-    gap: 0.35rem;
+    justify-content: center;
+    white-space: nowrap;
+    flex-shrink: 0;
     transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, color 0.15s ease, opacity 0.15s ease;
   }
   .output-btn .ico {
@@ -943,6 +1086,38 @@
     box-shadow: var(--btn-inset);
     opacity: 0.5;
     cursor: default;
+  }
+  /* ===== Responsive topbar (scopé header — ne touche ni sidebar ni
+     modales). Une seule ligne à toutes les largeurs : on masque des
+     libellés, jamais de wrap. ===== */
+  /* <1000px : Exporter/Importer en icône seule, Langue en initiale.
+     Paddings resserrés en dernier recours. */
+  @media (max-width: 999px) {
+    header {
+      padding: 0.35rem 0.5rem;
+    }
+    .indicateur:not(.tb-ico):not(.tb-action) {
+      padding: 0 0.4rem;
+    }
+    .tb-action {
+      width: 32px;
+      padding: 0;
+      justify-content: center;
+    }
+    .tb-action .tb-label {
+      display: none;
+    }
+    .langue-btn {
+      width: 32px;
+      padding: 0;
+      text-align: center;
+    }
+    .langue-btn .lg-full {
+      display: none;
+    }
+    .langue-btn .lg-court {
+      display: inline;
+    }
   }
   .row {
     flex: 1;

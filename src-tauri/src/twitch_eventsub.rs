@@ -1,4 +1,5 @@
-/// EventSub WebSocket Twitch — follows en temps réel (channel.follow v2).
+/// EventSub WebSocket Twitch — follows en temps réel (channel.follow v2)
+/// + file AutoMod (automod.message.hold / automod.message.update v1).
 ///
 /// Remplace le poll Helix 60 s des follows (retard moyen 30 s + jusqu'à
 /// 10 GET/min) : Twitch PUSHE l'événement sur une connexion WebSocket
@@ -119,6 +120,32 @@ async fn connect_session(
         keepalive_s
     );
 
+    // Abonnement AutoMod (hold + update) : après follows, hors du `?` —
+    // ISOLÉ non-fatal. Un échec ne coupe ni la socket ni les follows et
+    // n'efface jamais le keyring. 403 = vieux token sans le scope
+    // moderator:manage:automod → emit twitch:need_reauth (reconnexion
+    // device flow au choix de l'utilisateur). 409 = déjà actif = Ok.
+    match crate::twitch_helix::eventsub_abonner_automod(&session_id, user_id, token).await {
+        Ok(()) => log::info!("[EventSub] automod abonné (hold + update)"),
+        Err(crate::twitch_helix::HelixError::NeedReauth) => {
+            log::warn!("[EventSub] automod : NeedReauth (scope moderator:manage:automod absent)");
+            let _ = app.emit("twitch:need_reauth", ());
+        }
+        Err(e) => log::warn!("[EventSub] automod non abonné : {}", err_txt(e)),
+    }
+
+    // Abonnements Creator Goals (begin/progress/end) : après automod, hors
+    // du `?` — ISOLÉ non-fatal (même modèle). 403 = vieux token sans
+    // channel:read:goals → emit twitch:need_reauth, keyring conservé.
+    match crate::twitch_helix::eventsub_abonner_goals(&session_id, user_id, token).await {
+        Ok(()) => log::info!("[EventSub] goals abonnés (begin/progress/end)"),
+        Err(crate::twitch_helix::HelixError::NeedReauth) => {
+            log::warn!("[EventSub] goals : NeedReauth (scope channel:read:goals absent)");
+            let _ = app.emit("twitch:need_reauth", ());
+        }
+        Err(e) => log::warn!("[EventSub] goals non abonnés : {}", err_txt(e)),
+    }
+
     // 4. Boucle de lecture. Read timeout = keepalive×2+30 : sans message
     //    (keepalive OU notification) pendant ce délai → socket morte.
     let timeout = Duration::from_secs(keepalive_s * 2 + 30);
@@ -155,8 +182,8 @@ async fn connect_session(
             Err(_) => continue, // frame non-JSON ignorée
         };
         match v["metadata"]["message_type"].as_str().unwrap_or("") {
-            "notification" => {
-                if v["metadata"]["subscription_type"].as_str() == Some("channel.follow") {
+            "notification" => match v["metadata"]["subscription_type"].as_str().unwrap_or("") {
+                "channel.follow" => {
                     let evt = &v["payload"]["event"];
                     let login = evt["user_login"].as_str().unwrap_or_default().to_string();
                     let pseudo = match evt["user_name"].as_str() {
@@ -182,7 +209,34 @@ async fn connect_session(
                         alertes.on_event(evt_alerte);
                     }
                 }
-            }
+                // File AutoMod : message retenu ou résolution (approved/denied/
+                // expired — retrait côté store, dédup par message_id).
+                sub @ ("automod.message.hold" | "automod.message.update") => {
+                    let kind = if sub == "automod.message.hold" {
+                        "hold"
+                    } else {
+                        "update"
+                    };
+                    let _ = app.emit(
+                        "twitch:automod",
+                        serde_json::json!({
+                            "type": kind,
+                            "event": v["payload"]["event"],
+                        }),
+                    );
+                }
+                // Creator Goals : progression d'un objectif déclaré → parse
+                // + frame WS "goal-twitch" + atteinte widgets liés (viewers.rs).
+                // termine = channel.goal.end (verdict final is_achieved).
+                sub if sub.starts_with("channel.goal.") => {
+                    crate::viewers::on_goal_event(
+                        app,
+                        sub == "channel.goal.end",
+                        &v["payload"]["event"],
+                    );
+                }
+                _ => {}
+            },
             // Le keepalive réarme le timeout (message reçu = socket vivante).
             "session_keepalive" => {}
             "session_reconnect" => {

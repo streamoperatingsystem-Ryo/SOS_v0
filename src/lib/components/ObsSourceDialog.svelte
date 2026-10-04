@@ -2,6 +2,7 @@
   import { tauri } from "../tauri";
   import { createObsTrouFromPc, lierFondCapture } from "../stores/scene";
   import Modal from "./Modal.svelte";
+  import { t } from "../stores/langue";
 
   // mode "widget" (défaut) : source liée au widget trou sélectionné (widgetId).
   // mode "fond" : capture plein canvas comme FOND de la scène (pas de
@@ -86,34 +87,34 @@
 </script>
 
 <Modal
-  title={mode === "fond" ? "Mettre une app ou un jeu en fond" : "Lier une source OBS"}
+  title={mode === "fond" ? $t("obsSourceDialog.titreFond") : $t("obsSourceDialog.titreWidget")}
   onClose={onClose}
   maxWidth="460px"
   hint={mode === "fond"
-    ? "La capture remplira tout l'arrière-plan de la scène, derrière vos widgets. Vous pourrez la changer ou la retirer à tout moment."
-    : "La capture (caméra, fenêtre ou jeu) sera placée derrière l'overlay et visible à travers la fenêtre de capture du widget."}
+    ? $t("obsSourceDialog.hintFond")
+    : $t("obsSourceDialog.hintWidget")}
 >
   <div class="dialog-body">
     {#if etape === "type"}
-      <p class="note">Choisir le type de source :</p>
+      <p class="note">{$t("obsSourceDialog.choisirType")}</p>
       <div class="type-buttons">
         {#if mode !== "fond"}
-          <button class="modal-action" onclick={() => pickType("camera")}>Caméra</button>
+          <button class="modal-action" onclick={() => pickType("camera")}>{$t("obsSourceDialog.kind.camera")}</button>
         {/if}
-        <button class="modal-action" onclick={() => pickType("window")}>Fenêtre</button>
-        <button class="modal-action" onclick={() => pickType("game")}>Jeu</button>
+        <button class="modal-action" onclick={() => pickType("window")}>{$t("obsSourceDialog.kind.window")}</button>
+        <button class="modal-action" onclick={() => pickType("game")}>{$t("obsSourceDialog.kind.game")}</button>
       </div>
 
     {:else if etape === "liste" || etape === "working"}
       <div class="list-header">
-        <button class="modal-action small" onclick={onBack} disabled={working}>← Retour</button>
-        <span class="list-title">{kind}</span>
+        <button class="modal-action small" onclick={onBack} disabled={working}>← {$t("obsSourceDialog.retour")}</button>
+        <span class="list-title">{$t("obsSourceDialog.kind." + kind)}</span>
       </div>
 
       {#if loading}
-        <p class="note">Chargement…</p>
+        <p class="note">{$t("commun.chargement")}</p>
       {:else if liste.length === 0}
-        <p class="note warn">Aucune cible PC de ce type.</p>
+        <p class="note warn">{$t("obsSourceDialog.aucuneCible")}</p>
       {:else}
         <div class="list">
           {#each liste as item, i (i)}
@@ -136,7 +137,7 @@
       {/if}
     {/if}
 
-    <button class="cancel" onclick={onClose}>Annuler</button>
+    <button class="cancel" onclick={onClose}>{$t("commun.annuler")}</button>
   </div>
 </Modal>
 

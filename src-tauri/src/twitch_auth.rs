@@ -22,7 +22,7 @@ pub fn is_cancelled(c: &Cancel) -> bool {
 }
 
 pub const CLIENT_ID: &str = "kn9vopxlpnhslxxklti8aegvn38arm";
-const SCOPES: &str = "chat:read chat:edit moderator:read:followers channel:read:subscriptions user:read:broadcast moderator:manage:banned_users moderation:read channel:read:vips channel:manage:vips channel:manage:moderators moderator:manage:chat_messages";
+const SCOPES: &str = "chat:read chat:edit moderator:read:followers channel:read:subscriptions user:read:broadcast moderator:manage:banned_users moderation:read channel:read:vips channel:manage:vips channel:manage:moderators moderator:manage:chat_messages channel:manage:broadcast channel:edit:commercial channel:manage:raids moderator:read:chat_settings moderator:manage:chat_settings moderator:manage:announcements moderator:read:shield_mode moderator:manage:shield_mode moderator:manage:automod moderator:read:unban_requests moderator:manage:unban_requests channel:read:goals";
 const KEYRING_SERVICE: &str = "streamos-v0-twitch";
 const KEYRING_ACCOUNT: &str = "default";
 

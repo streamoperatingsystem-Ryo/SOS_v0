@@ -108,6 +108,11 @@ pub mod commands {
     }
 
     #[tauri::command]
+    pub fn speedrun_aller_split(_app_handle: AppHandle, _index: i32) -> Result<(), String> {
+        Err(MSG_INDISPONIBLE.to_string())
+    }
+
+    #[tauri::command]
     pub fn speedrun_lire_config(_app_handle: AppHandle) -> Result<crate::config::SpeedrunConfig, String> {
         Err(MSG_INDISPONIBLE.to_string())
     }
@@ -124,24 +129,6 @@ pub mod commands {
     pub fn speedrun_maj_settings_asl(
         _app_handle: AppHandle,
         _valeurs: std::collections::HashMap<String, bool>,
-    ) -> Result<(), String> {
-        Err(MSG_INDISPONIBLE.to_string())
-    }
-
-    #[tauri::command]
-    pub fn speedrun_baseline_lire(
-        _app_handle: AppHandle,
-        _chemin_lss: String,
-    ) -> Result<Vec<Option<f64>>, String> {
-        Err(MSG_INDISPONIBLE.to_string())
-    }
-
-    #[tauri::command]
-    pub fn speedrun_baseline_enregistrer(
-        _app_handle: AppHandle,
-        _chemin_lss: String,
-        _index: usize,
-        _cumul_secs: f64,
     ) -> Result<(), String> {
         Err(MSG_INDISPONIBLE.to_string())
     }

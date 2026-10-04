@@ -10,8 +10,8 @@
 ///
 /// Migration au boot : si index.json absent mais ancien config.json (full Scene)
 /// présent → générer un id, écrire <id>.json + index.json + nouveau config.json.
-use crate::scene::Scene;
-use crate::config::data_dir;
+use crate::scene::{CadreConfig, Scene};
+use crate::config::{data_dir, lire_langue};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
@@ -149,6 +149,13 @@ fn load_scene_file(app: &AppHandle, id: &str) -> Result<Scene, String> {
             removed
         );
     }
+    // Migration cadre unifié : cadreApp legacy → cadreWidget (widget actif
+    // gagne, sinon app repris). cadreApp vidé — plus de vérité séparée.
+    scene.migrer_cadres();
+    // Migration titres multi-positions : titre/titrePosition legacy →
+    // titreHaut/titreBas (idem bgTitre → bgTitreHaut/bgTitreBas). Champs
+    // legacy vidés — le JSON se nettoie à la prochaine sauvegarde.
+    scene.migrer_titres();
     Ok(scene)
 }
 
@@ -209,6 +216,20 @@ fn nouvel_id() -> String {
     uuid::Uuid::new_v4().simple().to_string()[..8].to_string()
 }
 
+/// Nom de la scène auto-créée au 1er boot — suit la langue UI (lire_langue).
+/// FR = source de vérité ("Défaut") ; installateur setup-base0007 écrit
+/// langue.json "en" avant le 1er run → "Default" chez les utilisateurs EN.
+fn nom_scene_defaut(app: &AppHandle) -> String {
+    match lire_langue(app).as_deref() {
+        Some("en") => "Default",
+        Some("es") => "Predeterminada",
+        Some("it") => "Predefinita",
+        Some("zh") => "默认",
+        _ => "Défaut",
+    }
+    .to_string()
+}
+
 /// Boot : migration + chargement initial. Retourne (Scene, current_id).
 ///
 /// 1. Si index.json existe → lire config.json sceneId (ou 1ère scène de l'index)
@@ -250,20 +271,24 @@ pub fn boot_scenes(app: &AppHandle) -> Result<(Scene, String), String> {
 fn migrer_ancien_config(app: &AppHandle) -> Result<(Scene, String), String> {
     let path = config_path(app)?;
     if !path.exists() {
-        return Ok((Scene::new(), "Défaut".to_string()));
+        return Ok((Scene::new(), nom_scene_defaut(app)));
     }
     let content = fs::read_to_string(&path)
         .map_err(|e| format!("Erreur lecture ancien config.json: {}", e))?;
     // Tente de parser comme Scene (ancien format)
     match serde_json::from_str::<Scene>(&content) {
-        Ok(scene) => {
-            let nom = "Défaut".to_string();
+        Ok(mut scene) => {
+            // Migration cadre unifié (même règle que load_scene_file).
+            scene.migrer_cadres();
+            // Migration titres multi-positions (même règle que load_scene_file).
+            scene.migrer_titres();
+            let nom = nom_scene_defaut(app);
             Ok((scene, nom))
         }
         Err(_) => {
             // Nouveau format { sceneId } sans index → scène vide
             log::warn!("Ancien config.json non-Scene et index absent → scène vide");
-            Ok((Scene::new(), "Défaut".to_string()))
+            Ok((Scene::new(), nom_scene_defaut(app)))
         }
     }
 }
@@ -416,14 +441,24 @@ pub fn initialiser_depuis_preset(
 }
 
 /// Une scène est « vierge » si elle ne contient AUCUN contenu utilisateur :
-/// pas de widget, pas de média de fond, pas de cadre (widget/app), pas de
-/// titre de fond, pas de morphs de fond. Les dims canvas ne comptent pas
-/// (miroir de la résolution OBS). Garde de initialiser_depuis_preset.
+/// pas de widget, pas de média de fond, pas de cadre AUTRE QUE le défaut
+/// auto posé à la naissance par Scene::new (cadreWidget ==
+/// CadreConfig::defaut_scene() compte comme « pas de cadre choisi » — sinon
+/// l'onboarding créerait une 2e scène au lieu de remplacer la vierge), pas
+/// de titre de fond (4 positions + legacy), pas de morphs de fond. Les dims
+/// canvas ne comptent pas (miroir de la résolution OBS). Garde de
+/// initialiser_depuis_preset.
 fn scene_vierge(s: &Scene) -> bool {
     s.widgets.is_empty()
         && s.bgMedia.is_empty()
-        && s.cadreWidget.is_none()
+        && s.cadreWidget
+            .as_ref()
+            .map_or(true, |c| *c == CadreConfig::defaut_scene())
         && s.cadreApp.is_none()
+        && s.bgTitreHaut.is_none()
+        && s.bgTitreBas.is_none()
+        && s.bgTitreGauche.is_none()
+        && s.bgTitreDroite.is_none()
         && s.bgTitre.is_none()
         && s.bgMorphs.as_ref().map_or(true, |m| m.is_empty())
 }
@@ -449,11 +484,57 @@ mod tests {
 
         let mut s = Scene::new();
         s.bgTitre = Some("Titre".to_string());
-        assert!(!scene_vierge(&s), "titre de fond = pas vierge");
+        assert!(!scene_vierge(&s), "titre de fond legacy = pas vierge");
+
+        let mut s = Scene::new();
+        s.bgTitreHaut = Some("Titre".to_string());
+        assert!(!scene_vierge(&s), "titre de fond haut = pas vierge");
+
+        let mut s = Scene::new();
+        s.bgTitreDroite = Some("Titre".to_string());
+        assert!(!scene_vierge(&s), "titre de fond droite = pas vierge");
 
         let mut s = Scene::new();
         s.bgMorphs = Some(vec![crate::scene::MorphPoint::default()]);
         assert!(!scene_vierge(&s), "morph de fond = pas vierge");
+    }
+
+    /// Migration titres multi-positions : legacy `titre`+`titrePosition` →
+    /// `titreHaut`/`titreBas` (idem fond), champs legacy vidés, nouveau
+    /// champ déjà présent gagne.
+    #[test]
+    fn migrer_titres_migre_legacy() {
+        let scene_json = serde_json::json!({
+            "widgets": [
+                { "id": "w1", "type": "media", "x": 0, "y": 0, "largeur": 10,
+                  "hauteur": 10, "z": 1, "titre": "Au-dessus", "titrePosition": "dessus" },
+                { "id": "w2", "type": "media", "x": 0, "y": 0, "largeur": 10,
+                  "hauteur": 10, "z": 1, "titre": "En dessous", "titrePosition": "dessous" },
+                { "id": "w3", "type": "media", "x": 0, "y": 0, "largeur": 10,
+                  "hauteur": 10, "z": 1, "titre": "Ignoré", "titrePosition": "dessus",
+                  "titreHaut": "Déjà pris" }
+            ],
+            "bgTitre": "Fond", "bgTitrePosition": "bas"
+        });
+        let mut scene: Scene = serde_json::from_value(scene_json).unwrap();
+        scene.migrer_titres();
+
+        let w1 = &scene.widgets[0];
+        assert_eq!(w1.titreHaut.as_deref(), Some("Au-dessus"), "dessus → titreHaut");
+        assert!(w1.titreBas.is_none());
+        let w2 = &scene.widgets[1];
+        assert_eq!(w2.titreBas.as_deref(), Some("En dessous"), "dessous → titreBas");
+        assert!(w2.titreHaut.is_none());
+        let w3 = &scene.widgets[2];
+        assert_eq!(w3.titreHaut.as_deref(), Some("Déjà pris"), "nouveau champ gagne");
+        for w in &scene.widgets {
+            assert!(w.titre.is_none(), "titre legacy vidé");
+            assert!(w.titrePosition.is_none(), "titrePosition legacy vidé");
+        }
+        assert_eq!(scene.bgTitreBas.as_deref(), Some("Fond"), "bgTitre bas → bgTitreBas");
+        assert!(scene.bgTitreHaut.is_none());
+        assert!(scene.bgTitre.is_none(), "bgTitre legacy vidé");
+        assert!(scene.bgTitrePosition.is_none(), "bgTitrePosition legacy vidé");
     }
 }
 
@@ -572,7 +653,7 @@ pub fn courante(app: &AppHandle, state: &ScenesState) -> Result<SceneIndex, Stri
     let id = state.current_id.lock().unwrap().clone();
     let idx = load_index(app)?;
     let entry = trouver_entree(&idx, &id).cloned()
-        .unwrap_or_else(|| SceneIndex { id: id.clone(), nom: "Défaut".to_string(), nomMasque: false });
+        .unwrap_or_else(|| SceneIndex { id: id.clone(), nom: nom_scene_defaut(app), nomMasque: false });
     Ok(entry)
 }
 
@@ -728,6 +809,10 @@ pub fn importer(app: &AppHandle, state: &ScenesState) -> Result<Option<SceneInde
     }
     let mut scene: Scene =
         serde_json::from_value(v.clone()).map_err(|e| format!("Schéma scène invalide: {}", e))?;
+    // Migration cadre unifié (même règle que load_scene_file).
+    scene.migrer_cadres();
+    // Migration titres multi-positions (même règle que load_scene_file).
+    scene.migrer_titres();
     let nom = v.get("nom").and_then(|n| n.as_str()).map(|s| s.to_string())
         .unwrap_or_else(|| {
             dossier.file_name().and_then(|s| s.to_str()).unwrap_or("Importée").to_string()

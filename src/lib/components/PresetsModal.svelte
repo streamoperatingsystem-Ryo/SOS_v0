@@ -18,6 +18,7 @@
   import { scenesIndexStore, createScene } from "../stores/scenes";
   import { tauri } from "../tauri";
   import Modal from "./Modal.svelte";
+  import { t } from "../stores/langue";
 
   let { mode }: { mode: "creation" | "onboarding" } = $props();
 
@@ -28,7 +29,7 @@
   // Nom saisi (mode création). Vide → défaut selon le choix : nom du preset,
   // ou « Scène N » pour la page vierge (comportement historique du bouton +).
   let nomSaisi = $state("");
-  let defautVierge = $derived(`Scène ${$scenesIndexStore.length + 1}`);
+  let defautVierge = $derived($t("presetsModal.nomDefaut", { n: $scenesIndexStore.length + 1 }));
 
   // Application en vol (désactive les cards pendant l'invoke).
   let occupe = $state(false);
@@ -100,16 +101,16 @@
 </script>
 
 <Modal
-  title={mode === "onboarding" ? "Bienvenue dans StreamOS" : "Nouvelle scène"}
+  title={mode === "onboarding" ? $t("presetsModal.titreOnboarding") : $t("presetsModal.titreCreation")}
   onClose={mode === "onboarding" ? fermerOnboarding : fermer}
   maxWidth="760px"
   hint={mode === "onboarding"
-    ? "Choisissez une scène de départ prête à l'emploi — tout reste modifiable ensuite. Ou partez d'une page vierge."
-    : "Partez d'un modèle prêt à l'emploi ou d'une page vierge — la scène actuelle n'est jamais modifiée."}
+    ? $t("presetsModal.hintOnboarding")
+    : $t("presetsModal.hintCreation")}
 >
   {#if mode === "creation"}
     <div class="nom-row">
-      <label for="preset-nom">Nom</label>
+      <label for="preset-nom">{$t("commun.nom")}</label>
       <input
         id="preset-nom"
         type="text"
@@ -127,8 +128,8 @@
         <svg class="preset-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
           {@html ICONE_VIERGE}
         </svg>
-        <span class="preset-nom">Page vierge</span>
-        <span class="preset-desc">Une scène vide — vous construisez tout vous-même.</span>
+        <span class="preset-nom">{$t("presetsModal.pageVierge")}</span>
+        <span class="preset-desc">{$t("presetsModal.pageViergeDesc")}</span>
       </button>
     {/if}
     {#each $presetsStore as preset (preset.id)}
@@ -145,14 +146,14 @@
       </button>
     {/each}
     {#if $presetsStore.length === 0}
-      <p class="vide">Aucun modèle disponible.</p>
+      <p class="vide">{$t("presetsModal.aucun")}</p>
     {/if}
   </div>
 
   {#if mode === "onboarding"}
     <div class="onboarding-footer">
       <button class="modal-action" onclick={fermerOnboarding} disabled={occupe}>
-        Partir d'une page vierge
+        {$t("presetsModal.partirVierge")}
       </button>
     </div>
   {/if}

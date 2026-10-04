@@ -2,6 +2,7 @@
   "id": "just-chatting",
   "nom": "Just Chatting",
   "description": "Grande caméra à gauche et chat à droite — l'équilibre classique des discussions.",
+  "description_en": "Large camera on the left and chat on the right — the classic talking layout.",
   "scene": {
     "widgets": [
       {
@@ -30,7 +31,6 @@
     "canvasH": 1080,
     "cadreWidget": {
       "style": "story",
-      "variante": "pink",
       "strokeWidth": 5,
       "couleur": "#ff4d8d",
       "couleurFin": "#e63973",

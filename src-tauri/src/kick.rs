@@ -484,6 +484,7 @@ pub fn run_ws(
                                 avatar: None,
                                 color: None,
                                 message_id: None,
+                                emotes: None,
                             };
                             let _ = app.emit("chat:message", &chat_msg);
 

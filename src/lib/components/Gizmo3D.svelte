@@ -1,6 +1,7 @@
 <script lang="ts">
-  import { sceneStore, selectedIdStore, rotateWidgetLocal, commitScene } from "../stores/scene";
+  import { sceneStore, selectedIdStore, rotateWidgetLocal, rotateFondLocal, commitScene } from "../stores/scene";
   import { get } from "svelte/store";
+  import { t } from "../stores/langue";
 
   // Carré 120×120. Boule positionnée par rotateX/rotateY (±maxDeg).
   // maxDeg=90 (défaut) = inclinaison seule ; maxDeg=180 = mode miroir
@@ -8,7 +9,9 @@
   //  miroir V à rotateX=±180 — perspective(800px), pas de backface:hidden).
   // cx = 60 + (ry/maxDeg)*60  (droite = rotateY positif)
   // cy = 60 - (rx/maxDeg)*60  (haut   = rotateX positif)
-  let { maxDeg = 90 }: { maxDeg?: number } = $props();
+  // cible : "widget" (défaut, pilote le widget sélectionné) ou "fond"
+  // (pilote bgRotX/bgRotY de la scène — tilt 3D du fond de l'application).
+  let { maxDeg = 90, cible = "widget" }: { maxDeg?: number; cible?: "widget" | "fond" } = $props();
   const SIZE = 120;
   const HALF = SIZE / 2;
   const AXIS_SNAP_DEG = 8; // aimant indépendant par axe (rx=0 ou ry=0)
@@ -20,8 +23,8 @@
       ? $sceneStore.widgets.find((w) => w.id === selectedId) ?? null
       : null
   );
-  let rx = $derived(widget?.rotateX ?? 0);
-  let ry = $derived(widget?.rotateY ?? 0);
+  let rx = $derived(cible === "fond" ? ($sceneStore.bgRotX ?? 0) : (widget?.rotateX ?? 0));
+  let ry = $derived(cible === "fond" ? ($sceneStore.bgRotY ?? 0) : (widget?.rotateY ?? 0));
 
   // Croix pleine si au centre (0,0), sinon axes atténués.
   let atCenter = $derived(Math.abs(rx) < 0.5 && Math.abs(ry) < 0.5);
@@ -63,22 +66,31 @@
     return { rx: nrx, ry: nry };
   }
 
+  // Applique le tilt : widget sélectionné (rotateX/rotateY) ou fond de la
+  // scène (bgRotX/bgRotY) selon la cible. Maj locale seule — le commit
+  // part au pointerup / dblclick.
+  function appliquerTilt(nrx: number, nry: number) {
+    if (cible === "fond") {
+      rotateFondLocal(nrx, nry);
+      return;
+    }
+    const id = get(selectedIdStore);
+    if (id) rotateWidgetLocal(id, nrx, nry);
+  }
+
   function onpointerdown(e: PointerEvent) {
     e.stopPropagation();
-    const id = get(selectedIdStore);
-    if (!id) return;
+    if (cible === "widget" && !get(selectedIdStore)) return;
     dragging = true;
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
     const { rx: nrx, ry: nry } = ptrToDeg(e);
-    rotateWidgetLocal(id, nrx, nry);
+    appliquerTilt(nrx, nry);
   }
 
   function onpointermove(e: PointerEvent) {
     if (!dragging) return;
-    const id = get(selectedIdStore);
-    if (!id) return;
     const { rx: nrx, ry: nry } = ptrToDeg(e);
-    rotateWidgetLocal(id, nrx, nry);
+    appliquerTilt(nrx, nry);
   }
 
   async function onpointerup(e: PointerEvent) {
@@ -90,14 +102,13 @@
 
   async function ondblclick(e: MouseEvent) {
     e.stopPropagation();
-    const id = get(selectedIdStore);
-    if (!id) return;
-    rotateWidgetLocal(id, 0, 0);
+    if (cible === "widget" && !get(selectedIdStore)) return;
+    appliquerTilt(0, 0);
     await commitScene();
   }
 </script>
 
-{#if widget}
+{#if cible === "fond" || widget}
   <div class="gizmo-wrap">
     <div
       class="gizmo"
@@ -148,11 +159,11 @@
       </svg>
     </div>
     <div class="labels">
-      <span>Haut/bas : {Math.round(rx)}°</span>
-      <span>Gauche/droite : {Math.round(ry)}°</span>
+      <span>{$t("gizmo.hautBas", { deg: Math.round(rx) })}</span>
+      <span>{$t("gizmo.gaucheDroite", { deg: Math.round(ry) })}</span>
       {#if miroirH || miroirV}
         <span class="label-miroir">
-          Miroir {miroirH && miroirV ? "H+V" : miroirH ? "horizontal" : "vertical"}
+          {$t(miroirH && miroirV ? "gizmo.miroirHV" : miroirH ? "gizmo.miroirH" : "gizmo.miroirV")}
         </span>
       {/if}
     </div>

@@ -7,6 +7,7 @@
   // Slot `header-extra` : contenu optionnel dans le header (ex: onglets de
   // CadresModal). Slot par défaut (`children`) : corps de la modale.
   import type { Snippet } from "svelte";
+  import { t } from "../stores/langue";
 
   let {
     title,
@@ -24,8 +25,21 @@
     children: Snippet;
   } = $props();
 
-  function onOverlayClick(e: MouseEvent) {
-    if (e.target === e.currentTarget) onClose();
+  let downSurOverlay = false;
+
+  function onOverlayPointerDown(e: PointerEvent) {
+    downSurOverlay = e.target === e.currentTarget;
+  }
+
+  function onOverlayPointerUp(e: PointerEvent) {
+    if (e.button === 0 && downSurOverlay && e.target === e.currentTarget) {
+      onClose();
+    }
+    downSurOverlay = false;
+  }
+
+  function onOverlayPointerCancel() {
+    downSurOverlay = false;
   }
 
   function onKeydown(e: KeyboardEvent) {
@@ -39,7 +53,13 @@
 
 <svelte:window onkeydown={onKeydown} />
 
-<div class="modal-overlay" onclick={onOverlayClick} role="presentation">
+<div
+  class="modal-overlay"
+  onpointerdown={onOverlayPointerDown}
+  onpointerup={onOverlayPointerUp}
+  onpointercancel={onOverlayPointerCancel}
+  role="presentation"
+>
   <div
     class="modal-shell"
     style="max-width: {maxWidth}"
@@ -57,7 +77,7 @@
           {@render headerExtra()}
         </div>
       {/if}
-      <button class="modal-close" onclick={onClose} aria-label="Fermer">✕</button>
+      <button class="modal-close" onclick={onClose} aria-label={$t("commun.fermer")}>✕</button>
     </div>
     {#if hint}
       <p class="modal-hint">{hint}</p>

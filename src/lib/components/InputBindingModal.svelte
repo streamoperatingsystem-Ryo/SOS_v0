@@ -8,6 +8,7 @@
   import type { InputMapping } from "../tauri";
   import { untrack } from "svelte";
   import Modal from "./Modal.svelte";
+  import { t } from "../stores/langue";
 
   let {
     widgetId,
@@ -20,13 +21,14 @@
   } = $props();
 
   // Labels des 16 boutons affichés (index → nom générique multi-skin).
-  const BTN_LABELS = [
+  let BTN_LABELS = $derived([
     "A / ✕", "B / ○", "X / □", "Y / △",
     "LB / L1", "RB / R1", "LT / L2", "RT / R2",
     "Select / Share", "Start / Options",
     "L3", "R3",
-    "D-Pad Haut", "D-Pad Bas", "D-Pad Gauche", "D-Pad Droite",
-  ];
+    $t("inputBinding.dpadHaut"), $t("inputBinding.dpadBas"),
+    $t("inputBinding.dpadGauche"), $t("inputBinding.dpadDroite"),
+  ]);
 
   // Copie locale de travail (annulation possible). untrack : on veut la
   // valeur initiale seulement (pas de re-sync si la prop change).
@@ -121,10 +123,10 @@
 </script>
 
 <Modal
-  title="Binding des touches manette"
+  title={$t("inputBinding.titre")}
   onClose={onCancel}
   maxWidth="34rem"
-  hint="Cliquez « Binder » puis appuyez sur la touche physique correspondante. Vous pouvez aussi saisir l'index manuellement (0-19)."
+  hint={$t("inputBinding.hint")}
 >
   <div class="modal-scroll">
     <div class="btn-list">
@@ -140,12 +142,12 @@
             class="btn-input"
           />
           {#if bindingIdx === i}
-            <button class="bind-btn binding" onclick={cancelBinding}>En attente…</button>
+            <button class="bind-btn binding" onclick={cancelBinding}>{$t("inputBinding.enAttente")}</button>
           {:else}
-            <button class="bind-btn" onclick={() => startBinding(i)}>Binder</button>
+            <button class="bind-btn" onclick={() => startBinding(i)}>{$t("inputBinding.binder")}</button>
           {/if}
           {#if buttons[i] !== i}
-            <button class="reset-btn" onclick={() => resetButton(i)} title="Réinitialiser">↺</button>
+            <button class="reset-btn" onclick={() => resetButton(i)} title={$t("commun.reinitialiser")}>↺</button>
           {/if}
         </div>
       {/each}
@@ -153,29 +155,27 @@
 
     {#if bindingIdx >= 0 && !gamepadDetecte && pollCount > 30}
       <p class="warn">
-        Aucune manette détectée par le navigateur. Saisissez l'index manuellement
-        (gilrs : 0=A, 1=B, 2=X, 3=Y, 4=LB, 5=RB, 6=LT, 7=RT, 8=Select,
-        9=Start, 10=L3, 11=R3, 12=DPad↑, 13=DPad↓, 14=DPad←, 15=DPad→).
+        {$t("inputBinding.aucuneManette")}
       </p>
     {/if}
 
     <div class="dpad-section">
-      <h3>D-Pad (axes)</h3>
-      <p class="note">Pour les manettes qui reportent le D-pad sur les axes (8BitDo rétro).</p>
+      <h3>{$t("inputBinding.dpadAxes")}</h3>
+      <p class="note">{$t("inputBinding.dpadNote")}</p>
       <label class="toggle-row">
         <input type="checkbox" checked={dpadInvertY} onchange={(e) => (dpadInvertY = (e.target as HTMLInputElement).checked)} />
-        <span>Inverser axe Y (Haut ↔ Bas)</span>
+        <span>{$t("inputBinding.inverserY")}</span>
       </label>
       <label class="toggle-row">
         <input type="checkbox" checked={dpadInvertX} onchange={(e) => (dpadInvertX = (e.target as HTMLInputElement).checked)} />
-        <span>Inverser axe X (Gauche ↔ Droite)</span>
+        <span>{$t("inputBinding.inverserX")}</span>
       </label>
     </div>
 
     <div class="modal-actions">
-      <button class="modal-action" onclick={resetAll}>Réinitialiser tout</button>
-      <button class="modal-action" onclick={onCancel}>Annuler</button>
-      <button class="modal-action primary" onclick={onSave}>Enregistrer</button>
+      <button class="modal-action" onclick={resetAll}>{$t("inputBinding.reinitialiserTout")}</button>
+      <button class="modal-action" onclick={onCancel}>{$t("commun.annuler")}</button>
+      <button class="modal-action primary" onclick={onSave}>{$t("commun.enregistrer")}</button>
     </div>
   </div>
 </Modal>

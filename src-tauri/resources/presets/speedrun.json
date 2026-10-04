@@ -2,6 +2,7 @@
   "id": "speedrun",
   "nom": "Speedrun",
   "description": "Splitter à gauche, chat à droite et clavier en bas — pour les runs chronométrés.",
+  "description_en": "Splitter on the left, chat on the right and keyboard at the bottom — for timed runs.",
   "scene": {
     "widgets": [
       {
@@ -45,7 +46,6 @@
     "canvasH": 1080,
     "cadreWidget": {
       "style": "thin-line",
-      "variante": "graphite",
       "strokeWidth": 4,
       "couleur": "#2d2d2d",
       "couleurFin": "#4a4a4a",

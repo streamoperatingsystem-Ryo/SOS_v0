@@ -48,6 +48,18 @@ fn font_bytes(name: &str) -> Option<&'static [u8]> {
     }
 }
 
+/// Assets de marque StreamOS embarqués (mascotte Streamy + wordmark) pour le
+/// layout « signature » de l'écran d'attente. Servis sur /brand/{name} —
+/// seuls les assets réellement utilisés par l'overlay sont embarqués.
+fn brand_bytes(name: &str) -> Option<&'static [u8]> {
+    match name {
+        "streamy-loading" => Some(include_bytes!("../../src/assets/streamy/streamy-loading.png")),
+        "streamy-offline" => Some(include_bytes!("../../src/assets/streamy/streamy-offline.png")),
+        "wordmark" => Some(include_bytes!("../../src/assets/logo/LogoSOSDashboardSmallSize.png")),
+        _ => None,
+    }
+}
+
 /// Handler GET /fonts/{name} — sert une police woff2 embarquée.
 /// Le paramètre {name} capture le segment complet (ex: "BebasNeue.woff2"),
 /// on strip l'extension .woff2 avant de chercher dans font_bytes.
@@ -63,6 +75,23 @@ async fn font_handler(Path(name): Path<String>) -> Response {
             bytes,
         ).into_response(),
         None => (StatusCode::NOT_FOUND, "Police introuvable").into_response(),
+    }
+}
+
+/// Handler GET /brand/{name} — sert un asset de marque PNG embarqué.
+/// L'extension .png est strippée comme .woff2 pour les polices.
+async fn brand_handler(Path(name): Path<String>) -> Response {
+    let key = name
+        .strip_suffix(".png")
+        .map(|s| s.to_string())
+        .unwrap_or(name);
+    match brand_bytes(&key) {
+        Some(bytes) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "image/png"), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+            bytes,
+        ).into_response(),
+        None => (StatusCode::NOT_FOUND, "Asset introuvable").into_response(),
     }
 }
 
@@ -96,6 +125,7 @@ pub async fn run_server(
         .route("/", get(index))
         .route("/ws", get(ws_handler))
         .route("/fonts/{name}", get(font_handler))
+        .route("/brand/{name}", get(brand_handler))
         .nest_service("/medias", ServeDir::new(medias_dir))
         .merge(api_deck::routes())
         // CORS permissif : le dashboard (localhost:1420 / tauri.localhost) charge
@@ -211,6 +241,11 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
                         }
                         Some("ecran-attente-resync") => {
                             crate::ecran_attente::reemit(&state.app);
+                        }
+                        // Resync Just Chatting : envoie toujours une frame
+                        // (actif:false reconstruit si jamais togglé).
+                        Some("just-chatting-resync") => {
+                            crate::just_chatting::reemit(&state.app);
                         }
                         _ => {}
                     }

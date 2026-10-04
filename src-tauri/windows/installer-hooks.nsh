@@ -1,4 +1,4 @@
-; StreamOS v0 — Hooks NSIS pour l'installer (setup-base0006).
+; StreamOS v0 — Hooks NSIS pour l'installer (setup-base0007).
 ;
 ; NSIS_HOOK_PREINSTALL : runs before copying files, after the PageReinstall
 ; page (which already offered to uninstall the old app version).
@@ -27,6 +27,13 @@
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
+  ; Langue par défaut du dashboard : anglais. Écrit langue.json APRÈS le
+  ; wipe PREINSTALL → au 1er boot, lire_langue retourne "en" (prioritaire
+  ; sur navigator.language). Le sélecteur topbar permet de changer ensuite.
+  CreateDirectory "$APPDATA\com.streamos.v0"
+  FileOpen $0 "$APPDATA\com.streamos.v0\langue.json" w
+  FileWrite $0 '{"langue": "en"}'
+  FileClose $0
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL

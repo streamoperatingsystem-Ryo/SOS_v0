@@ -1,0 +1,82 @@
+{
+  "id": "gaming-plein-ecran",
+  "nom": "Gaming Plein Écran",
+  "description": "Caméra et chat en colonne à gauche, trois objectifs Twitch en bas à droite — la capture de jeu occupe tout le reste.",
+  "description_en": "Camera and chat stacked on the left, three Twitch goals bottom-right — the game capture fills the rest.",
+  "scene": {
+    "widgets": [
+      {
+        "id": "preset-gpe-chat",
+        "type": "chat",
+        "x": 69.90267136053015,
+        "y": 303.9780492855663,
+        "largeur": 321.47028370262996,
+        "hauteur": 726.4299026713607,
+        "z": 1,
+        "chatFiltre": "unifie",
+        "taillePolice": 16,
+        "chatStyle": "bulles"
+      },
+      {
+        "id": "preset-gpe-camera",
+        "type": "camera",
+        "x": 69.90267136053015,
+        "y": 40.96707392834949,
+        "largeur": 320,
+        "hauteur": 240,
+        "z": 5000,
+        "obsSource": "SOS-Caméra"
+      },
+      {
+        "id": "preset-gpe-goal-followers",
+        "type": "goal",
+        "x": 905.1356388486232,
+        "y": 950.407951956927,
+        "largeur": 237.05943259473992,
+        "hauteur": 80,
+        "z": 2,
+        "goalPlateforme": "twitch",
+        "goalMetrique": "followers",
+        "goalCible": 500
+      },
+      {
+        "id": "preset-gpe-goal-subs",
+        "type": "goal",
+        "x": 1151.894802236488,
+        "y": 950.407951956927,
+        "largeur": 222.74591012632015,
+        "hauteur": 80,
+        "z": 3,
+        "goalPlateforme": "twitch",
+        "goalMetrique": "subs",
+        "goalCible": 10
+      },
+      {
+        "id": "preset-gpe-goal-followers2",
+        "type": "goal",
+        "x": 1384.340443155933,
+        "y": 950.407951956927,
+        "largeur": 222.74591012632015,
+        "hauteur": 80,
+        "z": 4,
+        "goalPlateforme": "twitch",
+        "goalMetrique": "followers",
+        "goalCible": 10
+      }
+    ],
+    "canvasW": 1920,
+    "canvasH": 1080,
+    "aideFond": true,
+    "aideObjectifs": true,
+    "aideCadres": true,
+    "cadreWidget": {
+      "style": "mgstyle",
+      "strokeWidth": 50,
+      "couleur": "#000000",
+      "couleurFin": "#8b5cf6",
+      "gradientAngle": 135,
+      "actif": true,
+      "bordActif": true
+    }
+  }
+}

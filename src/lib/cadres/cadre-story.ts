@@ -1,23 +1,9 @@
 // Cadre SVG Story — bordure dégradée avec coins en coeur, coeurs décoratifs.
-// Variantes : pink, blue, purple, green, orange, yellow.
-
-interface Variante {
-  vif: string;
-  clair: string;
-  profond: string;
-  pale: string;
-}
-
-const VARIANTES: Record<string, Variante> = {
-  pink: { vif: "#ff4d8d", clair: "#ff80b5", profond: "#e63973", pale: "#ffd6e8" },
-  blue: { vif: "#4d88ff", clair: "#80b5ff", profond: "#3973e6", pale: "#d6e8ff" },
-  purple: { vif: "#8c4dff", clair: "#b580ff", profond: "#7339e6", pale: "#e8d6ff" },
-  green: { vif: "#4dff88", clair: "#80ffb5", profond: "#39e673", pale: "#d6ffe8" },
-  orange: { vif: "#ff884d", clair: "#ffb580", profond: "#e67339", pale: "#ffe8d6" },
-  yellow: { vif: "#ffd700", clair: "#ffed4d", profond: "#e6a800", pale: "#fff5d6" },
-};
+// Tons dérivés des couleurs utilisateur : couleur = vif, couleurFin =
+// profond ; clair/pale = couleur éclaircie (aucune palette figée).
 
 import type { CadreOpts } from "./cadre-cyberpunk";
+import { angleVersCoords, assombrir, couleurOu, eclaircir } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
@@ -31,8 +17,7 @@ export function getStoryClipSize(strokeWidth = 4): number {
 export function getStoryClipPath(
   W: number,
   H: number,
-  strokeWidth = 4,
-  _variante = "pink"
+  strokeWidth = 4
 ): string {
   const s = Math.min(getStoryClipSize(strokeWidth), W / 4, H / 4);
   const parts = [
@@ -64,8 +49,16 @@ function heartShape(cx: number, cy: number, s: number): string {
 
 export default function renderStory(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const palette = VARIANTES[opts.variante ?? "pink"] ?? VARIANTES.pink;
+  const vif = couleurOu(opts.couleur, "#ffffff");
+  const palette = {
+    vif,
+    clair: eclaircir(vif, 0.35),
+    profond: couleurOu(opts.couleurFin, assombrir(vif, 0.2)),
+    pale: eclaircir(vif, 0.75),
+  };
   const blanc = "#ffffff";
+  const angle = Number.isFinite(Number(opts.gradientAngle)) ? Number(opts.gradientAngle) : 135;
+  const { x1: gx1, y1: gy1, x2: gx2, y2: gy2 } = angleVersCoords(angle);
 
   const ep = clampStrokeWidth(opts.strokeWidth ?? 4);
   const s = Math.min(getStoryClipSize(ep), largeur / 4, hauteur / 4);
@@ -148,12 +141,12 @@ export default function renderStory(opts: CadreOpts): string {
 
   return `<svg width="${svgW}" height="${svgH}" viewBox="${vx} ${vy} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${margin}px; left:-${margin}px; pointer-events:none; z-index:5;">
   <defs>
-    <linearGradient id="${gradId}" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
       <stop offset="0%" stop-color="${palette.vif}" />
       <stop offset="50%" stop-color="${palette.clair}" />
       <stop offset="100%" stop-color="${palette.profond}" />
     </linearGradient>
-    <linearGradient id="${innerGradId}" x1="0%" y1="0%" x2="100%" y2="100%">
+    <linearGradient id="${innerGradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
       <stop offset="0%" stop-color="${blanc}" stop-opacity="0.7" />
       <stop offset="50%" stop-color="${palette.pale}" stop-opacity="0.5" />
       <stop offset="100%" stop-color="${blanc}" stop-opacity="0.7" />

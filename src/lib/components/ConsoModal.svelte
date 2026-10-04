@@ -8,6 +8,7 @@
   // sa valeur actuelle, son max récent, et sa courbe des 5 dernières minutes.
   // Le survol d'une courbe affiche le point précis (valeur + il y a N s).
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import Modal from "./Modal.svelte";
   import {
     consoEtat,
@@ -15,6 +16,7 @@
     demarrerPollingConso,
     arreterPollingConso,
   } from "../stores/conso";
+  import { t } from "../stores/langue";
 
   let { onFermer }: { onFermer: () => void } = $props();
 
@@ -115,9 +117,9 @@
       };
     };
     return [
-      def("Messages chat / s", "var(--accent-violet)", (a) => a.chat_msgs),
-      def("Ticks splitter / s", "var(--accent-orange)", (a) => a.speedrun_events),
-      def("Pubs input viewer / s", "var(--accent-magenta)", (a) => a.input_viewer_pubs),
+      def(get(t)("consoModal.ligneChat"), "var(--accent-violet)", (a) => a.chat_msgs),
+      def(get(t)("consoModal.ligneSplitter"), "var(--accent-orange)", (a) => a.speedrun_events),
+      def(get(t)("consoModal.ligneInput"), "var(--accent-magenta)", (a) => a.input_viewer_pubs),
     ];
   });
 
@@ -140,7 +142,9 @@
     const dernier = h[h.length - 1]?.ts;
     if (ts === undefined || dernier === undefined) return "";
     const s = Math.round((dernier - ts) / 1000);
-    return s <= 0 ? "maintenant" : `il y a ${s} s`;
+    return s <= 0
+      ? get(t)("consoModal.maintenant")
+      : get(t)("consoModal.ilYA", { s });
   }
 
   // ---- Rendu ----
@@ -172,34 +176,38 @@
 
   function fmtRam(mo: number | undefined): string {
     if (mo === undefined) return "";
-    return mo >= 1024 ? `${(mo / 1024).toFixed(1)} Go` : `${Math.round(mo)} Mo`;
+    return mo >= 1024
+      ? `${(mo / 1024).toFixed(1)} ${get(t)("consoModal.go")}`
+      : `${Math.round(mo)} ${get(t)("consoModal.mo")}`;
   }
 </script>
 
 <Modal
-  title="Diagnostic — Consommation"
+  title={$t("consoModal.titre")}
   onClose={onFermer}
   maxWidth="980px"
-  hint="Mesures réelles, rafraîchies chaque seconde. Les courbes couvrent les 5 dernières minutes — survolez pour lire un point précis. Rien n'est enregistré : tout reste en mémoire."
+  hint={$t("consoModal.hint")}
 >
   <div class="corps">
     {#if $consoErreur}
-      <p class="vide">Mesure indisponible — le backend ne répond pas.</p>
+      <p class="vide">{$t("consoModal.indisponible")}</p>
     {:else if ($consoEtat?.historique.length ?? 0) < 2}
       <p class="vide">
-        Collecte en cours — les courbes apparaissent dans quelques secondes.
+        {$t("consoModal.collecte")}
       </p>
     {:else}
       <p class="meta">
-        {$consoEtat?.nb_coeurs ?? "?"} cœurs • {$consoEtat?.historique.length ?? 0}
-        s d'historique
+        {$t("consoModal.meta", {
+          coeurs: $consoEtat?.nb_coeurs ?? "?",
+          s: $consoEtat?.historique.length ?? 0,
+        })}
       </p>
 
       <!-- ============ VOTRE PC (processus) ============ -->
-      <h3>Votre PC</h3>
-      <p class="sous-titre">Part du processeur utilisée par chaque programme (% du total).</p>
+      <h3>{$t("consoModal.votrePc")}</h3>
+      <p class="sous-titre">{$t("consoModal.sousTitrePc")}</p>
       {#each lignesProcessus as l (l.nom)}
-        {@const t = trace(l.serie, 100)}
+        {@const tr = trace(l.serie, 100)}
         {@const idx = survol[l.nom]}
         <div class="ligne">
           <div class="tete">
@@ -219,12 +227,12 @@
               viewBox="0 0 100 36"
               preserveAspectRatio="none"
               role="img"
-              aria-label="Courbe {l.nom}"
+              aria-label={get(t)("consoModal.courbe", { nom: l.nom })}
               onmousemove={(e) => onSurvol(e, l.nom, l.serie.length)}
               onmouseleave={() => delete survol[l.nom]}
             >
-              <path d={t.aire} fill={l.couleur} opacity="0.15" />
-              <path d={t.ligne} fill="none" stroke={l.couleur} stroke-width="1.5" vector-effect="non-scaling-stroke" />
+              <path d={tr.aire} fill={l.couleur} opacity="0.15" />
+              <path d={tr.ligne} fill="none" stroke={l.couleur} stroke-width="1.5" vector-effect="non-scaling-stroke" />
               {#if idx !== undefined && l.serie[idx] !== undefined}
                 {@const x = (idx / Math.max(l.serie.length - 1, 1)) * 100}
                 {@const y = 36 - (Math.min(l.serie[idx], 100) / 100) * 36}
@@ -242,10 +250,10 @@
       {/each}
 
       <!-- ============ DANS STREAMOS (sous-systèmes) ============ -->
-      <h3>Dans StreamOS</h3>
-      <p class="sous-titre">Charge de chaque fonction (% d'un cœur — 100 % = un cœur saturé).</p>
+      <h3>{$t("consoModal.dansStreamos")}</h3>
+      <p class="sous-titre">{$t("consoModal.sousTitreThreads")}</p>
       {#each lignesThreads as l (l.nom)}
-        {@const t = trace(l.serie, 100)}
+        {@const tr = trace(l.serie, 100)}
         {@const idx = survol[l.nom]}
         <div class="ligne">
           <div class="tete">
@@ -259,12 +267,12 @@
               viewBox="0 0 100 36"
               preserveAspectRatio="none"
               role="img"
-              aria-label="Courbe {l.nom}"
+              aria-label={get(t)("consoModal.courbe", { nom: l.nom })}
               onmousemove={(e) => onSurvol(e, l.nom, l.serie.length)}
               onmouseleave={() => delete survol[l.nom]}
             >
-              <path d={t.aire} fill={l.couleur} opacity="0.15" />
-              <path d={t.ligne} fill="none" stroke={l.couleur} stroke-width="1.5" vector-effect="non-scaling-stroke" />
+              <path d={tr.aire} fill={l.couleur} opacity="0.15" />
+              <path d={tr.ligne} fill="none" stroke={l.couleur} stroke-width="1.5" vector-effect="non-scaling-stroke" />
               {#if idx !== undefined && l.serie[idx] !== undefined}
                 {@const x = (idx / Math.max(l.serie.length - 1, 1)) * 100}
                 {@const y = 36 - (Math.min(l.serie[idx], 100) / 100) * 36}
@@ -282,10 +290,10 @@
       {/each}
 
       <!-- ============ ACTIVITÉ (compteurs /s) ============ -->
-      <h3>Activité</h3>
-      <p class="sous-titre">Ce que fait l'application en ce moment (par seconde).</p>
+      <h3>{$t("consoModal.activite")}</h3>
+      <p class="sous-titre">{$t("consoModal.sousTitreActivite")}</p>
       {#each lignesActivite as l (l.nom)}
-        {@const t = trace(l.serie, null)}
+        {@const tr = trace(l.serie, null)}
         {@const idx = survol[l.nom]}
         {@const echelle = Math.max(l.max, 1)}
         <div class="ligne">
@@ -300,12 +308,12 @@
               viewBox="0 0 100 36"
               preserveAspectRatio="none"
               role="img"
-              aria-label="Courbe {l.nom}"
+              aria-label={get(t)("consoModal.courbe", { nom: l.nom })}
               onmousemove={(e) => onSurvol(e, l.nom, l.serie.length)}
               onmouseleave={() => delete survol[l.nom]}
             >
-              <path d={t.aire} fill={l.couleur} opacity="0.15" />
-              <path d={t.ligne} fill="none" stroke={l.couleur} stroke-width="1.5" vector-effect="non-scaling-stroke" />
+              <path d={tr.aire} fill={l.couleur} opacity="0.15" />
+              <path d={tr.ligne} fill="none" stroke={l.couleur} stroke-width="1.5" vector-effect="non-scaling-stroke" />
               {#if idx !== undefined && l.serie[idx] !== undefined}
                 {@const x = (idx / Math.max(l.serie.length - 1, 1)) * 100}
                 {@const y = 36 - (Math.min(l.serie[idx], echelle) / echelle) * 36}

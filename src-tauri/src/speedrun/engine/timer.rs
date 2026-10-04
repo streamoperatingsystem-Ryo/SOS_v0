@@ -51,6 +51,14 @@ pub struct TimerState {
     pub total_splits: i32,
     pub final_time: Option<f64>,
 
+    /// Temps primaire (cumul) auquel le segment courant a commencé.
+    /// Temps de segment = primary − seg_start ; remis à jour à chaque
+    /// split/skip/aller_a/undo.
+    pub seg_start: f64,
+    /// Index armé par clic en NotRunning (le prochain start() part de cet
+    /// index au lieu de 0). Effacé par start() (take) et reset().
+    pub armed_index: Option<i32>,
+
     // Timestamps internes
     start_time: Instant,
     adjusted_start: Instant,
@@ -70,6 +78,8 @@ impl TimerState {
             current_split_index: -1,
             total_splits: 0,
             final_time: None,
+            seg_start: 0.0,
+            armed_index: None,
             start_time: now,
             adjusted_start: now,
             time_paused_at: 0.0,
@@ -138,6 +148,15 @@ impl TimerState {
         self.is_game_time_paused = paused;
     }
 
+    /// Temps vivant du segment courant (primary − seg_start).
+    /// None en NotRunning (la ligne armée affiche 0:00.00 côté frontend).
+    pub fn segment_elapsed(&self) -> Option<f64> {
+        match self.current_phase {
+            TimerPhase::NotRunning => None,
+            _ => self.current_time().primary().map(|p| p - self.seg_start),
+        }
+    }
+
     pub fn loading_times(&self) -> f64 {
         self.loading_times.unwrap_or(0.0)
     }
@@ -165,44 +184,57 @@ impl TimerModel {
         }
     }
 
+    /// Démarre la run depuis l'index armé (clic en NotRunning) ou 0.
     pub fn start(&mut self) {
         if self.state.current_phase == TimerPhase::NotRunning {
             let now = Instant::now();
             self.state.current_phase = TimerPhase::Running;
-            self.state.current_split_index = 0;
+            self.state.current_split_index = self.state.armed_index.take().unwrap_or(0);
             self.state.start_time = now;
             self.state.adjusted_start = now;
             self.state.time_paused_at = 0.0;
             self.state.loading_times = None;
             self.state.final_time = None;
+            self.state.seg_start = 0.0;
         }
     }
 
-    pub fn split(&mut self) {
-        if self.state.current_phase == TimerPhase::Running {
-            let ct = self.state.current_time();
-            if ct.real_time.map(|t| t > 0.0).unwrap_or(false) {
-                self.state.current_split_index += 1;
-                if self.state.total_splits > 0
-                    && self.state.total_splits == self.state.current_split_index
-                {
-                    // Run terminée
-                    self.state.final_time = ct.game_time.or(ct.real_time);
-                    self.state.current_phase = TimerPhase::Ended;
-                }
-            }
+    /// Avance d'un split. Retourne la durée du segment qui vient d'être
+    /// bouclé (primary − seg_start), None si la phase ne permet pas de
+    /// splitter. seg_start est ensuite posé sur le primary courant → le
+    /// segment suivant repart de zéro.
+    pub fn split(&mut self) -> Option<f64> {
+        if self.state.current_phase != TimerPhase::Running {
+            return None;
         }
+        let ct = self.state.current_time();
+        if !ct.real_time.map(|t| t > 0.0).unwrap_or(false) {
+            return None;
+        }
+        let primary = ct.primary().unwrap_or(0.0);
+        let seg_dur = primary - self.state.seg_start;
+        self.state.current_split_index += 1;
+        self.state.seg_start = primary;
+        if self.state.total_splits > 0
+            && self.state.total_splits == self.state.current_split_index
+        {
+            // Run terminée
+            self.state.final_time = ct.game_time.or(ct.real_time);
+            self.state.current_phase = TimerPhase::Ended;
+        }
+        Some(seg_dur)
     }
 
     pub fn reset(&mut self) {
-        if self.state.current_phase != TimerPhase::NotRunning {
-            self.state.current_phase = TimerPhase::NotRunning;
-            self.state.current_split_index = -1;
-            self.state.final_time = None;
-            self.state.is_game_time_paused = false;
-            self.state.loading_times = None;
-            self.state.game_time_pause = None;
-        }
+        // Efface l'armement même si la phase est déjà NotRunning (un index
+        // armé par clic remet current_split_index ≥ 0).
+        self.state.armed_index = None;
+        self.state.current_phase = TimerPhase::NotRunning;
+        self.state.current_split_index = -1;
+        self.state.final_time = None;
+        self.state.is_game_time_paused = false;
+        self.state.loading_times = None;
+        self.state.game_time_pause = None;
     }
 
     pub fn pause(&mut self) {
@@ -224,7 +256,12 @@ impl TimerModel {
         }
     }
 
-    pub fn undo_split(&mut self) {
+    /// Annule le dernier split : le segment défait redevient actif et
+    /// reprend là où il en était — seg_start recule de d_k (sa durée
+    /// enregistrée, lue dans EngineInner::temps_segs et passée ici) →
+    /// segment_elapsed() réaffiche d_k. Sans durée enregistrée (segment
+    /// skippé) : repart de zéro (seg_start = primary courant).
+    pub fn undo_split(&mut self, duree_enregistree: Option<f64>) {
         if self.state.current_phase != TimerPhase::NotRunning && self.state.current_split_index > 0
         {
             if self.state.current_phase == TimerPhase::Ended {
@@ -232,6 +269,14 @@ impl TimerModel {
                 self.state.final_time = None;
             }
             self.state.current_split_index -= 1;
+            match duree_enregistree {
+                Some(d) => self.state.seg_start -= d,
+                None => {
+                    if let Some(p) = self.state.current_time().primary() {
+                        self.state.seg_start = p;
+                    }
+                }
+            }
         }
     }
 
@@ -242,6 +287,40 @@ impl TimerModel {
                 || self.state.current_split_index < self.state.total_splits - 1)
         {
             self.state.current_split_index += 1;
+            // Le segment sauté ne compte pas : le suivant repart de zéro.
+            if let Some(p) = self.state.current_time().primary() {
+                self.state.seg_start = p;
+            }
+        }
+    }
+
+    /// Clic sur une ligne de split :
+    ///   - NotRunning → arme l'index (le prochain start() partira de là),
+    ///     chrono à zéro, ne démarre PAS ;
+    ///   - Running/Paused/Ended → saute à cet index, chrono de segment à
+    ///     zéro (seg_start = primary courant), PAS un reset de run. Ended
+    ///     repasse en Running. Les temps de la tentative sont effacés par
+    ///     l'engine (temps_segs) — retry de segment, les précédents ne
+    ///     comptent pas comme finis.
+    pub fn aller_a(&mut self, index: i32) {
+        if index < 0 || (self.state.total_splits > 0 && index >= self.state.total_splits) {
+            return;
+        }
+        match self.state.current_phase {
+            TimerPhase::NotRunning => {
+                self.state.armed_index = Some(index);
+                self.state.current_split_index = index;
+            }
+            _ => {
+                self.state.current_split_index = index;
+                if let Some(p) = self.state.current_time().primary() {
+                    self.state.seg_start = p;
+                }
+                if self.state.current_phase == TimerPhase::Ended {
+                    self.state.current_phase = TimerPhase::Running;
+                    self.state.final_time = None;
+                }
+            }
         }
     }
 }

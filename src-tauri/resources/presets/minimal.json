@@ -2,6 +2,7 @@
   "id": "minimal",
   "nom": "Minimal",
   "description": "Un chat discret à droite avec un cadre fin — le reste de la place pour le jeu.",
+  "description_en": "A discreet chat on the right with a thin frame — the rest of the space for the game.",
   "scene": {
     "widgets": [
       {

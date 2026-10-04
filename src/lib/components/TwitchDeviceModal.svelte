@@ -7,6 +7,7 @@
   import { youtubeDevice } from "../stores/chat";
   import { annulerYoutubeDeviceFlow } from "../stores/youtube";
   import Modal from "./Modal.svelte";
+  import { t } from "../stores/langue";
 
   let device = $derived($twitchDevice);
   let ytDevice = $derived($youtubeDevice);
@@ -32,17 +33,17 @@
 
 {#if device || ytDevice}
   <Modal
-    title="Connexion {device ? "Twitch" : "YouTube"}"
+    title={$t("twitchDevice.connexion", { plateforme: device ? "Twitch" : "YouTube" })}
     onClose={onAnnuler}
     maxWidth="24rem"
-    hint="Ouvre le lien, entre ce code, puis autorise l'accès."
+    hint={$t("twitchDevice.hint")}
   >
     <div class="device-body">
       <div class="code-box">
         <span class="code">{device?.user_code || ytDevice?.user_code}</span>
       </div>
-      <button class="modal-action" onclick={onOuvrirLien}>Ouvrir le lien</button>
-      <button class="modal-action" onclick={onAnnuler}>Annuler</button>
+      <button class="modal-action" onclick={onOuvrirLien}>{$t("twitchDevice.ouvrirLien")}</button>
+      <button class="modal-action" onclick={onAnnuler}>{$t("commun.annuler")}</button>
     </div>
   </Modal>
 {/if}

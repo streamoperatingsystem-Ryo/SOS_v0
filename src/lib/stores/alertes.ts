@@ -2,7 +2,8 @@
 // Tous les événements arrivent côté Rust : USERNOTICE/bits via l'IRC
 // (twitch_chat.rs) et follows via EventSub WebSocket temps réel
 // (twitch_eventsub.rs) → alertes.rs. Le dashboard ne gère QUE la config.
-import { writable } from "svelte/store";
+import { writable, get } from "svelte/store";
+import { t } from "./langue";
 import {
   tauri,
   type AlertesConfig,
@@ -23,20 +24,13 @@ export type TypeAlerte = (typeof TYPES_ALERTE)[number];
 export const alertesConfig = writable<AlertesConfig>({});
 
 /// Config par défaut d'un type (miroir de config_type_defaut côté Rust).
+/// Le template par défaut suit la langue UI via les clés i18n
+/// `interactions.alertes.defaut.<type>` (fr.json = source de vérité).
 export function configDefautType(type: TypeAlerte): AlerteTypeConfig {
-  const templates: Record<TypeAlerte, string> = {
-    follow: "{pseudo} vient de suivre !",
-    raid: "{pseudo} raide avec {nbViewers} viewers !",
-    sub: "{pseudo} vient de s'abonner !",
-    resub: "{pseudo} resub pour {nbMoisCumul} mois !",
-    subgift: "{pseudo} offre un sub à {destinataire} !",
-    bits: "{pseudo} a envoyé {nbBits} bits !",
-  };
   return {
     actif: true,
     duree_ms: 5000,
-    texte_template: templates[type],
-    couleur: "#ffffff",
+    texte_template: get(t)(`interactions.alertes.defaut.${type}`),
     taille_px: 48,
     cooldown_viewer_s: 0,
     cooldown_global_s: 0,

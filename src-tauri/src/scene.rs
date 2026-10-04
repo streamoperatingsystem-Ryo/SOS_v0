@@ -92,8 +92,10 @@ fn default_cadre_gradient_angle() -> f64 {
 /// Configuration d'un cadre SVG (widget ou bord canvas).
 /// NB : champs camelCase VOLONTAIRES — contrat JSON direct avec le frontend
 /// (mêmes noms que scene.ts). D'où le allow(non_snake_case).
+/// PartialEq requis par scenes::scene_vierge (le défaut auto posé à la
+/// naissance ne compte pas comme contenu utilisateur).
 #[allow(non_snake_case)]
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CadreConfig {
     #[serde(default = "default_cadre_style")]
     pub style: String,
@@ -109,6 +111,10 @@ pub struct CadreConfig {
     pub gradientAngle: f64,
     #[serde(default)]
     pub actif: bool,
+    /// Le cadre s'applique aussi au bord du canvas (false = widgets seuls).
+    /// Défaut true : rétro-compat — les scènes existantes gardaient le bord.
+    #[serde(default = "default_true")]
+    pub bordActif: bool,
 }
 
 impl Default for CadreConfig {
@@ -121,6 +127,28 @@ impl Default for CadreConfig {
             couleurFin: default_cadre_couleur_fin(),
             gradientAngle: default_cadre_gradient_angle(),
             actif: false,
+            bordActif: true,
+        }
+    }
+}
+
+impl CadreConfig {
+    /// Cadre posé par défaut sur TOUTE scène neuve (Scene::new — nouvelle
+    /// sauvegarde, premier boot, scène illisible) : MGStyle noir + accent
+    /// violet marque StreamOS, épaisseur 50, actif, bord canvas inclus.
+    /// ⚠️ MIROIR de CADRE_WIDGET_DEFAUT (scene.ts) — garder en sync.
+    /// scene_vierge() traite CE défaut comme « pas de contenu utilisateur »
+    /// (l'onboarding preset peut encore remplacer une scène neuve).
+    pub fn defaut_scene() -> Self {
+        Self {
+            style: "mgstyle".to_string(),
+            variante: None,
+            strokeWidth: 50.0,
+            couleur: "#000000".to_string(),
+            couleurFin: "#8b5cf6".to_string(),
+            gradientAngle: 135.0,
+            actif: true,
+            bordActif: true,
         }
     }
 }
@@ -242,6 +270,11 @@ pub struct Widget {
     /// Taille de police (px) pour les widgets type "chat". Défaut 16.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub taillePolice: Option<u32>,
+    /// Mise en forme des messages pour les widgets type "chat" :
+    /// "compact" (défaut — messages joints, zébrage) ou "bulles" (messages
+    /// détachés, chacun avec le cadre SVG de scène comme un widget).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chatStyle: Option<String>,
     /// Identifiant du device caméra (getUserMedia deviceId) pour les widgets
     /// type "camera". None = device par défaut du système.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -286,6 +319,11 @@ pub struct Widget {
     /// Toutes les tailles internes du splitter sont en em → suit cette base.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub srTaillePolice: Option<u32>,
+    /// Disposition du splitter speedrun : "auto" | "colonne" | "ligne".
+    /// "auto"/None = splits en ligne si la hauteur passe sous ~4×srTaillePolice
+    /// (façon LiveSplit horizontal), colonne sinon. "colonne"/"ligne" forcent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srLayout: Option<String>,
     /// Plateforme suivie par un widget type "goal" :
     /// "twitch" | "youtube" | "kick" | "tiktok". None = non configuré.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -299,18 +337,50 @@ pub struct Widget {
     /// seul, jamais de frame goal-atteint).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goalCible: Option<u64>,
+    /// Id du Creator Goal Twitch LIÉ (objectif déclaré dans le Creator
+    /// Dashboard, lu via GET /goals — scope channel:read:goals). Some =
+    /// mode lié : actuel/cible/description viennent des frames "goal-twitch"
+    /// (EventSub channel.goal.* + poll viewers.rs), goalMetrique/goalCible
+    /// sont ignorés. None = mode manuel (compteurs communaute/viewers).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goalId: Option<String>,
     /// Chaîne de morphs (bulge/pinch) appliquée au média, dans l'ordre.
     /// None/vide = rendu natif (img/video), zéro coût GL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub morphs: Option<Vec<MorphPoint>>,
-    /// Titre optionnel affiché au-dessus ou en dessous du widget. None/vide =
-    /// pas de titre. Le texte est rendu avec une police Google Font (titrePolice)
-    /// et un gradient de couleur reprenant celui du cadre SVG actif de la scène.
+    /// Texte du titre affiché au-dessus du widget. None/vide = aucun titre à
+    /// cette position. Jusqu'à 4 titres simultanés (haut/bas/gauche/droite),
+    /// le style est partagé (titrePolice, titreTaille, …) et le texte est
+    /// rendu avec un gradient reprenant celui du cadre SVG actif de la scène.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titreHaut: Option<String>,
+    /// Texte du titre affiché en dessous du widget.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titreBas: Option<String>,
+    /// Texte du titre affiché à gauche du widget (rendu vertical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titreGauche: Option<String>,
+    /// Texte du titre affiché à droite du widget (rendu vertical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titreDroite: Option<String>,
+    /// LEGACY — ancien titre à position unique (« dessus »/« dessous »).
+    /// Conservé uniquement pour désérialiser les vieilles scènes : migré vers
+    /// titreHaut/titreBas par `migrer_titres()` à la lecture, jamais écrit
+    /// par l'UI. None en mémoire post-migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub titre: Option<String>,
-    /// Position du titre : "dessus" (défaut) ou "dessous".
+    /// LEGACY — position du titre legacy, source de migration uniquement.
+    /// Voir `titre`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub titrePosition: Option<String>,
+    /// Couleur de début du dégradé du texte. None → dégradé repris du cadre
+    /// SVG actif (comportement automatique par défaut).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titreCouleur: Option<String>,
+    /// Couleur de fin du dégradé du texte. None → couleur unie (reprend
+    /// titreCouleur) ou fin du dégradé du cadre si titreCouleur absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titreCouleurFin: Option<String>,
     /// Identifiant de la police Google Font (ex: "BebasNeue"). Voir fonts.ts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub titrePolice: Option<String>,
@@ -374,6 +444,14 @@ pub struct Scene {
     pub bgZoom: f64,
     #[serde(default = "default_bg_rot")]
     pub bgRot: f64,
+    /// Inclinaison 3D du fond (gizmo, ±90° max) : perspective(800px)
+    /// rotateX/rotateY appliquée sur l'élément #bg en diffusion et sur
+    /// .bg-layer en dashboard. 0 = fond plat. Distinct de bgRot (rotation
+    /// 2D du média dans le canvas).
+    #[serde(default = "default_zero_f64")]
+    pub bgRotX: f64,
+    #[serde(default = "default_zero_f64")]
+    pub bgRotY: f64,
     #[serde(default = "default_bg_offset")]
     pub bgOffsetX: f64,
     #[serde(default = "default_bg_offset")]
@@ -408,25 +486,56 @@ pub struct Scene {
     /// apparaît). Retirer la capture restaure le média stocké.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bgObsSource: Option<String>,
-    /// Cadre appliqué à chaque widget (clip-path + overlay SVG). None = aucun.
+    /// Cadre unifié de la scène : appliqué à CHAQUE widget (clip-path +
+    /// overlay SVG) ET au bord extérieur du canvas. None = aucun cadre.
+    /// (Un seul système depuis 2026-09-26 — avant, le bord avait son propre
+    /// cadre `cadreApp`.)
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cadreWidget: Option<CadreConfig>,
-    /// Cadre appliqué au bord extérieur du canvas. None = aucun.
+    /// LEGACY — ancien « cadre du bord de l'application », remplacé par le
+    /// cadre unifié `cadreWidget`. Conservé uniquement pour désérialiser les
+    /// vieilles scènes : migré vers cadreWidget par `migrer_cadres()` à la
+    /// lecture, jamais écrit par l'UI. None en mémoire post-migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cadreApp: Option<CadreConfig>,
     /// Chaîne de morphs appliquée au FOND de scène (bulge/pinch), dans l'ordre.
     /// Coordonnées normalisées (0-1) du canvas. None/vide = rendu natif.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bgMorphs: Option<Vec<MorphPoint>>,
-    /// Titre optionnel affiché à l'intérieur du fond de l'application, en haut
-    /// ou en bas. None/vide = pas de titre. Le texte est rendu avec une police
-    /// Google Font (bgTitrePolice) et un gradient de couleur reprenant celui
-    /// du cadre de l'application (cadreApp).
+    /// Texte du titre affiché en haut à l'intérieur du fond de l'application.
+    /// None/vide = aucun titre à cette position. Jusqu'à 4 titres simultanés
+    /// (haut/bas/gauche/droite — côtés en texte vertical), style partagé
+    /// (bgTitrePolice, bgTitreTaille, …) et gradient reprenant le cadre
+    /// unifié (cadreWidget).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgTitreHaut: Option<String>,
+    /// Texte du titre affiché en bas à l'intérieur du fond.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgTitreBas: Option<String>,
+    /// Texte du titre affiché le long du bord gauche du fond (vertical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgTitreGauche: Option<String>,
+    /// Texte du titre affiché le long du bord droit du fond (vertical).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgTitreDroite: Option<String>,
+    /// LEGACY — ancien titre de fond à position unique (« haut »/« bas »).
+    /// Conservé uniquement pour désérialiser les vieilles scènes : migré vers
+    /// bgTitreHaut/bgTitreBas par `migrer_titres()` à la lecture, jamais
+    /// écrit par l'UI. None en mémoire post-migration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bgTitre: Option<String>,
-    /// Position du titre du fond : "haut" (défaut) ou "bas" (intérieur du fond).
+    /// LEGACY — position du titre de fond legacy, source de migration
+    /// uniquement. Voir `bgTitre`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bgTitrePosition: Option<String>,
+    /// Couleur de début du dégradé du texte. None → dégradé repris du cadre
+    /// unifié (cadreWidget), comportement automatique par défaut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgTitreCouleur: Option<String>,
+    /// Couleur de fin du dégradé du texte. None → couleur unie (reprend
+    /// bgTitreCouleur) ou fin du dégradé du cadre si bgTitreCouleur absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgTitreCouleurFin: Option<String>,
     /// Identifiant de la police Google Font (ex: "BebasNeue"). Voir fonts.ts.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bgTitrePolice: Option<String>,
@@ -453,6 +562,21 @@ pub struct Scene {
     /// aucun contour). Défaut 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bgTitreContourEpaisseur: Option<u32>,
+    /// Aide contextuelle « fond vide » (presets guidés — ex. gaming plein
+    /// écran) : encadré jaune-orangé centré sur le canvas du DASHBOARD
+    /// uniquement (jamais en diffusion), auto-masqué dès qu'un média de fond
+    /// ou une capture OBS (bgObsSource) est lié. Texte i18n côté UI.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aideFond: Option<bool>,
+    /// Aide contextuelle « connecte-toi » au-dessus des widgets goal :
+    /// auto-masquée quand toutes les plateformes des goals sont connectées.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aideObjectifs: Option<bool>,
+    /// Aide contextuelle « personnalise tes cadres » (presets guidés) :
+    /// encadré centré empilé avec aideFond, auto-masquée à la première
+    /// ouverture de la modale Cadres ou via la croix (dismiss persistant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub aideCadres: Option<bool>,
 }
 
 impl Default for Scene {
@@ -466,6 +590,8 @@ impl Default for Scene {
             bgFit: DEFAULT_BG_FIT.to_string(),
             bgZoom: DEFAULT_BG_ZOOM,
             bgRot: DEFAULT_BG_ROT,
+            bgRotX: 0.0,
+            bgRotY: 0.0,
             bgOffsetX: DEFAULT_BG_OFFSET,
             bgOffsetY: DEFAULT_BG_OFFSET,
             bgMiroirH: false,
@@ -478,11 +604,21 @@ impl Default for Scene {
             bgPaused: true,
             bgTime: 0.0,
             bgObsSource: None,
-            cadreWidget: None,
+            // Cadre par défaut à la naissance : MGStyle noir/violet actif
+            // (choix produit — une nouvelle sauvegarde sans cadre choisi
+            // obtient le cadre marque). Les vieilles sauvegardes ne sont
+            // PAS touchées : #[serde(default)] → None pour le champ absent.
+            cadreWidget: Some(CadreConfig::defaut_scene()),
             cadreApp: None,
             bgMorphs: None,
+            bgTitreHaut: None,
+            bgTitreBas: None,
+            bgTitreGauche: None,
+            bgTitreDroite: None,
             bgTitre: None,
             bgTitrePosition: None,
+            bgTitreCouleur: None,
+            bgTitreCouleurFin: None,
             bgTitrePolice: None,
             bgTitreTaille: None,
             bgTitreGras: None,
@@ -491,6 +627,9 @@ impl Default for Scene {
             bgTitreEspacement: None,
             bgTitreContourCouleur: None,
             bgTitreContourEpaisseur: None,
+            aideFond: None,
+            aideObjectifs: None,
+            aideCadres: None,
         }
     }
 }
@@ -498,5 +637,50 @@ impl Default for Scene {
 impl Scene {
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Migration cadre unifié (2026-09-26) : UN SEUL CadreConfig pilote les
+    /// DEUX rendus (widgets + bord du canvas). `cadreWidget` est le champ
+    /// canonique ; `cadreApp` n'est plus qu'une source de migration lue au
+    /// chargement des vieilles scènes — jamais écrite par l'UI.
+    /// Règle (choix produit) : cadreWidget actif → il gagne ; sinon cadreApp
+    /// (même inactif) est repris pour ne pas perdre le réglage. cadreApp est
+    /// vidé dans tous les cas → plus de vérité séparée, le JSON se nettoie à
+    /// la prochaine sauvegarde.
+    pub fn migrer_cadres(&mut self) {
+        if let Some(app) = self.cadreApp.take() {
+            let widget_gagne = self.cadreWidget.as_ref().is_some_and(|c| c.actif);
+            if !widget_gagne {
+                self.cadreWidget = Some(app);
+            }
+        }
+    }
+
+    /// Migration titres multi-positions (2026-09-28) : le titre à position
+    /// unique (« dessus »/« dessous » widget, « haut »/« bas » fond) devient
+    /// jusqu'à 4 textes par position (haut/bas/gauche/droite), style partagé.
+    /// Les champs legacy `titre`/`titrePosition`/`bgTitre`/`bgTitrePosition`
+    /// ne sont plus que des sources de migration lues au chargement — jamais
+    /// écrits par l'UI. Un champ nouveau déjà présent gagne (le legacy est
+    /// vidé dans tous les cas → le JSON se nettoie à la prochaine sauvegarde).
+    pub fn migrer_titres(&mut self) {
+        for w in self.widgets.iter_mut() {
+            let pos = w.titrePosition.take();
+            if let Some(t) = w.titre.take() {
+                let bas = pos.as_deref() == Some("dessous");
+                let cible = if bas { &mut w.titreBas } else { &mut w.titreHaut };
+                if cible.is_none() {
+                    *cible = Some(t);
+                }
+            }
+        }
+        let pos = self.bgTitrePosition.take();
+        if let Some(t) = self.bgTitre.take() {
+            let bas = pos.as_deref() == Some("bas");
+            let cible = if bas { &mut self.bgTitreBas } else { &mut self.bgTitreHaut };
+            if cible.is_none() {
+                *cible = Some(t);
+            }
+        }
     }
 }

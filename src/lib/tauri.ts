@@ -43,6 +43,10 @@ export interface Widget {
   obsSource?: string;
   chatFiltre?: string;
   taillePolice?: number;
+  /// Mise en forme des messages (widget "chat") : "compact" (défaut —
+  /// messages joints, zébrage) ou "bulles" (messages détachés, chacun avec
+  /// le cadre SVG de scène — même traitement qu'un widget objectif).
+  chatStyle?: string;
   /// Identifiant du device caméra pour les widgets type "camera" :
   /// FriendlyName PnP (pc_enumerate_cameras) = valeur video_device_id de la
   /// source OBS dshow_input "SOS-Caméra". undefined = device par défaut.
@@ -77,6 +81,10 @@ export interface Widget {
   /// Taille de police de base (px) pour les widgets type "speedrun". undefined = 16.
   /// Toutes les tailles internes du splitter sont en em → suit cette base.
   srTaillePolice?: number;
+  /// Disposition du splitter speedrun : "auto" | "colonne" | "ligne".
+  /// "auto"/undefined = splits en ligne si la hauteur passe sous
+  /// ~4×srTaillePolice (façon LiveSplit horizontal), colonne sinon.
+  srLayout?: string;
   /// Plateforme suivie par un widget type "goal" :
   /// "twitch" | "youtube" | "kick" | "tiktok". undefined = non configuré.
   goalPlateforme?: GoalPlateforme;
@@ -86,16 +94,39 @@ export interface Widget {
   /// Valeur cible du widget type "goal". undefined = compteur seul
   /// (pas de frame goal-atteint).
   goalCible?: number;
+  /// Id du Creator Goal Twitch LIÉ (objectif déclaré dans le Creator
+  /// Dashboard — GET /goals, scope channel:read:goals). Présent = mode
+  /// lié : actuel/cible/description viennent des frames "goal-twitch"
+  /// (EventSub + poll viewers.rs), goalMetrique/goalCible ignorés.
+  /// undefined = mode manuel.
+  goalId?: string;
   /// Chaîne de morphs (bulge/pinch) appliquée au média, dans l'ordre.
   /// undefined/vide = rendu natif (img/video), zéro coût GL.
   morphs?: MorphPoint[];
-  /// Titre optionnel affiché au-dessus ou en dessous du widget. undefined/vide
-  /// = pas de titre. Le texte est rendu avec une police Google Font
-  /// (titrePolice) et un gradient de couleur reprenant celui du cadre SVG
-  /// actif de la scène (fallback blanc→gris si aucun cadre actif).
+  /// Texte du titre affiché au-dessus du widget. undefined/vide = aucun titre
+  /// à cette position. Jusqu'à 4 titres simultanés (haut/bas/gauche/droite —
+  /// côtés en texte vertical), style partagé (titrePolice, titreTaille, …) et
+  /// gradient de couleur reprenant celui du cadre SVG actif de la scène
+  /// (fallback blanc→gris si aucun cadre actif).
+  titreHaut?: string;
+  /// Texte du titre affiché en dessous du widget.
+  titreBas?: string;
+  /// Texte du titre affiché à gauche du widget (texte vertical).
+  titreGauche?: string;
+  /// Texte du titre affiché à droite du widget (texte vertical).
+  titreDroite?: string;
+  /// LEGACY — ancien titre à position unique (« dessus »/« dessous »).
+  /// Migré vers titreHaut/titreBas côté Rust à la lecture (migrer_titres) ;
+  /// jamais écrit par l'UI.
   titre?: string;
-  /// Position du titre : "dessus" (défaut) ou "dessous".
+  /// LEGACY — position du titre legacy. Voir `titre`.
   titrePosition?: "dessus" | "dessous";
+  /// Couleur de début du dégradé du texte. Absent → dégradé repris du cadre
+  /// SVG actif (comportement automatique par défaut).
+  titreCouleur?: string;
+  /// Couleur de fin du dégradé du texte. Absent → couleur unie (reprend
+  /// titreCouleur) ou fin du dégradé du cadre si titreCouleur absent.
+  titreCouleurFin?: string;
   /// Identifiant de la police Google Font (ex: "BebasNeue"). Voir fonts.ts.
   titrePolice?: string;
   /// Taille du titre en pixels (12-72). Défaut 24.
@@ -142,15 +173,6 @@ export const GOAL_METRIQUES: Record<GoalPlateforme, GoalMetrique[]> = {
   tiktok: ["viewers"],
 };
 
-/// Libellés FR des métriques (UI config + fallback de titre du widget).
-export const GOAL_METRIQUE_LABELS: Record<GoalMetrique, string> = {
-  followers: "Followers",
-  subs: "Subs",
-  sub_points: "Points de subs",
-  abonnes: "Abonnés",
-  viewers: "Viewers",
-};
-
 /// Suggestion de palier « prochain chiffre reconnaissable » — aligné sur
 /// l'algo officiel Twitch Creator Goals vérifié (11→20, 260→300) :
 /// <100 → +10, <1000 → +100, <10000 → +1000, sinon +10000.
@@ -170,6 +192,25 @@ export function goalSuggestion(
     return 25;
   }
   return goalPalierSuivant(actuel);
+}
+
+/// Creator Goal Twitch — objectif DÉCLARÉ par le streamer dans son Creator
+/// Dashboard (miroir de twitch_helix::CreatorGoal — mêmes noms que la frame
+/// WS "goal-twitch" et le retour de `twitch_goals_lister`, zéro mapping).
+export interface TwitchGoal {
+  /// id Helix — valeur de Widget.goalId quand le widget est lié.
+  id: string;
+  /// Type Helix : "follower" | "subscription" | "subscription_count" |
+  /// "new_subscription" | "new_subscription_count" | "new_bit" | "new_cheerer".
+  goal_type: string;
+  /// Texte libre du streamer (Creator Dashboard) — peut être vide.
+  description: string;
+  actuel: number;
+  cible: number;
+  /// GET : dérivé (actuel >= cible) ; channel.goal.end : verdict Twitch.
+  atteint: boolean;
+  /// true seulement via channel.goal.end (ou disparition du GET /goals).
+  termine: boolean;
 }
 
 /// Mapping des touches manette pour un widget input-viewer.
@@ -243,12 +284,17 @@ export interface AslLoadResult {
 }
 
 /// Event speedrun émis par le moteur (event Tauri speedrun:event).
+/// `time` des events split/ended = durée du segment bouclé ; le cumul de
+/// run voyage dans `cumul`. `segmentTime` = temps vivant du segment courant
+/// (event time/etat) — null si timer armé en NotRunning.
 export interface SpeedrunEvent {
   type:
     | "started"
     | "split"
     | "reset"
     | "ended"
+    | "goto"
+    | "etat"
     | "gameTime"
     | "time"
     | "connected"
@@ -262,9 +308,13 @@ export interface SpeedrunEvent {
     | "splitSkipped"
     | "splitUndone";
   time?: string;
+  cumul?: string;
   index?: number;
+  phase?: string;
   realTime?: string;
   gameTime?: string | null;
+  segmentTime?: string | null;
+  splitTimes?: (string | null)[];
   process?: string;
   pid?: number;
   message?: string;
@@ -273,10 +323,14 @@ export interface SpeedrunEvent {
 
 /// Configuration d'un cadre SVG (widget ou bord canvas).
 /// `style` = ID du registre ("carre", "arrondis", "cyberpunk", "story",
-/// "thin-line", "hexagon", "mgstyle"). `variante` = variante de couleur (presets).
-/// `couleur`/`couleurFin` = dégradé pour les cadres personnalisables.
+/// "thin-line", "hexagon", "mgstyle"). `variante` = champ legacy (désérialisé
+/// pour lire les vieilles scènes, ignoré au rendu et jamais réécrit).
+/// `couleur`/`couleurFin` = couleurs du cadre (tous les styles — les tons
+/// internes des presets en sont dérivés).
 /// `gradientAngle` = angle du dégradé en degrés (0-360, défaut 135 = diagonal).
 /// `actif` = cadre visible.
+/// `bordActif` = le cadre s'applique aussi au bord du canvas (absent/false
+/// = widgets seuls). undefined = true (rétro-compat vieilles scènes).
 export interface CadreConfig {
   style: string;
   variante?: string;
@@ -285,6 +339,7 @@ export interface CadreConfig {
   couleurFin: string;
   gradientAngle: number;
   actif: boolean;
+  bordActif?: boolean;
 }
 
 export interface Scene {
@@ -296,6 +351,11 @@ export interface Scene {
   bgFit?: string;
   bgZoom?: number;
   bgRot?: number;
+  /// Inclinaison 3D du fond (gizmo, ±90° max) : perspective(800px)
+  /// rotateX/rotateY sur l'élément #bg (diffusion) / .bg-layer (dashboard).
+  /// 0 = fond plat. Distinct de bgRot (rotation 2D du média).
+  bgRotX?: number;
+  bgRotY?: number;
   bgOffsetX?: number;
   bgOffsetY?: number;
   /// Miroir du fond : retournement horizontal/vertical du média de fond.
@@ -315,18 +375,39 @@ export interface Scene {
   /// Présence = fond capture (prioritaire sur bgMedia — le média n'est pas
   /// peint tant que la capture est active).
   bgObsSource?: string;
+  /// Cadre unifié de la scène : appliqué à chaque widget (clip-path +
+  /// overlay SVG) ET au bord extérieur du canvas.
   cadreWidget?: CadreConfig;
+  /// LEGACY — ancien cadre du bord de l'application. Migré vers cadreWidget
+  /// par le Rust au chargement (migrer_cadres) ; jamais écrit par l'UI.
   cadreApp?: CadreConfig;
   /// Chaîne de morphs appliquée au FOND de scène (bulge/pinch), dans l'ordre.
   /// Coordonnées normalisées (0-1) du canvas. undefined/vide = rendu natif.
   bgMorphs?: MorphPoint[];
-  /// Titre optionnel affiché à l'intérieur du fond de l'application, en haut
-  /// ou en bas. undefined/vide = pas de titre. Le texte est rendu avec une
-  /// police Google Font (bgTitrePolice) et un gradient de couleur reprenant
-  /// celui du cadre de l'application (cadreApp).
+  /// Texte du titre affiché en haut à l'intérieur du fond de l'application.
+  /// undefined/vide = aucun titre à cette position. Jusqu'à 4 titres
+  /// simultanés (haut/bas/gauche/droite — côtés en texte vertical), style
+  /// partagé (bgTitrePolice, bgTitreTaille, …) et gradient de couleur
+  /// reprenant celui du cadre unifié (cadreWidget).
+  bgTitreHaut?: string;
+  /// Texte du titre affiché en bas à l'intérieur du fond.
+  bgTitreBas?: string;
+  /// Texte du titre affiché le long du bord gauche du fond (vertical).
+  bgTitreGauche?: string;
+  /// Texte du titre affiché le long du bord droit du fond (vertical).
+  bgTitreDroite?: string;
+  /// LEGACY — ancien titre de fond à position unique. Migré vers
+  /// bgTitreHaut/bgTitreBas côté Rust à la lecture (migrer_titres) ; jamais
+  /// écrit par l'UI.
   bgTitre?: string;
-  /// Position du titre du fond : "haut" (défaut) ou "bas" (intérieur du fond).
+  /// LEGACY — position du titre de fond legacy. Voir `bgTitre`.
   bgTitrePosition?: "haut" | "bas";
+  /// Couleur de début du dégradé du texte. Absent → dégradé repris du cadre
+  /// unifié (cadreWidget), comportement automatique par défaut.
+  bgTitreCouleur?: string;
+  /// Couleur de fin du dégradé du texte. Absent → couleur unie (reprend
+  /// bgTitreCouleur) ou fin du dégradé du cadre si bgTitreCouleur absent.
+  bgTitreCouleurFin?: string;
   /// Identifiant de la police Google Font (ex: "BebasNeue"). Voir fonts.ts.
   bgTitrePolice?: string;
   /// Taille du titre du fond en pixels (12-72). Défaut 24.
@@ -345,6 +426,16 @@ export interface Scene {
   /// Épaisseur du contour des lettres du titre du fond en px (0-6 ; 0 =
   /// aucun contour). Défaut 2.
   bgTitreContourEpaisseur?: number;
+  /// Aide « fond vide » (presets guidés) : encadré centré sur le canvas du
+  /// dashboard, auto-masqué dès qu'un média de fond ou une capture OBS est lié.
+  aideFond?: boolean;
+  /// Aide « connecte-toi » au-dessus des widgets goal : auto-masquée quand
+  /// toutes les plateformes des goals sont connectées.
+  aideObjectifs?: boolean;
+  /// Aide « personnalise tes cadres » (presets guidés) : encadré centré
+  /// empilé avec aideFond, auto-masquée à la première ouverture de la
+  /// modale Cadres ou via la croix (dismiss persistant).
+  aideCadres?: boolean;
 }
 
 /// Entrée de l'index des scènes (id + nom seulement, jamais le contenu).
@@ -378,7 +469,6 @@ export interface AlerteTypeConfig {
   actif: boolean;
   duree_ms: number;
   texte_template: string;
-  couleur: string;
   taille_px: number;
   cooldown_viewer_s: number;
   cooldown_global_s: number;
@@ -452,7 +542,6 @@ export interface CommandeConfig {
   duree_ms: number;
   /// Variables : {pseudo} {commande} {message} (reste de la ligne).
   texte_template: string;
-  couleur: string;
   taille_px: number;
   cooldown_viewer_s: number;
   cooldown_global_s: number;
@@ -526,6 +615,21 @@ export interface EcranAttenteConfig {
   minuteur_y: number;
   /// Échelle de la carte minuteur (0.4-3.0). Défaut 1.0.
   minuteur_echelle: number;
+  /// Layout de l'overlay : "signature" (marque StreamOS — Streamy + stries
+  /// néon + wordmark, défaut) | "minimal" (rendu historique).
+  layout: string;
+  /// Centre horizontal de Streamy (px canvas). Défaut 170 (haut-gauche).
+  streamy_x: number;
+  /// Centre vertical de Streamy (px canvas). Défaut 180.
+  streamy_y: number;
+  /// Échelle de Streamy (0.3-2.0). Défaut 0.6.
+  streamy_echelle: number;
+  /// Centre horizontal du wordmark (px canvas). Défaut 960.
+  logo_x: number;
+  /// Centre vertical du wordmark (px canvas). Défaut 140 (haut-centre).
+  logo_y: number;
+  /// Échelle du wordmark (0.3-2.0). Défaut 1.0.
+  logo_echelle: number;
 }
 
 /// Snapshot complet (config + runtime) : commande `ecran_attente_etat` +
@@ -536,6 +640,33 @@ export interface EcranAttenteEtat {
   en_pause: boolean;
   /// Secondes restantes (détenues par Rust — le dashboard reflète).
   temps_restant: number;
+}
+
+// ===== Types Just Chatting (mirroir des structs Rust just_chatting.rs) =====
+
+/// Rectangle en FRACTIONS du canvas (0–1) — converti en pixels côté
+/// diffusion/dashboard (× canvasW/H de la scène réelle).
+export interface JcRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/// Paire caméra / chat pour une orientation.
+export interface JcLayout {
+  camera: JcRect;
+  chat: JcRect;
+}
+
+/// Snapshot JC : commande `just_chatting_etat` + event `just-chatting:etat`
+/// + charge utile de la frame WS `just-chatting-etat`. Les deux orientations
+/// sont calculées en Rust (formule unique) ; on choisit selon canvasW/H
+/// (paysage si W >= H). `actif` est runtime, NON persisté — OFF au boot.
+export interface JustChattingEtat {
+  actif: boolean;
+  paysage: JcLayout;
+  portrait: JcLayout;
 }
 
 // ===== Types Diagnostic conso (mirroir des structs Rust conso.rs) =====
@@ -704,8 +835,22 @@ export const tauri = {
 
   /// Synchronise les captures SOS-Trou-* d'OBS avec la scène chargée.
   /// Active + sync transform les items liés, cache les autres. Non-fatal.
-  async sceneSyncCaptures(host: string, port: number, password: string): Promise<void> {
-    await invoke("scene_sync_captures", { host, port, password });
+  /// `scene` optionnel (Just Chatting) : synchronise avec la copie FOURNIE
+  /// au lieu de la scène chargée — jamais écrite côté Rust (état ni disque).
+  async sceneSyncCaptures(host: string, port: number, password: string, scene?: Scene): Promise<void> {
+    await invoke("scene_sync_captures", { host, port, password, scene });
+  },
+
+  // ===== Just Chatting (overlay non-destructif, état runtime non persisté) =====
+
+  /// Snapshot JC (actif + layouts paysage/portrait). OFF au boot.
+  async justChattingEtat(): Promise<JustChattingEtat> {
+    return invoke<JustChattingEtat>("just_chatting_etat");
+  },
+
+  /// Active ou coupe le mode. N'écrit pas la scène, pas de JSON.
+  async justChattingSetActif(actif: boolean): Promise<void> {
+    await invoke("just_chatting_set_actif", { actif });
   },
 
   // ===== Scènes (v0.14) =====
@@ -801,6 +946,19 @@ export const tauri = {
   /// Marque l'onboarding comme fait (choix preset OU page vierge).
   async onboardingMarquerFait(): Promise<void> {
     await invoke("onboarding_marquer_fait");
+  },
+
+  // ===== Langue UI (i18n dashboard) =====
+
+  /// Langue persistée dans langue.json. null = jamais choisie → le front
+  /// détecte navigator.language (fallback "fr").
+  async langueEtat(): Promise<string | null> {
+    return invoke<string | null>("langue_etat");
+  },
+
+  /// Persiste la langue de l'UI (langue.json).
+  async langueSauver(langue: string): Promise<void> {
+    await invoke("langue_sauver", { langue });
   },
 
   // ===== Sources OBS "trou" (Lot 2) =====
@@ -912,6 +1070,27 @@ export const tauri = {
   /// la recréation du widget le réutilisera. Non-fatal si l'item est absent.
   async cameraHide(host: string, port: number, password: string): Promise<void> {
     await invoke("camera_hide", { host, port, password });
+  },
+
+  /// Découpe "SOS-Caméra" + "SOS-Caméra-Fond" à la forme du cadre SVG du
+  /// widget caméra (filtre OBS « Image mask/Blend » + PNG régénéré côté
+  /// Rust dans <data>/obs). points = polygone widget-local
+  /// (pointsClipPathCadre — même forme que le trou destination-out de
+  /// diffusion.html) ; null = cadre sans forme → filtres retirés, caméra
+  /// rectangulaire. fit/zoom = mêmes valeurs que l'item obsSyncTrous de la
+  /// caméra. Retourne false si la source n'était pas encore prête (capteur
+  /// en démarrage) → ne pas mettre en cache, retenter au prochain commit.
+  async cameraMaskSync(
+    host: string,
+    port: number,
+    password: string,
+    points: [number, number][] | null,
+    w: number,
+    h: number,
+    fit: string,
+    zoom: number
+  ): Promise<boolean> {
+    return invoke<boolean>("camera_mask_sync", { host, port, password, points, w, h, fit, zoom });
   },
 
   // ===== Alertes (follow/raid/sub/resub/subgift/bits) =====
@@ -1444,6 +1623,169 @@ export const tauri = {
     return invoke<boolean>("twitch_envoyer_commande_chat", { commande });
   },
 
+  // ===== Contrôles en direct Twitch (Helix — section « En direct ») =====
+  // Erreur "need_reauth" si 403 (scopes manquants → bandeau de reconnexion).
+
+  /// Infos de la chaîne : titre, game_id/game_name, tags.
+  async twitchLiveChannelInfo(): Promise<{
+    title: string;
+    game_id: string;
+    game_name: string;
+    tags: string[];
+  }> {
+    return invoke("twitch_live_channel_info");
+  },
+
+  /// Modifier titre/catégorie/tags — PATCH partiel : un champ absent
+  /// (undefined) n'est pas envoyé à Helix. tags n'est jamais un tableau vide.
+  async twitchLiveMajChannel(opts: {
+    title?: string;
+    gameId?: string;
+    tags?: string[];
+  }): Promise<void> {
+    await invoke("twitch_live_maj_channel", opts);
+  },
+
+  /// Recherche de catégorie (suggestions jeu).
+  async twitchLiveSearchCategories(
+    query: string
+  ): Promise<{ id: string; name: string; box_art_url: string }[]> {
+    return invoke("twitch_live_search_categories", { query });
+  },
+
+  /// Infos d'un jeu par id (jacquette) : GET /games?id=<id>. Sert à
+  /// récupérer box_art_url quand la section s'ouvre avec un game_id déjà
+  /// connu — la recherche ci-dessus reste la source au choix. null si
+  /// l'id n'existe plus côté Twitch.
+  async twitchLiveGameInfo(
+    gameId: string
+  ): Promise<{ id: string; name: string; box_art_url: string } | null> {
+    return invoke("twitch_live_game_info", { gameId });
+  },
+
+  /// Recherche de chaîne (suggestions raid).
+  async twitchLiveSearchChannels(query: string): Promise<
+    {
+      id: string;
+      login: string;
+      display_name: string;
+      is_live: boolean;
+      thumbnail_url: string;
+    }[]
+  > {
+    return invoke("twitch_live_search_channels", { query });
+  },
+
+  /// Créer un marqueur de stream (description optionnelle).
+  /// Échoue hors-ligne (message Helix, pas de retry).
+  async twitchLiveMarker(description?: string): Promise<void> {
+    await invoke("twitch_live_marker", { description });
+  },
+
+  /// Lancer une pub — durées Helix uniquement : 30/60/90/120/150/180.
+  async twitchLivePub(duree: number): Promise<void> {
+    await invoke("twitch_live_pub", { duree });
+  },
+
+  /// Lancer un raid vers un login (résolution côté Rust).
+  async twitchLiveRaidLancer(login: string): Promise<void> {
+    await invoke("twitch_live_raid_lancer", { login });
+  },
+
+  /// Annuler le raid en cours.
+  async twitchLiveRaidAnnuler(): Promise<void> {
+    await invoke("twitch_live_raid_annuler");
+  },
+
+  /// Modes de chat actuels (GET /chat/settings).
+  async twitchLiveChatSettings(): Promise<{
+    emote_mode: boolean;
+    follower_mode: boolean;
+    follower_mode_duration: number | null;
+    slow_mode: boolean;
+    slow_mode_wait_time: number | null;
+    subscriber_mode: boolean;
+  }> {
+    return invoke("twitch_live_chat_settings");
+  },
+
+  /// Modifier les modes de chat — PATCH partiel : seuls les champs présents
+  /// sont envoyés. Les clés internes restent snake_case (format Helix).
+  /// Bornes : slow_mode_wait_time 3–120 s, follower_mode_duration 0–129600 min.
+  async twitchLiveChatSettingsMaj(settings: {
+    emote_mode?: boolean;
+    follower_mode?: boolean;
+    follower_mode_duration?: number;
+    slow_mode?: boolean;
+    slow_mode_wait_time?: number;
+    subscriber_mode?: boolean;
+  }): Promise<void> {
+    await invoke("twitch_live_chat_settings_maj", { settings });
+  },
+
+  /// Envoyer une annonce colorée (blue|green|orange|purple|primary).
+  async twitchLiveAnnonce(message: string, couleur: string): Promise<void> {
+    await invoke("twitch_live_annonce", { message, couleur });
+  },
+
+  /// Shield Mode actif ?
+  async twitchLiveShieldStatus(): Promise<boolean> {
+    return invoke<boolean>("twitch_live_shield_status");
+  },
+
+  /// Activer/désactiver le Shield Mode (confirmation UI avant activation).
+  async twitchLiveShieldSet(actif: boolean): Promise<void> {
+    await invoke("twitch_live_shield_set", { actif });
+  },
+
+  /// Demandes d'unban en attente (status=pending).
+  async twitchLiveUnbanRequests(): Promise<
+    {
+      id: string;
+      user_id: string;
+      login: string;
+      display_name: string;
+      text: string;
+      created_at: string;
+    }[]
+  > {
+    return invoke("twitch_live_unban_requests");
+  },
+
+  /// Approuver/refuser une demande d'unban.
+  async twitchLiveUnbanResoudre(
+    unbanRequestId: string,
+    approuver: boolean
+  ): Promise<void> {
+    await invoke("twitch_live_unban_resoudre", { unbanRequestId, approuver });
+  },
+
+  /// Autoriser/refuser un message retenu par AutoMod (file EventSub).
+  async twitchLiveAutomodResoudre(
+    msgId: string,
+    autoriser: boolean
+  ): Promise<void> {
+    await invoke("twitch_live_automod_resoudre", { msgId, autoriser });
+  },
+
+  /// Télécharge la jacquette du jeu dans medias/jacquette-<gameId>.jpg
+  /// (écrasée à chaque pose). Commande dédiée — gardes côté Rust : hôte
+  /// figé static-cdn.jtvnw.net, JPEG par magic bytes, taille plafonnée.
+  /// Retourne le chemin relatif "medias/...jpg" à poser sur le widget.
+  async twitchLivePoserJacquette(
+    boxArtUrl: string,
+    gameId: string
+  ): Promise<string> {
+    return invoke("twitch_live_poser_jacquette", { boxArtUrl, gameId });
+  },
+
+  /// Creator Goals Twitch déclarés (GET /goals — objectifs actifs, un par
+  /// type max). Relu à chaque appel (zéro persistance). 403 = vieux token
+  /// sans channel:read:goals → erreur NeedReauth côté UI (reconnexion).
+  async twitchGoalsLister(): Promise<TwitchGoal[]> {
+    return invoke<TwitchGoal[]>("twitch_goals_lister");
+  },
+
   // ===== Clips de bienvenue (welcome) =====
 
   /// État courant de la file d'attente (clip en cours + queue + config globale).
@@ -1657,21 +1999,11 @@ export const tauri = {
     await invoke("speedrun_maj_settings_asl", { valeurs });
   },
 
-  /// Lit la baseline sauvegardée d'un .lss (temps de split cumulés en secondes
-  /// par segment, null = pas de données). Référence « dernière fois » de la
-  /// colonne delta — vide si aucune run enregistrée pour ce .lss.
-  async speedrunBaselineLire(cheminLss: string): Promise<(number | null)[]> {
-    return invoke<(number | null)[]>("speedrun_baseline_lire", { cheminLss });
-  },
-
-  /// Enregistre le temps cumulé (secondes) d'un split réalisé dans la
-  /// baseline du .lss — devient la référence du prochain run.
-  async speedrunBaselineEnregistrer(
-    cheminLss: string,
-    index: number,
-    cumulSecs: number
-  ): Promise<void> {
-    await invoke("speedrun_baseline_enregistrer", { cheminLss, index, cumulSecs });
+  /// Clic sur une ligne de split : arme l'index si le timer est arrêté
+  /// (le prochain start ASL/manuel part de là), sinon saute à l'index en
+  /// retry de segment (tous les temps de la tentative effacés).
+  async speedrunAllerSplit(index: number): Promise<void> {
+    await invoke("speedrun_aller_split", { index });
   },
 
   // ===== Diagnostic consommation (modale Diagnostic — polling 1 Hz) =====

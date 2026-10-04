@@ -7,6 +7,7 @@
   import { deleteWidget, selectedIdStore as selId } from "../stores/scene";
   import { get } from "svelte/store";
   import Modal from "./Modal.svelte";
+  import { t } from "../stores/langue";
 
   let open = $derived($confirmDeleteWidget);
 
@@ -34,11 +35,11 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if open}
-  <Modal title="Supprimer ce widget ?" onClose={onCancel} maxWidth="24rem" hint="Cette action est irréversible.">
+  <Modal title={$t("confirmSupprWidget.titre")} onClose={onCancel} maxWidth="24rem" hint={$t("confirmSupprWidget.hint")}>
     <div class="confirm-body">
       <div class="modal-actions confirm-actions">
-        <button class="modal-action danger" onclick={onConfirm}>Oui</button>
-        <button class="modal-action" onclick={onCancel}>Non</button>
+        <button class="modal-action danger" onclick={onConfirm}>{$t("commun.oui")}</button>
+        <button class="modal-action" onclick={onCancel}>{$t("commun.non")}</button>
       </div>
     </div>
   </Modal>

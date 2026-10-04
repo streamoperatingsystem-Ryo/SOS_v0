@@ -10,6 +10,7 @@
   import { dupliquerSceneModalOpen } from "../stores/ui";
   import { scenesIndexStore, duplicateScene } from "../stores/scenes";
   import Modal from "./Modal.svelte";
+  import { t } from "../stores/langue";
 
   let sourceId = $derived($dupliquerSceneModalOpen);
   let source = $derived(
@@ -18,7 +19,7 @@
 
   // Suggestion : « <nom source> 2 », incrémentée tant que le nom est pris.
   let suggestion = $derived.by(() => {
-    const base = source?.nom ?? "Scène";
+    const base = source?.nom ?? $t("dupliquerModal.nomDefaut");
     const pris = new Set($scenesIndexStore.map((s) => s.nom.trim()));
     let n = 2;
     while (pris.has(`${base} ${n}`)) n += 1;
@@ -60,16 +61,16 @@
 
 {#if sourceId}
   <Modal
-    title="Dupliquer la scène"
+    title={$t("dupliquerModal.titre")}
     onClose={fermer}
     maxWidth="420px"
     hint={source
-      ? `Copie de « ${source.nom} » — reprend tout le contenu (widgets, fond, cadre) et devient la scène courante.`
-      : "La copie reprend tout le contenu de la scène et devient la scène courante."}
+      ? $t("dupliquerModal.hintNom", { nom: source.nom })
+      : $t("dupliquerModal.hintGenerique")}
   >
     <div class="dupliquer-corps">
       <div class="nom-row">
-        <label for="dupliquer-nom">Nom</label>
+        <label for="dupliquer-nom">{$t("commun.nom")}</label>
         <input
           id="dupliquer-nom"
           bind:this={inputEl}
@@ -88,10 +89,10 @@
       </div>
       <div class="modal-actions">
         <button class="modal-action" onclick={fermer} disabled={occupe}>
-          Annuler
+          {$t("commun.annuler")}
         </button>
         <button class="modal-action primary" onclick={() => void onValider()} disabled={occupe}>
-          Dupliquer
+          {$t("commun.dupliquer")}
         </button>
       </div>
     </div>

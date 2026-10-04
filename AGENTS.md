@@ -71,9 +71,12 @@ npm run tauri dev                    # dev complet (Rust + frontend)
   `moderator:read:followers`, `channel:read:subscriptions`,
   `user:read:broadcast`, `moderator:manage:banned_users`, `moderation:read`,
   `channel:read:vips`, `channel:manage:vips`, `channel:manage:moderators`,
-  `moderator:manage:chat_messages`.
+  `moderator:manage:chat_messages` + les scopes « En direct » listés dans la
+  section « Contrôles Twitch « En direct » » plus bas.
   Token stocké dans keyring (Windows native).
-- **Chat** : IRC sur WebSocket `wss://irc-ws.chat.twitch.tv:443` (tags IRCv3).
+- **Chat** : IRC sur WebSocket `wss://irc-ws.chat.twitch.tv:443` (capabilities
+  `twitch.tv/tags` + `twitch.tv/commands` — commands requis pour recevoir
+  les USERNOTICE sub/resub/subgift/raid, sinon jamais envoyés par Twitch).
   PING/PONG réactif (le serveur envoie PING, on répond PONG immédiatement —
   pas de timer) + Pong natif au niveau frame WebSocket.
 - **Follows** : EventSub WebSocket `channel.follow` v2 (`twitch_eventsub.rs`,
@@ -117,6 +120,51 @@ npm run tauri dev                    # dev complet (Rust + frontend)
 - **Auto-resume** : lit `tiktok.json` au boot → WS direct.
 - **Dépendance** : `piratetok-live-rs` vendored dans `vendor/piratetok-live-rs/` (build.rs neutralisé — bug Windows path separators).
 
+## Contrôles Twitch « En direct » — modale Modération (Helix)
+
+Section « En direct » de l'onglet Twitch de `ModerationModal.svelte`
+(master-detail, comme Communauté/VIPs/Bannis). Store `stores/twitchLive.ts`,
+commandes `twitch_live_*` dans `lib.rs`, helpers Helix dans
+`twitch_helix.rs`. **Helix uniquement — jamais IRC** pour ces actions.
+
+- **Scopes ajoutés** (concaténés dans `SCOPES`, twitch_auth.rs) :
+  `channel:manage:broadcast` (PATCH /channels + POST /streams/markers),
+  `channel:edit:commercial`, `channel:manage:raids`,
+  `moderator:read:chat_settings` + `moderator:manage:chat_settings`,
+  `moderator:manage:announcements`, `moderator:read:shield_mode` +
+  `moderator:manage:shield_mode`, `moderator:manage:automod`,
+  `moderator:read:unban_requests` + `moderator:manage:unban_requests`.
+  ⚠️ Un token déjà en keyring n'a PAS ces scopes → Helix 403 = `need_reauth`
+  → l'utilisateur relance le device flow au clic (jamais automatique, le
+  keyring n'est pas effacé tant qu'il n'a pas choisi de se reconnecter).
+- **Pub** : POST `/channels/commercial` + scope `channel:edit:commercial`.
+  `/channels/ads` = planning de pubs (Get Ad Schedule / snooze) — NE PAS
+  l'utiliser pour lancer une pub. Durées figées : 30/60/90/120/150/180 s.
+- **File AutoMod** : EventSub `automod.message.hold` / `automod.message.update`
+  v1 sur la socket `twitch_eventsub.rs` existante. Souscription ISOLÉE après
+  l'abonnement follows (qui reste fatal) : hors du `?`, un échec ne coupe ni
+  la socket ni les follows ; un 403 émet `twitch:need_reauth` sans effacer le
+  keyring ; 409 = déjà actif = succès. Actions : POST
+  `/moderation/automod/message` (ALLOW/DENY). Pas de GET de file — cet
+  endpoint n'existe pas dans Helix.
+- **Shield Mode** : PUT `/moderation/shield_mode` UNIQUEMENT après
+  confirmation explicite dans l'UI — l'activation vide le chat et force les
+  modes AutoMod (le texte de confirmation le dit).
+- **`parse_resp` (twitch_helix.rs)** : corps vide / 204 → `Value::Null` AVANT
+  le parse JSON — PATCH /channels, POST /chat/announcements et DELETE /raids
+  répondent 204 No Content.
+- **Zéro persistance** : Helix relu à l'ouverture de la section, rien sur
+  disque. Aucun contrôle Helix ne touche la scène ni OBS — **seule
+  exception** : le bouton « Poser sur le layout » (jacquette du jeu
+  courant, choisie via la recherche de catégorie ou le `game_id` relu).
+  `twitch_live_poser_jacquette` (lib.rs) télécharge le JPEG avec gardes
+  AVANT la requête (schéma https + hôte figé `static-cdn.jtvnw.net`,
+  `game_id` alphanumérique ; corps ≤ `MAX_IMG_BYTES` et magic bytes
+  FF D8 FF vérifiés) dans `medias/jacquette-<game_id>.jpg` (écrasé à
+  chaque pose), puis `poserJacquette` (stores/scene.ts) fait l'upsert du
+  widget média dédupliqué par nom de fichier — un second clic met à jour,
+  n'empile pas — + UN seul `commitScene`.
+
 ## Architecture chat — flux des messages
 
 ```
@@ -133,6 +181,9 @@ struct ChatMessage {
     texte: String,
     badges: Option<...>,
     avatar: Option<String>,
+    color: Option<String>,      // tag IRCv3 color (Twitch)
+    message_id: Option<String>, // suppression Helix (Twitch)
+    emotes: Option<Vec<EmoteSeg>>, // emotes Twitch (officielles + tierces)
 }
 ```
 
@@ -143,6 +194,19 @@ retire les nœuds correspondants dans chaque widget filtré. `fillChatBody`
 (rebuild complet) reste le chemin des changements rares : création du widget,
 changement de filtre/taille/cadre (le border-image inline suit le gradient
 du cadre — CEF ne recalcule pas les var() en dynamique).
+
+**Emotes Twitch (twitch_emotes.rs)** : au démarrage de la tâche IRC, une
+tâche parallèle charge les listes BTTV/7TV/FFZ (global + chaîne, APIs
+publiques sans auth — 404 = chaîne non inscrite, non-fatal) dans un
+`Arc<RwLock<CacheEmotes>>`. Par PRIVMSG, `construire_segments` produit des
+`EmoteSeg { debut, fin, url, nom }` : les emotes **officielles** viennent du
+tag IRC `emotes` (positions en **codepoints Unicode**, converties en UTF-16
+pour `String.slice` JS — fin exclusive) ; les **tierces** sont matchées par
+mot dans les zones non couvertes (priorité BTTV > 7TV > FFZ, case-sensitive,
+ponctuation collée acceptée). `diffusion.html` et `chat-popout.html` rendent
+`<img class="emote">` entre texte échappé (URL contrainte à `https://`,
+XSS-safe). Les émojis Unicode passent en texte brut (transport UTF-8 intact,
+fallback police OS).
 
 ## Compteur viewers — widget chat en diffusion (2026-XX)
 
@@ -229,6 +293,100 @@ touche pas la file d'alertes globale.
 par `GOAL_METRIQUES`), champ Cible, bouton **Suggérer** (palier sur valeur
 live, `N/A` si non mesurée). `Toolbar` → « Créer un widget objectif ».
 
+### Mode lié — Creator Goals Twitch déclarés (2026-10-03)
+
+> Le widget peut aussi être LIÉ à un Creator Goal déclaré par le streamer
+> dans son Creator Dashboard Twitch — actuel/cible/description tenus par
+> Twitch sur les vrais events, pas par une cible locale. **Twitch
+> uniquement** : aucune API d'objectifs chez YouTube/Kick/TikTok → le mode
+> manuel reste leur seule option (et le fallback si goalId est retiré).
+> ⚠️ Aucune API d'écriture : les goals se déclarent côté Twitch, jamais
+> depuis StreamOS. GET /goals ne retourne que les objectifs ACTIFS.
+
+- **Widget** : `goalId: Option<String>` (scene.rs + tauri.ts, serde default
+  → rétro-compat). Some = mode lié (`goalMetrique`/`goalCible` ignorés,
+  gardés comme fallback à la déliaison). `goalId: undefined` = délier.
+  Changer de plateforme hors Twitch purge `goalId` (CarteEdition).
+- **Scope** : `channel:read:goals` ajouté à `SCOPES` (twitch_auth.rs) →
+  tokens en keyring SANS ce scope → 403 → `need_reauth` (même mécanique que
+  les sections « En direct » : emit `twitch:need_reauth`, keyring conservé,
+  reconnexion device flow au choix de l'utilisateur).
+- **Helix** (`twitch_helix.rs`) : `CreatorGoal { id, goal_type, description,
+  actuel, cible, atteint, termine }` — vocabulaire partagé commande Tauri +
+  frame WS, zéro mapping. `creator_goals()` = GET /goals (`atteint` dérivé
+  actuel≥cible). `eventsub_abonner_goals()` = channel.goal.begin/progress/
+  end v1 — condition `broadcaster_user_id` SEULE (pas de moderator_user_id,
+  contrairement à follows/automod).
+- **EventSub** (`twitch_eventsub.rs`) : 3ᵉ abonnement isolé non-fatal après
+  follows (fatal) et automod (isolé). Notifications `channel.goal.*` →
+  `viewers::on_goal_event` (is_achieved null sur begin/progress → dérivé ;
+  verdict final sur end).
+- **Frames** (`viewers.rs`) : `{"type":"goal-twitch","id","goal_type",
+  "description","actuel","cible","atteint","termine"}` sur chat_tx + emit
+  `goal-twitch` miroir → `stores/objectifs.ts` `goalsTwitch` (id→goal).
+  Deux sources : EventSub (temps réel) ET poll GET /goals au tick twitch
+  (secours + late-joiners :4321). Dedup par tuple dans `goals_publies` ;
+  disparus du GET → frame `termine:true` (goal fini/supprimé raté par
+  EventSub). Un `termine` n'efface pas la map.
+- **Atteinte liée** : `verifier_objectifs_goals` réutilise
+  `evaluer_objectif` mais avec clé `widget_id:goal_id` (relier un AUTRE
+  goal réarme la célébration ; le retain teste le préfixe avant `:`).
+  `verifier_objectifs` (manuel) SKIP les widgets avec goalId.
+- **Commande** `twitch_goals_lister` (lib.rs) : GET /goals pour la
+  CarteEdition — zéro persistance, relu à chaque ouverture.
+- **CarteEdition** : section « Objectifs Twitch » visible si plateforme
+  twitch — auto-fetch à l'ouverture (`$effect`), lignes cliquables
+  (description || label type, actuel/cible live via goalsTwitch, barre,
+  badges Lié/Terminé) ; clic = lier, re-clic = délier (toggle). États :
+  non-connecté / chargement / need_reauth (bouton « Reconnecter Twitch »
+  → connecterTwitch) / erreur (bouton Recharger) / vide (hint Creator
+  Dashboard). Mode lié : contrôles manuels masqués + « Délier » + hint
+  goalDisparu si le goal n'est plus actif.
+- **Diffusion** (`diffusion.html`) : `goalsTwitchMap` (id→goal) rempli par
+  le handler `goal-twitch` ; `majGoalValeur` branche liée (label =
+  description, `Terminé` dans `.goal-statut`, `goal-plein` sur pct 100) ;
+  `majGoalWidgets` exclut les liés (sinon les frames communaute
+  écraseraient l'affichage) ; `gKey` inclut `goalId` (rebuild entête au
+  lier/délier) ; `goalLabelEntete` « Objectif Twitch » en attente de la
+  1re frame.
+- **i18n** : `goal.ttype.*` (7 types Helix : follower, subscription(_count),
+  new_subscription(_count), new_bit, new_cheerer) + `carteEdition.goals*`
+  dans fr/en/es/it/zh — fr.json source de vérité.
+
+## Ordre de plan (z) des widgets — boutons −/+ au survol (2026-10-03)
+
+> Réordonnancement z par l'utilisateur : tout au premier plan / tout en
+> arrière-plan, via boutons au survol + entrées du menu contextuel widget.
+> **Zéro Rust** — `Widget.z` est un champ JSON comme un autre ; côté
+> diffusion le z est « style seulement » au snapshot (`zIndex = w.z` sur le
+> wrap), jamais de rebuild.
+
+- **Bande normale 0..N-1** (widgets non-caméra). Création/duplication :
+  `z = max(non-caméra)+1` (trous possibles après delete). `mettreWidgetPlan`
+  **renumérote la bande à chaque appel** → z contigus, trous comblés, borne
+  basse ≥ 0 garantie (un z < 0 passerait SOUS `.bg-layer` z:0 en dashboard).
+- **Caméra EXCLUE** : plage réservée z=5000 (sous les overlays autonomes
+  diffusion 9995-9999 — welcome 9999, alertes 9997, commandes 9996).
+  `mettreWidgetPlan(id)` est no-op sur la caméra ; boutons et entrées de
+  menu masqués pour elle (`wgType !== "camera"` / `!isCamera`).
+- **`mettreWidgetPlan(id, "avant" | "arriere")`** (`stores/scene.ts`) : tri
+  par z (stable), splice + push/unshift, réassignation z=index, puis
+  `commitScene` (save + snapshot :4321 — sync trous/caméra inchangée).
+  ⚠️ Effet de bord voulu : un widget `trou` masque « fond + widgets
+  dessous » → remonter/descendre un trou change ce qui est visible à
+  travers lui.
+- **Boutons −/+** (`Widget.svelte`, bloc `.z-controls`) : badge flottant
+  AU-DESSUS du coin supérieur droit, visible au `:hover` du widget —
+  dashboard uniquement, jamais en diffusion. `transform: scale(1/scale)`
+  inline → taille écran constante quel que soit le zoom canvas ; ronds
+  ambre `--message-user-action-color` ; `pointer-events:none` au repos +
+  masqué pendant `.dragging` ; `stopPropagation` pointerdown/dblclick (pas
+  de drag/sélection/modale titres/morph) ; `disabled` aux extrémités de la
+  bande non-caméra (un widget à égalité de z peut encore bouger).
+- **Menu contextuel widget** (`Canvas.svelte`, clic droit) : entrées
+  `carteEdition.premierPlan` / `carteEdition.arrierePlan` après « Dupliquer »
+  — action → ferme le menu (pattern établi, pas de disabled dans `.ctx-item`).
+
 ## État partagé (tauri::State)
 
 | State         | Champs clés                          | Commandes associées |
@@ -249,6 +407,37 @@ live, `N/A` si non mesurée). `Toolbar` → « Créer un widget objectif ».
 | `tiktok.ts`   | `connecterTiktok`, `deconnecterTiktok`, `lireUsernameSauve` |
 | `communaute.ts`| Followers/subs/viewers (Twitch Helix + YouTube Data API). Affichage intégré dans la modale Modération & Rôles (onglet Twitch → section « Communauté » lecture seule ; onglet YouTube activé). Chargement réactif dans `App.svelte` ($effect sur `connexions.twitch`/`connexions.youtube`). |
 | `presets.ts`   | Galerie de scènes modèles : `presetsStore`, `chargerPresets`, `creerSceneDepuisPreset` (NOUVELLE scène), `initialiserSceneDepuisPreset` (onboarding + recharge UI + sceneSyncCaptures). |
+| `langue.ts`    | Store i18n : `langue`, `t` (traducteur `$t("cle")` / `get(t)("cle")`), `localeTag` (toLocaleString), `initLangue`/`setLangue`, `LANGUES`. Voir section i18n + TRADUCTIONS.md. |
+
+## Internationalisation (i18n dashboard) — 2026-09-28
+
+> UI traduisible FR/EN/DE/ES/IT/RU/ZH/JA via dictionnaires JSON — **feuille de route
+> et règles détaillées dans `TRADUCTIONS.md`** (lots d'extraction + traduction
+> pour agents). Périmètre v1 : DASHBOARD UNIQUEMENT (diffusion.html /
+> raccourcis.html / chat-popout.html non traduits).
+
+- **Dictionnaires** : `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` — objets imbriqués
+  par zone (`toolbar.widgets.creer`). **fr.json = source de vérité** : toute
+  clé y existe d'abord ; fallback langue → fr → clé brute.
+- **Store** `stores/langue.ts` : `$t("cle", {vars})` en template Svelte,
+  `get(t)("cle")` en TS ; interpolation `{var}` (jamais de concaténation) ;
+  `localeTag` (derived) remplace les `toLocaleString("fr-FR")` en dur.
+- **Persistance** : `langue.json` via commandes `langue_etat`/`langue_sauver`
+  (pattern onboarding — pas de whitelist Rust : ajouter une langue = 1 JSON +
+  entrées `LANGUES`/`LOCALE_TAGS`/`DICTS` dans langue.ts, zéro Rust).
+- **Sélecteur** : bouton « Langue » topbar (groupe outils à droite,
+  `.langue-btn`) + dropdown `.langues-dropdown` — **recette `.ctx-menu` /
+  `.ctx-item`** (app.css, même look que les menus clic droit ; seul
+  l'ancrage diffère : absolu sous le bouton vs fixed à la souris).
+  Chaque item affiche un mini-drapeau SVG (`Drapeau.svelte` — pas
+  d'emoji drapeau, non rendus sous WebView2/Windows). Fermeture par
+  sélection / clic extérieur `fermerLangues` / Escape `onSupprKey`.
+  Noms de langues NATIFS, jamais traduits. Ordre figé : **en, fr, zh**
+  en tête, puis de, es, it, ru, ja.
+- **Détection au boot** (`initLangue`, onMount App.svelte étape 0b) :
+  langue.json → navigator.language (préfixe 2) → "fr".
+- **Ne PAS traduire** (liste fermée — détails dans TRADUCTIONS.md) : marques,
+  contenu utilisateur, valeurs techniques, `src-tauri/`, pages OBS, commentaires.
 
 ## Persistance (config.rs)
 
@@ -267,8 +456,8 @@ PAS "StreamOS" ; `config.rs` → `app_data_dir()`) :
 - `unfollows.json` — historique append-only des unfollows détectés (user_id, login, date_unfollow). Dédupliqué par user_id.
 - `raccourcis.json` — `{ "visible": bool, "bord": "gauche|droite|haut|bas", "monitor_index": n }` (barre de raccourcis)
 - `onboarding.json` — `{ "fait": true }` (présence de la galerie de presets au 1er lancement ; absent = premier démarrage)
+![alt text](image.png)- `langue.json` — `{ "langue": "fr" }` (langue UI du dashboard — i18n, voir section dédiée)
 - `telemetrie/events.jsonl` — journal append-only des événements télémétrie (schéma v1, voir section dédiée)
-- `speedrun_baselines.json` — référence « dernière fois » du splitter : temps de split **cumulés** (secondes) par segment, keyed par chemin .lss. Mis à jour à chaque split réalisé ; mergé avec les PB du .lss pour la colonne delta (voir section Speedrun).
 - `ecran_attente.json` — config de l'écran d'attente BRB (duree_s, titre,
   afficher_titre, son, volume, media/kind/nom, source_audio OBS)
 - `scenes/` — scènes SOS (JSON)
@@ -428,9 +617,11 @@ Dialog fichier (mp4/webm/mkv + images) → validate_and_copy_media (lib.rs)
   Windows x64). **Exclu de git** (`.gitignore` `src-tauri/binaries/`) — chaque
   env dev/CI doit le fournir (build statique gyan.dev ffmpeg-release-essentials).
 - Permission : `shell:allow-execute` pour `binaries/ffmpeg` (capabilities).
-- `remux_to_mp4` est blocking sync mais tourne sur un thread worker Tauri (pas
-  le thread UI) → pas de gel du dashboard. Remux `-c copy` d'un fichier ≤80 Mo
-  prend quelques secondes (I/O bound).
+- `remux_to_mp4` est blocking sync, exécuté via les commandes d'import
+  `async` + `spawn_blocking` (pool bloquant Tokio — plus sur le thread UI ;
+  avant 2026-09-27 elles étaient `fn` sync = thread principal → gel
+  « Ne répond plus »). Remux `-c copy` d'un fichier ≤80 Mo prend quelques
+  secondes (I/O bound).
 
 ### Limitations
 
@@ -450,31 +641,107 @@ Dialog fichier (mp4/webm/mkv + images) → validate_and_copy_media (lib.rs)
 > 3. **Delete → `SetSceneItemEnabled(false)` sur l'item, JAMAIS `RemoveInput`** — l'input OBS est conservé (conflits d'accès exclusif du capteur Windows, perte des settings OBS). Recréation = réutilisation de l'input + réactivation de l'item.
 > 4. **Device change → `SetInputSettings video_device_id` seulement si `apply_device == true`** (jamais au boot — pas de restart du capteur dshow).
 > 5. **Diffusion = trou + cadre SVG, dashboard = placeholder 📷, pas de getUserMedia** — le widget caméra passe par le chemin trou de `diffusion.html` (`renderScene` + `peindreFond` : `w.trou === true || w.type === "camera"`).
-> 6. **Transform = sémantique `sync_trous`** : position = centre du widget, bounds w×h, `OBS_BOUNDS_SCALE_OUTER` (cover), alignment 0 → aucun saut entre create et move/resize.
+> 6. **Transform = sémantique `sync_trous`** : position = centre du widget, bounds w×h, `OBS_BOUNDS_SCALE_OUTER` (cover), alignment 0 → aucun saut entre create et move/resize. **+ crop ratio w/h** (`crop_source`, 2026-10-01) : SCALE_OUTER sans crop déborde de la boîte quand le ratio capteur ≠ ratio widget, et obs-websocket n'expose pas « rogner selon la boîte » → crop explicite calculé depuis `sourceWidth/Height`.
+> 7. **Masque = filtre OBS sur la SOURCE, jamais de rustine diffusion.html** (2026-09-29) : `SOS-Caméra` ET `SOS-Caméra-Fond` sont découpés à la forme du cadre SVG via le filtre « Image mask/Blend » (**`mask_filter_v2`**, mode alpha) — le débord du rectangle caméra ne peut plus apparaître à travers les autres trous (jeu) ni sans média de fond.
+> 8. **Bloc SOS tout en HAUT de la scène OBS, SAUF `SOS-Fond-*`** (2026-10-01) : `reorder_sos_sources` part de l'index max de la scène (`arr.len()-1`), pas du nombre d'items SOS — sinon le bloc se range en bas et toute source utilisateur passe devant SOS-Diffusion. Les `SOS-Fond-*` (captures plein canvas) restent aux indices 0..F-1, tout en bas : au-dessus des sources utilisateur, elles les couvriraient entièrement.
+
+### ⚠️ Pièges obs-websocket v5 — NE JAMAIS RÉINTRODUIRE (2026-10-01)
+
+> Trois bugs silencieux découverts ensemble (symptômes : angle droit de la
+> caméra visible dans le trou jeu en dessous, puis « voile noir » sur la
+> caméra). Tous dans `obs_trou.rs`, tous vérifiés par mesure réelle sur
+> OBS 32.2.2 / obs-websocket 5.7.4.
+
+1. **`GetSceneItemTransform` répond `{ "sceneItemTransform": { sourceWidth, sourceHeight, … } }`** —
+   un niveau d'imbrication. Lire `resp["sourceWidth"]` à la racine renvoie
+   toujours 0 → crop zoom, crop ratio et masque silencieusement inopérants
+   (log `masque: « SOS-Caméra-Fond » sans taille de base → skip` alors qu'une
+   color_source a TOUJOURS une taille = signal de ce bug).
+2. **Deux kinds de filtre masque** (`GetSourceFilterKindList`) : `mask_filter`
+   = **v1 OBSOLÈTE, `opacity` ENTIER 0-100** ; `mask_filter_v2` = `opacity`
+   double 0-1. Créer `mask_filter` avec `opacity: 1.0` → lu comme **1 %** →
+   source quasi transparente, plaque noire visible à travers. Toujours
+   `SOS_MASQUE_KIND = "mask_filter_v2"` ; un filtre d'un autre kind est retiré
+   puis recréé (le kind ne se change pas par `SetSourceFilterSettings`).
+3. **`SetSceneItemIndex` : index 0 = bas, max = haut** — le reorder doit
+   partir de `arr.len()-1` (taille totale de la scène) pour le bloc
+   Diffusion/Caméra/Fond/Trou-* ; les `SOS-Fond-*` occupent explicitement
+   les indices 0..F-1 (plein canvas → ne doivent couvrir aucune source).
+
+> Méthode de vérification sans deviner : `GetSourceScreenshot` de `SOS-Caméra`
+> avec/sans `SetSourceFilterEnabled` et moyenne d'alpha (1,5/255 vs 255 = le
+> filtre est la cause) ; `GetSceneItemList` pour les indices réels.
 
 ### Architecture
 
 ```
 Widget caméra (dashboard) ── commitScene ── obsSyncTrous (item caméra, fit "remplir")
-   │ createCameraWidget / setCameraDevice / deleteWidget
-   │ camera_sync / camera_hide (commandes Tauri)
+   │                             └─ syncCameraMask (cache par forme : move = no-op)
+   │ createCameraWidget / setCameraDevice (forcer) / deleteWidget
+   │ camera_sync / camera_hide / camera_mask_sync (commandes Tauri)
    ▼
 OBS scène "SOS" : [SOS-Diffusion (browser :4321)] ← au-dessus
-                  [SOS-Caméra (dshow_input)]       ← juste dessous
-                  [SOS-Caméra-Fond (color_source)] ← plaque noire
+                  [SOS-Caméra (dshow + filtre SOS-Masque)]  ← juste dessous
+                  [SOS-Caméra-Fond (color + filtre SOS-Masque)] ← plaque noire
                   [SOS-Trou-* (captures)]          ← tout en bas
 diffusion.html : widget caméra = trou dans le canvas de fond (destination-out,
 forme du clip-path du cadre) → la caméra OBS apparaît à travers ; widgets DOM
 chevauchant le rect caméra clippés via clipPath SVG evenodd (#sos-cam-clip).
 ```
 
+### Masque caméra — découpe à la forme du cadre (2026-09-29)
+
+> Problème : la source OBS est un RECTANGLE (AABB du widget, cover) mais le
+> trou visible a la FORME du clip-path du cadre (biseaux cyberpunk…). L'écart
+> n'était masqué que par le canvas de fond opaque → pixels caméra visibles à
+> travers les autres trous (jeu) et sans média de fond (« débordement »).
+
+- **Filtre** : « Image mask/Blend », kind OBS **`mask_filter_v2`**
+  (constant `SOS_MASQUE_KIND` — PAS `mask_filter` v1 : opacity entière 0-100,
+  voir l'encart « Pièges obs-websocket » plus haut), settings
+  `{ type: "mask_alpha_filter.effect", image_path, color: 0xFFFFFF, opacity: 1.0, stretch: true }`
+  — l'alpha du PNG multiplie l'alpha de la source, le PNG est étiré à la
+  taille de BASE de la source (d'où le mapping en pixels source).
+- **Polygone** : `pointsMasqueCamera` (scene.ts) → `pointsClipPathCadre`
+  (cadres/points.ts = `svgPathEnPoints`, port du `svgPathToPoints` de
+  diffusion.html) — **même forme que le trou destination-out**, mêmes
+  conditions (`cadre.actif && strokeWidth > 0 && !sansCadre`), même parser
+  des deux côtés (zéro dérive trou/masque). `carre`/`sansCadre` → null →
+  filtres retirés, caméra rectangulaire.
+- **Mapping** (`obs_trou::points_en_espace_source`) : inverse du pipeline
+  `sync_trous` (`crop_source` = crop zoom centré **+ crop ratio w/h en
+  « remplir »**, puis bounds fit alignés au centre — mêmes valeurs que
+  l'item). La rotation
+  de l'item est ignorée VOLONTAIREMENT : le filtre s'applique avant le
+  transform → la forme tourne avec la source, comme le cadre avec le widget.
+  La position (x, y) n'intervient pas → un move ne change pas le masque.
+- **PNG** : `mask_png.rs` — rasterisation scanline even-odd anti-aliasée
+  (couverture fractionnaire) + encodeur PNG RGBA maison (deflate « stored »,
+  zéro dépendance). Fail-open : entrée invalide → couverture pleine (caméra
+  rectangulaire), jamais de caméra invisible. Fichier versionné par hash
+  sha256 dans `<data>/obs/masque-{camera|fond}-<hash16>.png` (cache d'images
+  OBS contourné par le changement de chemin) + nettoyage des orphelins en
+  gardant les fichiers encore référencés par un filtre.
+- **Commande** `camera_mask_sync` (one-shot) : retour `bool` — `false` =
+  capteur dshow froid (sourceWidth 0, retry 1,2 s inclus) → le dashboard ne
+  met PAS en cache et retente au prochain commit (auto-guérison).
+- **Dashboard** (`scene.ts`) : `syncCameraMask(forcer)` — cache par forme
+  (`cleMasqueCamera` = JSON des points, mémorisé seulement si Rust retourne
+  true) ; fit/zoom = les constantes de l'item caméra de `commitScene`
+  (« remplir »/1, contrat lié). `setCameraDevice` → `forcer` (nouveau device
+  = résolution native potentiellement différente). `syncCapturesOBS()` =
+  sceneSyncCaptures + masque, appelé par les chargements de scène
+  (openScene/duplicateScene/preset/boot/connexion OBS — scenes.ts,
+  presets.ts, App.svelte, Toolbar.svelte).
+
 ### Fichiers
 
-- `src-tauri/src/obs_trou.rs` — `SOS_CAMERA`, `ensure_camera()` (create/enable/transform/index), `camera_sync()`, `camera_hide()` ; `sync_scene_captures()` : ensure caméra (apply_device=false) + cache l'item orphelin si pas de widget caméra.
-- `src-tauri/src/lib.rs` — commandes `camera_sync` (device Option + géométrie) et `camera_hide`.
-- `src/lib/tauri.ts` — wrappers `cameraSync` / `cameraHide`.
-- `src/lib/stores/scene.ts` — `createCameraWidget` (obsSource="SOS-Caméra" + cameraSync non-fatal), `setCameraDevice` (cameraSync avec device), `commitScene` (items incluent la caméra, fit "remplir"), `deleteWidget` (cameraHide avant remove).
-- `src-tauri/resources/diffusion.html` — **PAS de getUserMedia** : le widget caméra est rendu comme un trou (élément transparent + `applyCadreWidget`), trou dans `peindreFond`.
+- `src-tauri/src/obs_trou.rs` — `SOS_CAMERA`, `ensure_camera()` (create/enable/transform/index), `camera_sync()`, `camera_hide()` ; `crop_source()` (crop zoom + crop ratio w/h, partagé par `sync_trous`/`ensure_camera`/`points_en_espace_source`) ; `reorder_sos_sources()` (bloc SOS = HAUT de scène, départ à `arr.len()-1`) ; `sync_scene_captures()` : ensure caméra (apply_device=false) + cache l'item orphelin si pas de widget caméra ; section « Masque caméra » : `camera_mask_sync()` + helpers (`points_en_espace_source`, `appliquer/retirer_filtre_masque` avec migration kind v1→v2, `taille_base_item`).
+- `src-tauri/src/mask_png.rs` — rasterisation polygone (scanline even-odd AA) + encodeur PNG RGBA (deflate stocké) + tests ; `src-tauri/src/lib.rs` — commandes `camera_sync`, `camera_hide`, `camera_mask_sync` (dossier PNG = `config::data_dir/obs`).
+- `src/lib/cadres/points.ts` — `svgPathEnPoints` (port de `svgPathToPoints` de diffusion.html) + `pointsClipPathCadre` (registre → polygone widget-local).
+- `src/lib/tauri.ts` — wrappers `cameraSync` / `cameraHide` / `cameraMaskSync`.
+- `src/lib/stores/scene.ts` — `createCameraWidget` (obsSource="SOS-Caméra" + cameraSync non-fatal), `setCameraDevice` (cameraSync avec device + syncCameraMask forcé), `commitScene` (items incluent la caméra, fit "remplir" + syncCameraMask), `deleteWidget` (cameraHide avant remove), `pointsMasqueCamera`/`syncCameraMask`/`syncCapturesOBS`.
+- `src-tauri/resources/diffusion.html` — **PAS de getUserMedia** : le widget caméra est rendu comme un trou (élément transparent + `applyCadreWidget`), trou dans `peindreFond`. **Aucune modif pour le masque** (découpe au niveau de la source OBS).
 
 ### Anti-patterns à ne JAMAIS réintroduire
 
@@ -483,6 +750,11 @@ chevauchant le rect caméra clippés via clipPath SVG evenodd (#sos-cam-clip).
 3. ❌ `SetInputSettings` au boot (sync_scene_captures) — restart du capteur dshow à chaque ouverture de scène.
 4. ❌ Exclure le widget caméra du cadre SVG ou du trou `peindreFond` — il suit la règle figée des cadres.
 5. ❌ Créer un second input si "SOS-Caméra" existe déjà — CreateSceneItem / SetInputSettings sur l'existant.
+6. ❌ Masquer le débord caméra côté diffusion.html (peindre le fond sur le rect, plaque DOM…) — la découpe se fait au niveau de la SOURCE OBS (crop `crop_source` + filtre SOS-Masque), sinon le débord réapparaît à travers les autres trous.
+7. ❌ Régénérer le masque à chaque move — cache par forme (`cleMasqueCamera`) : le masque est en pixels de la source, indépendant de la position.
+8. ❌ `SCALE_OUTER` (fit « remplir ») sans `crop_source` — la source déborde de la boîte w×h et perce dans tout trou voisin (cf. « Pièges obs-websocket »).
+9. ❌ Kind `mask_filter` (v1) — `opacity` entière, 1.0 = 1 % → voile noir ; toujours `SOS_MASQUE_KIND`.
+10. ❌ Reorder avec `top_to_bottom.len()-1` comme index de départ — range le bloc SOS en BAS de scène ; départ = `arr.len()-1`.
 
 ## Fond de scène = capture OBS (app/jeu) — SOS-Fond-* (2026-09-21)
 
@@ -571,10 +843,22 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
 
 ### Règles et pièges (leçons de l'ancienne app)
 
-1. **USERNOTICE doit être parsé explicitement** dans `twitch_chat.rs` — tombé
-   dans un `_ =>` ignoré, aucun raid/sub n'est jamais émis (bug "raid sans
-   alerte" en live). La détection de commande utilise `irc_command()` (pas
-   `contains` — un message peut contenir le mot "USERNOTICE").
+1. **USERNOTICE exige `CAP REQ :twitch.tv/commands`** — avec `tags` seul,
+   Twitch n'envoie JAMAIS les USERNOTICE : tout le parsing derrière est du
+   code mort (bug "resub sans alerte" en live, corrigé 2026-09-30 — la
+   capability est demandée dans `connect_irc` à chaque connexion). Le test
+   bouton « Test » masque ce bug (il appelle `on_event` sans passer par
+   l'IRC). Le message doit ensuite être **parsé explicitement** dans
+   `twitch_chat.rs` — tombé dans un `_ =>` ignoré, aucun raid/sub n'est
+   jamais émis (bug "raid sans alerte" ancienne app). La détection de
+   commande utilise `irc_command()` (pas `contains` — un message peut
+   contenir le mot "USERNOTICE"). msg-id couverts : `sub`, `resub`
+   (+ continuations `giftpaidupgrade` / `primepaidupgrade` / `extendsub`),
+   `subgift` (+ dons communautaires `submysterygift` / `standardpayforward` /
+   `communitypayforward` → destinataire = mass-gift-count ou « la communauté »),
+   `raid`. ⚠️ Un resub NON partagé en chat n'émet aucun USERNOTICE — limite
+   Twitch : aucun event push (EventSub inclus) ne couvre les renouvellements
+   silencieux.
 2. **Le follow n'a pas d'event IRC** → EventSub WebSocket `channel.follow` v2
    (`twitch_eventsub.rs`, push temps réel). ⚠️ L'abonnement doit être créé
    dans les 10 s suivant le `session_welcome` (sinon Twitch ferme la socket),
@@ -657,8 +941,8 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
   sur `/medias/`.
 - **Cadre SVG sur les overlays** : `appliquerCadreOverlay(carteEl, idCadre)` +
   `nettoyerCadreOverlay` dans diffusion.html — les cartes des overlays
-  autonomes suivent `currentScene.cadreWidget` (le « Cadre des widgets » choisi
-  dans la modale Cadres). Mesure de la carte APRÈS affichage (rAF au play,
+  autonomes suivent `currentScene.cadreWidget` (le cadre unifié choisi dans
+  la modale Cadres — un seul réglage, widgets + bord canvas). Mesure de la carte APRÈS affichage (rAF au play,
   re-mesure au `canplay` vidéo — la hauteur change) + refresh au snapshot si
   l'overlay est visible (changement de cadre à chaud). Clip-path appliqué à la
   carte pour les cadres à forme (cyberpunk/story/hexagon/arrondis). Le bandeau
@@ -721,12 +1005,12 @@ sidebar "Interactions chat" est
 un **lanceur direct** (pas un accordéon) : le clic ouvre la modale — seule section
 non dépliable de la sidebar.
 
-## Input Viewer — capture globale clavier + souris (2026-09-14)
+## Input Viewer — capture globale clavier + souris + manette (2026-10-03)
 
 > Port du concept "Input Viewer" de RUST_SOS_2026 (E:\SteamOs - All Version\RUST_SOS_2026v0.1,
 > features/input_viewer.rs + capture_clavier.rs). Widget de scène qui affiche
-> les entrées en temps réel côté diffusion. **Lot 1 : clavier + souris.**
-> Lot 2 (non implémenté) : manette (gilrs + XInput), pavé numérique flash.
+> les entrées en temps réel côté diffusion. Modes : **clavier** (AZERTY/QWERTY),
+> **souris**, **numpad**, **manette** (gilrs → mapping standard Gamepad).
 
 ### Flux
 
@@ -753,15 +1037,51 @@ Clavier (poll GetAsyncKeyState 60Hz, thread Rust) + Souris (hook WH_MOUSE_LL)
   - **Bouton ON/OFF** dans les options du widget (Toolbar) → commandes
     `input_viewer_set_actif` / `input_viewer_etat_actif`. Zéro thread/hook
     quand OFF.
+  - **Auto-stop (2026-10-03)** : la capture est GLOBALE (pas liée à la
+    scène). `syncInputViewerCapture()` (scene.ts) coupe la capture quand la
+    scène chargée n'a AUCUN widget `input-viewer` — appelé dans `loadScene`
+    (couvre openScene/createScene/deleteScene/duplicateScene/importScene/
+    presets) et `deleteWidget` (suppression du dernier widget). Jamais
+    d'auto-START : le bouton ON/OFF reste le choix de l'utilisateur.
 - **Widget de scène** `type: "input-viewer"` : champs `inputMode`
-  ("clavier"|"souris"), `inputLayout` ("azerty"|"qwerty"), `inputCouleur`
-  (couleur presse, défaut #8b5cf6). Créé via Toolbar →
+  ("clavier"|"souris"|"numpad"|"manette"), `inputLayout`
+  ("azerty"|"qwerty"), `inputSkin` ("xbox"|"ps"|"8bitdo", manette seulement),
+  `inputCouleur` (couleur presse, défaut #8b5cf6), `inputMapping` (remap
+  boutons manette + inversion D-pad). Créé via Toolbar →
   `createInputViewerWidget()` (500×220). Placeholder dashboard « Input
   viewer ». Cadre SVG automatique (applyCadreWidget).
 - **Diffusion** (`diffusion.html`) : branche renderScene `input-viewer` —
-  markup keycaps généré UNE FOIS (recréé si mode/layout change), maj d'état
-  par `classList.toggle('presse')` sur les éléments qui changent seulement
-  (union ancien/nouveau). WS `input-viewer-etat` → `majInputViewerEtat`.
+  markup généré UNE FOIS (recréé si `ivKey` = mode|layout|skin change), maj
+  d'état par `classList.toggle('presse')` sur les éléments qui changent
+  seulement (union ancien/nouveau). WS `input-viewer-etat` →
+  `majInputViewerEtat` (touches `[data-touche]`/`[data-touche-alt]`, souris
+  `[data-souris]` + X/Y, manette `[data-bouton]`/`[data-dpad]`/`[data-stick-indicateur]`).
+
+### Skins input-viewer — SVG réaliste (2026-10-03)
+
+> Toutes les manettes et la souris sont des **SVG inline** générés par
+> `ivGenererManette8BitDoSVG` / `ivGenererManetteXboxSVG` /
+> `ivGenererManettePsSVG` / `ivGenererSourisHTML` ; clavier et numpad gardent
+> leurs touches DOM (layout dynamique) posées sur un châssis SVG
+> (`ivChassisHTML` : plaque + plateau encaissé + câble + LEDs CAPS/NUM/SCRL
+> qui s'allument via `data-touche`). Ancien markup DOM de la manette
+> supprimé (boutons verre génériques + labels `::after`).
+
+- **Contrat pressé intact** : `.presse` est togglée sur des `<g>` SVG
+  (`classList` fonctionne sur SVG) ; les fills de base sont des gradients
+  `fill="url(#ivg*)"`, la règle CSS `.presse` les écrase (attribut de
+  présentation < CSS). Glow = `filter: drop-shadow` (pas de
+  outline/box-shadow en SVG). Labels = `<text>` (`::after` ne marche pas en
+  SVG) ; couleurs par classes `iv-fig-lbl-*` (Xbox lettres / PS symboles).
+- **Sticks SVG** : `<g class="iv-fig-stick" data-stick-indicateur data-bouton>`
+  — le cap bouge (axes) ET s'illumine au clic L3/R3. Branche dédiée dans
+  `majInputViewerEtat` : `translate(px)` en unités viewBox (le `calc(-50%+%)`
+  DOM ne s'applique pas aux éléments SVG).
+- **Boutons bonus** : home=`data-bouton="16"`, touchpad PS=`17`.
+- **Responsive** : `viewBox` + `preserveAspectRatio="xMidYMid meet"` partout
+  (sauf le châssis clavier, volontairement étiré `none`).
+- **8BitDo fallback** : `data-skin="8bitdo"` sur `.iv-manette` → si D-pad
+  inactif, axes LeftStick lus comme D-pad (émulation DualShock4).
 
 ### Pièges (leçons ancienne app + v0)
 
@@ -783,11 +1103,11 @@ Clavier (poll GetAsyncKeyState 60Hz, thread Rust) + Souris (hook WH_MOUSE_LL)
 |---|---|
 | `src-tauri/src/input_viewer.rs` | Capture : poll clavier 60Hz (table vkCode→KeyboardEvent.code portée), hook souris LL, état central, publication WS throttlée 30Hz |
 | `src-tauri/src/lib.rs` | `InputViewerState` + commandes `input_viewer_set_actif` / `input_viewer_etat_actif` |
-| `src-tauri/src/scene.rs` | Champs Widget `inputMode` / `inputLayout` / `inputCouleur` |
+| `src-tauri/src/scene.rs` | Champs Widget `inputMode` / `inputLayout` / `inputSkin` / `inputCouleur` / `inputMapping` |
 | `src/lib/stores/scene.ts` | `createInputViewerWidget()` + `setInputViewerConfig()` |
-| `src/lib/components/Toolbar.svelte` | Bouton création + options (mode/layout/couleur + ON/OFF capture) |
+| `src/lib/components/CarteEdition.svelte` | Options input-viewer (mode/layout/skin/couleur + ON/OFF capture) |
 | `src/lib/components/Widget.svelte` | Placeholder « Input viewer » (dashboard = config, pas un player) |
-| `src-tauri/resources/diffusion.html` | Rendu keycaps AZERTY/QWERTY + visuel souris + maj DOM directe (WS `input-viewer-etat`) |
+| `src-tauri/resources/diffusion.html` | 6 rendus : clavier/numpad (touches DOM + châssis SVG `ivChassisHTML`), souris SVG, manettes SVG (8bitdo/xbox/ps) + maj DOM directe (WS `input-viewer-etat`) |
 
 ## Morphing (bulge/pinch) — widgets média + fond de scène (2026-09-12)
 
@@ -855,7 +1175,7 @@ morphs: [{ x, y, rayon, intensite, mode }]  (normalisés 0-1, ordre = cumul)
 | Variable | Couleur | Sémantique | Usages |
 |---|---|---|---|
 | `--message-user-action-color` | `#f59e0b` (orange) | Action requise de l'utilisateur | Toolbar `.obs-status.erreur` (mot de passe OBS invalide, OBS injoignable), ObsSourceDialog `.hint.warn` |
-| `--message-ok-color` | `#22c55e` (vert) | Succès / état connecté | Toolbar `.obs-status.ok` + `.header.etat-ok` (en-tête section OBS connecté : texte vert), `.dot.on` partagée (bandeau top App.svelte + lignes Connexions), DevPanel `.check` |
+| `--message-ok-color` | `#22c55e` (vert) | Succès / état connecté | Toolbar `.obs-status.ok` + `.header.etat-ok` (en-tête section OBS connecté : texte vert), `.dot.on` partagée (bandeau top App.svelte + lignes Connexions) |
 | `--message-error-color` | `#c0392b` (rouge) | Erreur / danger | Toolbar `.header.etat-erreur` (en-tête section OBS non connecté : texte + liseré gauche rouges), boutons destructifs au survol (ConfirmDeleteWidgetModal `.action.danger:hover`, SceneBar `.ctx-item.danger:hover`), `.ctrl-btn.ctrl-arreter:hover` (topbar) |
 
 ### Système de thème `src/theme/` — 3 couches (2026-09-20, spec IDEE/IDEA02.md)
@@ -911,11 +1231,12 @@ morphs: [{ x, y, rayon, intensite, mode }]  (normalisés 0-1, ordre = cumul)
   `--fond-panneau` reste pour les panneaux flottants (modales, dropdowns,
   carte d'édition).
 - **Accent utilisateur (couleur du cadre)** : `App.svelte` pousse la
-  couleur EFFECTIVE du cadre actif (`cadreApp`, fallback `cadreWidget`)
+  couleur EFFECTIVE du cadre unifié (`cadreWidget` — source unique)
   dans `--cadre-couleur` / `--cadre-couleur-fin` sur `:root`, résolue via
   `gradientCadre()` de `lib/cadres/registre` — le même resolver que le
-  rendu : cadre personnalisable → `couleur`/`couleurFin` ; preset →
-  palette de la `variante` (le champ `couleur` n'y est PAS la vérité).
+  rendu : TOUS les styles → `couleur`/`couleurFin` (les tons internes des
+  presets sont dérivés de ces couleurs ; `variante` est legacy, désérialisé
+  mais ignoré).
   `--accent-ui` = `var(--cadre-couleur, var(--accent-violet))` + dérivés
   `--glow-ui`, `--bordure-ui`, `--bordure-ui-active`, `--gradient-cadre`
   (glace.css).
@@ -1124,44 +1445,69 @@ les boutons sémantiques qui reposent un `--btn-tint` coloré.
 6. ❌ Arrondir les widgets canvas ou toucher `diffusion.html` pour le style —
    règle figée cadres (voir section dédiée).
 
-## Titre de widget (2026-09-19)
+## Titres multi-positions — widget + fond (2026-09-19, refondu 2026-09-28)
 
-> Titre optionnel affiché au-dessus ou en dessous d'un widget, rendu en
-> dashboard ET en diffusion :4321. Pendant pour le fond de l'application :
-> champs `bgTitre*` (`.bg-titre` dashboard / `#bg-titre` diffusion).
+> Jusqu'à 4 titres SIMULTANÉS par cible (widget / fond), style partagé.
+> Latéraux (gauche/droite) : texte VERTICAL (`writing-mode: vertical-rl`).
+> Vocabulaire unifié « haut/bas/gauche/droite » pour les deux cibles :
+> widget = HORS du widget (au-dessus/dessous/à côté), fond = INTÉRIEUR
+> le long du bord correspondant.
 
-### Champs `Widget` (tauri.ts + scene.rs)
+### Champs (tauri.ts + scene.rs — contrat JSON direct, camelCase)
 
-`titre` (vide/undefined = pas de titre), `titrePosition` ("dessus"/"dessous"),
-`titrePolice` (id Google Font, `fonts.ts` — woff2 embarqués via `server.rs`),
-`titreTaille` (12–72 px, défaut 24), `titreGras`/`titreItalique`/`titreSouligne`,
-`titreEspacement` (−2 à 20 px), `titreContourCouleur` (hex, défaut `"#fff"`),
-`titreContourEpaisseur` (0–6 px, 0 = aucun contour, défaut 2).
+- Widget : `titreHaut` / `titreBas` / `titreGauche` / `titreDroite`
+  (`Option<String>`, vide/None = aucun titre à cette position) + style
+  partagé `titrePolice` (id Google Font, fonts.ts — woff2 embarqués via
+  `server.rs`), `titreTaille` (12–72 px, défaut 24),
+  `titreGras`/`titreItalique`/`titreSouligne`, `titreEspacement`
+  (−2 à 20 px), `titreContourCouleur` (hex, défaut `"#fff"`),
+  `titreContourEpaisseur` (0–6 px, 0 = aucun contour, défaut 2),
+  `titreCouleur`/`titreCouleurFin` (hex — dégradé du texte personnalisé ;
+  absents = auto, dégradé repris du cadre ; `titreCouleur` seule = couleur
+  unie).
+- Fond : miroirs `bgTitreHaut/Bas/Gauche/Droite` + `bgTitre*` style
+  (`bgTitreCouleur`/`bgTitreCouleurFin` idem).
+- **LEGACY** : `titre`/`titrePosition` (« dessus »/« dessous ») et
+  `bgTitre`/`bgTitrePosition` (« haut »/« bas ») — désérialisés puis migrés
+  par `Scene::migrer_titres()` (pattern `migrer_cadres`) aux mêmes 4 sites
+  que la migration cadres (load_scene_file, migrer_ancien_config, importer,
+  presets::instancier) : « dessus »→titreHaut, « dessous »/« bas »→Bas, un
+  champ nouveau déjà présent gagne, legacy vidé dans tous les cas (le JSON
+  se nettoie à la prochaine sauvegarde). Jamais écrits par l'UI.
 
 ### Édition (dashboard)
 
-Double-clic sur le widget : `relY < 0.25` → position "dessus", le reste →
-"dessous" → `titreModalOpen` (ui.ts) → `TitreModal.svelte` → `setWidgetTitre`
-(scene.ts). Zones `.titre-zone` (25% haut/bas) : affichées au `:hover` dès
-que le widget est `selected`, **avec ou sans titre existant**, avec label
-explicite ambre (« Double-cliquez ici pour ajouter/modifier un titre
-au-dessus/en dessous de votre widget »).
+Double-clic sur un widget : bord le plus proche du clic (relX/relY, min des
+4 distances haut/bas/gauche/droite) → `titreModalOpen` (ui.ts — porte
+`{ id, position }`) → `TitreModal.svelte` → `TitreEditForm.svelte` (corps
+partagé widget + fond : 4 champs texte + style + 2 pickers de dégradé
+(perso/auto-cadre) + aperçu mini-canvas avec les textes ancrés à leur
+position) → `setWidgetTitre` (scene.ts). Zones
+`.titre-zone` : haut/bas 25% pleine largeur, gauche/droite 22% × 50%
+centrées — affichées au `:hover` du widget sélectionné, avec ou sans titre
+existant. Fond : bouton « Titre du fond » (CarteEdition) →
+`TitreFondModal.svelte` (même TitreEditForm) → `setBgTitre`.
 
 ### Rendu
 
-- Dashboard : `.widget-titre` hors `.widget-3d` (non clippé par le cadre
-  SVG), gradient de texte = couleurs du cadre actif (`gradientCadre`,
-  fallback blanc→gris). Position `bottom:100%`/`top:100%`.
-- Diffusion : `applyTitreWidget` / `entry.titreEl` (diffusion.html) —
-  créé/maj/supprimé selon `w.titre`, mêmes champs.
+- Dashboard : `.widget-titre.haut/.bas/.gauche/.droite` hors `.widget-3d`
+  (non clippés par le cadre SVG) — haut/bas `bottom/top:100%` centrés
+  horizontalement, gauche/droite `right/left:100%` centrés verticalement +
+  vertical-rl. `Canvas.svelte` `.bg-titre.*` (intérieur, 8 px des bords).
+  Gradient de texte = `titreCouleur`/`bgTitreCouleur` définis → dégradé
+  personnalisé (`*CouleurFin` absente → couleur unie) ; sinon couleurs du
+  cadre actif (`gradientCadre`, fallback blanc→gris ; `sansCadre` →
+  fallback). Priorité : perso > cadre > fallback.
+- Diffusion : `applyTitreWidget` (entry.titreEls par position —
+  create/update/remove selon les 4 champs) / `applyTitreFond` (bgTitreEls,
+  `.bg-titre` classe). Mêmes formules inline (top/left/transform/marges)
+  + writing-mode vertical-rl pour les latéraux.
 - **Contour des lettres** : `-webkit-text-stroke: <N>px <couleur>` réglable
-  par titre (`titreContourCouleur`/`titreContourEpaisseur`, resp.
-  `bgTitreContour*` ; épaisseur 0 = aucun contour) — inline dans les
-  templates Svelte / via `el.style.webkitTextStroke` dans les apply* de
-  diffusion.html. `paint-order: stroke fill` reste fixé dans les 4 règles
-  CSS (`.widget-titre` + `.bg-titre` dashboard, `.widget-titre` +
-  `#bg-titre` diffusion) : le contour est peint SOUS le gradient — sans
-  paint-order il mange les glyphes.
+  (partagé par les 4 titres) — inline dans les templates Svelte / via
+  `el.style.webkitTextStroke` dans les apply* de diffusion.html.
+  `paint-order: stroke fill` reste fixé dans les règles CSS (le contour est
+  peint SOUS le gradient — sans paint-order il mange les glyphes).
+- `scene_vierge` (scenes.rs) : couvre les 4 `bgTitre*` + legacy `bgTitre`.
 
 ## Cadres SVG — règle absolue (NE PAS REGRESSER)
 
@@ -1175,15 +1521,54 @@ Les cadres SVG (`scene.cadreWidget`) s'appliquent à **TOUS les widgets**, sans
 exception : médias, chat, welcome-clip, et **widgets troués**. Aucun type de
 widget ne doit être exclu du cadre.
 
+**Cadre unifié (2026-09-26) — UN SEUL système, deux rendus.** Une seule
+`CadreConfig` (`scene.cadreWidget`, champ canonique) alimente EN MÊME TEMPS
+le cadre de chaque widget ET le cadre du bord extérieur du canvas
+(`Canvas.svelte` `.cadre-app-overlay`, diffusion `applyCadreApp` →
+`#cadre-app-overlay` — les deux lisent `cadreWidget`). `CadresModal` n'a
+plus d'onglets : un « Cadre activé », un writer unique `mettreAJourCadre`
+(stores/scene.ts — écrit `cadreWidget` et purge `cadreApp`). Le champ
+`scene.cadreApp` est LEGACY : conservé pour désérialiser les vieilles
+scènes, migré vers `cadreWidget` par `Scene::migrer_cadres()` à la lecture
+(load_scene_file, importer, migrer_ancien_config, presets::instancier —
+cadreWidget actif gagne, sinon cadreApp repris même inactif, cadreApp vidé
+dans tous les cas). Jamais écrit par l'UI ; ne jamais réintroduire une
+seconde config divergente.
+
+**Portée du bord (`bordActif`)** : `CadreConfig.bordActif` (bool, défaut
+`true` — `#[serde(default = "defaut_vrai")]` côté Rust, optionnel côté TS)
+masque UNIQUEMENT l'overlay du bord extérieur (`Canvas.svelte` gate
+`cadreBordActif`, `applyCadreApp` → `bordActif !== false`) ; le cadre des
+widgets reste actif. Ce n'est PAS une seconde config : même CadreConfig,
+juste une cible de rendu masquable. Vieilles scènes sans le champ → `true`
+(rétro-compat). Toggles : `CadresModal` (« Bord de l'app », désactivé si
+cadre inactif) + carte fond de `CarteEdition`.
+
+**Cadre par défaut** (`CadreConfig::defaut_scene`, scene.rs — MIROIR de
+`CADRE_WIDGET_DEFAUT`, scene.ts) : MGStyle, noir → violet #8b5cf6, épaisseur
+50, actif, bordActif. Posé dès la **naissance** d'une scène (Scene::new —
+nouvelle sauvegarde « + Scène », premier boot, fallback scène illisible) →
+cadre actif sur widgets + bord dès le départ. Les sauvegardes existantes ne
+sont PAS touchées (`#[serde(default)]` → cadreWidget reste None au load) ;
+`sceneAvecWidget` (scene.ts) le pose encore au 1er widget créé sur ces
+vieilles scènes (`??` — un cadre explicitement désactivé n'est jamais
+réactivé). ⚠️ `scene_vierge` (scenes.rs — garde onboarding) traite le
+défaut auto comme « pas de contenu utilisateur » : `cadreWidget ==
+defaut_scene()` compte vierge, toute autre valeur = choix utilisateur →
+pas vierge. CadreConfig dérive PartialEq pour ce test.
+
 **Opt-out par widget** (`w.sansCadre`, 2026-09-19) : les widgets créés par
 drop dans la zone Widgets (`ajouterALaBibliotheque` → `poserMediaDepuisBibliotheque`,
 auto-pose — l'entrée reste dans `bibliothequeMedias`) portent `sansCadre: true`
 — le cadre de scène ne s'applique pas à EUX (clip-path + overlay absents, trou
 éventuel rectangulaire, titre en gradient fallback). Le bouton « Transformer
 en widget » (`transformerEnWidget`) repasse `sansCadre` à false sur le widget
-déjà posé (pas de doublon) et consomme la ligne. Flag par instance sérialisé
-dans la scène, pas par type : la règle ci-dessus reste vraie pour tous les
-autres widgets.
+déjà posé (pas de doublon) et consomme la ligne. `setWidgetSansCadre(id, v)`
+est le setter générique exposé dans la carte d'édition pour TOUS les types
+(toggle « cadre sur ce widget », caméra incluse — réactiver consomme aussi
+l'entrée bibliothèque si le widget porte un média droppé). Flag par instance
+sérialisé dans la scène, pas par type : la règle ci-dessus reste vraie pour
+tous les autres widgets.
 
 ### Comportement attendu
 
@@ -1295,51 +1680,84 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
 ### Commandes Tauri (11)
 
 - `speedrun_charger_asl(path)` → charge .asl, retourne settings
-- `speedrun_charger_lss(path)` → charge .lss, retourne segments + PB ; fige
-  aussi la baseline mergée (slot Rust) poussée dans le payload WS `lss`
+- `speedrun_charger_lss(path)` → charge .lss, retourne segments + PB ;
+  mémorise la run (slot Rust) pour le resync diffusion (payload WS `lss`)
 - `speedrun_demarrer(totalSplits, start, split, reset)` → démarre boucle polling
 - `speedrun_arreter()` → arrête boucle
 - `speedrun_maj_settings(start, split, reset)` → met à jour settings
 - `speedrun_est_actif()` → true si actif
 - `speedrun_action_manuelle(action)` → start/split/skip/undo/reset/pause
+- `speedrun_aller_split(index)` → clic sur une ligne : arme l'index (timer
+  arrêté) ou saute à l'index en retry de segment (run en cours)
 - `speedrun_lire_config()` → lit speedrun.json (chemins + settings)
 - `speedrun_sauver_config(config)` → sauve speedrun.json
-- `speedrun_baseline_lire(chemin_lss)` → baseline sauvegardée du .lss
-  (`Vec<Option<f64>>`, cumul secondes/segment ; vide si jamais enregistrée)
-- `speedrun_baseline_enregistrer(chemin_lss, index, cumul_secs)` → écrit le
-  temps cumulé d'un split réalisé dans speedrun_baselines.json (ne touche PAS
-  la référence affichée — figée pour le run en cours)
 
 ### Events
 
 - Tauri `speedrun:event` → store Svelte dashboard (types: started, split, reset,
-  ended, gameTime, time, connected, disconnected, error, stopped, loaded, paused,
-  resumed, splitSkipped, splitUndone, settings-list).
+  ended, goto, etat, gameTime, time, connected, disconnected, error, stopped,
+  loaded, paused, resumed, splitSkipped, splitUndone, settings-list).
 - WS `speedrun-etat` → diffusion.html `majSpeedrunEtat` (maj DOM directe,
   pattern input-viewer : textContent/classList, zéro re-render). Sous-types
-  spéciaux : `lss` (segments + champ `baseline` mergée) et `baseline`
-  (référence delta fraîche, émise à chaque `started` — figée pour le run).
+  spéciaux : `lss` (segments) et `etat` (resync complet émis via `EmitEtat`
+  par `reemit_lss` — un reload OBS retrouve index + temps de la run).
 
-### Colonne delta « dernière fois » (2026-09-19)
+### Modèle de temps par segment — référence LiveSplit (2026-10-02)
 
-> 1ère colonne temps de chaque ligne de split = **delta cumulé vs la référence**
-> (baseline `speedrun_baselines.json` « dernière fois », fallback PB du .lss) —
-> convention LiveSplit (colonne « +/− », signe toujours affiché, dixième).
+> Chaque ligne de split affiche `nom | temps | delta`. La référence est
+> le **PB du segment** (`pb[i] − pb[i−1]` — les PB du .lss sont CUMULÉS,
+> real time puis game time). Si `pb[i−1]` est absent la durée est
+> indéterminable → delta/temps vides, jamais le cumul entier. Il n'y a PAS
+> de baseline « dernière fois » persistée (`speedrun_baselines.json`
+> supprimé — pas de sauvegarde de run).
 
-- **Format** : `-1.6` / `+2.3` / `-1:23.4` (cumulé au split : temps courant −
-  référence cumulée). `0.0` neutre (gris) si non parcouru / skippé / sans
-  référence (premier run : « compteurs à zéro »).
-- **Couleurs** : vert `--message-ok-color` si négatif (gagné), rouge
-  `--message-error-color` si positif (perdu) — sur la valeur ET la **bordure
-  de la ligne entière** (`.seg-ahead`/`.seg-behind` dashboard,
-  `.sr-seg-ahead`/`.sr-seg-behind` diffusion ; déclarées après `.actif` →
-  l'emportent aussi sur le split en cours).
-- **Cycle de vie de la référence** : figée à chaque `started` (slot Rust +
-  emit WS `baseline` + store `referenceSplits`) — les enregistrements en
-  cours de run préparent la référence du run SUIVANT sans modifier l'affiché.
-- **Ordre des colonnes aligné** dashboard/diffusion : n° | nom | delta | temps.
-- **Dernier split** : émis via `ended` (pas `split`) → son temps est stocké
-  dans `splits` et enregistré en baseline dans le handler `ended`.
+- **Delta (colonne « +/− », droite)** : écart au PB du segment, format
+  LiveSplit `m:ss` sans décimales (`−1:01`, `+0:12`). Actif = live à chaque
+  tick (`segmentTime` des events `time`/`etat` = `segment_elapsed()` =
+  primary − `seg_start`), figé au split pour les passés, vide pour les non
+  atteints / skippés / armés / sans PB. `−x` vert (`--message-ok-color`),
+  `+x` rouge (`--message-error-color`) — sur la valeur ET la bordure de la
+  ligne (`.seg-ahead`/`.seg-behind`, `.sr-seg-ahead`/`.sr-seg-behind`).
+  Pas de hex nouveau ; chrono principal teinté `--sr-grad-from`. Les deux
+  `<span>` de temps ont une largeur de colonne (jamais `display:none`).
+- **Temps (milieu)** : durée de segment — passé = durée réalisée figée,
+  actif = temps vivant (0:00.00 si armé, jamais de signe), non atteint /
+  skippé = durée PB du segment (vide si indéterminable).
+- **Contrat events** : `split`/`ended` portent `time` = **durée de segment**
+  et `cumul` = temps total de run (champ séparé). Les deux consommateurs
+  (store `speedrun.ts` + `diffusion.html`) lisent `time` comme durée — un
+  oubli = régression visible.
+- **Clic sur une ligne** (`speedrun_aller_split`, `.speedrun-segment`
+  `pointer-events:auto` + `stopPropagation`, pas de `commitScene`) :
+  en NotRunning → **arme** l'index (`armed_index` dans timer.rs, chrono à
+  zéro, ne démarre pas — attend le start ASL/manuel ; `Started.index` porte
+  l'index armé sinon le frontend reviendrait à 0) ; en Running/Paused/Ended →
+  saute à l'index en **retry de segment** : chrono de segment à zéro, TOUS
+  les temps de la tentative effacés (`temps_segs` Rust + `splits`/
+  `srSplitTimes` frontend — les précédents ne comptent pas comme finis),
+  PAS un reset de run.
+- **undo** : `seg_start` recule de `d_k` (durée enregistrée dans
+  `EngineInner.temps_segs`, passée à `undo_split`) → le segment défait
+  reprend là où il en était au lieu de repartir de zéro.
+- **`disconnected`** (sortie du jeu) : le timer Rust reset → `reset` émis
+  avant `disconnected` — l'affichage suit le timer sur les deux frontaux.
+
+> **Sujet suivant (non implémenté)** : à la sortie du jeu détectée par l'ASL,
+> proposer à l'utilisateur de sauver ou non ses splits (nom + dossier) ;
+> l'ASL serait chargé par layout (3 layouts → 3 jeux, le switch recharge).
+
+### Disposition « ligne » horizontale (2026-09-29)
+
+> Façon LiveSplit horizontal : champ widget `srLayout` (`"auto"` | `"colonne"`
+> | `"ligne"`, Option serde — absent = auto). En **auto**, le splitter bascule
+> en ligne quand `hauteur < ~4×srTaillePolice` (même seuil des deux côtés ;
+> fallbacks taille = 16 diffusion / 27 dashboard, identiques aux fontSize
+> appliqués). En ligne : `.sr-ligne` toggle sur `.widget.speedrun` /
+> `.speedrun-widget` → `flex-direction: row`, header/meta/barre masqués,
+> splits en scroll horizontal (cellules empilées nom / delta+temps via
+> `flex-wrap`, index masqué), timer épinglé à droite. Le seul JS dépendant
+> de l'axe est le scroll auto vers le split actif (`scrollTop`↔`scrollLeft`)
+> dans `srMajSegmentsVisuel` (diffusion) et le `$effect` de `WidgetSpeedrun`.
 
 ### Bugs corrigés (portés depuis le legacy, déjà fixés dans le code source)
 
@@ -1530,6 +1948,8 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
 - Modales : `modale-interactions`, `modale-moderation`, `modale-cadres`
 - Écran d'attente : `ecran-attente` (toggle lancer/arrêter — pastille verte
   `data-plat="attente"` alimentée par `raccourcis:connexions.attente`)
+- Just Chatting : `just-chatting` (toggle overlay — pastille verte
+  `data-plat="justchatting"` alimentée par `raccourcis:connexions.justchatting`)
 - Système : `systeme-masquer`
 
 ### Événements
@@ -1585,6 +2005,86 @@ init/appliquer/masquer), section accordéon « Raccourcis » dans Toolbar
   suffit, `setConnexions` itère tous les `[data-plat]` (zéro JS ajouté).
   Payload `raccourcis:connexions` étendu : `stream` / `record` (bools),
   poussés par le même `$effect`/`pushRaccourcisConnexions` d'App.svelte.
+
+## Just Chatting — overlay non-destructif caméra + chat (2026-XX)
+
+> Mode bascule « scene IRL » : en diffusion, seuls la caméra et le(s) chat(s)
+> restent visibles, repositionnés sur un layout calculé. **La scène réelle
+> n'est JAMAIS mutée** — ni `commitScene`, ni `update_scene`, ni JSON. Pas de
+> titre au-dessus de la caméra, pas de zoom fond (écarts assumés vs la
+> version React). `scene.cadreWidget` reste actif (règle figée cadres).
+
+### État — runtime, OFF au boot, non persisté
+
+`just_chatting.rs` (pattern `ecran_attente` sans timer ni JSON) :
+`JustChattingState { actif: Mutex<bool>, derniere_frame, chat_tx, app }`.
+Commandes `just_chatting_etat` / `just_chatting_set_actif` ; frame WS
+`just-chatting-etat` `{etat:{actif, paysage, portrait}}` sur `chat_tx` +
+event `just-chatting:etat` → dashboard. **Resync** : la diffusion envoie
+`just-chatting-resync` au `ws.onopen` → `server.rs` → `reemit()` —
+différence volontaire avec `ecran_attente::reemit` : **jamais un no-op**,
+une frame `actif:false` est reconstruite si aucune n'a été émise (une
+Browser Source connectée avant le premier toggle doit recevoir l'état).
+
+### Formule de layout — unique, en Rust (fractions 0–1)
+
+La frame porte les DEUX variantes (`paysage` + `portrait`) ; la diffusion et
+le store choisissent selon `canvasW >= canvasH` puis × canvas réel en px.
+Paysage : `m=0.04, g=0.02, h=0.78, y=(1-h)/2, inner=1-2m-g`, caméra
+`x=m, w=0.62*inner`, chat `x=m+wCam+g, w=0.38*inner` (même hauteur/centre).
+Portrait : mêmes marges 0.04 sur les 4 côtés, empilés, caméra 62 % de la
+hauteur utile au-dessus. Plusieurs chats → tous au même rect. Les fractions
+du preset embarqué `presets/just-chatting.json` NE SONT PAS utilisées (le
+preset reste un modèle de scène distinct).
+
+### Dérivation — deux copies indépendantes, même résultat
+
+- **Diffusion** (`diffusion.html`, `jcDeriverScene` en tête de
+  `renderScene`) : copie `{...scene, widgets: caméra+chats aux rects JC}` —
+  le sweep `seen` retire le DOM des widgets filtrés, `peindreFond` ne perce
+  plus leurs trous, `#sos-cam-clip` suit le rect JC. Aucun rendu dédié.
+- **OBS** (`stores/justChatting.ts` → `sceneDerivee`) : copie complète
+  identique + **`bgObsSource: undefined`** (sinon la capture plein canvas
+  resterait affichée) passée à `scene_sync_captures` via le paramètre
+  optionnel `scene: Option<Scene>` de la commande (absent = scène chargée,
+  comportement historique). `sync_scene_captures` (contrat unique dans
+  `obs_trou.rs`) : caméra `ensure_camera` au rect JC, `SOS-Trou-*`/`SOS-Fond-*`
+  absents de la copie → `SetSceneItemEnabled false`. Jamais `RemoveInput`,
+  jamais d'écriture (`state.scene` ni disque).
+
+### Toggle (dashboard, non-fatal OBS offline)
+
+- **ON** : `setActif` → store rafraîchi AVANT les syncs →
+  `sceneSyncCaptures(copie dérivée)` + `cameraSync(null, rect JC)` +
+  `cameraMaskSync(points cadre, jcW, jcH, "remplir", 1)` — le masque PNG
+  dépend des DIMS du widget (sync_scene_captures cale le transform, pas le
+  masque). Pas de widget caméra → skip cameraSync/masque, masquage OK.
+- **OFF** : `syncCapturesOBS()` (scène réelle — réactive trous + fond,
+  recale la caméra) + **`syncCameraMask(true)` obligatoire** : le cache
+  `cleMasqueCamera` détient encore la clé réelle alors que le PNG OBS est
+  aux dims JC → sans `forcer`, le rétablissement serait sauté.
+- **Ordre critique au OFF** : `jcActif` doit être à `false` AVANT
+  `syncCapturesOBS` — sinon le hook post-sync renverrait la copie dérivée
+  et le mode ne se couperait pas dans OBS.
+
+### Hook post-sync captures (`scene.ts` — `registerApresSyncCaptures`)
+
+Enregistré par `initJustChatting`, exécuté à la fin de `syncCapturesOBS`
+(openScene/duplicate/preset/boot/reconnexion OBS) **ET** de `commitScene` :
+si JC actif → `sceneSyncCaptures(copie dérivée)` re-cache les trous de la
+nouvelle scène et recale `SOS-Caméra`/`SOS-Caméra-Fond` au rect JC
+(`obsSyncTrous` repositionne les items sans jamais toucher
+`sceneItemEnabled`, mais il remet la caméra au rect réel à chaque commit).
+**Un hook n'appelle JAMAIS `syncCapturesOBS`** (re-enchaînement → boucle) —
+wrapper Tauri direct uniquement. Coût assumé en v1 : un one-shot OBS à
+chaque pointerup tant que le mode est actif (documenté, pas optimisé).
+
+### UI
+
+Toolbar : section toggle directe `header output-btn` + `.dot` (état) ;
+topbar : pillule `.indicateur-btn` visible si `jcActif`, clic = coupe ;
+raccourcis : `data-id="just-chatting"` `data-plat="justchatting"`.
+i18n : `toolbar.justChatting` + `toolbar.justChattingTitle` (5 dicts).
 
 ## Télémétrie multiplateforme — collecte passive JSONL (2026-09-19)
 
@@ -1745,13 +2245,19 @@ drag ET resize :
 
 ### Contrats
 
-- **Config persistée** `ecran_attente.json` : `duree_s` (défaut 600), `titre`,
+- **Config persistée** `ecran_attente.json` : `duree_s` (défaut 600), `titre`
+  (**défaut vide** — le wordmark du layout signature fait office de titre),
   `afficher_titre`, `son` (**défaut ON** — consigne utilisateur), `volume`
   (0.0-1.0, défaut 0.5), `media`/`media_kind`/`media_nom`, `source_audio`,
-  `minuteur_x`/`minuteur_y` (centre de la carte minuteur en px canvas,
-  défaut 960/540) et `minuteur_echelle` (0.4-3.0, défaut 1.0) — positionnés
-  par mini-canvas drag/resize dans la modale (même mécanique que le
-  « Squelette de position » des alertes/welcome).
+  et trois éléments positionnables par mini-canvas drag/resize dans la
+  modale (même mécanique que le « Squelette de position » des
+  alertes/welcome — centre x/y en px canvas + échelle) : `minuteur_x/y`
+  (défaut 960/540) + `minuteur_echelle` (0.4-3.0), `streamy_x/y` (défaut
+  170/180, haut-gauche) + `streamy_echelle` (0.3-2.0, défaut 0.6),
+  `logo_x/y` (défaut 960/140, haut-centre) + `logo_echelle` (0.3-2.0).
+  **`layout`** : `"signature"` (défaut — marque StreamOS) | `"minimal"`
+  (rendu historique), choisi dans la modale ; passé dans la frame WS,
+  appliqué live par classe CSS.
 - **Frame WS `ecran-attente-etat`** (auto-réparatrice : config + runtime
   complets à chaque tick/transition — un client reconnecté se réaligne à la
   frame suivante). Resync : la diffusion envoie `ecran-attente-resync` au
@@ -1784,6 +2290,22 @@ drag ET resize :
   `data-overlay="ecran-attente"`), ré-appliqué au snapshot (changement de
   scène en live) ; titre ET chiffres du chrono en dégradé de texte aux mêmes
   couleurs (chiffres nuancés de blanc pour la lisibilité).
+- **Layout `signature`** (`.layout-signature` sur la racine — tout le bloc
+  `ecran-attente-sig-*` est `display:none` sinon) : 4 **stries néon**
+  diagonales aux coins + comète glissante (`ea-comet`), **mascotte Streamy**
+  (`/brand/streamy-loading.png`, flottement `ea-streamy-flotte`) avec
+  **anneaux orbitaux** rotatifs (`.sig-orbite`, conic + mask annulaire —
+  clin d'œil aux `.orb` du dashboard), **wordmark** `/brand/wordmark.png`
+  (`mix-blend-mode:screen` → fond noir neutralisé sans retouche) et
+  **ligne morse ···−−−···** (9 `<i>` p/t flashés en séquence, cycle 9,5 s).
+  Streamy et wordmark sont positionnés par `streamy_x/y/echelle` et
+  `logo_x/y/echelle` (left/top = centre + `scale`, comme le minuteur —
+  live à chaque frame). Palette fixe cyan→violet→magenta (identité) —
+  l'aurora reste teintée cadre. En pause → swap `streamy-offline.png`
+  (même `<img>`, src changée dans `majEcranAttente`). Le média importé
+  reste le fond (`cover`) sous les éléments de marque. Assets servis par
+  `GET /brand/{name}` (server.rs, `include_bytes!` depuis `src/assets/` —
+  même pattern que `/fonts/`).
 - Fin de chrono : « 0:00 » affiché ~1,5 s puis frame `actif:false` de Rust →
   fade-out + nettoyage. La pause ne fige que le chrono — le média continue.
 
@@ -1812,7 +2334,7 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 |---|---|
 | `src-tauri/src/ecran_attente.rs` | `EcranAttenteState` (config + runtime + timer tokio + frame WS + audio OBS), `reemit`, `lister_sources_audio` |
 | `src-tauri/src/lib.rs` | `mod ecran_attente`, `app.manage`, 7 commandes |
-| `src-tauri/src/server.rs` | Handler WS `ecran-attente-resync` → `reemit()` |
+| `src-tauri/src/server.rs` | Handler WS `ecran-attente-resync` → `reemit()` + route `GET /brand/{name}` (PNG marque embarqués) |
 | `src-tauri/resources/diffusion.html` | Overlay `.ecran-attente-*`, `majEcranAttente`, dispatch + resync |
 | `src/lib/stores/ecranAttente.ts` | Store + listener `ecran-attente:etat` + actions (creds OBS des stores `obs.ts`) |
 | `src/lib/components/EcranAttenteModal.svelte` | Modale config/contrôle (pas de preview média) |
@@ -1820,3 +2342,104 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 | `src/lib/components/Toolbar.svelte` | Lanceur « Écran d'attente » |
 | `src/App.svelte` | Init, pillule header, dispatch `ecran-attente`, montage modale |
 | `src-tauri/resources/raccourcis.html` | Bouton `data-id="ecran-attente"` + `data-plat="attente"` |
+
+## Guide du streamer — livre feuilletable intégré (2026-10-03)
+
+> Guide utilisateur en langage simple, rendu comme un livre ouvert dont
+> les feuilles basculent en 3D autour de la reliure (référence : carnet
+> Tomb Raider). **Dashboard uniquement** — jamais dans `diffusion.html`
+> ni aucune page OBS. Plan complet : `PLAN-GUIDE-STREAMER.md`.
+
+### Lanceur & montage
+
+- **Section « Ergonomie »** = pied fixe de la sidebar (`Toolbar.svelte`,
+  `.section.dash-fond` — sibling de l'aside, `flex-shrink:0`, hors zone
+  scrollable). Accordéon standard (`toggleSection("ergonomie")`, union
+  `Section` de `ui.ts`) regroupant le fond du chrome dashboard (ex-« Fond
+  du dashboard », déplacé là) + le lanceur du guide. Carte **ardoise** à
+  l'ouverture : `--carte-ardoise` (glace.css ← `--t-ardoise-700` — niveau
+  700 exigé : un 950 serait invisible en bordure pointillée sur
+  `--fond-panneau`), variante `.cible-ergo` au même mécanisme que les
+  autres `.cible-*`. La `.dot` marque le fond dashboard posé ; surcharge
+  `.dash-fond .chevron` (margin-left réduit — sinon trou entre la `.dot`
+  poussée à droite par `margin-left:auto` et le chevron).
+- Flag `guideLivreOpen` (`ui.ts`) → `{#if $guideLivreOpen}<GuideLivre/>`
+  dans `App.svelte`, à la suite des autres modales.
+
+### Mécanique du livre (`GuideLivre.svelte`)
+
+- **Modèle** : `N = ceil(PAGES.length / 2)` feuilles physiques ; feuille
+  `i` : recto = `PAGES[2i]`, verso = `PAGES[2i+1]`. État `tournees` =
+  feuilles tournées (0..N) ; à t=0 la base gauche = page de garde, à t=N
+  la base droite = 4ᵉ de couverture.
+- **3D CSS, pas SVG** : `perspective:1600px` sur `.livre-scene`,
+  `preserve-3d` sur `.livre` ET `.feuille`, `transform-origin: left
+  center` (reliure), `backface-visibility:hidden` (avec `-webkit-`) sur
+  les deux faces, flip `rotateY(-180deg)` en 0.65 s. Le SVG ne sert qu'au
+  décor (ornements dorés) — les éléments SVG ne supportent pas les
+  transforms 3D.
+- **Z-index** : pile droite `calc(--n-feuilles - --i)`, pile gauche
+  `calc(--i + 1)` — les vars sont posées en style inline par feuille.
+- **État** : verrou `enTransition` 680 ms ; `feuilleEnMouvement` reçoit
+  seul `will-change`. **Reprise de lecture** :
+  `localStorage["sos-guide-page"]` (bornée [0,N], lecture/écriture
+  non-fatales).
+- **Navigation** : zones tranche gauche/droite (72px, à cheval `-8px` sur
+  le bord du livre) — flèche SVG `opacity:0→0.9` au hover + soulèvement
+  du coin (`rotateY(-7deg)` recto / `-173deg` verso, classes `survol-*`
+  sur `.livre`) ; masquées aux extrémités. Clavier `←`/`→` + `Escape` ;
+  clic-overlay pointerdown+pointerup (pattern `Modal.svelte`) ; ✕
+  recette `.modal-close`.
+- ⚠️ **Piège chrome global des boutons** : `app.css` applique
+  `backdrop-filter:blur(6px)` + pseudo-éléments shine/reflet à TOUS les
+  `<button>` → les `.zone-tourne` (72px pleine hauteur sur les tranches)
+  floutaient le texte des bords de page. Correctif : `backdrop-filter:
+  none` + `::before/::after{content:none}` sur `.zone-tourne` (même
+  neutralisation que `.header` de Toolbar — réflexe à avoir pour tout
+  bouton « zone invisible »).
+- **Contenu** : `{#snippet face(pg, folio, cote)}` — couverture
+  (`id:"couverture"` = mise en page dédiée), verso orphelin (PAGES
+  impair) et bases = pages de garde décoratives. Blocs : `para` /
+  `liste` / `etapes` / `note` / `sep`. Titres et lettrine
+  (`::first-letter`) en **Caveat** (déjà injectée par `fonts.ts` —
+  zéro ajout de font) **sauf ru/zh/ja** : Caveat ne couvre pas le
+  cyrillique ni le CJK → `--fonte-titre` sur `.livre` bascule sur une
+  police système du pays (Segoe UI / Microsoft YaHei / Yu Gothic —
+  map `FONTES_TITRES`). Signature « Ryo Shinkawa » et marqueurs
+  d'étapes (chiffres) restent en Caveat. Folios bas-droite (recto) /
+  bas-gauche (verso).
+- **Palette** : `var(--livre-*)` (glace.css ← tokens `--t-parchemin`,
+  `--t-encre`, `--t-cuir`, `--t-dore`, `--t-ruban`…) — artwork interne
+  du composant ; le chrome de l'overlay reste sur les rôles existants.
+  Zéro hex dans le composant (règle figée Variables CSS UI).
+
+### Contenu (`src/lib/guide/contenu.ts`)
+
+- `BlocGuide` (`para|liste|etapes|note|sep`) + `PageGuide { id, titreCle,
+  blocs }` ; `PAGES[]` = ordre des faces. **Textes = clés i18n
+  uniquement** (`guide.pages.<id>.*` dans les 8 JSON — fr.json source de
+  vérité). Ajouter une page = 1 entrée `PAGES` + les clés ×8.
+- **Marqueurs `**…**`** : rendus `<strong class="mot-cle">` bordeaux par
+  `segments()` (split sur `**`). Les traductions doivent conserver le
+  même nombre de marqueurs, autour des mots équivalents (jamais autour
+  de la ponctuation).
+- **Registre figé : jamais de tutoiement**, aucune langue — infinitif /
+  impersonnel privilégié pour l'UI, sinon pronom formel (vous / Sie /
+  usted / Lei / вы-impératif pluriel / 您 / です・ます調). S'applique aux
+  fichiers i18n entiers, pas seulement au guide.
+- **Règle de rédaction** : seules des fonctionnalités **vérifiées dans
+  le code** sont documentées (pas de sommaire exhaustif, pas de features
+  dormantes) — re-grep la feature avant d'écrire ses textes.
+
+### Fichiers
+
+| Fichier | Rôle |
+|---|---|
+| `src/lib/components/GuideLivre.svelte` | Overlay + mécanique du livre (flip 3D, zones tranche, clavier, reprise localStorage) |
+| `src/lib/guide/contenu.ts` | Modèle de données `PAGES` / `BlocGuide` / `PageGuide` |
+| `src/lib/stores/ui.ts` | `"ergonomie"` dans `Section` + flag `guideLivreOpen` |
+| `src/lib/components/Toolbar.svelte` | Section Ergonomie (pied fixe) + variante `.cible-ergo` |
+| `src/App.svelte` | Import + montage `{#if $guideLivreOpen}` |
+| `src/theme/tokens.css` | Tokens `--t-*` palette livre + `--t-ardoise-700` |
+| `src/theme/glace.css` | Rôles `--livre-*` + `--carte-ardoise` |
+| `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `toolbar.ergonomie`/`guide`/`guideTitle` + section `guide` complète |

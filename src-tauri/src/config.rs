@@ -205,42 +205,6 @@ pub fn sauver_speedrun_config(app: &AppHandle, cfg: &SpeedrunConfig) -> Result<(
         .map_err(|e| format!("Écrire speedrun.json: {}", e))
 }
 
-// ===== Persistance baselines Speedrun (référence « dernière fois ») =====
-
-/// Baselines de comparaison du splitter : temps de split cumulés (secondes)
-/// par segment, indexés par chemin du fichier .lss. Mis à jour à chaque split
-/// réalisé (commande `speedrun_baseline_enregistrer`) — la colonne delta du
-/// splitter compare le run en cours à ces valeurs (fallback : PB du .lss).
-/// Persisté dans `speedrun_baselines.json`.
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-pub struct SpeedrunBaselines {
-    /// Map : chemin .lss → temps cumulés par segment (None = pas de données).
-    #[serde(default)]
-    pub par_lss: std::collections::HashMap<String, Vec<Option<f64>>>,
-}
-
-/// Lit les baselines speedrun (speedrun_baselines.json). Defaults si absent.
-pub fn lire_speedrun_baselines(app: &AppHandle) -> Result<SpeedrunBaselines, String> {
-    let dir = data_dir(app)?;
-    let path = dir.join("speedrun_baselines.json");
-    if !path.exists() {
-        return Ok(SpeedrunBaselines::default());
-    }
-    let content = fs::read_to_string(&path)
-        .map_err(|e| format!("Lire speedrun_baselines.json: {}", e))?;
-    serde_json::from_str(&content)
-        .map_err(|e| format!("Parse speedrun_baselines.json: {}", e))
-}
-
-/// Sauve les baselines speedrun (écrase si existe).
-pub fn sauver_speedrun_baselines(app: &AppHandle, cfg: &SpeedrunBaselines) -> Result<(), String> {
-    let dir = data_dir(app)?;
-    let path = dir.join("speedrun_baselines.json");
-    let json = serde_json::to_string(cfg)
-        .map_err(|e| format!("Serialize speedrun_baselines.json: {}", e))?;
-    fs::write(&path, json)
-        .map_err(|e| format!("Écrire speedrun_baselines.json: {}", e))
-}
 
 // ===== Persistance barre de raccourcis =====
 
@@ -313,6 +277,33 @@ pub fn marquer_onboarding_fait(app: &AppHandle) -> Result<(), String> {
     let path = dir.join("onboarding.json");
     let json = serde_json::json!({ "fait": true }).to_string();
     fs::write(&path, json).map_err(|e| format!("Écrire onboarding.json: {}", e))
+}
+
+// ===== Persistance langue UI (i18n dashboard) =====
+
+/// Lit la langue de l'UI (langue.json { "langue": "fr" }). None si absent ou
+/// illisible → le frontend détecte alors navigator.language (fallback "fr").
+/// Le code n'est PAS validé ici : la whitelist des langues vit côté front
+/// (stores/langue.ts) — un code inconnu retombe sur "fr" naturellement.
+pub fn lire_langue(app: &AppHandle) -> Option<String> {
+    let dir = data_dir(app).ok()?;
+    let path = dir.join("langue.json");
+    if !path.exists() {
+        return None;
+    }
+    let content = fs::read_to_string(&path).ok()?;
+    let v: serde_json::Value = serde_json::from_str(&content).ok()?;
+    v.get("langue")
+        .and_then(|l| l.as_str())
+        .map(|s| s.to_string())
+}
+
+/// Écrit langue.json { "langue": "<code>" } (écrase si existe).
+pub fn sauver_langue(app: &AppHandle, langue: &str) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("langue.json");
+    let json = serde_json::json!({ "langue": langue }).to_string();
+    fs::write(&path, json).map_err(|e| format!("Écrire langue.json: {}", e))
 }
 
 // ===== Persistance snapshot followers (détection unfollows) =====

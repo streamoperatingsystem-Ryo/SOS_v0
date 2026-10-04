@@ -1,18 +1,9 @@
 // Cadre SVG Thin Line — bordure fine minimaliste avec accents aux coins.
-// Variantes : graphite, argent, blanc-pure.
+// Tons dérivés des couleurs utilisateur : couleur = trait principal,
+// couleurFin = accent (défaut : couleur éclaircie).
 
 import type { CadreOpts } from "./cadre-cyberpunk";
-
-interface Variante {
-  principal: string;
-  accent: string;
-}
-
-const VARIANTES: Record<string, Variante> = {
-  graphite: { principal: "#2d2d2d", accent: "#4a4a4a" },
-  argent: { principal: "#a0a0a0", accent: "#c0c0c0" },
-  "blanc-pure": { principal: "#ffffff", accent: "#e0e0e0" },
-};
+import { couleurOu, eclaircir } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
@@ -26,8 +17,7 @@ export function getThinLineClipSize(strokeWidth = 4): number {
 export function getThinLineClipPath(
   W: number,
   H: number,
-  strokeWidth = 4,
-  _variante = "graphite"
+  strokeWidth = 4
 ): string {
   const r = getThinLineClipSize(strokeWidth);
   const rEff = Math.min(r, W / 4, H / 4);
@@ -36,7 +26,10 @@ export function getThinLineClipPath(
 
 export default function renderThinLine(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const p = VARIANTES[opts.variante ?? "graphite"] ?? VARIANTES.graphite;
+  const p = {
+    principal: couleurOu(opts.couleur, "#ffffff"),
+    accent: couleurOu(opts.couleurFin, eclaircir(couleurOu(opts.couleur, "#ffffff"), 0.3)),
+  };
   const ep = clampStrokeWidth(opts.strokeWidth ?? 4);
   const r = Math.min(getThinLineClipSize(ep), largeur / 4, hauteur / 4);
 

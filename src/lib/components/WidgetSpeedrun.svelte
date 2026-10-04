@@ -13,7 +13,8 @@
     totalSplits,
     segmentsLss,
     splits,
-    referenceSplits,
+    tempsSegment,
+    allerSplit,
     nomJeuLss,
     nomCategorieLss,
     estActif,
@@ -23,6 +24,7 @@
     chargerAsl,
     chargerLss,
   } from "../stores/speedrun";
+  import { t } from "../stores/langue";
 
   // Props
   // gradient : paire {from, to} du cadre de scène actif (fallback blanc→gris).
@@ -36,6 +38,15 @@
   // tailles internes sont en em → suit srTaillePolice. Défaut Rajdhani 27px.
   let srPolice = $derived(contenu?.srPolice ?? "Rajdhani");
   let srTaille = $derived(contenu?.srTaillePolice ?? 27);
+
+  // Disposition du splitter : "colonne" (vertical) | "ligne" (horizontal,
+  // façon LiveSplit) | "auto" (défaut) — auto bascule en ligne quand la
+  // hauteur passe sous ~4× la taille de base (assez pour timer + 1 rangée).
+  let srLayoutVal = $derived(contenu?.srLayout ?? "auto");
+  let srLigne = $derived(
+    srLayoutVal === "ligne" ||
+      (srLayoutVal !== "colonne" && (contenu?.hauteur ?? 9999) < srTaille * 4)
+  );
 
   // Ombre de contraste (noir ou blanc) selon la luminance de la couleur du
   // cadre : fait ressortir le timer (gradient) quel que soit le fond. Texte
@@ -57,12 +68,23 @@
   // l'état du moteur (segments + noms) pour le timer dashboard. Les contrôles
   // sont dans la Toolbar, mais le rechargement reste ici (le widget connaît
   // ses chemins persistés).
+  // ⚠️ Ne jamais dépendre de `contenu` entier : moveWidgetLocal/resize/rotate
+  // recréent l'objet widget à chaque pointermove → nouvelle identité de prop →
+  // l'effet relançait chargerAsl/chargerLss ~60×/s (gel « Ne répond pas »).
+  // On trace les CHEMINS via $derived (string inchangée → pas de re-run) +
+  // signature lastAsl/lastLss en garde anti-réentrée.
+  let cheminAslVal = $derived(contenu?.speedrunCheminAsl ?? null);
+  let cheminLssVal = $derived(contenu?.speedrunCheminLss ?? null);
+  let lastAsl: string | null = null;
+  let lastLss: string | null = null;
   $effect(() => {
-    if (contenu?.speedrunCheminAsl) {
-      chargerAsl(contenu.speedrunCheminAsl).catch(() => {});
+    if (cheminAslVal && cheminAslVal !== lastAsl) {
+      lastAsl = cheminAslVal;
+      chargerAsl(cheminAslVal).catch(() => {});
     }
-    if (contenu?.speedrunCheminLss) {
-      chargerLss(contenu.speedrunCheminLss).catch(() => {});
+    if (cheminLssVal && cheminLssVal !== lastLss) {
+      lastLss = cheminLssVal;
+      chargerLss(cheminLssVal).catch(() => {});
     }
   });
 
@@ -99,77 +121,98 @@
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${String(cs).padStart(2, "0")}`;
   }
 
-  // Temps de segment (delta, pas cumulé) pour chaque segment i.
-  //   - passé : cumul[i] - cumul[i-1]
-  //   - actif : tempsCourant - cumul[i-1]
-  //   - non parcouru : "--/--/--"
-  function tempsSegment(i: number): string {
+  // Durée PB du segment i (référence LiveSplit = pb[i] − pb[i−1] ; le .lss
+  // stocke les PB en CUMUL — real time d'abord, fallback game time).
+  // null si le segment n'a pas de PB OU si le précédent n'en a pas : sans
+  // pb[i−1], soustraire 0 rendrait le cumul entier au lieu de la durée.
+  function segPb(i: number): number | null {
+    const segs = $segmentsLss;
+    const cur = segs[i];
+    if (!cur) return null;
+    const pbCur = cur.pbRealTime ?? cur.pbGameTime;
+    if (pbCur == null) return null;
+    if (i === 0) return pbCur; // cumul du 1er segment = sa durée
+    const prev = segs[i - 1];
+    const pbPrev = prev ? (prev.pbRealTime ?? prev.pbGameTime) : null;
+    if (pbPrev == null) return null;
+    return pbCur - pbPrev;
+  }
+
+  // Colonne temps (droite) — sémantique LiveSplit :
+  //   - passé avec temps enregistré : durée réalisée figée ($splits[i])
+  //   - actif : temps vivant du segment (0:00.00 si armé en NotRunning)
+  //   - non atteint / skippé : durée PB du segment
+  function tempsSeg(i: number): string {
     const idx = $indexSplitCourant;
-    if (idx === null) return "--/--/--";
-    if (i < idx) {
-      const cumulI = parseTime($splits[i]);
-      const cumulPrev = i > 0 ? parseTime($splits[i - 1]) : 0;
-      return formatSegment(cumulI - cumulPrev);
+    if (idx !== null && i === idx) {
+      return $tempsSegment ?? "00:00.00";
     }
-    if (i === idx) {
-      const current = parseTime(tempsAffiche);
-      const cumulPrev = i > 0 ? parseTime($splits[i - 1]) : 0;
-      return formatSegment(current - cumulPrev);
+    const realise = $splits[i];
+    if (idx !== null && i < idx && realise) {
+      return realise;
     }
-    return "--/--/--";
+    const pb = segPb(i);
+    return pb !== null ? formatSegment(pb) : "";
   }
 
   // Formate un delta signé façon LiveSplit (colonne "+/−") : signe toujours
-  // présent, précision au dixième — "-1.6", "+2.3", "-1:23.4", "+1:02:03.4".
+  // présent, format m:ss (h:mm:ss au-delà d'une heure), secondes arrondies —
+  // jamais de décimales ("-1:01", "+0:12", "+1:02:03").
   function formatDelta(secs: number): string {
     const sign = secs < 0 ? "-" : "+";
-    const totalDs = Math.round(Math.abs(secs) * 10);
-    const h = Math.floor(totalDs / 36000);
-    const m = Math.floor((totalDs % 36000) / 600);
-    const s = Math.floor((totalDs % 600) / 10);
-    const d = totalDs % 10;
-    if (h > 0) {
-      return `${sign}${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}.${d}`;
-    }
-    if (m > 0) {
-      return `${sign}${m}:${String(s).padStart(2, "0")}.${d}`;
-    }
-    return `${sign}${s}.${d}`;
+    const totalS = Math.round(Math.abs(secs));
+    const h = Math.floor(totalS / 3600);
+    const m = Math.floor((totalS % 3600) / 60);
+    const s = totalS % 60;
+    const ss = String(s).padStart(2, "0");
+    if (h > 0) return `${sign}${h}:${String(m).padStart(2, "0")}:${ss}`;
+    return `${sign}${m}:${ss}`;
   }
 
-  // Delta vs référence « dernière fois » (baseline mergée PB) pour la 1ère
-  // colonne de chaque segment — CUMULÉ au split, comme LiveSplit :
-  //   - passé : cumulRun[i] - ref[i]
-  //   - actif : tempsCourant - ref[i]  (live à chaque tick)
-  //   - non parcouru / skip / pas de référence : "0.0" neutre (compteurs à
-  //     zéro — premier run sans sauvegarde)
-  // sens : "ahead" (vert, devant) | "behind" (rouge, derrière) | "neutre".
+  // Delta vs PB du segment (référence = segPb, durée PB du segment) — colonne
+  // "+/−" façon LiveSplit :
+  //   - actif : temps vivant − segPb (défile à chaque tick)
+  //   - passé : durée réalisée − segPb (figé au split)
+  //   - non atteint / skippé / armé en NotRunning / sans PB : vide
+  // sens : "ahead" (vert, gagné) | "behind" (rouge, perdu) | "neutre".
   function deltaInfo(i: number): { texte: string; sens: "ahead" | "behind" | "neutre" } {
+    const vide = { texte: "", sens: "neutre" as const };
     const idx = $indexSplitCourant;
-    const ref = $referenceSplits[i];
-    if (idx === null || i > idx || ref == null) return { texte: "0.0", sens: "neutre" };
-    let cumul: number | null = null;
+    const pb = segPb(i);
+    if (idx === null || i > idx || pb === null) return vide;
+    let seg: number | null = null;
     if (i < idx) {
-      // Split passé : temps enregistré (vide si le segment a été skippé).
+      // Split passé : durée enregistrée (vide si le segment a été skippé).
       const t = $splits[i];
-      if (t) cumul = parseTime(t);
-    } else {
-      cumul = parseTime(tempsAffiche);
+      if (t) seg = parseTime(t);
+    } else if ($phaseTimer !== "NotRunning") {
+      // Actif : temps vivant du segment. En NotRunning armé, pas de delta
+      // (le chrono n'a pas démarré).
+      if ($tempsSegment) seg = parseTime($tempsSegment);
     }
-    if (cumul === null) return { texte: "0.0", sens: "neutre" };
-    // Classer sur la valeur ARRONDIE au dixième (cohérent avec l'affichage :
-    // un delta affiché "0.0"/"-0.0" ne bascule pas de couleur).
-    const d = Math.round((cumul - ref) * 10) / 10;
+    if (seg === null) return vide;
+    // Classer sur la valeur ARRONDIE à la seconde (cohérent avec
+    // l'affichage m:ss : un delta affiché "+0:00" ne bascule pas de couleur).
+    const d = Math.round(seg - pb);
     return { texte: formatDelta(d), sens: d < 0 ? "ahead" : d > 0 ? "behind" : "neutre" };
+  }
+
+  // Clic sur une ligne : arme l'index (timer arrêté) ou saute à l'index en
+  // retry de segment (run en cours). Actif seulement si le splitter tourne
+  // ($estActif — moteur démarré). pointerdown/dblclick stoppés : pas de
+  // drag/select du widget, pas de commitScene.
+  function clicSegment(i: number) {
+    if (!$estActif) return;
+    allerSplit(i).catch(() => {});
   }
 
   // Phase label court
   let phaseLabel = $derived.by(() => {
     switch ($phaseTimer) {
-      case "Running": return "Running";
-      case "Paused": return "Paused";
-      case "Ended": return "Finished";
-      default: return "Ready";
+      case "Running": return $t("widgetSpeedrun.phaseRunning");
+      case "Paused": return $t("widgetSpeedrun.phasePaused");
+      case "Ended": return $t("widgetSpeedrun.phaseEnded");
+      default: return $t("widgetSpeedrun.phaseReady");
     }
   });
   let phaseCls = $derived.by(() => {
@@ -194,21 +237,30 @@
   // Scroll auto : centrer le segment actif dans la liste quand l'index change.
   // Pas de smooth behavior (saccade dans le dashboard Tauri webview).
   // Au reset/arrêt (idx === null), remonter en haut pour voir le 1er split
-  // au prochain démarrage.
+  // au prochain démarrage. Mode ligne : centrage horizontal (scrollLeft).
   $effect(() => {
     const idx = $indexSplitCourant;
     if (!segmentsEl) return;
     if (idx === null) {
       segmentsEl.scrollTop = 0;
+      segmentsEl.scrollLeft = 0;
       return;
     }
     const segs = segmentsEl.querySelectorAll(".speedrun-segment");
     if (idx >= 0 && idx < segs.length) {
       const actif = segs[idx] as HTMLElement;
-      const containerH = segmentsEl.clientHeight;
-      const target = actif.offsetTop - (containerH - actif.offsetHeight) / 2;
-      if (target >= 0 && Math.abs(segmentsEl.scrollTop - target) > 1) {
-        segmentsEl.scrollTop = target;
+      if (srLigne) {
+        const containerW = segmentsEl.clientWidth;
+        const target = actif.offsetLeft - (containerW - actif.offsetWidth) / 2;
+        if (target >= 0 && Math.abs(segmentsEl.scrollLeft - target) > 1) {
+          segmentsEl.scrollLeft = target;
+        }
+      } else {
+        const containerH = segmentsEl.clientHeight;
+        const target = actif.offsetTop - (containerH - actif.offsetHeight) / 2;
+        if (target >= 0 && Math.abs(segmentsEl.scrollTop - target) > 1) {
+          segmentsEl.scrollTop = target;
+        }
       }
     }
   });
@@ -216,6 +268,7 @@
 
 <div
   class="speedrun-widget"
+  class:sr-ligne={srLigne}
   style="--sr-grad-from:{gradient.from}; --sr-grad-to:{gradient.to}; --sr-ombre:{srOmbre}; font-family: '{srPolice}', sans-serif; font-size: {srTaille}px;"
 >
   {#if $erreurSpeedrun}
@@ -231,12 +284,12 @@
         <div class="sr-cat">{$nomCategorieLss}</div>
       {/if}
     {:else}
-      <div class="sr-titre-jeu"><span class="sr-placeholder">Aucun splits chargé</span></div>
+      <div class="sr-titre-jeu"><span class="sr-placeholder">{$t("widgetSpeedrun.aucunSplits")}</span></div>
     {/if}
     {#if $estConnecte}
-      <span class="sr-status ok" title="{$nomProcessus ?? "connecté"}">●</span>
+      <span class="sr-status ok" title={$nomProcessus ?? $t("widgetSpeedrun.connecte")}>●</span>
     {:else if $estActif}
-      <span class="sr-status attente" title="en attente…">○</span>
+      <span class="sr-status attente" title={$t("widgetSpeedrun.enAttente")}>○</span>
     {/if}
   </div>
 
@@ -267,17 +320,22 @@
     <div class="speedrun-segments" bind:this={segmentsEl}>
       {#each $segmentsLss as seg, i}
         {@const delta = deltaInfo(i)}
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <!-- svelte-ignore a11y_click_events_have_key_events -->
         <div
           class="speedrun-segment"
           class:actif={$indexSplitCourant === i}
           class:done={$indexSplitCourant !== null && $indexSplitCourant > i}
           class:seg-ahead={delta.sens === "ahead"}
           class:seg-behind={delta.sens === "behind"}
+          class:cliquable={$estActif}
+          onpointerdown={(e) => e.stopPropagation()}
+          ondblclick={(e) => e.stopPropagation()}
+          onclick={() => clicSegment(i)}
         >
-          <span class="seg-idx">{i + 1}</span>
           <span class="seg-nom">{seg.nom}</span>
+          <span class="seg-time">{tempsSeg(i)}</span>
           <span class="seg-pb delta-{delta.sens}">{delta.texte}</span>
-          <span class="seg-time">{tempsSegment(i)}</span>
         </div>
       {/each}
     </div>
@@ -462,6 +520,13 @@
     background: linear-gradient(135deg, color-mix(in srgb, var(--sr-grad-from) 35%, #000), #000000);
     transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
   }
+  /* Clic = armer/sauter vers le split : la ligne capture le clic quand le
+     splitter tourne (.widget-3d a pointer-events:none). stopPropagation sur
+     pointerdown → la ligne ne drague pas le widget. */
+  .speedrun-segment.cliquable {
+    pointer-events: auto;
+    cursor: pointer;
+  }
   .speedrun-segment.actif {
     /* Split en cours : dégradé couleur user pleine → noir + cadre fluo
        lumineux de la couleur variable (glow externe + interne). */
@@ -476,19 +541,6 @@
     color: var(--gris);
     opacity: 0.6;
   }
-  .seg-idx {
-    font-size: 0.85em;
-    font-weight: 700;
-    color: var(--gris);
-    min-width: 1.4em;
-    text-align: right;
-    font-variant-numeric: tabular-nums;
-    text-shadow: 0 1px 2px #000;
-  }
-  .speedrun-segment.actif .seg-idx {
-    color: var(--sr-grad-from);
-    text-shadow: 0 0 6px var(--sr-grad-from), 0 1px 2px #000;
-  }
   .seg-nom {
     flex: 1;
     overflow: hidden;
@@ -496,14 +548,18 @@
     white-space: nowrap;
     text-shadow: 0 1px 2px #000, 0 0 1px #000;
   }
-  /* Colonne delta « dernière fois » (1ère colonne temps, ex-PB) : vert =
-     temps gagné (devant la référence), rouge = temps perdu, gris = neutre
-     ("0.0", pas de comparaison). Variables sémantiques — jamais d'hex. */
+  /* Colonne delta (dernière colonne, façon LiveSplit "+/−") : vert = temps
+     gagné vs PB du segment, rouge = temps perdu, gris = neutre. Largeur de
+     colonne fixe — la case reste visible même vide (jamais display:none).
+     Variables sémantiques — jamais d'hex. */
   .seg-pb {
     font-variant-numeric: tabular-nums;
     color: var(--gris);
     font-size: 0.9em;
     text-shadow: 0 1px 2px #000;
+    min-width: 3.2em;
+    text-align: right;
+    flex-shrink: 0;
   }
   .seg-pb.delta-ahead { color: var(--message-ok-color); }
   .seg-pb.delta-behind { color: var(--message-error-color); }
@@ -522,6 +578,11 @@
     font-size: 0.9em;
     font-weight: 600;
     text-shadow: 0 1px 2px #000;
+    /* Largeur de colonne fixe : le temps de segment reste visible même vide
+       (split non atteint sans PB) — jamais display:none. */
+    min-width: 3.6em;
+    text-align: right;
+    flex-shrink: 0;
   }
   /* Split actif : temps en couleur cadre + glow doux (une seule couche
      lumineuse + ombre noire de lisibilité). */
@@ -531,6 +592,60 @@
     text-shadow:
       0 0 0.4em var(--sr-grad-from),
       0 1px 2px #000;
+  }
+
+  /* ===== Mode ligne (srLayout "ligne", ou "auto" sous le seuil de hauteur)
+     Façon LiveSplit horizontal : splits en scroll horizontal à gauche
+     (cellules empilées nom / delta+temps), timer épinglé à droite. Header,
+     meta et barre de progression masqués — la ligne reste lisible. */
+  .speedrun-widget.sr-ligne {
+    flex-direction: row;
+    align-items: center;
+    gap: 0.4em;
+    padding: 0.3em 0.5em;
+  }
+  .speedrun-widget.sr-ligne .sr-header,
+  .speedrun-widget.sr-ligne .sr-meta,
+  .speedrun-widget.sr-ligne .sr-barre {
+    display: none;
+  }
+  .speedrun-widget.sr-ligne .sr-timer {
+    margin: 0;
+    flex-shrink: 0;
+    order: 2;
+  }
+  .speedrun-widget.sr-ligne .sr-timer-valeur {
+    font-size: 1.4em;
+  }
+  .speedrun-widget.sr-ligne .speedrun-segments {
+    flex-direction: row;
+    align-items: stretch;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex: 1;
+    min-width: 0;
+    padding-top: 0;
+  }
+  .speedrun-widget.sr-ligne .speedrun-segments::-webkit-scrollbar {
+    width: 0;
+    height: 5px;
+  }
+  /* Cellule empilée : nom en haut (pleine largeur via wrap), temps + delta
+     côte à côte dessous. */
+  .speedrun-widget.sr-ligne .speedrun-segment {
+    flex-wrap: wrap;
+    flex: 0 0 auto;
+    min-width: 5.5em;
+    max-width: 9em;
+    padding: 0.15em 0.4em;
+    gap: 0 0.4em;
+    align-content: center;
+  }
+  .speedrun-widget.sr-ligne .seg-nom { flex: 0 0 100%; }
+  .speedrun-widget.sr-ligne .seg-time { flex: 1; }
+  .speedrun-widget.sr-ligne .seg-pb,
+  .speedrun-widget.sr-ligne .seg-time {
+    font-size: 0.75em;
   }
 
   /* ===== Erreur ===== */
