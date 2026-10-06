@@ -5,10 +5,11 @@
 // (.fond-image dans .fond-decor — app.css ; le canvas reste opaque).
 // Persistée en localStorage (préférence cosmétique machine-only, même
 // pattern que obs.ts).
-import { writable, type Writable } from "svelte/store";
+import { get, writable, type Writable } from "svelte/store";
 import { tauri } from "../tauri";
 
 const LS_FOND = "sidebarFond";
+const MEDIA_BASE = "http://127.0.0.1:4321/";
 
 function lireLS(cle: string): string | null {
   try {
@@ -29,6 +30,28 @@ fondSidebar.subscribe((v) => {
     // ignore (quota / mode privé) — le fond marche quand même en RAM
   }
 });
+
+/// Vérifie au boot que le média du fond existe encore sur :4321 — sinon
+/// reset du store (localStorage nettoyé via le subscribe ci-dessus). Le
+/// fichier peut avoir été supprimé du dossier medias/ hors de l'app :
+/// localStorage garderait la référence et la CSS redemanderait l'URL à
+/// chaque rendu (404 en boucle). Jamais de reset sur erreur réseau pure
+/// (serveur :4321 pas encore prêt, offline) : on attend une vraie réponse
+/// HTTP, bornée ~15 s puis abandon (le fond reste, tant pis).
+async function verifierFondExistant(rel: string | null): Promise<void> {
+  if (!rel) return;
+  for (let i = 0; i < 15; i++) {
+    try {
+      const r = await fetch(`${MEDIA_BASE}${rel}`, { method: "HEAD" });
+      if (!r.ok) fondSidebar.set(null);
+      return;
+    } catch {
+      await new Promise((res) => setTimeout(res, 1000));
+    }
+  }
+}
+
+void verifierFondExistant(get(fondSidebar));
 
 /// Dialog « Images » → validation + copie vers medias/ (commande commune
 /// import_alerte_media, filtre image seul) → le fond suit immédiatement.

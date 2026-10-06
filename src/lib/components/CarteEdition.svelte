@@ -25,7 +25,12 @@
     setChatFiltre, setChatStyle, setChatTaillePoliceLocal,
     setSpeedrunPolice, setSpeedrunPoliceLocal, setSpeedrunConfig,
     setInputViewerConfig, setInputViewerConfigLocal, setCameraDevice, setGoalConfig,
+    setMusiqueConfig,
     resetMorphsWidget, resetMorphsFond,
+    ajouterSlidesMedia, retirerSlideMedia, deplacerSlideMedia,
+    setSlidesSecMedia, viderSlidesMedia,
+    ajouterSlidesFond, retirerSlideFond, deplacerSlideFond,
+    setSlidesSecFond, viderSlidesFond,
   } from "../stores/scene";
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
   import { videoRegistry } from "../stores/video";
@@ -41,7 +46,7 @@
   import { tauri } from "../tauri";
   import {
     GOAL_METRIQUES, goalSuggestion,
-    type GoalPlateforme, type GoalMetrique, type TwitchGoal,
+    type GoalPlateforme, type GoalMetrique, type TwitchGoal, type MediaSlide,
   } from "../tauri";
   import { valeursGoals, goalsTwitch } from "../stores/objectifs";
   import { connexions, connecterTwitch } from "../stores/chat";
@@ -129,6 +134,8 @@
   );
   let isSpeedrunWidget = $derived(selectedType === "speedrun");
   let isGoalWidget = $derived(selectedType === "goal");
+  let isMusiqueWidget = $derived(selectedType === "musique");
+  let musiqueModeVal = $derived(selectedWidget?.musiqueMode ?? "player");
   let isMediaWidget = $derived(selectedType === "media");
   let chatFiltreVal = $derived(selectedWidget?.chatFiltre ?? "unifie");
   let chatStyleVal = $derived(selectedWidget?.chatStyle ?? "compact");
@@ -228,6 +235,7 @@
   // on ajoute le nom du fichier importé si disponible (mediaNom).
   const TYPES_WIDGET = [
     "media", "chat", "camera", "welcome-clip", "input-viewer", "speedrun", "goal",
+    "musique",
   ];
   let nomsTypes = $derived.by(() => {
     const tr = $t;
@@ -283,7 +291,10 @@
   let bgPixel = $derived($sceneStore.bgPixel ?? 0);
   let bgMiroirH = $derived($sceneStore.bgMiroirH === true);
   let bgMiroirV = $derived($sceneStore.bgMiroirV === true);
-  let hasFond = $derived(bgMedia.length > 0);
+  // Slides du carrousel de fond — liste non vide = prioritaire sur bgMedia.
+  let bgSlides = $derived($sceneStore.bgSlides ?? []);
+  let bgSlidesSec = $derived($sceneStore.bgSlidesSec ?? 5);
+  let hasFond = $derived(bgMedia.length > 0 || bgSlides.length > 0);
   // Fond = capture OBS (app/jeu plein canvas) : PRIORITAIRE sur le média —
   // bgMedia reste stocké mais n'est pas peint tant que la capture est active.
   let bgObsSource = $derived($sceneStore.bgObsSource ?? null);
@@ -291,6 +302,35 @@
   let fondVideoEl = $derived($videoRegistry.get("fond"));
   let bgPaused = $derived($sceneStore.bgPaused ?? true);
   let bgTime = $derived($sceneStore.bgTime ?? 0);
+
+  // ===== Carrousel d'images (mediaSlides widget / bgSlides fond) =====
+  // Liste non vide = carrousel actif (prioritaire sur le média unique, qui
+  // reste stocké). Images uniquement — fondu enchaîné côté diffusion.
+  let widgetSlides = $derived(selectedWidget?.mediaSlides ?? []);
+  let widgetSlidesSec = $derived(selectedWidget?.mediaSlidesSec ?? 5);
+  // Brouillons d'intervalle pendant le drag du slider — commit au change,
+  // même pattern que les sliders de transformation.
+  let widgetSlidesSecBrouillon = $state<number | null>(null);
+  let bgSlidesSecBrouillon = $state<number | null>(null);
+  let widgetSlidesSecVal = $derived(widgetSlidesSecBrouillon ?? widgetSlidesSec);
+  let bgSlidesSecVal = $derived(bgSlidesSecBrouillon ?? bgSlidesSec);
+
+  function onAjouterSlidesMedia(): void { void ajouterSlidesMedia(); }
+  function onAjouterSlidesFond(): void { void ajouterSlidesFond(); }
+  function onWidgetSlidesSecInput(e: Event): void {
+    widgetSlidesSecBrouillon = +(e.target as HTMLInputElement).value;
+  }
+  function onWidgetSlidesSecChange(): void {
+    if (widgetSlidesSecBrouillon !== null) void setSlidesSecMedia(widgetSlidesSecBrouillon);
+    widgetSlidesSecBrouillon = null;
+  }
+  function onBgSlidesSecInput(e: Event): void {
+    bgSlidesSecBrouillon = +(e.target as HTMLInputElement).value;
+  }
+  function onBgSlidesSecChange(): void {
+    if (bgSlidesSecBrouillon !== null) void setSlidesSecFond(bgSlidesSecBrouillon);
+    bgSlidesSecBrouillon = null;
+  }
 
   // ===== Cadres SVG =====
   // Toggle par widget (sansCadre — opt-out par instance, tous types) +
@@ -828,6 +868,18 @@
                   </button>
                   <p class="hint">{$t("carteEdition.goalHint")}</p>
                 {/if}
+              {:else if isMusiqueWidget}
+                <!-- Widget musique : mini-lecteur Winamp rendu dans la
+                     diffusion (LCD marquee + équalizer + barre). Deux modes :
+                     player = tout, eq = bandes de spectre seules. -->
+                <div class="fit-group">
+                  <span class="field-label">{$t("carteEdition.musiqueMode")}</span>
+                  <div class="fit-buttons">
+                    <button class="fit-btn" class:active={musiqueModeVal === "player"} onclick={() => selectedId && setMusiqueConfig(selectedId, "player")}>{$t("carteEdition.musiqueModePlayer")}</button>
+                    <button class="fit-btn" class:active={musiqueModeVal === "eq"} onclick={() => selectedId && setMusiqueConfig(selectedId, "eq")}>{$t("carteEdition.musiqueModeEq")}</button>
+                  </div>
+                </div>
+                <p class="hint">{$t("carteEdition.musiqueHint")}</p>
               {:else}
                 <!-- Widget média : fenêtre de capture + source OBS -->
                 <button class="action" onclick={onToggleTrou}>
@@ -839,6 +891,11 @@
                   {:else}
                     <button class="action" onclick={onOpenObsDialog}>{$t("carteEdition.sourceObsLier")}</button>
                   {/if}
+                {/if}
+                {#if isMediaWidget}
+                  <!-- Carrousel d'images (mediaSlides) : liste non vide =
+                       prioritaire sur le média unique du widget. -->
+                  {@render carrouselBloc(widgetSlides, widgetSlidesSecVal, onAjouterSlidesMedia, retirerSlideMedia, deplacerSlideMedia, onWidgetSlidesSecInput, onWidgetSlidesSecChange, viderSlidesMedia)}
                 {/if}
               {/if}
               <!-- Cadre sur ce widget (sansCadre — opt-out par instance,
@@ -887,6 +944,7 @@
             </button>
           {:else if !hasFond}
             <button class="action" onclick={importFond}>{$t("carteEdition.importerFond")}</button>
+            <button class="action" onclick={onAjouterSlidesFond}>{$t("carteEdition.carrouselCreer")}</button>
             <button class="action" onclick={() => (obsFondDialogOpen = true)}>{$t("carteEdition.appEnFond")}</button>
             <p class="hint">{$t("carteEdition.aucunFond")}</p>
           {:else}
@@ -906,6 +964,9 @@
               <button class="action" onclick={() => titreFondModalOpen.set(true)}>
                 {hasBgTitre ? $t("carteEdition.titreFondModifier") : $t("carteEdition.titreFondAjouter")}
               </button>
+              <!-- Carrousel d'images du fond (bgSlides) : liste non vide =
+                   prioritaire sur bgMedia (bgObsSource reste au-dessus). -->
+              {@render carrouselBloc(bgSlides, bgSlidesSecVal, onAjouterSlidesFond, retirerSlideFond, deplacerSlideFond, onBgSlidesSecInput, onBgSlidesSecChange, viderSlidesFond)}
             {:else if tabFond === "transformation"}
               <Gizmo3D cible="fond" />
               <div class="fit-group">
@@ -1002,6 +1063,41 @@
     <input class="range" type="range" {min} {max} {step} value={valeur} {oninput} {onchange} />
     <span class="slider-val">{fmt ? fmt(valeur) : String(valeur)}</span>
   </div>
+{/snippet}
+
+<!-- Bloc partagé du carrousel d'images (widget média + fond de scène) :
+     liste ordonnée de slides (défilement séquentiel + fondu enchaîné
+     côté diffusion), ajout/retrait/réordonnancement + intervalle. -->
+{#snippet carrouselBloc(
+  slides: MediaSlide[],
+  secVal: number,
+  onAjouter: () => void,
+  onRetirer: (i: number) => void,
+  onDeplacer: (i: number, dir: -1 | 1) => void,
+  onSecInput: (e: Event) => void,
+  onSecChange: () => void,
+  onVider: () => void
+)}
+  <div class="fit-group">
+    <span class="field-label">{$t("carteEdition.carrousel")}</span>
+  </div>
+  {#if slides.length}
+    <div class="slides-list">
+      {#each slides as slide, i}
+        <div class="slide-ligne">
+          <span class="slide-nom" title={slide.rel}>{i + 1}. {slide.nom}</span>
+          <button class="slide-btn" title={$t("carteEdition.carrouselMonter")} onclick={() => onDeplacer(i, -1)} disabled={i === 0}>↑</button>
+          <button class="slide-btn" title={$t("carteEdition.carrouselDescendre")} onclick={() => onDeplacer(i, 1)} disabled={i === slides.length - 1}>↓</button>
+          <button class="slide-btn slide-del" title={$t("carteEdition.carrouselRetirer")} onclick={() => onRetirer(i)}>✕</button>
+        </div>
+      {/each}
+    </div>
+    {@render sliderLigne($t("carteEdition.carrouselSec"), secVal, 1, 60, 1, onSecInput, onSecChange, (v) => Math.round(v) + " s")}
+  {/if}
+  <button class="action" onclick={onAjouter}>{slides.length ? $t("carteEdition.carrouselAjouter") : $t("carteEdition.carrouselCreer")}</button>
+  {#if slides.length}
+    <button class="action" onclick={onVider}>{$t("carteEdition.carrouselVider")}</button>
+  {/if}
 {/snippet}
 
 {#snippet controlesTransformation()}
@@ -1398,17 +1494,12 @@
     opacity: 0.6;
     cursor: default;
   }
+  /* Style select = global (app.css). Locaux : largeur pleine + accent
+     par-carte au focus (pas l'accent-ui global). */
   select {
-    background: var(--fond-controle);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    padding: 0.35rem 0.5rem;
-    font: inherit;
-    font-size: 0.85rem;
     width: 100%;
   }
   select:focus {
-    outline: none;
     border-color: var(--accent-carte);
   }
   .fit-group {
@@ -1434,26 +1525,58 @@
     background: var(--fond);
     color: var(--texte);
   }
-  .police-select {
-    width: 100%;
-    padding: 0.4rem 0.5rem;
+
+  /* ===== Carrousel d'images : liste ordonnée des slides ===== */
+  .slides-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.2rem;
+    max-height: 10rem;
+    overflow-y: auto;
+  }
+  .slide-ligne {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    background: var(--btn-surface);
+    border: 1px solid var(--bordure);
+    box-shadow: var(--btn-inset);
+    padding: 0.2rem 0.3rem;
+    min-width: 0;
+  }
+  .slide-nom {
+    flex: 1;
+    font-size: 0.75rem;
+    opacity: 0.85;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .slide-btn {
+    flex-shrink: 0;
     background: var(--fond-controle);
     color: var(--texte);
     border: 1px solid var(--bordure-ui);
     font: inherit;
-    font-size: 0.85rem;
+    font-size: 0.7rem;
+    line-height: 1;
+    padding: 0.2rem 0.35rem;
     cursor: pointer;
+    min-width: 1.4rem;
+    text-align: center;
   }
-  .police-select:focus {
-    outline: none;
-    border-color: var(--accent-carte);
+  .slide-btn:hover {
+    background: var(--btn-surface-hover);
+    border-color: var(--bordure-active);
   }
-  .police-select option {
-    padding: 0.3rem;
-    background: var(--fond);
-    color: var(--texte);
+  .slide-btn:disabled {
+    opacity: 0.3;
+    cursor: default;
   }
-
+  .slide-del {
+    color: var(--dash-danger);
+  }
   /* ===== Speedrun ===== */
   .speedrun-ctrl-row {
     display: grid;

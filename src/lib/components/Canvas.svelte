@@ -19,6 +19,8 @@
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
   import { creerRenduMorph, dessinerFitCanvas, chaineFilter, type RenduMorph } from "../morph/gl-morph";
   import WidgetComp from "./Widget.svelte";
+  import ModuleHud from "./ModuleHud.svelte";
+  import { MODULE_IDS } from "../tauri";
   import AlignmentGuides from "./AlignmentGuides.svelte";
   import CadreSVG from "./CadreSVG.svelte";
   import ObsSourceDialog from "./ObsSourceDialog.svelte";
@@ -82,7 +84,34 @@
   let bgFilter = $derived(chaineFilter(bgLum, bgContraste, bgTeinte, bgFlou));
   // Fond = capture OBS (app/jeu plein canvas) : prioritaire sur le média.
   let bgObsSource = $derived($sceneStore.bgObsSource ?? null);
-  let hasFond = $derived(bgMedia.length > 0 || !!bgObsSource);
+  // ===== Carrousel d'images du fond (bgSlides) =====
+  // Liste non vide = carrousel actif (prioritaire sur bgMedia qui reste
+  // stocké ; bgObsSource garde la priorité absolue — même règle que la
+  // diffusion). Preview = slide courante avancée par un intervalle LOCAL ;
+  // le fondu enchaîné n'est rendu que côté :4321 — ici swap de src simple.
+  let bgSlidesList = $derived(
+    $sceneStore.bgSlides && $sceneStore.bgSlides.length > 0 && !bgObsSource
+      ? $sceneStore.bgSlides
+      : null
+  );
+  let bgSlideIdx = $state(0);
+  let bgSlideCourante = $derived(
+    bgSlidesList ? bgSlidesList[Math.min(bgSlideIdx, bgSlidesList.length - 1)] : null
+  );
+  $effect(() => {
+    // Liste changée (ajout/retrait/réordonnancement) → repartir au début.
+    void bgSlidesList;
+    bgSlideIdx = 0;
+  });
+  $effect(() => {
+    if (!bgSlidesList || bgSlidesList.length < 2) return;
+    const ms = Math.max(1, $sceneStore.bgSlidesSec ?? 5) * 1000;
+    const timer = setInterval(() => {
+      bgSlideIdx = (bgSlideIdx + 1) % bgSlidesList.length;
+    }, ms);
+    return () => clearInterval(timer);
+  });
+  let hasFond = $derived(bgMedia.length > 0 || !!bgObsSource || !!bgSlidesList);
   // ===== Aides contextuelles (presets guidés — dashboard uniquement) =====
   // Encadrés jaune-orangé auto-masqués : aideFond disparaît dès qu'un média
   // ou une capture OBS est lié au fond ; aideObjectifs disparaît quand
@@ -158,11 +187,9 @@
   let cadre = $derived($sceneStore.cadreWidget ?? null);
   let cadreActif = $derived(!!cadre?.actif && (cadre?.strokeWidth ?? 0) > 0);
   let cadreBordActif = $derived(cadreActif && (cadre?.bordActif ?? true));
-  // Couleur du badge « en lecture dans OBS » (fond) = couleur du cadre
-  // (couleur utilisateur). Fallback --texte si pas de cadre actif.
-  let bgLectureCouleur = $derived(
-    cadreActif && cadre ? cadre.couleur : "var(--texte)"
-  );
+  // Le badge « en lecture dans OBS » (fond) est orange fixe
+  // (.lecture-obs-fond — recette .msg-pill, app.css) — jamais la couleur
+  // du cadre.
 
   // ===== Titre du fond de l'application (intérieur haut/bas) =====
   // Titres du fond (haut/bas/gauche/droite — intérieur du fond, latéraux en
@@ -238,7 +265,7 @@
     // Bouton gauche uniquement : le clic droit ouvre le menu contextuel du
     // fond (oncontextmenu) — il ne doit ni désélectionner ni déposer un morph.
     if (e.button !== 0) return;
-    if ($morphMode && hasFond && !bgIsVideo) {
+    if ($morphMode && hasFond && (!bgIsVideo || bgSlidesList)) {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       const nx = Math.min(1, Math.max(0, (e.clientX - rect.left) / rect.width));
       const ny = Math.min(1, Math.max(0, (e.clientY - rect.top) / rect.height));
@@ -258,7 +285,7 @@
   let bgMorphSurvol = $state(false);
 
   function onCanvasPointerMove(e: PointerEvent) {
-    if ($morphMode && hasFond && !bgIsVideo) {
+    if ($morphMode && hasFond && (!bgIsVideo || bgSlidesList)) {
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
       bgMorphCx = (e.clientX - rect.left) / scale;
       bgMorphCy = (e.clientY - rect.top) / scale;
@@ -396,12 +423,14 @@
 
   function rendreBgMorph(): void {
     if (!bgRendu) return;
-    const src: HTMLImageElement | HTMLVideoElement | null = bgIsVideo
+    // Carrousel : la source est la slide courante (bgImgEl) — jamais la vidéo.
+    const useVideo = bgIsVideo && !bgSlidesList;
+    const src: HTMLImageElement | HTMLVideoElement | null = useVideo
       ? bgVideoEl ?? null
       : bgImgEl ?? null;
     if (!src) return;
-    const sw = bgIsVideo ? bgVideoEl!.videoWidth : bgImgEl!.naturalWidth;
-    const sh = bgIsVideo ? bgVideoEl!.videoHeight : bgImgEl!.naturalHeight;
+    const sw = useVideo ? bgVideoEl!.videoWidth : bgImgEl!.naturalWidth;
+    const sh = useVideo ? bgVideoEl!.videoHeight : bgImgEl!.naturalHeight;
     if (!sw || !sh) return;
     if (!bgOff) bgOff = document.createElement("canvas");
     if (bgOff.width !== canvasW) bgOff.width = canvasW;
@@ -459,6 +488,7 @@
     void bgPret;
     void $sceneStore.bgMorphs;
     void bgMedia;
+    void bgSlideCourante; // repeindre à chaque slide du carrousel
     canvasW;
     canvasH;
     void bgRot;
@@ -480,14 +510,16 @@
   function rendreBgPixel(): void {
     const cv = bgPixelCanvasEl;
     if (!cv) return;
-    const src: HTMLImageElement | HTMLVideoElement | null = bgIsVideo
+    // Carrousel : la source est la slide courante (bgImgEl) — jamais la vidéo.
+    const useVideo = bgIsVideo && !bgSlidesList;
+    const src: HTMLImageElement | HTMLVideoElement | null = useVideo
       ? bgVideoEl ?? null
       : bgImgEl ?? null;
     if (!src) return;
-    const sw = bgIsVideo ? bgVideoEl!.videoWidth : bgImgEl!.naturalWidth;
-    const sh = bgIsVideo ? bgVideoEl!.videoHeight : bgImgEl!.naturalHeight;
+    const sw = useVideo ? bgVideoEl!.videoWidth : bgImgEl!.naturalWidth;
+    const sh = useVideo ? bgVideoEl!.videoHeight : bgImgEl!.naturalHeight;
     if (!sw || !sh) return;
-    if (bgIsVideo && bgVideoEl!.readyState < 2) return;
+    if (useVideo && bgVideoEl!.readyState < 2) return;
     if (cv.width !== canvasW) cv.width = canvasW;
     if (cv.height !== canvasH) cv.height = canvasH;
     const ctx = cv.getContext("2d");
@@ -526,6 +558,7 @@
     if (bgAMorphs || bgPixel <= 0 || !bgPixelCanvasEl) return;
     void bgPret;
     void bgMedia;
+    void bgSlideCourante; // repeindre à chaque slide du carrousel
     canvasW;
     canvasH;
     void bgRot;
@@ -568,7 +601,7 @@
   {#if scale > 0}
     <div
       class="canvas"
-      class:morphable={$morphMode && hasFond && !bgIsVideo && !bgObsSource}
+      class:morphable={$morphMode && hasFond && (!bgIsVideo || bgSlidesList) && !bgObsSource}
       style="width:{canvasW}px; height:{canvasH}px; transform: scale({scale});"
       onpointerdown={onCanvasPointerDown}
       onpointermove={onCanvasPointerMove}
@@ -584,14 +617,14 @@
                  plus — page transparente → la source SOS-Fond-* en bas de
                  pile OBS apparaît). Pastille informative (recette .msg-pill,
                  pattern .lecture-obs-fond). -->
-            <div class="lecture-obs-fond msg-pill" style="color: {bgLectureCouleur};">
+            <div class="lecture-obs-fond msg-pill">
               <span class="msg-pill-icon">▶</span>
               <span class="msg-pill-text">{$t("canvas.captureFond")}</span>
             </div>
           {:else if bgAMorphs}
             <!-- Rendu morphé : canvas GL (le warp inclut fit + transforms fond) -->
             <canvas bind:this={bgMorphCanvasEl} class="bg-media morph-canvas" draggable="false"></canvas>
-            {#if bgIsVideo}
+            {#if bgIsVideo && !bgSlidesList}
               <video
                 bind:this={bgVideoEl}
                 class="bg-src-cachee"
@@ -606,7 +639,7 @@
               <img
                 bind:this={bgImgEl}
                 class="bg-src-cachee"
-                src={MEDIA_BASE + bgMedia}
+                src={MEDIA_BASE + (bgSlideCourante?.rel ?? bgMedia)}
                 alt=""
                 draggable="false"
                 crossorigin="anonymous"
@@ -614,7 +647,21 @@
               />
             {/if}
           {:else}
-            {#if bgIsVideo}
+            {#if bgSlidesList && bgSlideCourante}
+              <!-- Carrousel de fond : preview du slide courant (le fondu
+                   enchaîné n'est rendu que côté diffusion — ici swap de src).
+                   bgImgEl sert de source au chemin pixelisé, comme bgMedia. -->
+              <img
+                class="bg-media"
+                class:bg-cachee={bgPixel > 0}
+                bind:this={bgImgEl}
+                src={MEDIA_BASE + bgSlideCourante.rel}
+                alt=""
+                draggable="false"
+                onload={() => (bgPret += 1)}
+                style="object-fit:{bgFitCss}; object-position:{bgFit === 'centrer' ? 'center' : '50% 50%'}; transform:{bgMediaTransform}; transform-origin:center center; filter:{bgFilter};"
+              />
+            {:else if bgIsVideo}
               <video
                 class="bg-media bg-video"
                 class:bg-cachee={bgPixel > 0}
@@ -656,7 +703,7 @@
           {#if bgLecture}
             <!-- Badge lecture OBS (dashboard seulement) : la barre lecteur
                  pilote :4321 via bgPaused — la vignette dashboard reste figée. -->
-            <div class="lecture-obs-fond msg-pill" style="color: {bgLectureCouleur};">
+            <div class="lecture-obs-fond msg-pill">
               <span class="msg-pill-icon">▶</span>
               <span class="msg-pill-text">{$t("canvas.videoFondObs")}</span>
             </div>
@@ -682,6 +729,16 @@
       {/if}
       {#each $sceneStore.widgets as w (w.id)}
         <WidgetComp {w} {scale} />
+      {/each}
+
+      <!-- Modules HUD (scene.modules — horloge / musique / objectifs) :
+           couche séparée des widgets, au-dessus d'eux (z 9000 en diffusion),
+           drag/resize propres, config via la modale Modules. -->
+      {#each MODULE_IDS as id (id)}
+        {@const m = $sceneStore.modules?.[id]}
+        {#if m?.actif}
+          <ModuleHud {id} {m} {scale} />
+        {/if}
       {/each}
 
       <!-- Aides contextuelles (presets guidés — dashboard uniquement,
@@ -747,6 +804,7 @@
             couleur={cadre.couleur}
             couleurFin={cadre.couleurFin}
             gradientAngle={cadre.gradientAngle}
+            animer={cadre.animer === true}
             idCadre="app"
           />
         </div>
@@ -1119,7 +1177,7 @@
     pointer-events: none;
   }
   /* Badge « en lecture dans OBS » (fond) : pastille .msg-pill (recette
-     app.css), couleur inline bgLectureCouleur = couleur réelle du cadre. */
+     app.css), teinte orange partagée (.lecture-obs-fond, règle globale). */
   /* Overlay cadre unifié : bord extérieur du canvas, au-dessus des widgets. */
   .cadre-app-overlay {
     position: absolute;

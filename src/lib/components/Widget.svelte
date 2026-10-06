@@ -26,6 +26,8 @@
   import { valeursGoals, goalsTwitch } from "../stores/objectifs";
   import { t, localeTag } from "../stores/langue";
   import WidgetSpeedrun from "./WidgetSpeedrun.svelte";
+  import { musiqueEtat, musiqueBands, initMusique } from "../stores/musique";
+  import { onMount } from "svelte";
 
   let { w, scale }: { w: Widget; scale: number } = $props();
 
@@ -38,6 +40,24 @@
   let isInputViewer = $derived(widgetType === "input-viewer");
   let isSpeedrun = $derived(widgetType === "speedrun");
   let isGoal = $derived(widgetType === "goal");
+  let isMusique = $derived(widgetType === "musique");
+
+  // ===== Widget musique (aperçu dashboard) =====
+  // Vignette Winamp miniature : LCD (titre courant) + barres EQ live +
+  // barre de progression. Le rendu complet (marquee animée, temps,
+  // spectre réel) est dans diffusion.html.
+  onMount(() => {
+    if (isMusique) void initMusique();
+  });
+  let muTitre = $derived(
+    $musiqueEtat?.en_cours ? `♪ ${$musiqueEtat.en_cours.titre}` : "♪ —"
+  );
+  let muPct = $derived.by(() => {
+    const p = $musiqueEtat?.progression;
+    return p && p.duree_s && p.duree_s > 0
+      ? Math.min(100, (p.position_ms / 1000 / p.duree_s) * 100)
+      : 0;
+  });
 
   // ===== Widget goal (aperçu dashboard) =====
   // Mode manuel : valeur live depuis valeursGoals (communaute/viewers).
@@ -130,6 +150,28 @@
   // Widgets trou exclus : côté diffusion ils sont transparents (pas de lecture).
   let lectureObs = $derived(isVideo && !!w.media && !isTrou && w.mediaPaused === false);
 
+  // ===== Carrousel d'images (mediaSlides) =====
+  // Liste non vide = carrousel actif (prioritaire sur w.media, qui reste
+  // stocké). Preview dashboard = slide courante avancée par un intervalle
+  // LOCAL (le timer viewer est dans diffusion.html — aucune écriture scène
+  // par slide). Swap de src simple, pas de fondu : vignette de config.
+  let slidesList = $derived(w.mediaSlides && w.mediaSlides.length ? w.mediaSlides : null);
+  let slideIdx = $state(0);
+  let slideCourante = $derived(slidesList ? slidesList[Math.min(slideIdx, slidesList.length - 1)] : null);
+  $effect(() => {
+    // Liste changée (ajout/retrait/réordonnancement) → repartir au début.
+    void slidesList;
+    slideIdx = 0;
+  });
+  $effect(() => {
+    if (!slidesList || slidesList.length < 2) return;
+    const ms = Math.max(1, w.mediaSlidesSec ?? 5) * 1000;
+    const timer = setInterval(() => {
+      slideIdx = (slideIdx + 1) % slidesList.length;
+    }, ms);
+    return () => clearInterval(timer);
+  });
+
   // ===== Cadre de scène (overlay SVG + clip-path) =====
   // cadreWidget est lu depuis le store scène (un cadre pour tous les widgets).
   // Appliqué sur tous les widgets, y compris les widgets trou (le cadre SVG
@@ -138,11 +180,8 @@
   // par widget, le cadre de scène reste actif pour les autres.
   let cadre = $derived($sceneStore.cadreWidget ?? null);
   let cadreActif = $derived(!!cadre?.actif && (cadre?.strokeWidth ?? 0) > 0 && w.sansCadre !== true);
-  // Couleur du badge « en lecture dans OBS » = couleur du cadre SVG
-  // (couleur utilisateur). Fallback --texte si pas de cadre actif.
-  let lectureCouleur = $derived(
-    cadreActif && cadre ? cadre.couleur : "var(--texte)"
-  );
+  // Le badge « en lecture dans OBS » est orange fixe (.lecture-obs —
+  // recette .msg-pill, app.css) — jamais la couleur du cadre.
   // Épaisseur effective : le widget goal adopte l'échelle « bulle »
   // (plafond 2px — même cadre que les messages chat en mode bulles en
   // diffusion, cadreMsgScale/cadreGoal de diffusion.html) ; son format
@@ -351,6 +390,7 @@
     void mediaPret;
     void w.morphs;
     void w.media;
+    void slideCourante; // carrousel : re-rendre quand la slide change
     void w.mediaTime;
     w.largeur;
     w.hauteur;
@@ -657,6 +697,49 @@
           <div class="goal-preview-bar"><div class="goal-preview-fill" style="width:{goalPct}%"></div></div>
         {/if}
       </div>
+    {:else if isMusique}
+      <!-- Widget musique (dashboard) : vignette Winamp — LCD titre +
+           barres EQ live + barre de progression. Le rendu complet
+           (marquee, temps, modes) est dans diffusion.html. -->
+      {@render mediaFond()}
+      <div class="mu-preview">
+        {#if (w.musiqueMode ?? "player") === "player"}
+          <span class="mu-titre">WINAMP</span>
+          <span class="mu-lcd">{muTitre}</span>
+        {/if}
+        <div class="mu-eq">
+          {#each $musiqueBands as b, i (i)}
+            <div class="mu-eq-bar" style:height="{Math.max(4, Math.round((b / 255) * 100))}%"></div>
+          {/each}
+        </div>
+        {#if (w.musiqueMode ?? "player") === "player"}
+          <div class="mu-prog"><div class="mu-prog-fill" style:width="{muPct}%"></div></div>
+        {/if}
+      </div>
+    {:else if slidesList && slideCourante}
+      <!-- Carrousel d'images : preview du slide courant (le fondu enchaîné
+           n'est rendu que côté diffusion — ici swap de src simple). -->
+      {#if aMorphs}
+        <!-- Rendu morphé : canvas GL, source cachée = slide courante -->
+        <canvas bind:this={morphCanvasEl} class="preview morph-canvas" draggable="false"></canvas>
+        <img
+          bind:this={imgEl}
+          class="src-cachee"
+          src={MEDIA_BASE + slideCourante.rel}
+          alt=""
+          draggable="false"
+          crossorigin="anonymous"
+          onload={() => (mediaPret += 1)}
+        />
+      {:else}
+        <img
+          class="preview"
+          src={MEDIA_BASE + slideCourante.rel}
+          alt=""
+          draggable="false"
+          style="object-fit:{fitCss}; object-position:{fit === 'centrer' ? 'center' : '50% 50%'}; transform:{mediaTransform}; transform-origin:center center; filter:{mediaFilter};"
+        />
+      {/if}
     {:else if w.media && !isVideo}
       {#if aMorphs}
         <!-- Rendu morphé : canvas GL (le warp inclut fit + transforms) -->
@@ -709,7 +792,7 @@
     {#if lectureObs}
       <!-- Badge lecture OBS (dashboard seulement) : la barre lecteur pilote
            :4321 via mediaPaused — la vignette dashboard reste figée. -->
-      <div class="lecture-obs msg-pill" style="color: {lectureCouleur};">
+      <div class="lecture-obs msg-pill">
         <span class="msg-pill-icon">▶</span>
         <span class="msg-pill-text">{$t("widget.videoLectureObs")}</span>
       </div>
@@ -729,6 +812,7 @@
           couleur={cadre.couleur}
           couleurFin={cadre.couleurFin}
           gradientAngle={cadre.gradientAngle}
+          animer={cadre.animer === true}
           idCadre="w-{w.id}"
         />
       </div>
@@ -1005,10 +1089,8 @@
     color: var(--texte);
   }
   /* Badge « input viewer affiché dans OBS » (dashboard) : pastille centrée
-     .msg-pill (recette app.css), teinte orange action utilisateur. */
-  .input-viewer-obs {
-    color: var(--message-user-action-color);
-  }
+     .msg-pill — teinte orange via la règle globale app.css (même couleur
+     que .lecture-obs / .lecture-obs-fond, recette unifiée). */
   /* Vignette objectif (dashboard) : métrique·plateforme + actuel/cible +
      barre de progression — variables du thème uniquement. */
   .goal-preview {
@@ -1050,6 +1132,69 @@
     border-radius: 999px;
     transition: width 0.4s ease;
   }
+  /* Aperçu widget musique (dashboard) : châssis sombre + LCD vert +
+     barres EQ live + barre de progression — miniature du rendu
+     Winamp de diffusion.html. */
+  .mu-preview {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 0.3rem;
+    padding: 0.45rem;
+    pointer-events: none;
+    background: linear-gradient(180deg, #2e2e2e, #1c1c1c);
+  }
+  .mu-titre {
+    display: flex;
+    align-items: center;
+    height: 0.55rem;
+    padding: 0 0.3rem;
+    border: 1px solid #111;
+    border-radius: 2px;
+    background: linear-gradient(90deg, #000028 0%, #1d1d6e 45%, #4a4ab8 62%, #000028 100%);
+    font-size: 0.4rem;
+    font-weight: 700;
+    font-style: italic;
+    letter-spacing: 0.2em;
+    color: #d5d6ff;
+    text-shadow: 0 0 3px rgba(150, 150, 255, 0.6);
+  }
+  .mu-lcd {
+    font-family: "Lucida Console", Consolas, monospace;
+    font-size: 0.7rem;
+    font-weight: 700;
+    color: #4aff4a;
+    text-shadow: 0 0 5px rgba(74, 255, 74, 0.55);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .mu-eq {
+    flex: 1;
+    min-height: 12px;
+    display: flex;
+    align-items: flex-end;
+    gap: 2px;
+  }
+  .mu-eq-bar {
+    flex: 1;
+    background: linear-gradient(180deg, #ff4040 0%, #ffb040 30%, #4aff4a 65%);
+    transition: height 120ms linear;
+  }
+  .mu-prog {
+    height: 5px;
+    border-radius: 2px;
+    background: #101410;
+    border: 1px solid #333;
+    overflow: hidden;
+  }
+  .mu-prog-fill {
+    height: 100%;
+    background: linear-gradient(180deg, #7dff7d, #2fd32f);
+    transition: width 0.4s ease;
+  }
   /* Fond du widget input viewer (dashboard) : voile opaque sombre + halo
      orange doux au centre — signale visuellement l'overlay OBS. */
   .widget-3d.input-viewer {
@@ -1062,8 +1207,8 @@
     box-shadow: inset 0 0 2.5rem color-mix(in srgb, var(--message-user-action-color) 16%, transparent);
   }
   /* Badge « en lecture dans OBS » : pastille .msg-pill (recette app.css),
-     couleur inline lectureCouleur = couleur réelle du cadre SVG. Dans
-     .widget-3d → suit le tilt 3D et est découpé par le clip-path du cadre. */
+     teinte orange partagée (.lecture-obs, règle globale). Dans .widget-3d
+     → suit le tilt 3D et est découpé par le clip-path du cadre. */
   .handle {
     position: absolute;
     width: 8px;
