@@ -28,6 +28,11 @@ use tokio::sync::broadcast;
 /// Jeton d'annulation du timer courant (pour stop/skip).
 type TimerCancel = Arc<AtomicBool>;
 
+/// Durée de l'intro "spotlight" (avatar seul dans la zone centrée) avant que
+/// le clip ne démarre — doit rester en sync avec le setTimeout de
+/// diffusion.html (mode plein écran).
+const INTRO_SPOTLIGHT_MS: u64 = 3000;
+
 /// Configuration globale des clips de bienvenue.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ConfigGlobale {
@@ -42,6 +47,15 @@ pub struct ConfigGlobale {
     /// durée (le clip est coupé ou prolongé selon le cas).
     #[serde(default)]
     pub duree_affichage_ms: u64,
+    /// true (défaut) = overlay positionné par le squelette de position unifié.
+    /// false = mode "spotlight" : voile noir opaque plein écran + carte
+    /// centrée à 85 % + intro avatar 3 s avant le clip.
+    #[serde(default = "default_utiliser_squelette")]
+    pub utiliser_squelette: bool,
+}
+
+fn default_utiliser_squelette() -> bool {
+    true
 }
 
 /// Configuration de l'overlay welcome côté diffusion.
@@ -74,6 +88,7 @@ impl Default for ConfigGlobale {
             actif: true,
             overlay: OverlayConfig::default(),
             duree_affichage_ms: 0,
+            utiliser_squelette: true,
         }
     }
 }
@@ -133,6 +148,9 @@ pub struct QueueEtat {
     pub overlay: OverlayConfig,
     /// Durée d'affichage forcée en ms (0 = durée naturelle du clip).
     pub duree_affichage_ms: u64,
+    /// true = squelette de position, false = mode spotlight plein écran
+    /// (miroir de config_globale, pour l'UI dashboard).
+    pub utiliser_squelette: bool,
 }
 
 /// Format du fichier clips_bienvenue.json sur disque.
@@ -335,8 +353,21 @@ impl WelcomeState {
     }
 
     /// Résout l'URL MP4 d'un item puis le joue. Si échec → skip (avancer).
+    /// En mode spotlight (Twitch), fetch en parallèle les streamers mis en
+    /// avant sur la page d'accueil du viewer (étagère favoris, non-fatal).
     async fn jouer_item_async(&self, item: QueueItem) {
-        match crate::twitch_clips::resoudre_mp4(&item.clip_id).await {
+        let spotlight = !self.config_globale.lock().unwrap().utiliser_squelette;
+        let (mp4_res, favoris) = tokio::join!(
+            crate::twitch_clips::resoudre_mp4(&item.clip_id),
+            async {
+                if spotlight && item.plateforme == "twitch" {
+                    crate::twitch_clips::favoris_channel(&item.login, 6).await
+                } else {
+                    Vec::new()
+                }
+            }
+        );
+        match mp4_res {
             Ok(url) => {
                 let mut resolved = item.clone();
                 resolved.clip_mp4_url = url;
@@ -350,7 +381,7 @@ impl WelcomeState {
                     }
                 }
                 let _ = self.save_to_disk();
-                self.jouer_item(resolved);
+                self.jouer_item(resolved, favoris);
             }
             Err(e) => {
                 eprintln!("[Welcome] résolution MP4 échouée pour {} : {} — skip", item.login, e);
@@ -407,7 +438,8 @@ impl WelcomeState {
     }
 
     /// Émet welcome-clip-play pour un item dont l'URL MP4 est résolue + démarre timer.
-    fn jouer_item(&self, mut item: QueueItem) {
+    /// `favoris` = streamers mis en avant par le viewer (vide hors spotlight).
+    fn jouer_item(&self, mut item: QueueItem, favoris: Vec<crate::twitch_clips::StreamerFavori>) {
         // Fallback avatar/bio depuis le registre (cache) si absents de l'item.
         if item.avatar.is_none() || item.bio.is_none() {
             let registry = self.registry.lock().unwrap();
@@ -426,6 +458,10 @@ impl WelcomeState {
         // un changement de config sans clip en cours).
         self.emit_overlay_config();
 
+        // Mode d'affichage courant : squelette de position (défaut) ou
+        // spotlight plein écran (voile noir + intro avatar 3 s).
+        let utiliser_squelette = self.config_globale.lock().unwrap().utiliser_squelette;
+
         // Émettre welcome-clip-play sur le WS :4321.
         let msg = serde_json::json!({
             "type": "welcome-clip-play",
@@ -441,6 +477,8 @@ impl WelcomeState {
                 "duree_ms": item.clip_duree_ms,
             },
             "message": item.message,
+            "utiliser_squelette": utiliser_squelette,
+            "favoris": favoris,
         });
         let _ = self.chat_tx.send(msg.to_string());
 
@@ -450,11 +488,16 @@ impl WelcomeState {
         // Démarrer le timer.
         // - Si duree_affichage_ms > 0 (config globale) : forcer cette durée.
         // - Sinon : durée naturelle du clip (+ 2s sécurité pour le buffering).
+        // - Mode spotlight : + intro avatar (le clip ne démarre qu'après).
         let duree_affichage = self.config_globale.lock().unwrap().duree_affichage_ms;
         let timer_ms = if duree_affichage > 0 {
             duree_affichage
         } else {
             item.clip_duree_ms.max(1000) + 2000 // min 1s + sécurité
+        } + if utiliser_squelette {
+            0
+        } else {
+            INTRO_SPOTLIGHT_MS
         };
         let state = self.clone();
         let new_cancel = Arc::new(AtomicBool::new(false));
@@ -491,8 +534,24 @@ impl WelcomeState {
         avatar: Option<String>,
         bio: Option<String>,
     ) -> Result<(), String> {
-        // Résoudre l'URL MP4.
-        let mp4_url = crate::twitch_clips::resoudre_mp4(clip_id).await?;
+        // Mode d'affichage courant (squelette / spotlight) — lu avant le
+        // join! pour savoir s'il faut fetcher les favoris du viewer.
+        let utiliser_squelette = self.config_globale.lock().unwrap().utiliser_squelette;
+        let login_favoris = display_name.to_lowercase();
+
+        // Résoudre l'URL MP4 + fetch favoris en parallèle (spotlight Twitch
+        // uniquement — non-fatal, liste vide sinon).
+        let (mp4_res, favoris) = tokio::join!(
+            crate::twitch_clips::resoudre_mp4(clip_id),
+            async {
+                if utiliser_squelette {
+                    Vec::new()
+                } else {
+                    crate::twitch_clips::favoris_channel(&login_favoris, 6).await
+                }
+            }
+        );
+        let mp4_url = mp4_res?;
 
         // Annuler le timer précédent (si un clip tournait).
         {
@@ -529,6 +588,8 @@ impl WelcomeState {
                 "duree_ms": clip_duree_ms,
             },
             "message": format!("Bienvenue {} !", display_name),
+            "utiliser_squelette": utiliser_squelette,
+            "favoris": favoris,
         });
         let _ = self.chat_tx.send(msg.to_string());
 
@@ -554,11 +615,16 @@ impl WelcomeState {
         // Démarrer le timer → welcome-clip-stop.
         // - Si duree_affichage_ms > 0 (config globale) : forcer cette durée.
         // - Sinon : durée naturelle du clip (+ 2s sécurité).
+        // - Mode spotlight : + intro avatar (le clip démarre après 3 s).
         let duree_affichage = self.config_globale.lock().unwrap().duree_affichage_ms;
         let timer_ms = if duree_affichage > 0 {
             duree_affichage
         } else {
             clip_duree_ms.max(1000) + 2000
+        } + if utiliser_squelette {
+            0
+        } else {
+            INTRO_SPOTLIGHT_MS
         };
         let state = self.clone();
         let new_cancel = Arc::new(AtomicBool::new(false));
@@ -590,6 +656,18 @@ impl WelcomeState {
         self.config_globale.lock().unwrap().duree_affichage_ms = ms;
         self.save_to_disk()?;
         self.emit_etat();
+        Ok(())
+    }
+
+    /// Bascule le mode d'affichage : true = squelette de position unifié,
+    /// false = spotlight plein écran (voile noir + carte 85 % + intro 3 s).
+    /// Persiste + émet l'état + pousse welcome-clip-config (flag inclus) pour
+    /// que la diffusion applique le mode au prochain play sans reconnect.
+    pub fn set_utiliser_squelette(&self, actif: bool) -> Result<(), String> {
+        self.config_globale.lock().unwrap().utiliser_squelette = actif;
+        self.save_to_disk()?;
+        self.emit_etat();
+        self.emit_overlay_config();
         Ok(())
     }
 
@@ -688,6 +766,7 @@ impl WelcomeState {
             config_globale_actif: cfg.actif,
             overlay,
             duree_affichage_ms: cfg.duree_affichage_ms,
+            utiliser_squelette: cfg.utiliser_squelette,
         }
     }
 
@@ -784,6 +863,7 @@ impl WelcomeState {
                 }
             })
             .unwrap_or_else(|| self.config_globale.lock().unwrap().overlay.clone());
+        let utiliser_squelette = self.config_globale.lock().unwrap().utiliser_squelette;
         let msg = serde_json::json!({
             "type": "welcome-clip-config",
             "config": {
@@ -791,6 +871,7 @@ impl WelcomeState {
                 "y": cfg.y,
                 "largeur": cfg.largeur,
                 "hauteur": cfg.hauteur,
+                "utiliser_squelette": utiliser_squelette,
             },
         });
         let _ = self.chat_tx.send(msg.to_string());

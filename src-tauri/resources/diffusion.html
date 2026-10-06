@@ -130,6 +130,19 @@
         z-index: 0;
         pointer-events: none;
       }
+      /* Carrousel d'images (mediaSlides) : pile d'imgs superposées dans le
+         widget, fondu enchaîné par transition d'opacité. La règle globale
+         .widget img donne déjà 100%/object-fit — fit/transform/filter posés
+         inline par applyMediaStyle sur chaque slide. */
+      .widget .slide {
+        position: absolute;
+        inset: 0;
+        opacity: 0;
+        transition: opacity 0.8s ease-in-out;
+      }
+      .widget .slide.visible {
+        opacity: 1;
+      }
       /* Overlay cadre SVG widget : position absolute, inset 0, au-dessus du
          média, pointer-events:none pour ne pas bloquer. */
       .cadre-overlay {
@@ -221,6 +234,7 @@
       .chat-viewers {
         display: flex;
         align-items: center;
+        justify-content: center;
         gap: 0.8em;
         padding: 0.3em 0.6em;
         flex-shrink: 0;
@@ -248,6 +262,38 @@
       .chat-viewers .plat-badge.kick { background: #53fc18; color: #000; }
       .chat-viewers .plat-badge.youtube { background: #ff0000; }
       .chat-viewers .plat-badge.tiktok { background: #000; }
+      /* Ligne « musique en cours » sous la barre viewers : phrase défilante
+         (marquee) remplie par musique-play, vidée par musique-stop. Élément
+         SÉPARÉ de .chat-viewers car celle-ci est cachée en mode bulles —
+         la ligne doit rester visible dans les deux styles de chat. */
+      .chat-musique {
+        display: flex;
+        align-items: center;
+        overflow: hidden;
+        white-space: nowrap;
+        padding: 0.22em 0.6em;
+        flex-shrink: 0;
+        position: relative;
+        z-index: 1; /* au-dessus du média de fond */
+        color: #fff;
+        font-weight: 600;
+        opacity: 0.92;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+        font-family: system-ui, "Segoe UI Emoji", "Apple Color Emoji",
+          "Noto Color Emoji", sans-serif;
+      }
+      .chat-musique:empty { display: none; }
+      /* Piste défilante : deux copies identiques du texte → translateX
+         0 → -50% boucle sans saut. Durée inline (proportionnelle au titre). */
+      .musique-defile {
+        display: inline-flex;
+        animation: musiqueDefil 12s linear infinite;
+      }
+      .musique-defile > span { padding-right: 3em; }
+      @keyframes musiqueDefil {
+        from { transform: translateX(0); }
+        to { transform: translateX(-50%); }
+      }
       .chat-body {
         width: 100%;
         /* flex:1 au lieu de height:100% — la barre viewers prend sa place
@@ -489,8 +535,10 @@
         border-radius: 6px;
         overflow: hidden;
         background: #000;
-        /* 16:9 via padding-bottom — technique robuste insensible au flex */
-        padding-bottom: 56.25%;
+        /* 16:9 strict : aspect-ratio garantit le format quelle que soit la
+           hauteur de la colonne (le clip n'est jamais étiré en hauteur). */
+        aspect-ratio: 16 / 9;
+        height: auto;
       }
       .welcome-clip-video {
         position: absolute;
@@ -501,6 +549,171 @@
         object-fit: contain;
         display: block;
         border-radius: 6px;
+      }
+
+      /* Mode « spotlight » (welcome : utiliser_squelette décoché) : voile noir
+         opaque plein écran + carte centrée à 85 % du canvas en split
+         avatar/bio à gauche / clip à droite. Intro de 3 s : l'avatar occupe
+         toute la carte seul, puis transition (600 ms) vers le split. */
+      .welcome-clip-voile {
+        position: absolute;
+        inset: 0;
+        background: #000;
+        opacity: 0;
+        transition: opacity 350ms ease;
+        pointer-events: none;
+      }
+      .welcome-clip-voile.visible { opacity: 1; }
+      /* Message de bienvenue (msg.message) — rendu en spotlight seulement ;
+         la carte squelette garde son rendu historique. */
+      .welcome-clip-message { display: none; }
+      .welcome-clip-root.spot {
+        left: 50%;
+        top: 50%;
+        transform: translate(-50%, -50%);
+        width: 85%;
+      }
+      .welcome-clip-root.spot .widget.welcome-clip {
+        flex-direction: row;
+        align-items: center;
+        gap: 2.5cqw;
+        padding: 3cqw;
+        background: transparent;
+      }
+      .welcome-clip-root.spot .welcome-clip-entete {
+        flex: 0 0 42%;
+        gap: 1.2cqw;
+        transition: flex-basis 600ms ease;
+      }
+      .welcome-clip-root.spot .welcome-clip-avatar {
+        width: 22cqw;
+        height: 22cqw;
+        max-width: none;
+        max-height: none;
+        transition:
+          width 600ms ease,
+          height 600ms ease;
+      }
+      .welcome-clip-root.spot .welcome-clip-pseudo {
+        font-size: clamp(1rem, 3cqw, 2.2rem);
+      }
+      .welcome-clip-root.spot .welcome-clip-message {
+        display: block;
+        font-size: clamp(0.8rem, 2.2cqw, 1.4rem);
+        font-style: italic;
+        opacity: 0.9;
+        text-align: center;
+        max-width: 100%;
+        overflow-wrap: break-word;
+      }
+      .welcome-clip-root.spot .welcome-clip-cta {
+        font-size: clamp(0.7rem, 1.6cqw, 1rem);
+      }
+      .welcome-clip-root.spot .welcome-clip-bio {
+        font-size: clamp(0.8rem, 1.8cqw, 1.2rem);
+        -webkit-line-clamp: 4;
+        line-clamp: 4;
+      }
+      .welcome-clip-root.spot .welcome-clip-video-wrap {
+        /* Colonne droite : le clip seul, 16:9, centré verticalement —
+           rien en dessous. Sa hauteur découle de sa largeur (aspect-ratio),
+           jamais de la hauteur de la carte. */
+        width: 100%;
+      }
+      /* Colonne droite (titre + clip). En squelette : simple wrapper pleine
+         largeur (le titre reste masqué). En spotlight : moitié droite,
+         titre « Streamer Twitch » au-dessus du clip. */
+      .welcome-clip-droite {
+        display: flex;
+        flex-direction: column;
+        width: 100%;
+        flex-shrink: 0;
+      }
+      .welcome-clip-root.spot .welcome-clip-droite {
+        flex: 1;
+        width: auto;
+        align-self: center;
+        align-items: center;
+        gap: 1.4cqw;
+      }
+      .welcome-clip-plateforme { display: none; }
+      .welcome-clip-root.spot .welcome-clip-plateforme {
+        display: block;
+        font-weight: 800;
+        font-size: clamp(0.9rem, 2.6cqw, 1.7rem);
+        letter-spacing: 0.38em;
+        text-indent: 0.38em; /* compense le letter-spacing pour le centrage */
+        text-transform: uppercase;
+        background: linear-gradient(90deg, #c9a2ff, #9146ff 55%, #e0bfff);
+        -webkit-background-clip: text;
+        background-clip: text;
+        color: transparent;
+        filter: drop-shadow(0 0 14px rgba(145, 70, 255, 0.55));
+      }
+      .welcome-clip-root.spot .welcome-clip-plateforme::after {
+        content: "";
+        display: block;
+        height: 2px;
+        margin-top: 0.6cqw;
+        background: linear-gradient(90deg, transparent, #9146ff, transparent);
+      }
+      /* Streamers mis en avant par le viewer (étagère favoris de sa page
+         d'accueil Twitch) — sous la bio, côté gauche, spotlight uniquement. */
+      .welcome-clip-favoris { display: none; }
+      .welcome-clip-root.spot .welcome-clip-favoris {
+        flex-wrap: wrap;
+        justify-content: center;
+        gap: 1.2cqw;
+        max-width: 100%;
+      }
+      .welcome-clip-favori {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.4cqw;
+        position: relative;
+      }
+      .welcome-clip-favori img {
+        width: 4.5cqw;
+        height: 4.5cqw;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 2px solid rgba(255, 255, 255, 0.35);
+      }
+      .welcome-clip-favori .fav-live {
+        position: absolute;
+        top: 0;
+        right: 0;
+        width: 1.1cqw;
+        height: 1.1cqw;
+        min-width: 8px;
+        min-height: 8px;
+        border-radius: 50%;
+        background: #2ecc40;
+        border: 2px solid #000;
+      }
+      .welcome-clip-favori .fav-nom {
+        font-size: clamp(0.55rem, 1.4cqw, 0.9rem);
+        opacity: 0.85;
+        max-width: 9cqw;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: center;
+      }
+      /* Intro spotlight : l'avatar seul occupe toute la carte — textes
+         masqués (ils apparaissent au split), clip caché via display JS. */
+      .welcome-clip-root.spot.intro .welcome-clip-entete { flex-basis: 100%; }
+      .welcome-clip-root.spot.intro .welcome-clip-avatar {
+        width: 44cqw;
+        height: 44cqw;
+      }
+      .welcome-clip-root.spot.intro .welcome-clip-pseudo,
+      .welcome-clip-root.spot.intro .welcome-clip-cta,
+      .welcome-clip-root.spot.intro .welcome-clip-message,
+      .welcome-clip-root.spot.intro .welcome-clip-bio,
+      .welcome-clip-root.spot.intro .welcome-clip-favoris {
+        display: none !important;
       }
 
       /* ===== Input Viewer (clavier + souris) — glass sombre + keycaps verre 3D
@@ -928,6 +1141,141 @@
         0%, 100% { filter: none; }
         50% { filter: brightness(1.35) drop-shadow(0 0 calc(var(--goal-h, 90px) * 0.04) var(--sr-grad-from, #fff)); }
       }
+      /* ===== Widget musique — mini-lecteur Winamp (LCD + EQ + barre) =====
+         --mu-w/--mu-h posées inline à chaque snapshot (même technique que
+         --goal-w/h — pas de cqw, absent du CEF de plusieurs versions
+         d'OBS). musiqueMode "eq" (.mu-eq-only) = bandes seules.
+         Signature skin classic : barre de titre dégradée "WINAMP" +
+         peak dots orange sur l'EQ. */
+      .widget.musique {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: calc(var(--mu-h, 120px) * 0.06);
+        padding: calc(var(--mu-h, 120px) * 0.07) calc(var(--mu-w, 340px) * 0.04);
+        box-sizing: border-box;
+        /* Châssis métal sombre façon Winamp — couvre le fond verre clair
+           .widget pour garder le LCD lisible sur un jeu lumineux. */
+        background: linear-gradient(180deg, #1c1c1c, #2a2a2a);
+        color: #4aff4a;
+        font-family: "Courier New", ui-monospace, monospace;
+      }
+      .mu-titre {
+        display: flex;
+        align-items: center;
+        height: calc(var(--mu-h, 120px) * 0.11);
+        min-height: 8px;
+        padding: 0 6px;
+        border: 1px solid #111;
+        border-radius: 2px;
+        background: linear-gradient(
+          90deg,
+          #000028 0%,
+          #1d1d6e 45%,
+          #4a4ab8 62%,
+          #000028 100%
+        );
+        font-style: italic;
+        font-weight: 700;
+        letter-spacing: 0.2em;
+        font-size: calc(var(--mu-h, 120px) * 0.08);
+        color: #d5d6ff;
+        text-shadow: 0 0 4px rgba(150, 150, 255, 0.6);
+        overflow: hidden;
+        white-space: nowrap;
+      }
+      .widget.musique > *:not(.media-fond):not(.cadre-overlay) {
+        position: relative;
+        z-index: 1;
+      }
+      .mu-lcd {
+        display: flex;
+        align-items: center;
+        gap: 0.6em;
+        background: #050805;
+        border-radius: 3px;
+        box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.9);
+        padding: calc(var(--mu-h, 120px) * 0.08) 0.6em;
+        overflow: hidden;
+        font-size: calc(var(--mu-h, 120px) * 0.14);
+        font-weight: 700;
+        letter-spacing: 0.04em;
+        text-shadow: 0 0 6px rgba(74, 255, 74, 0.55);
+      }
+      /* Marquee : deux copies du texte + translateX -50% (même technique
+         que .musique-defile — boucle sans saut). */
+      .mu-defile-wrap {
+        flex: 1;
+        min-width: 0;
+        overflow: hidden;
+        white-space: nowrap;
+      }
+      .mu-defile {
+        display: inline-block;
+        animation: musiqueDefil 12s linear infinite;
+      }
+      .mu-defile > span { padding-right: 3em; }
+      .mu-temps {
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .mu-rest { color: #2ea02e; }
+      .mu-eq {
+        display: flex;
+        align-items: flex-end;
+        gap: 3px;
+        height: calc(var(--mu-h, 120px) * 0.3);
+        min-height: 14px;
+        background: #050805;
+        border-radius: 3px;
+        box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.9);
+        padding: 3px 4px;
+        box-sizing: border-box;
+      }
+      .mu-col {
+        position: relative;
+        flex: 1;
+        height: 100%;
+        display: flex;
+        align-items: flex-end;
+      }
+      .mu-peak {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 2px;
+        background: #ff9c40;
+        box-shadow: 0 0 4px rgba(255, 156, 64, 0.6);
+      }
+      .mu-bar {
+        width: 100%;
+        height: 4%;
+        min-height: 2px;
+        background: linear-gradient(180deg,
+          #ff5b5b 0%, #ffe14a 30%, #4aff4a 55%);
+        box-shadow: 0 0 4px rgba(74, 255, 74, 0.4);
+        transition: height 80ms linear;
+      }
+      .mu-posbar {
+        height: calc(var(--mu-h, 120px) * 0.07);
+        min-height: 4px;
+        border-radius: 999px;
+        background: #0a0f0a;
+        box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.8);
+        overflow: hidden;
+      }
+      .mu-posfill {
+        height: 100%;
+        width: 0%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, #2ea02e, #4aff4a);
+        transition: width 250ms linear;
+      }
+      /* Mode "eq" : bandes seules occupant tout le widget. */
+      .widget.musique.mu-eq-only .mu-titre,
+      .widget.musique.mu-eq-only .mu-lcd,
+      .widget.musique.mu-eq-only .mu-posbar { display: none; }
+      .widget.musique.mu-eq-only .mu-eq { flex: 1; height: auto; }
       .iv-section {
         display: none;
         flex: 1;
@@ -1454,6 +1802,741 @@
         50% { transform: scale(1.15); }
       }
 
+      /* ===== Présentation streamer (portage « streamers favoris ») =====
+         Overlay plein écran AUTONOME (pas un widget de scène) piloté par les
+         frames WS presentation-show/-hide/-mode/-clip-play/-clip-stop/
+         -audio-play/-audio-stop. z 10000+ : AU-DESSUS de toute la pile
+         existante (écran d'attente 9990 → welcome 9999) — la présentation
+         est une prise de scène délibérée et manuelle.
+         Mode "theatrical" : voile sombre + orbes + sol de scène + faisceaux
+         spot + poussière + rideaux rouges qui s'ouvrent en restant froncés
+         en bordure (translateX ±27 % + scaleX, 1,2 s) + cantonné festonné
+         permanent + embrasses dorées + public (sièges rouges + têtes) au
+         premier plan. Mode "card" : même carte en version compacte, sans
+         rideaux ni voile complet ni public (fondu simple). Le clip joue
+         dans un lecteur plein écran au-dessus de tout (z 10004). */
+      .pres-voile {
+        position: absolute;
+        inset: 0;
+        z-index: 10000;
+        pointer-events: none;
+        overflow: hidden;
+        opacity: 0;
+        transition: opacity 0.5s ease;
+        background: radial-gradient(ellipse at 50% 42%, #1b1b38 0%, #05050a 74%);
+      }
+      .pres-voile.visible { opacity: 1; }
+      .pres-orbe {
+        position: absolute;
+        border-radius: 50%;
+        filter: blur(90px);
+        opacity: 0.45;
+        animation: pres-orbe 14s ease-in-out infinite alternate;
+      }
+      .pres-orbe.o1 { width: 620px; height: 620px; left: -140px; top: -160px;
+        background: rgba(140, 60, 255, 0.35); }
+      .pres-orbe.o2 { width: 560px; height: 560px; right: -120px; top: 12%;
+        background: rgba(255, 60, 120, 0.28); animation-delay: -5s; }
+      .pres-orbe.o3 { width: 520px; height: 520px; left: 34%; bottom: -240px;
+        background: rgba(60, 110, 255, 0.30); animation-delay: -9s; }
+      @keyframes pres-orbe {
+        from { transform: translate(0, 0) scale(1); }
+        to { transform: translate(60px, -40px) scale(1.12); }
+      }
+      .pres-rideau {
+        position: absolute;
+        top: 0;
+        bottom: 0;
+        width: 50%;
+        z-index: 10001;
+        pointer-events: none;
+        transition: transform 1.2s cubic-bezier(0.4, 0, 0.2, 1);
+        /* Plis larges (~88 px) : creux sombre → faîneau clair au centre du
+           pli → creux. Le dégradé vertical assombrit le haut (ombre du
+           cantonné) et le bas. */
+        background:
+          linear-gradient(180deg,
+            rgba(0, 0, 0, 0.55) 0%,
+            rgba(0, 0, 0, 0.12) 16%,
+            rgba(0, 0, 0, 0) 42%,
+            rgba(0, 0, 0, 0.38) 100%),
+          repeating-linear-gradient(90deg,
+            #3a060d 0px,
+            #5c0c18 15px,
+            #8f1526 34px,
+            #b01c30 44px,
+            #8f1526 54px,
+            #5c0c18 73px,
+            #3a060d 88px);
+      }
+      .pres-rideau.gauche {
+        left: 0;
+        border-right: 6px solid #c9a13b;
+        transform-origin: left center;
+        box-shadow: inset -60px 0 80px rgba(0, 0, 0, 0.65),
+                    14px 0 36px rgba(0, 0, 0, 0.45);
+      }
+      .pres-rideau.droite {
+        right: 0;
+        border-left: 6px solid #c9a13b;
+        transform-origin: right center;
+        box-shadow: inset 60px 0 80px rgba(0, 0, 0, 0.65),
+                    -14px 0 36px rgba(0, 0, 0, 0.45);
+      }
+      /* Ouvert : le rideau reste froncé en bordure (~11 % de l'écran) au
+         lieu de sortir — les plis compressés par scaleX rendent le froncé,
+         l'embrasse le retient visuellement. */
+      .pres-rideau.gauche.open { transform: translateX(-27%) scaleX(0.5); }
+      .pres-rideau.droite.open { transform: translateX(27%) scaleX(0.5); }
+      /* Ourlet doré en bas du rideau. */
+      .pres-rideau::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 14px;
+        background: linear-gradient(180deg, #8a6c25 0%, #e8c55c 45%, #b8933a 100%);
+      }
+      /* Cantonné (valance) : drapé horizontal permanent — le proscenium du
+         théâtre. Festons en demi-cercles sous le corps (192 px/feston → 10
+         festons exacts sur 1920) ; le cercle doré du dessous, plus grand et
+         décalé, dessine le liseré. */
+      .pres-valance {
+        position: absolute;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 110px;
+        z-index: 10001;
+        pointer-events: none;
+        opacity: 0;
+        transition: opacity 0.6s ease;
+        background:
+          linear-gradient(180deg, rgba(0, 0, 0, 0.5), rgba(0, 0, 0, 0) 55%),
+          repeating-linear-gradient(90deg,
+            #3a060d 0px,
+            #5c0c18 15px,
+            #8f1526 34px,
+            #b01c30 44px,
+            #8f1526 54px,
+            #5c0c18 73px,
+            #3a060d 88px);
+        box-shadow: 0 18px 42px rgba(0, 0, 0, 0.55);
+      }
+      .pres-valance.visible { opacity: 1; }
+      .pres-valance::after {
+        content: "";
+        position: absolute;
+        left: 0;
+        right: 0;
+        top: 100%;
+        height: 46px;
+        background:
+          radial-gradient(circle 100px at 50% 0%,
+            #a01728 0%, #7a1220 60%, #4a0810 95%, transparent 100%)
+            0 0 / 192px 40px repeat-x,
+          radial-gradient(circle 104px at 50% 0%,
+            #e8c55c 0%, #b8933a 68%, transparent 100%)
+            0 4px / 192px 44px repeat-x;
+      }
+      /* Embrasses : bandes dorées obliques retenant le rideau froncé. Le
+         transition-delay n'est posé que dans .open — à la fermeture
+         (retrait de la classe) elles s'effacent sans délai. */
+      .pres-embrasse {
+        position: absolute;
+        top: 57%;
+        width: 290px;
+        height: 30px;
+        z-index: 10001;
+        pointer-events: none;
+        opacity: 0;
+        border-radius: 999px;
+        background: linear-gradient(180deg, #f0d070 0%, #c9a13b 55%, #8a6c25 100%);
+        box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5);
+        transition: opacity 0.4s ease, transform 0.4s ease;
+      }
+      .pres-embrasse.gauche {
+        left: -55px;
+        transform: rotate(-24deg) translateY(-16px);
+      }
+      .pres-embrasse.droite {
+        right: -55px;
+        transform: rotate(24deg) translateY(-16px);
+      }
+      .pres-embrasse.open {
+        opacity: 1;
+        transition-delay: 0.75s;
+      }
+      .pres-embrasse.gauche.open { transform: rotate(-24deg) translateY(0); }
+      .pres-embrasse.droite.open { transform: rotate(24deg) translateY(0); }
+      /* Sol de scène + faisceaux + poussière : enfants du voile (fade
+         automatique avec lui, mode theatrical uniquement). */
+      .pres-sol {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 24%;
+        pointer-events: none;
+        background:
+          radial-gradient(ellipse 62% 95% at 50% 112%,
+            rgba(255, 214, 150, 0.10), transparent 60%),
+          linear-gradient(180deg,
+            transparent 0%,
+            rgba(20, 11, 7, 0.78) 38%,
+            #0b0503 100%);
+      }
+      /* Liseré de lumière en haut du sol. */
+      .pres-sol::before {
+        content: "";
+        position: absolute;
+        top: 0;
+        left: 8%;
+        right: 8%;
+        height: 2px;
+        background: linear-gradient(90deg,
+          transparent, rgba(255, 220, 160, 0.18), transparent);
+      }
+      .pres-spot {
+        position: absolute;
+        top: -60px;
+        width: 420px;
+        height: 126%;
+        pointer-events: none;
+        transform-origin: 50% 0;
+      }
+      .pres-spot.s1 { left: 6%; transform: rotate(17deg); }
+      .pres-spot.s2 { right: 6%; transform: rotate(-17deg); }
+      .pres-spot.s3 { left: 50%; margin-left: -260px; width: 520px; }
+      /* Le clip-path du faisceau est sur l'enfant : le parent porte l'angle
+         de base, l'enfant le balancement — un seul transform par élément. */
+      .pres-spot-i {
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg,
+          rgba(255, 238, 200, 0.16),
+          rgba(255, 238, 200, 0.05) 55%,
+          transparent 88%);
+        clip-path: polygon(47% 0, 53% 0, 100% 100%, 0 100%);
+        filter: blur(10px);
+        transform-origin: 50% 0;
+        animation: pres-spot-bal 11s ease-in-out infinite alternate;
+      }
+      .pres-spot.s2 .pres-spot-i { animation-delay: -4s; }
+      .pres-spot.s3 .pres-spot-i { animation-delay: -7s; }
+      @keyframes pres-spot-bal {
+        from { transform: rotate(-1.4deg); }
+        to { transform: rotate(1.4deg); }
+      }
+      .pres-poussiere {
+        position: absolute;
+        border-radius: 50%;
+        background: rgba(255, 240, 210, 0.55);
+        filter: blur(0.6px);
+        pointer-events: none;
+        animation: pres-poussiere-drift var(--pd, 12s) ease-in-out
+          var(--pdl, 0s) infinite alternate;
+      }
+      @keyframes pres-poussiere-drift {
+        from { transform: translate(0, 0); opacity: 0.12; }
+        50% { opacity: 0.5; }
+        to { transform: translate(26px, -42px); opacity: 0.22; }
+      }
+      /* Public au premier plan : rangées de fauteuils bordeaux + têtes
+         silhouettées (la rangée la plus proche = grosses têtes floues
+         coupées par le bas de l'écran). z 10003 : DEVANT la carte comme
+         dans un vrai théâtre, SOUS le lecteur clip (10004). ~15 % des
+         fauteuils restent vides. */
+      .pres-public {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        height: 240px;
+        z-index: 10003;
+        pointer-events: none;
+        overflow: hidden;
+        opacity: 0;
+        transition: opacity 0.6s ease;
+      }
+      .pres-public.visible { opacity: 1; }
+      /* Rangée = ligne d'ancrage horizontale (height:0) ; les places
+         s'étendent vers le haut depuis cette ligne. */
+      .pres-rangee {
+        position: absolute;
+        left: 0;
+        right: 0;
+        height: 0;
+      }
+      .pres-place { position: absolute; bottom: 0; }
+      .pres-siege {
+        position: absolute;
+        left: 50%;
+        bottom: 0;
+        transform: translateX(-50%);
+        background: linear-gradient(180deg,
+          #7a1622 0%, #4d0a12 68%, #33060c 100%);
+        border-radius: 46% 46% 8% 8% / 32% 32% 5% 5%;
+        box-shadow: inset 0 8px 14px rgba(255, 120, 120, 0.10),
+                    0 -2px 10px rgba(0, 0, 0, 0.35);
+      }
+      .pres-tete {
+        position: absolute;
+        left: 50%;
+        bottom: 0;
+        border-radius: 50%;
+        background: #0b0709;
+        transform: translateX(-50%);
+        transform-origin: 50% 100%;
+        /* Léger halo chaud en haut : lumière de scène sur les têtes. */
+        box-shadow: 0 -4px 10px rgba(255, 205, 150, 0.10);
+        animation: pres-tete-sway var(--sw, 5s) ease-in-out
+          var(--swd, 0s) infinite alternate;
+      }
+      /* Épaules de la silhouette (hérite la couleur de la tête). */
+      .pres-tete::after {
+        content: "";
+        position: absolute;
+        left: -32%;
+        right: -32%;
+        top: 80%;
+        height: 55%;
+        border-radius: 50% 50% 0 0 / 100% 100% 0 0;
+        background: inherit;
+      }
+      @keyframes pres-tete-sway {
+        from { transform: translateX(-50%) rotate(-1.5deg); }
+        to { transform: translateX(-50%) rotate(1.5deg) translateY(-2px); }
+      }
+      .pres-root {
+        position: absolute;
+        inset: 0;
+        z-index: 10002;
+        pointer-events: none;
+        display: none;
+        align-items: center;
+        justify-content: center;
+      }
+      /* Contenu « plaqué » sur l'écran de scène : pas de panneau (fond,
+         bordure, ombre) — la lisibilité repose sur les text-shadow des
+         textes et l'assombrissement du voile. max-width ~73 % : le contenu
+         reste dans l'ouverture entre les rideaux froncés (~220 px/côté). */
+      .pres-carte {
+        display: flex;
+        align-items: center;
+        gap: 56px;
+        max-width: 73%;
+        opacity: 0;
+        transform: translateY(26px) scale(0.94);
+        /* Délai : la carte apparaît PENDANT l'ouverture des rideaux (1,2 s). */
+        transition: opacity 0.55s ease 0.65s,
+                    transform 0.55s cubic-bezier(0.2, 0.9, 0.3, 1.15) 0.65s;
+      }
+      .pres-carte.visible { opacity: 1; transform: none; }
+      /* Mode card : carte compacte, entrée immédiate (pas de rideaux). */
+      .pres-root.mode-card .pres-carte {
+        flex-direction: column;
+        gap: 22px;
+        max-width: 760px;
+        text-align: center;
+        transition-delay: 0s;
+      }
+      .pres-col-gauche {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 14px;
+        max-width: 460px;
+        text-align: center;
+      }
+      .pres-avatar {
+        width: 190px;
+        height: 190px;
+        border-radius: 50%;
+        object-fit: cover;
+        border: 5px solid rgba(255, 255, 255, 0.9);
+        box-shadow: 0 0 0 6px rgba(145, 70, 255, 0.55), 0 16px 50px rgba(0, 0, 0, 0.6);
+      }
+      .pres-root.mode-card .pres-avatar { width: 150px; height: 150px; }
+      .pres-nom {
+        font: 800 54px/1.05 "Segoe UI", system-ui, sans-serif;
+        color: #fff;
+        text-shadow: 0 4px 18px rgba(0, 0, 0, 0.7);
+        word-break: break-word;
+      }
+      .pres-root.mode-card .pres-nom { font-size: 42px; }
+      .pres-login {
+        font: 600 24px/1.2 "Segoe UI", system-ui, sans-serif;
+        color: rgba(255, 255, 255, 0.65);
+      }
+      .pres-badges { display: flex; gap: 10px; }
+      .pres-badge {
+        font: 700 18px/1 "Segoe UI", system-ui, sans-serif;
+        color: #fff;
+        padding: 8px 16px;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #772ce8, #9146ff);
+        box-shadow: 0 4px 16px rgba(145, 70, 255, 0.45);
+      }
+      .pres-badge.affiliate { background: linear-gradient(135deg, #1f6feb, #3b82f6); }
+      .pres-bio {
+        font: 400 23px/1.45 "Segoe UI", system-ui, sans-serif;
+        color: rgba(255, 255, 255, 0.88);
+        display: -webkit-box;
+        -webkit-line-clamp: 5;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+      }
+      .pres-jeu-courant {
+        font: 700 22px/1.2 "Segoe UI", system-ui, sans-serif;
+        color: #ffd77a;
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+      }
+      .pres-lien {
+        font: 600 20px/1 "Segoe UI", system-ui, sans-serif;
+        color: rgba(255, 255, 255, 0.55);
+        letter-spacing: 0.04em;
+      }
+      .pres-col-droite {
+        display: flex;
+        flex-direction: column;
+        gap: 18px;
+        max-width: 620px;
+      }
+      /* Fond « écran de cinéma » : la bannière de chaîne couvre toute la
+         scène. C'est le 1er enfant du voile → orbes, sol, spots et
+         poussière (enfants suivants) restent PAR-DESSUS, comme les rideaux
+         (z 10001) et le contenu (z 10002). ::after = scrim sombre pour la
+         lisibilité des infos. */
+      .pres-fond {
+        position: absolute;
+        inset: 0;
+        pointer-events: none;
+      }
+      .pres-fond-img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .pres-fond::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg,
+          rgba(5, 5, 10, 0.55) 0%,
+          rgba(5, 5, 10, 0.32) 45%,
+          rgba(5, 5, 10, 0.72) 100%);
+      }
+      .pres-root.mode-card .pres-col-droite { align-items: center; }
+      .pres-live {
+        display: inline-flex;
+        align-items: center;
+        gap: 12px;
+        align-self: flex-start;
+        font: 800 22px/1 "Segoe UI", system-ui, sans-serif;
+        color: #fff;
+        background: #e91916;
+        padding: 10px 18px;
+        border-radius: 10px;
+        box-shadow: 0 6px 22px rgba(233, 25, 22, 0.5);
+      }
+      .pres-root.mode-card .pres-live { align-self: center; }
+      .pres-live::before {
+        content: "";
+        width: 12px;
+        height: 12px;
+        border-radius: 50%;
+        background: #fff;
+      }
+      .pres-titre-live {
+        font: 600 22px/1.35 "Segoe UI", system-ui, sans-serif;
+        color: rgba(255, 255, 255, 0.8);
+        text-shadow: 0 2px 8px rgba(0, 0, 0, 0.7);
+      }
+      .pres-jeux { display: flex; gap: 12px; align-items: flex-end; }
+      .pres-jeu { display: flex; flex-direction: column; gap: 6px; width: 96px; }
+      .pres-jeu img {
+        width: 96px;
+        height: 128px;
+        object-fit: cover;
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.55);
+      }
+      .pres-jeu span {
+        font: 600 15px/1.2 "Segoe UI", system-ui, sans-serif;
+        color: rgba(255, 255, 255, 0.75);
+        display: -webkit-box;
+        -webkit-line-clamp: 2;
+        -webkit-box-orient: vertical;
+        overflow: hidden;
+        text-align: center;
+      }
+      .pres-clips {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+      }
+      .pres-clip {
+        position: relative;
+        border-radius: 12px;
+        overflow: hidden;
+        box-shadow: 0 8px 26px rgba(0, 0, 0, 0.55);
+        aspect-ratio: 16 / 9;
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .pres-clip img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+      }
+      .pres-clip .duree {
+        position: absolute;
+        right: 8px;
+        bottom: 8px;
+        font: 700 15px/1 "Segoe UI", system-ui, sans-serif;
+        color: #fff;
+        background: rgba(0, 0, 0, 0.75);
+        padding: 4px 8px;
+        border-radius: 6px;
+      }
+      .pres-clip .titre {
+        position: absolute;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        font: 600 15px/1.3 "Segoe UI", system-ui, sans-serif;
+        color: #fff;
+        padding: 18px 10px 8px;
+        background: linear-gradient(180deg, transparent, rgba(0, 0, 0, 0.85));
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      /* Lecteur clip plein écran (au-dessus de tout, public inclus). */
+      .pres-clip-root {
+        position: absolute;
+        inset: 0;
+        z-index: 10004;
+        display: none;
+        align-items: center;
+        justify-content: center;
+        background: rgba(0, 0, 0, 0.9);
+        pointer-events: none;
+      }
+      .pres-clip-root.visible { display: flex; }
+      .pres-clip-video {
+        max-width: 88%;
+        max-height: 82%;
+        border-radius: 14px;
+        box-shadow: 0 20px 80px rgba(0, 0, 0, 0.85);
+      }
+      .pres-clip-titre {
+        position: absolute;
+        top: 44px;
+        left: 8%;
+        right: 8%;
+        font: 700 30px/1.3 "Segoe UI", system-ui, sans-serif;
+        color: #fff;
+        text-align: center;
+        text-shadow: 0 3px 14px rgba(0, 0, 0, 0.85);
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+
+      /* ===== Modules HUD (scene.modules : horloge / musique / objectifs) =====
+         Couche d'affichage SÉPARÉE des widgets — rectangles libres en px
+         canvas, rendu minimaliste (fond translucide sombre, texte clair,
+         accent = extrémité lumineuse du gradient du cadre actif via
+         --mod-accent, résolu par bpmResoudreCouleurs). z 9000 : au-dessus
+         des widgets, SOUS l'écran d'attente (9990) et les overlays
+         éphémères (999x). Tailles en calc(var(--mod-fs)) — pas de cqw
+         (absent du CEF de plusieurs versions d'OBS). */
+      #modules-root {
+        position: absolute;
+        inset: 0;
+        z-index: 9000;
+        pointer-events: none;
+        overflow: hidden;
+      }
+      .module {
+        position: absolute;
+        box-sizing: border-box;
+        color: #f4f4f6;
+        font-family: var(--mod-font, "Segoe UI", system-ui, sans-serif);
+        font-size: var(--mod-fs, 20px);
+        text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
+        overflow: hidden;
+      }
+      .module > *:not(.cadre-overlay) { position: relative; z-index: 1; }
+      .module .mod-fond {
+        position: absolute;
+        inset: 0;
+        z-index: 0;
+        border-radius: 10px;
+        background: rgba(10, 10, 14, var(--mod-opacite, 0.45));
+      }
+      /* --- Horloge : date │ heure --- */
+      .module.horloge {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.7em;
+        padding: 0 0.8em;
+        white-space: nowrap;
+      }
+      .mh-date {
+        letter-spacing: 0.25em;
+        font-weight: 400;
+        font-size: 0.78em;
+        color: #d6d6dc;
+        font-variant-numeric: tabular-nums;
+      }
+      .mh-sep {
+        width: 2px;
+        height: 1.1em;
+        border-radius: 2px;
+        background: var(--mod-accent, #e0e0e0);
+        box-shadow: 0 0 6px var(--mod-accent, #e0e0e0);
+      }
+      .mh-heure {
+        letter-spacing: 0.18em;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+      }
+      .mh-ampm { font-size: 0.5em; margin-left: 0.4em; color: #d6d6dc; }
+      /* --- Musique : carte (icône + titre/sous-titre) + pastille temps --- */
+      .module.musique {
+        display: flex;
+        align-items: stretch;
+        gap: 0.5em;
+        overflow: visible;
+      }
+      .module.musique .mod-fond { display: none; }
+      .mm-carte, .mm-temps {
+        display: flex;
+        align-items: center;
+        border-radius: 10px;
+        background: rgba(10, 10, 14, var(--mod-opacite, 0.45));
+        box-sizing: border-box;
+        overflow: hidden;
+      }
+      .mm-carte {
+        flex: 1;
+        min-width: 0;
+        gap: 0.6em;
+        padding: 0.35em 0.6em 0.35em 0.35em;
+      }
+      .mm-icone {
+        flex: none;
+        width: 2.2em;
+        height: 2.2em;
+        border-radius: 8px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: rgba(255, 255, 255, 0.08);
+        color: var(--mod-accent, #e0e0e0);
+        font-size: 1em;
+      }
+      .mm-txt { min-width: 0; display: flex; flex-direction: column; gap: 0.15em; }
+      .mm-titre {
+        font-weight: 700;
+        font-size: 0.95em;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .mm-sous {
+        font-size: 0.68em;
+        color: #c9c9d0;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .mm-temps {
+        flex: none;
+        gap: 0.5em;
+        padding: 0 0.7em;
+        font-size: 0.62em;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.05em;
+      }
+      .mm-points { display: flex; gap: 0.3em; }
+      .mm-points i {
+        display: block;
+        width: 0.45em;
+        height: 0.45em;
+        border-radius: 50%;
+        background: rgba(255, 255, 255, 0.25);
+      }
+      .mm-points i.on {
+        background: var(--mod-accent, #e0e0e0);
+        box-shadow: 0 0 4px var(--mod-accent, #e0e0e0);
+      }
+      .module.musique.sans-temps .mm-temps { display: none; }
+      /* --- Objectifs : titre + lignes LABEL —— actuel / cible --- */
+      .module.objectifs {
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        gap: 0.55em;
+        padding: 0.7em 0.9em;
+      }
+      .mo-titre {
+        font-size: 0.6em;
+        letter-spacing: 0.3em;
+        text-transform: uppercase;
+        color: #b9b9c2;
+        white-space: nowrap;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .mo-titre:empty { display: none; }
+      .mo-ligne { display: flex; flex-direction: column; gap: 0.25em; }
+      .mo-haut {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        gap: 0.6em;
+        white-space: nowrap;
+      }
+      .mo-label {
+        font-weight: 700;
+        font-size: 0.72em;
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .mo-val {
+        font-size: 0.72em;
+        letter-spacing: 0.08em;
+        font-variant-numeric: tabular-nums;
+        color: #c9c9d0;
+      }
+      .mo-val .mo-actuel { color: var(--mod-accent, #e0e0e0); font-weight: 700; }
+      .mo-bar {
+        height: 2px;
+        border-radius: 2px;
+        background: rgba(255, 255, 255, 0.22);
+        overflow: hidden;
+      }
+      .mo-fill {
+        height: 100%;
+        width: 0%;
+        background: var(--mod-accent, #e0e0e0);
+        box-shadow: 0 0 6px var(--mod-accent, #e0e0e0);
+        transition: width 0.5s ease;
+      }
+      .mo-vide {
+        font-size: 0.65em;
+        color: #b9b9c2;
+        text-align: center;
+      }
+
       /* ===== Écran d'attente (BRB) — overlay plein écran =====
          Porté de l'ancienne app (features/ecran-attente). z 9990 : recouvre
          toute la scène mais RESTE SOUS les overlays éphémères (pad 9995,
@@ -1878,6 +2961,30 @@
         bottom: auto;
         top: -24px;
       }
+      /* Pop d'entrée de Streamy — l'animation n'existe que tant que .visible
+         est posée : retirer la classe suffit à la réarmer pour le prochain
+         premier message. Délai 0,35 s : elle surgit une fois la barre glissée. */
+      .bandeau-pm-root.visible .bandeau-pm-streamy {
+        transform-origin: 50% 100%;
+        animation: bpm-streamy-pop 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) 0.35s both;
+      }
+      @keyframes bpm-streamy-pop {
+        0%   { transform: scaleX(-1) translateY(60px) scale(0.5);  opacity: 0; }
+        55%  { transform: scaleX(-1) translateY(-8px) scale(1.06); opacity: 1; }
+        75%  { transform: scaleX(-1) translateY(3px)  scale(0.98); }
+        100% { transform: scaleX(-1) translateY(0)    scale(1);    opacity: 1; }
+      }
+      /* Variante pos-haut : elle est sous la barre, le pop descend donc. */
+      .bandeau-pm-root.pos-haut.visible .bandeau-pm-streamy {
+        transform-origin: 50% 0%;
+        animation-name: bpm-streamy-pop-haut;
+      }
+      @keyframes bpm-streamy-pop-haut {
+        0%   { transform: scaleX(-1) translateY(-60px) scale(0.5);  opacity: 0; }
+        55%  { transform: scaleX(-1) translateY(8px)   scale(1.06); opacity: 1; }
+        75%  { transform: scaleX(-1) translateY(-3px)  scale(0.98); }
+        100% { transform: scaleX(-1) translateY(0)     scale(1);    opacity: 1; }
+      }
 
       .bandeau-pm-contenu {
         display: flex;
@@ -1991,6 +3098,14 @@
       let currentSceneId = null;
       // Timer du rendu différé (au milieu du fondu, quand l'écran est noir).
       let fonduTimer = null;
+
+      // Mode miniature dashboard (?preview dans l'URL — iframe de la section
+      // Prévisualisation de la Toolbar) : TOUT le son est coupé et les vidéos
+      // persistantes (widgets média + fond de scène) restent figées sur leur
+      // frame mediaTime/bgTime — l'aperçu reste live (chat, alertes, overlays
+      // éphémères, just-chatting…) sans doubler le décodage vidéo ni l'audio
+      // de la source OBS. La page chargée sans le param (OBS) est inchangée.
+      const PREVIEW = new URLSearchParams(location.search).has("preview");
 
       // Échelle backing→scène du canvas de fond (résolution adaptative).
       // Tout le dessin de peindreFond se fait en coords SCÈNE ; le transform
@@ -2406,6 +3521,14 @@
       function decorerCadreMsgDims(div, cadre, W, H) {
         if (W <= 0 || H <= 0) return;
         cadre = cadreMsgScale(cadre);
+        // Jamais d'anim sur les bulles : jusqu'à ~200 SVG par widget —
+        // un animateMotion par message violerait le budget perf.
+        if (cadre.animer === true) {
+          var cs = {};
+          for (var k in cadre) cs[k] = cadre[k];
+          cs.animer = false;
+          cadre = cs;
+        }
         var clip = genererCadreClipPath(cadre, W, H);
         if (clip) {
           div.style.clipPath = clip;
@@ -2503,8 +3626,12 @@
 
       // État du fond de scène : { mediaEl, mediaKey, kind, mediaTime }.
       // mediaEl (img/video) est display:none — sert uniquement de source
-      // pour drawImage dans peindreFond().
-      let bgState = { mediaEl: null, mediaKey: "", kind: "", mediaTime: 0 };
+      // pour drawImage dans peindreFond(). Mode carrousel (bgSlides) :
+      // slides[] d'imgs cachées remplace mediaEl — slideIdx/prevIdx/
+      // fadeStart/nextAt pilotés par le tick de startBgLoop.
+      let bgState = { mediaEl: null, mediaKey: "", kind: "", mediaTime: 0,
+        slides: null, slidesKey: "", slideIdx: 0, prevIdx: -1, fadeStart: 0,
+        fadeDur: 800, nextAt: 0 };
       // Morphing fond : offscreen + canvas GL + rendu (créés lazily au premier
       // morph — zéro coût tant que la scène n'a pas de bgMorphs).
       var bgMorphOff = null;
@@ -2518,6 +3645,102 @@
         const noQuery = rel.split("?")[0];
         const parts = noQuery.split("/");
         return parts[parts.length - 1] || "";
+      }
+
+      // ===== Carrousels d'images (mediaSlides widget / bgSlides fond) =====
+      // Liste non vide = actif et prioritaire sur le média unique (qui reste
+      // stocké et redevient visible si la liste est vidée). Le timer tourne
+      // ICI côté viewer — le dashboard ne commit que les mutations de
+      // liste/intervalle, jamais les avances. Images uniquement, fondu
+      // enchaîné fixe, boucle séquentielle.
+      var SLIDES_FADE_MS = 800;
+
+      // Clé de liste = JSON des rels (PAS l'intervalle : un changement de sec
+      // ne doit pas reconstruire la pile — il recale juste le timer).
+      function slidesKeyOf(list) {
+        var rels = [];
+        for (var i = 0; i < list.length; i++) rels.push((list[i] && list[i].rel) || "");
+        return JSON.stringify(rels);
+      }
+
+      // Intervalle borné : défaut 5 s, min 1 s.
+      function slidesSecOf(sec) {
+        return Math.max(1, sec || 5);
+      }
+
+      function slidesArreter(entry) {
+        if (!entry) return;
+        if (entry.slideTimer) { clearInterval(entry.slideTimer); entry.slideTimer = null; }
+        // Handler posé par slidesDemarrerMorph (imgs uniquement).
+        if (entry.mediaEl && entry.mediaEl.tagName === "IMG") entry.mediaEl.onload = null;
+      }
+
+      // Construit la pile d'imgs du carrousel widget dans el (opacity 0 sauf
+      // la slide courante, classe "visible"). Retourne les éléments dans
+      // l'ordre de la liste.
+      function slidesConstruire(el, list, w) {
+        var els = [];
+        for (var i = 0; i < list.length; i++) {
+          var img = document.createElement("img");
+          img.className = "slide";
+          img.src = "/" + list[i].rel;
+          applyMediaStyle(img, w);
+          if (i === 0) img.classList.add("visible");
+          el.appendChild(img);
+          els.push(img);
+        }
+        return els;
+      }
+
+      function slidesAvancer(entry) {
+        if (!entry.slidesEls || entry.slidesEls.length < 2) return;
+        entry.slidesEls[entry.slideIdx].classList.remove("visible");
+        entry.slideIdx = (entry.slideIdx + 1) % entry.slidesEls.length;
+        entry.slidesEls[entry.slideIdx].classList.add("visible");
+      }
+
+      // (Re)démarre l'intervalle du carrousel widget. 1 slide = statique, pas
+      // de timer. Mémorise slideSec : l'appelant ne relance que si l'intervalle
+      // a changé (la pile et la slide courante survivent).
+      function slidesDemarrer(entry, sec) {
+        slidesArreter(entry);
+        entry.slideSec = slidesSecOf(sec);
+        if (!entry.slidesEls) return;
+        // Fondu borné à la moitié de l'intervalle — la transition ne dépasse
+        // jamais le temps d'affichage d'une slide.
+        var fadeS = Math.min(SLIDES_FADE_MS / 1000, entry.slideSec * 0.5);
+        for (var fi = 0; fi < entry.slidesEls.length; fi++) entry.slidesEls[fi].style.transitionDuration = fadeS + "s";
+        if (entry.slidesEls.length < 2) return;
+        entry.slideTimer = setInterval(function () { slidesAvancer(entry); }, entry.slideSec * 1000);
+      }
+
+      // Retire la pile de slides du DOM + le timer (carrousel → média unique).
+      function slidesRetirer(entry) {
+        slidesArreter(entry);
+        if (entry.slidesEls) {
+          for (var i = 0; i < entry.slidesEls.length; i++) entry.slidesEls[i].remove();
+          entry.slidesEls = null;
+        }
+        entry.slideIdx = 0;
+        entry.slidesKey = "";
+        entry.slideSec = 0;
+      }
+
+      // Démarre l'intervalle « swap src » du carrousel sur une entry morph :
+      // la source cachée mediaEl change de slide, le rendu GL frame-par-frame
+      // suit sans autre travail. Lit entry.slidesList + entry.slideSec.
+      function slidesDemarrerMorph(entry) {
+        slidesArreter(entry);
+        var l = entry.slidesList;
+        if (!l || l.length < 2) return;
+        entry.slideTimer = setInterval(function () {
+          entry.slideIdx = (entry.slideIdx + 1) % l.length;
+          var el = entry.mediaEl;
+          // Chemin image = rendu one-shot : re-rendre le morph quand la
+          // nouvelle slide est chargée (pas de boucle rAF pour les images).
+          el.onload = function () { if (entry.dernierW) morphRendreWidget(entry, entry.dernierW); };
+          el.src = "/" + l[entry.slideIdx].rel;
+        }, entry.slideSec * 1000);
       }
 
       function applyWidgetStyle(el, w) {
@@ -2580,7 +3803,7 @@
         if (!entry.mediaEl || entry.mediaEl.tagName !== "VIDEO") return;
         const paused = w.mediaPaused !== false; // défaut true
         entry.mediaEl.loop = !paused;
-        if (paused) {
+        if (paused || PREVIEW) {
           if (!entry.mediaEl.paused) entry.mediaEl.pause();
         } else {
           if (entry.mediaEl.paused) entry.mediaEl.play().catch(function () {});
@@ -2750,8 +3973,23 @@
         bgCtx.setTransform(bgScaleX, 0, 0, bgScaleY, 0, 0);
         bgCtx.clearRect(0, 0, cw, ch);
 
-        if (!bgState.mediaEl) return;
-        const src = bgState.mediaEl;
+        if (!bgState.mediaEl && !bgState.slides) return;
+        const src = bgState.slides ? bgState.slides[bgState.slideIdx] : bgState.mediaEl;
+        if (!src) return;
+        // Slide précédente pendant la fenêtre de fondu (crossfade alpha) —
+        // dessinée sous la courante avec alpha complémentaire.
+        var srcPrev = null;
+        var alphaCur = 1;
+        if (bgState.slides && bgState.prevIdx >= 0 && bgState.fadeStart > 0) {
+          var kFade = (performance.now() - bgState.fadeStart) / (bgState.fadeDur || SLIDES_FADE_MS);
+          var sp = bgState.slides[bgState.prevIdx];
+          if (kFade < 1 && sp && sp.complete && sp.naturalWidth > 0) {
+            srcPrev = sp;
+            alphaCur = kFade;
+          } else {
+            bgState.prevIdx = -1; // fondu terminé (ou image perdue)
+          }
+        }
         // Vidéo : readyState >= 2 (HAVE_CURRENT_DATA) pour drawImage.
         // Image : complete && naturalWidth > 0.
         const ready = bgState.kind === "video"
@@ -2803,6 +4041,11 @@
               pctx.scale(bgMH, bgMV);
               pctx.translate(-pw / 2, -ph / 2);
               try {
+                if (srcPrev) {
+                  var rPp = fitRects(srcPrev.naturalWidth, srcPrev.naturalHeight, cw, ch, fit);
+                  if (rPp) { pctx.globalAlpha = 1 - alphaCur; pctx.drawImage(srcPrev, rPp.sx, rPp.sy, rPp.sw, rPp.sh, rPp.dx / pf, rPp.dy / pf, rPp.dw / pf, rPp.dh / pf); }
+                }
+                pctx.globalAlpha = alphaCur;
                 pctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, r.dx / pf, r.dy / pf, r.dw / pf, r.dh / pf);
               } catch (e) {}
               pctx.restore();
@@ -2820,10 +4063,16 @@
           ctx.scale(bgMH, bgMV);
           ctx.translate(-cw / 2, -ch / 2);
           try {
+            if (srcPrev) {
+              var rPn = fitRects(srcPrev.naturalWidth, srcPrev.naturalHeight, cw, ch, fit);
+              if (rPn) { ctx.globalAlpha = 1 - alphaCur; ctx.drawImage(srcPrev, rPn.sx, rPn.sy, rPn.sw, rPn.sh, rPn.dx, rPn.dy, rPn.dw, rPn.dh); }
+            }
+            ctx.globalAlpha = alphaCur;
             ctx.drawImage(src, r.sx, r.sy, r.sw, r.sh, r.dx, r.dy, r.dw, r.dh);
           } catch (e) {
             // drawImage peut échouer si la vidéo n'est pas prête → ignore.
           }
+          ctx.globalAlpha = 1;
           ctx.filter = "none";
           ctx.restore();
         }
@@ -3020,6 +4269,30 @@
             bgDernierT = v.currentTime;
             peindreFond(currentScene);
           }
+          // Carrousel de fond : avance à nextAt (image suivante déjà chargée)
+          // + repeint chaque frame pendant la fenêtre de fondu.
+          if (bgState.slides && bgState.slides.length > 1) {
+            var now = performance.now();
+            var inFade = bgState.prevIdx >= 0 && (now - bgState.fadeStart) < (bgState.fadeDur || SLIDES_FADE_MS);
+            if (now >= bgState.nextAt) {
+              var next = (bgState.slideIdx + 1) % bgState.slides.length;
+              var nimg = bgState.slides[next];
+              if (nimg && nimg.complete && nimg.naturalWidth > 0) {
+                var secBg = slidesSecOf(currentScene && currentScene.bgSlidesSec);
+                bgState.prevIdx = bgState.slideIdx;
+                bgState.slideIdx = next;
+                bgState.fadeStart = now;
+                // Fondu borné à la moitié de l'intervalle.
+                bgState.fadeDur = Math.min(SLIDES_FADE_MS, secBg * 500);
+                bgState.nextAt = now + secBg * 1000;
+                peindreFond(currentScene);
+              } else {
+                bgState.nextAt = now + 500; // image pas prête → re-tester
+              }
+            } else if (inFade) {
+              peindreFond(currentScene);
+            }
+          }
           rafId = requestAnimationFrame(tick);
         }
         rafId = requestAnimationFrame(tick);
@@ -3036,7 +4309,7 @@
         if (!state.mediaEl || state.kind !== "video") return;
         const paused = scene.bgPaused !== false; // défaut true
         state.mediaEl.loop = !paused;
-        if (paused) {
+        if (paused || PREVIEW) {
           if (!state.mediaEl.paused) state.mediaEl.pause();
         } else {
           if (state.mediaEl.paused) state.mediaEl.play().catch(function () {});
@@ -3070,11 +4343,14 @@
           ? "scale(" + bgZ + ") perspective(" + bgPersp + "px) rotateX(" + bgTiltX + "deg) rotateY(" + bgTiltY + "deg)"
           : "";
         const rel = scene.bgMedia || "";
+        // Carrousel de fond : liste non vide = actif (sauf si bgObsSource —
+        // la capture garde la priorité absolue sur tout, règle figée).
+        const bgSlides = (scene.bgSlides && scene.bgSlides.length && !scene.bgObsSource) ? scene.bgSlides : null;
         // Fond capture OBS (bgObsSource) : PRIORITAIRE sur le média — même
         // chemin que « pas de fond » (mediaEl retiré + canvas transparent) :
         // la page étant transparente, la source SOS-Fond-* en bas de pile OBS
         // apparaît plein canvas. Retirer la capture restaure le média stocké.
-        if (!rel || scene.bgObsSource) {
+        if ((!rel && !bgSlides) || scene.bgObsSource) {
           if (bgState.mediaEl) {
             bgEl.removeChild(bgState.mediaEl);
             bgState.mediaEl = null;
@@ -3082,6 +4358,15 @@
             bgState.kind = "";
             bgState.mediaTime = 0;
           }
+          if (bgState.slides) {
+            for (var ci = 0; ci < bgState.slides.length; ci++) bgState.slides[ci].remove();
+            bgState.slides = null;
+          }
+          bgState.slidesKey = "";
+          bgState.slideIdx = 0;
+          bgState.prevIdx = -1;
+          bgState.fadeStart = 0;
+          bgState.nextAt = 0;
           // Pas de fond (ou fond capture) → canvas transparent (OBS visible).
           // Transform neutre : clearRect en pixels backing (le transform
           // adaptatif posé par peindreFond persisterait sinon).
@@ -3090,6 +4375,60 @@
           bgDernierT = -1;
           stopBgLoop();
           return;
+        }
+        if (bgSlides) {
+          // ===== Fond carrousel : pile d'imgs cachées (source drawImage),
+          // avancée par le tick de startBgLoop + fondu dans peindreFond =====
+          const lkey = slidesKeyOf(bgSlides);
+          if (bgState.slidesKey !== lkey || !bgState.slides) {
+            if (bgState.mediaEl) { bgEl.removeChild(bgState.mediaEl); bgState.mediaEl = null; }
+            if (bgState.slides) {
+              for (var ri = 0; ri < bgState.slides.length; ri++) bgState.slides[ri].remove();
+            }
+            bgState.slides = bgSlides.map(function (sl) {
+              var img = document.createElement("img");
+              img.src = "/" + sl.rel;
+              bgEl.appendChild(img); // display:none (#bg img) — source drawImage
+              return img;
+            });
+            bgState.slidesKey = lkey;
+            bgState.slideIdx = 0;
+            bgState.prevIdx = -1;
+            bgState.fadeStart = 0;
+            bgState.nextAt = performance.now() + slidesSecOf(scene.bgSlidesSec) * 1000;
+            bgState.kind = "image";
+            bgState.mediaKey = "slides:" + lkey;
+            bgState.mediaTime = 0;
+            bgDernierT = -1;
+            // Peindre dès que la 1re image est chargée (snapshot courant en
+            // param — currentScene peut avoir avancé d'ici le load).
+            var img0 = bgState.slides[0];
+            if (img0) {
+              if (img0.complete && img0.naturalWidth > 0) {
+                peindreFond(scene);
+              } else {
+                img0.addEventListener("load", function () { peindreFond(currentScene); });
+              }
+            }
+            startBgLoop();
+          }
+          // L'intervalle est relu en direct dans le tick
+          // (currentScene.bgSlidesSec) — un changement de sec ne reconstruit
+          // pas la pile et ne perd pas la slide courante.
+          return;
+        }
+        // ===== Média unique : sortie de carrousel → retirer la pile =====
+        if (bgState.slides) {
+          for (var xi = 0; xi < bgState.slides.length; xi++) bgState.slides[xi].remove();
+          bgState.slides = null;
+          bgState.slidesKey = "";
+          bgState.slideIdx = 0;
+          bgState.prevIdx = -1;
+          bgState.fadeStart = 0;
+          bgState.nextAt = 0;
+          // La boucle ne sert plus qu'aux vidéos (relancée ci-dessous si
+          // le média unique est une vidéo) — sinon rAF tournerait à vide.
+          stopBgLoop();
         }
         const kind = scene.bgKind || kindFromMedia(rel);
         const key = mediaKey(rel);
@@ -4414,6 +5753,9 @@
         // global sur #stage, sous les widgets.
         applyTitreFond(scene);
 
+        // Modules HUD (couche séparée des widgets, #modules-root z 9000).
+        renderModules(scene);
+
         var seen = new Set();
 
         for (var i = 0; i < scene.widgets.length; i++) {
@@ -4436,6 +5778,7 @@
             if (trouEntry && trouEntry.kind !== "trou") {
               // Libérer le contexte GL si c'était un widget morphé.
               if (trouEntry.morphRendu) trouEntry.morphRendu.detruire();
+              slidesArreter(trouEntry); // timer carrousel éventuel
               trouEntry.wrapEl.remove();
               widgetMap.delete(w.id);
               trouEntry = null;
@@ -4534,6 +5877,11 @@
               var viewersBar = document.createElement("div");
               viewersBar.className = "chat-viewers";
               el.appendChild(viewersBar);
+              // Ligne « musique en cours » (défilante) — entre la barre
+              // viewers et le corps du chat, remplie par majMusiqueMarquee.
+              var musiqueEl = document.createElement("div");
+              musiqueEl.className = "chat-musique";
+              el.appendChild(musiqueEl);
               var chatBody = document.createElement("div");
               chatBody.className = "chat-body";
               el.appendChild(chatBody);
@@ -4546,7 +5894,7 @@
               var chatNew = {
                 el: el, wrapEl: wrapEl, mediaEl: null, mediaKey: "",
                 kind: "chat", mediaTime: 0,
-                chatBody: chatBody, viewersBar: viewersBar,
+                chatBody: chatBody, viewersBar: viewersBar, musiqueEl: musiqueEl,
                 chatFiltre: filtre, taillePolice: taille,
                 chatRebuildKey: chatRebuildKey, cadreMsg: cadreMsg,
                 cadreOverlayEl: null, cadreKey: "", titreEls: null
@@ -4557,6 +5905,9 @@
               // Cadre widget : clip-path + overlay SVG.
               applyCadreWidget(el, chatNew, w, scene.cadreWidget);
               applyTitreWidget(chatNew, w, scene.cadreWidget);
+              // Widget (re)créé pendant qu'une piste joue → reremplir sa
+              // ligne défilante (maj globale sur tous les widgets chat).
+              majMusiqueMarquee();
             }
             continue;
           }
@@ -4585,6 +5936,7 @@
             var ivCouleur = w.inputCouleur || "#8b5cf6";
             var ivKey = ivMode + "|" + ivLayout + "|" + ivSkin;
             if (ivEntry && ivEntry.kind !== "inputviewer") {
+              slidesArreter(ivEntry); // timer carrousel éventuel
               ivEntry.wrapEl.remove();
               widgetMap.delete(w.id);
               ivEntry = null;
@@ -4655,6 +6007,7 @@
             seen.add(w.id);
             var srEntry = widgetMap.get(w.id);
             if (srEntry && srEntry.kind !== "speedrun") {
+              slidesArreter(srEntry); // timer carrousel éventuel
               srEntry.wrapEl.remove();
               widgetMap.delete(w.id);
               srEntry = null;
@@ -4754,6 +6107,7 @@
             seen.add(w.id);
             var gEntry = widgetMap.get(w.id);
             if (gEntry && gEntry.kind !== "goal") {
+              slidesArreter(gEntry); // timer carrousel éventuel
               gEntry.wrapEl.remove();
               widgetMap.delete(w.id);
               gEntry = null;
@@ -4836,6 +6190,98 @@
             continue;
           }
 
+          // ===== Widget musique (mini-lecteur Winamp : LCD + EQ + barre) =====
+          // Contenu piloté par les frames musique-* + le tick local
+          // (musiqueAudio.currentTime — même page, pas besoin de la
+          // progression Rust). musiqueMode "eq" = bandes seules.
+          if (wtype === "musique") {
+            seen.add(w.id);
+            var muEntry = widgetMap.get(w.id);
+            if (muEntry && muEntry.kind !== "musique") {
+              slidesArreter(muEntry); // timer carrousel éventuel
+              muEntry.wrapEl.remove();
+              widgetMap.delete(w.id);
+              muEntry = null;
+            }
+            var muMode = w.musiqueMode === "eq" ? "eq" : "player";
+            if (muEntry) {
+              // UPDATE : style + z + bascule de mode (classe — même DOM).
+              applyWidgetStyle(muEntry.el, w);
+              muEntry.el.style.setProperty("--mu-w", w.largeur + "px");
+              muEntry.el.style.setProperty("--mu-h", w.hauteur + "px");
+              muEntry.wrapEl.style.zIndex = w.z;
+              if (muEntry.muMode !== muMode) {
+                muEntry.muMode = muMode;
+                muEntry.el.classList.toggle("mu-eq-only", muMode === "eq");
+              }
+              syncMediaFond(muEntry, w);
+              applyCadreWidget(muEntry.el, muEntry, w, scene.cadreWidget);
+              applyTitreWidget(muEntry, w, scene.cadreWidget);
+            } else {
+              // CREATE : conteneur + LCD (marquee + temps) + EQ 16 barres +
+              // barre de position crantée.
+              var muWrap = document.createElement("div");
+              muWrap.className = "widget-wrap";
+              muWrap.style.zIndex = w.z;
+              var muEl = document.createElement("div");
+              muEl.className = "widget musique" + (muMode === "eq" ? " mu-eq-only" : "");
+              applyWidgetStyle(muEl, w);
+              muEl.style.setProperty("--mu-w", w.largeur + "px");
+              muEl.style.setProperty("--mu-h", w.hauteur + "px");
+              muEl.innerHTML =
+                '<div class="mu-titre">WINAMP</div>' +
+                '<div class="mu-lcd">' +
+                  '<div class="mu-defile-wrap"><span class="mu-defile">' +
+                    '<span class="mu-txt"></span><span class="mu-txt"></span>' +
+                  '</span></div>' +
+                  '<span class="mu-temps"><span class="mu-pos">--:--</span>' +
+                    '<span class="mu-rest"></span></span>' +
+                '</div>' +
+                '<div class="mu-eq"></div>' +
+                '<div class="mu-posbar"><div class="mu-posfill"></div></div>';
+              var muEqEl = muEl.querySelector(".mu-eq");
+              var muBars = [];
+              var muPeaks = [];
+              for (var mbi = 0; mbi < 16; mbi++) {
+                var muCol = document.createElement("div");
+                muCol.className = "mu-col";
+                var muPeak = document.createElement("div");
+                muPeak.className = "mu-peak";
+                muPeak.style.display = "none";
+                var muBar = document.createElement("div");
+                muBar.className = "mu-bar";
+                muCol.appendChild(muPeak);
+                muCol.appendChild(muBar);
+                muEqEl.appendChild(muCol);
+                muBars.push(muBar);
+                muPeaks.push(muPeak);
+              }
+              muWrap.appendChild(muEl);
+              stageEl.appendChild(muWrap);
+              var muDefile = muEl.querySelector(".mu-defile");
+              var muNew = {
+                el: muEl, wrapEl: muWrap, mediaEl: null, mediaKey: "",
+                kind: "musique", mediaTime: 0, muMode: muMode, muKey: null,
+                muDefileEl: muDefile,
+                muTxtEls: muDefile.querySelectorAll(".mu-txt"),
+                muPosEl: muEl.querySelector(".mu-pos"),
+                muRestEl: muEl.querySelector(".mu-rest"),
+                muFillEl: muEl.querySelector(".mu-posfill"),
+                muBars: muBars,
+                muPeakEls: muPeaks,
+                cadreOverlayEl: null, cadreKey: "", titreEls: null
+              };
+              widgetMap.set(w.id, muNew);
+              majMusiqueWidget(muNew);
+              syncMediaFond(muNew, w);
+              applyCadreWidget(muEl, muNew, w, scene.cadreWidget);
+              applyTitreWidget(muNew, w, scene.cadreWidget);
+            }
+            // Le tick 250 ms ne tourne que s'il reste un widget musique.
+            assurerTickMusique();
+            continue;
+          }
+
           // ===== Widget média MORPHÉ (canvas GL) =====
           // Média avec morphs → canvas warpé (source cachée pour img/video).
           // Rendu one-shot image ; vidéo → boucle rAF (morphAssurerBoucle).
@@ -4845,6 +6291,7 @@
             // Transition depuis un autre kind → détruire et recréer.
             if (mMEntry && mMEntry.kind !== "morph") {
               if (mMEntry.morphRendu) mMEntry.morphRendu.detruire();
+              slidesArreter(mMEntry); // timer carrousel éventuel
               mMEntry.wrapEl.remove();
               widgetMap.delete(w.id);
               mMEntry = null;
@@ -4888,11 +6335,38 @@
             mMEntry.wrapEl.style.zIndex = w.z;
             // Recréer la source cachée si le média a changé (comme le chemin
             // normal vérifie mediaKey — sinon l'ancien média resterait affiché).
-            var mKey = mediaKey(w.media);
+            // Carrousel : la source devient la slide courante — le timer swap
+            // le src, le rendu GL frame-par-frame suit sans autre travail.
+            var mSlides = (w.mediaSlides && w.mediaSlides.length) ? w.mediaSlides : null;
+            var mKey = mSlides ? slidesKeyOf(mSlides) : mediaKey(w.media);
+            var mSec = slidesSecOf(w.mediaSlidesSec);
             if (mMEntry.mediaKey !== mKey) {
-              mMEntry.mediaEl.src = "/" + w.media;
               mMEntry.mediaKey = mKey;
               mMEntry.mediaTime = w.mediaTime || 0;
+              mMEntry.slidesList = mSlides;
+              mMEntry.slideIdx = 0;
+              mMEntry.slideSec = mSec;
+              // Famille d'élément : carrousel = img, média vidéo = video (un
+              // <video> n'affiche pas une image fixe) → remplacer si besoin.
+              var mNeedVideo = mSlides ? false : ((w.kind || kindFromMedia(w.media || "")) === "video");
+              if ((mMEntry.mediaEl.tagName === "VIDEO") !== mNeedVideo) {
+                var mRepl = mNeedVideo ? createMedia(w, "video") : document.createElement("img");
+                mRepl.className = "morph-src";
+                mMEntry.mediaEl.replaceWith(mRepl);
+                mMEntry.mediaEl = mRepl;
+              }
+              // Image : re-rendre au load si la slide n'est pas encore
+              // chargée (le rendu one-shot ci-dessous partirait à vide).
+              if (mMEntry.mediaEl.tagName === "IMG") {
+                mMEntry.mediaEl.onload = function () { if (mMEntry.dernierW) morphRendreWidget(mMEntry, mMEntry.dernierW); };
+              }
+              mMEntry.mediaEl.src = "/" + (mSlides ? mSlides[0].rel : w.media);
+              slidesDemarrerMorph(mMEntry);
+            } else if (mSlides && mMEntry.slideSec !== mSec) {
+              // Même liste, intervalle changé : recaler le timer sans
+              // reconstruire (slide courante conservée).
+              mMEntry.slideSec = mSec;
+              slidesDemarrerMorph(mMEntry);
             }
             applyMediaState(mMEntry, w);
             mMEntry.dernierW = w;
@@ -4906,12 +6380,16 @@
           // ===== Widget média (chemin existant) =====
           var kind = w.kind || (w.media ? kindFromMedia(w.media) : "image");
           var key = mediaKey(w.media);
+          // Carrousel actif : liste non vide → prioritaire sur `media` (le
+          // média unique reste stocké, il redevient visible si liste vidée).
+          var slidesList = (w.mediaSlides && w.mediaSlides.length) ? w.mediaSlides : null;
 
           // Transition morph → média normal (morphs retirés) : l'entry "morph"
           // contient un canvas + source cachée → détruire et recréer from
           // scratch (le chemin normal ne sait pas remplacer un canvas).
           if (entry && entry.kind === "morph") {
             if (entry.morphRendu) entry.morphRendu.detruire();
+            slidesArreter(entry); // timer carrousel morph éventuel
             entry.wrapEl.remove();
             widgetMap.delete(w.id);
             entry = null;
@@ -4921,25 +6399,49 @@
             // ===== UPDATE : widget existant — style only =====
             applyWidgetStyle(entry.el, w);
             entry.wrapEl.style.zIndex = w.z;
-            // Recréer le mediaEl SEULEMENT si le nom de fichier a changé.
-            if (entry.mediaKey !== key || entry.kind !== kind) {
-              if (entry.mediaEl) entry.el.removeChild(entry.mediaEl);
-              if (w.media) {
-                var mediaEl = createMedia(w, kind);
-                applyMediaStyle(mediaEl, w);
-                entry.el.appendChild(mediaEl);
-                entry.mediaEl = mediaEl;
-                entry.mediaTime = w.mediaTime || 0;
-                applyMediaState(entry, w);
+            if (slidesList) {
+              // ===== Carrousel actif : pile d'imgs + timer opacity =====
+              var sKey = slidesKeyOf(slidesList);
+              if (entry.slidesKey !== sKey || !entry.slidesEls) {
+                // (Re)construire : retirer média unique + ancienne pile.
+                if (entry.mediaEl) { entry.mediaEl.remove(); entry.mediaEl = null; entry.mediaTime = 0; }
+                slidesRetirer(entry);
+                entry.slidesEls = slidesConstruire(entry.el, slidesList, w);
+                entry.slideIdx = 0;
+                entry.slidesKey = sKey;
+                slidesDemarrer(entry, w.mediaSlidesSec);
               } else {
-                entry.mediaEl = null;
-                entry.mediaTime = 0;
+                // Même liste : style only sur chaque slide + recalage du
+                // timer si l'intervalle a changé (slide courante conservée).
+                for (var sidx = 0; sidx < entry.slidesEls.length; sidx++) applyMediaStyle(entry.slidesEls[sidx], w);
+                if (entry.slideSec !== slidesSecOf(w.mediaSlidesSec)) slidesDemarrer(entry, w.mediaSlidesSec);
               }
               entry.mediaKey = key;
-              entry.kind = kind;
-            } else if (entry.mediaEl) {
-              applyMediaStyle(entry.mediaEl, w);
-              applyMediaState(entry, w);
+              entry.kind = "slides";
+            } else {
+              // ===== Média unique : retirer la pile carrousel si présente =====
+              if (entry.slidesEls) slidesRetirer(entry);
+              // Recréer le mediaEl SEULEMENT si le nom de fichier a changé
+              // (kind "slides" ≠ kind → rebuild aussi en sortie de carrousel).
+              if (entry.mediaKey !== key || entry.kind !== kind) {
+                if (entry.mediaEl) entry.el.removeChild(entry.mediaEl);
+                if (w.media) {
+                  var mediaEl = createMedia(w, kind);
+                  applyMediaStyle(mediaEl, w);
+                  entry.el.appendChild(mediaEl);
+                  entry.mediaEl = mediaEl;
+                  entry.mediaTime = w.mediaTime || 0;
+                  applyMediaState(entry, w);
+                } else {
+                  entry.mediaEl = null;
+                  entry.mediaTime = 0;
+                }
+                entry.mediaKey = key;
+                entry.kind = kind;
+              } else if (entry.mediaEl) {
+                applyMediaStyle(entry.mediaEl, w);
+                applyMediaState(entry, w);
+              }
             }
             // Cadre widget : clip-path + overlay SVG (recréé seulement si changé).
             applyCadreWidget(entry.el, entry, w, scene.cadreWidget);
@@ -4953,16 +6455,21 @@
             el.className = "widget";
             applyWidgetStyle(el, w);
             var mediaEl = null;
-            if (w.media) {
+            var slidesEls = null;
+            if (slidesList) {
+              slidesEls = slidesConstruire(el, slidesList, w);
+            } else if (w.media) {
               mediaEl = createMedia(w, kind);
               applyMediaStyle(mediaEl, w);
               el.appendChild(mediaEl);
             }
             wrapEl.appendChild(el);
             stageEl.appendChild(wrapEl);
-            var newEntry = { el: el, wrapEl: wrapEl, mediaEl: mediaEl, mediaKey: key, kind: kind, mediaTime: w.mediaTime || 0, cadreOverlayEl: null, cadreKey: "", titreEls: null };
+            var newEntry = { el: el, wrapEl: wrapEl, mediaEl: mediaEl, mediaKey: key, kind: slidesList ? "slides" : kind, mediaTime: w.mediaTime || 0, cadreOverlayEl: null, cadreKey: "", titreEls: null,
+              slidesEls: slidesEls, slidesKey: slidesList ? slidesKeyOf(slidesList) : "", slideIdx: 0, slideTimer: null, slideSec: 0 };
             widgetMap.set(w.id, newEntry);
-            applyMediaState(newEntry, w);
+            if (slidesList) slidesDemarrer(newEntry, w.mediaSlidesSec);
+            else applyMediaState(newEntry, w);
             // Cadre widget : clip-path + overlay SVG.
             applyCadreWidget(el, newEntry, w, scene.cadreWidget);
             applyTitreWidget(newEntry, w, scene.cadreWidget);
@@ -4974,6 +6481,7 @@
           if (!seen.has(id)) {
             // Libérer le contexte GL des widgets morphés.
             if (entry.kind === "morph" && entry.morphRendu) entry.morphRendu.detruire();
+            slidesArreter(entry); // timer carrousel éventuel
             entry.wrapEl.remove();
             widgetMap.delete(id);
           }
@@ -5058,7 +6566,7 @@
       }
 
       // --- Cadre inline (arrondis / carre) ---
-      function renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle) {
+      function renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle, animer) {
         var c = /^#[0-9a-f]{6}$/i.test(couleur || "") ? couleur : "#ffffff";
         var cFin = /^#[0-9a-f]{6}$/i.test(couleurFin || "") ? couleurFin : c;
         var ep = clampStrokeWidth(strokeWidth);
@@ -5071,12 +6579,23 @@
         var gx1 = Math.round(50 - dx * scale), gy1 = Math.round(50 - dy * scale);
         var gx2 = Math.round(50 + dx * scale), gy2 = Math.round(50 + dy * scale);
         var gradId = "grad-cadre-" + (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + style;
+        // Comète (animer) : segment balayant le tracé du bord — recette
+        // thin-line (pathLength=100 + dashoffset SMIL). SUR le bord : la
+        // marge est rognée par overflow:hidden/clip-path du parent.
+        var rectPath = rx > 0
+          ? "M " + rx + " 0 L " + (W - rx) + " 0 Q " + W + " 0 " + W + " " + rx + " L " + W + " " + (H - rx) + " Q " + W + " " + H + " " + (W - rx) + " " + H + " L " + rx + " " + H + " Q 0 " + H + " 0 " + (H - rx) + " L 0 " + rx + " Q 0 0 " + rx + " 0 Z"
+          : "M 0 0 L " + W + " 0 L " + W + " " + H + " L 0 " + H + " Z";
+        var comet = animer
+          ? '<path d="' + rectPath + '" fill="none" stroke="' + cFin + '" stroke-width="' + Math.max(1.2, ep * 0.7) + '" stroke-linecap="round" pathLength="100" stroke-dasharray="7 93" stroke-dashoffset="0">'
+            + '<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4s" repeatCount="indefinite"/></path>'
+          : "";
         return '<svg width="' + (W + offset * 2) + '" height="' + (H + offset * 2) + '" viewBox="-' + offset + ' -' + offset + ' ' + (W + offset * 2) + ' ' + (H + offset * 2) + '" preserveAspectRatio="none" style="position:absolute;top:-' + offset + 'px;left:-' + offset + 'px;pointer-events:none;z-index:5;">'
           + '<defs><linearGradient id="' + gradId + '" x1="' + gx1 + '%" y1="' + gy1 + '%" x2="' + gx2 + '%" y2="' + gy2 + '%">'
           + '<stop offset="0%" stop-color="' + c + '" stop-opacity="1"/>'
           + '<stop offset="100%" stop-color="' + cFin + '" stop-opacity="1"/>'
           + '</linearGradient></defs>'
           + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + rx + '" ry="' + rx + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '"/>'
+          + comet
           + '</svg>';
       }
 
@@ -5090,7 +6609,7 @@
         var s = Math.min(getCyberpunkBevelSize(sw), W / 4, H / 4);
         return "path('M " + s + " 0 L " + (W - s) + " 0 L " + W + " " + s + " L " + W + " " + (H - s) + " L " + (W - s) + " " + H + " L " + s + " " + H + " L 0 " + (H - s) + " L 0 " + s + " Z')";
       }
-      function renderCyberpunk(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+      function renderCyberpunk(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
         var c2 = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.35);
         var c3 = "#ffffff";
@@ -5098,7 +6617,7 @@
         var ep = clampStrokeWidth(strokeWidth);
         var offset = ep / 2;
         var bevel = getCyberpunkBevelSize(ep);
-        var margin = Math.max(4, ep);
+        var margin = Math.max(6, ep * 1.4);
         var svgW = W + offset * 2 + margin * 2;
         var svgH = H + offset * 2 + margin * 2;
         var viewX = -(offset + margin);
@@ -5116,11 +6635,13 @@
           var Y = function (y) { return cy + y * sy; };
           var plaque = "M " + X(b + d) + " " + Y(-d) + " L " + X(bevel * 0.55) + " " + Y(-d) + " L " + X(-d) + " " + Y(bevel * 0.55) + " L " + X(-d) + " " + Y(b + d) + " L " + X(-d * 2.2) + " " + Y(b + d) + " L " + X(-d * 2.2) + " " + Y(bevel * 0.35) + " L " + X(bevel * 0.35) + " " + Y(-d * 2.2) + " L " + X(b + d) + " " + Y(-d * 2.2) + " Z";
           var chevron = "M " + X(bevel * 0.9) + " " + Y(-d * 3.4) + " L " + X(bevel * 0.28) + " " + Y(-d * 3.4) + " L " + X(-d * 3.4) + " " + Y(bevel * 0.28) + " L " + X(-d * 3.4) + " " + Y(bevel * 0.9);
+          var chevron2 = "M " + X(bevel * 0.62) + " " + Y(-d * 4.6) + " L " + X(bevel * 0.34) + " " + Y(-d * 4.6) + " L " + X(-d * 4.6) + " " + Y(bevel * 0.34) + " L " + X(-d * 4.6) + " " + Y(bevel * 0.62);
           var dx = X(bevel * 0.62), dy = Y(bevel * 0.62);
           var dr = Math.max(1.4, ep * 0.4);
           return "<g>" +
             '<path d="' + plaque + '" fill="' + c2 + '" fill-opacity="0.28" stroke="' + c1 + '" stroke-width="' + traitFin + '" stroke-linejoin="miter"/>' +
             '<path d="' + chevron + '" fill="none" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.85"/>' +
+            '<path d="' + chevron2 + '" fill="none" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.4"/>' +
             '<circle cx="' + dx + '" cy="' + dy + '" r="' + dr + '" fill="' + c3 + '" stroke="' + c1 + '" stroke-width="' + Math.max(0.6, ep * 0.12) + '"/>' +
             "</g>";
         }
@@ -5144,6 +6665,26 @@
           '<path d="M ' + (W + co) + " " + (midY - segV) + " L " + (W + co) + " " + (midY + segV) + '" stroke="' + c1 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
           '<circle cx="' + (W + co) + '" cy="' + (midY - segV) + '" r="' + pr + '" fill="' + c1 + '"/>'
         ].join("\n    ");
+        // Code-barres (marge haut-droite) : micro-data signature cyberpunk.
+        var barH = Math.max(4, ep * 1.1);
+        var barY = -margin * 0.55 - barH / 2;
+        var barUnit = Math.max(0.8, ep * 0.28);
+        var barX0 = W - bevel * 0.2 - barUnit * 26;
+        var barPattern = [1, 1, 0.5, 2, 0.5, 1, 3, 1, 0.5, 0.5, 2, 1];
+        var bx = barX0;
+        var barcode = "";
+        for (var bi = 0; bi < barPattern.length; bi++) {
+          var bw = barPattern[bi] * barUnit;
+          barcode += '<rect x="' + bx + '" y="' + barY + '" width="' + bw + '" height="' + barH + '" fill="' + (bi % 3 === 0 ? c1 : c2) + '" opacity="0.85"/>';
+          bx += bw + barUnit;
+        }
+        // Runner lumineux (UN groupe, UN animateMotion le long du bord) —
+        // émis seulement si animer (toggle « Animer » de la modale).
+        var dotR = Math.max(1.8, ep * 0.55);
+        var runner = animer
+          ? '<g opacity="0.95"><animateMotion dur="5s" repeatCount="indefinite" path="' + pathBorder + '"/>'
+            + '<circle r="' + (dotR * 2.6) + '" fill="' + c1 + '" opacity="0.35"/><circle r="' + dotR + '" fill="' + c3 + '"/></g>'
+          : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<clipPath id="' + clipPathId + '"><path d="' + pathBorder + '"/></clipPath>'
@@ -5151,11 +6692,11 @@
           + '<linearGradient id="' + gradInnerId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c3 + '" stop-opacity="0.9"/><stop offset="50%" stop-color="' + c1 + '" stop-opacity="0.6"/><stop offset="100%" stop-color="' + c3 + '" stop-opacity="0.9"/></linearGradient>'
           + "</defs>"
           + '<g clip-path="url(#' + clipPathId + ')">'
-          + '<path d="' + pathBorder + '" fill="none" stroke="' + c1 + '" stroke-width="' + (ep * 2.2) + '" stroke-linejoin="miter" opacity="0.25"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="' + c1 + '" stroke-width="' + (ep * 2.6) + '" stroke-linejoin="miter" opacity="0.22"/>'
           + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
-          + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradInnerId + ')" stroke-width="' + Math.max(1, ep * 0.35) + '" stroke-linejoin="miter" opacity="0.8"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradInnerId + ')" stroke-width="' + Math.max(1, ep * 0.35) + '" stroke-linejoin="miter" opacity="0.85"/>'
           + '<path d="' + pathBorder + '" fill="none" stroke="' + c3 + '" stroke-width="' + Math.max(0.8, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.4"/>'
-          + "</g><g>" + circuits + "</g>" + brackets
+          + "</g><g>" + circuits + "</g>" + brackets + barcode + runner
           + "</svg>";
       }
 
@@ -5186,7 +6727,15 @@
       function heartShape(cx, cy, s) {
         return "M " + cx + " " + (cy + s * 0.25) + " C " + (cx - s * 0.42) + " " + (cy - s * 0.08) + " " + (cx - s * 0.42) + " " + (cy - s * 0.42) + " " + cx + " " + (cy - s * 0.18) + " C " + (cx + s * 0.42) + " " + (cy - s * 0.42) + " " + (cx + s * 0.42) + " " + (cy - s * 0.08) + " " + cx + " " + (cy + s * 0.25) + " Z";
       }
-      function renderStory(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+      // Étincelle 4-pointes (losange étoilé) centrée en cx,cy, rayon r.
+      function sparkleShape(cx, cy, r) {
+        var k = r * 0.16;
+        return "M " + cx + " " + (cy - r) + " Q " + (cx + k) + " " + (cy - k) + " " + (cx + r) + " " + cy
+          + " Q " + (cx + k) + " " + (cy + k) + " " + cx + " " + (cy + r)
+          + " Q " + (cx - k) + " " + (cy + k) + " " + (cx - r) + " " + cy
+          + " Q " + (cx - k) + " " + (cy - k) + " " + cx + " " + (cy - r) + " Z";
+      }
+      function renderStory(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var vif = bpmHexValide(couleur) ? couleur : "#ffffff";
         var palette = {
           vif: vif,
@@ -5198,7 +6747,7 @@
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
         var s = Math.min(getStoryClipSize(ep), W / 4, H / 4);
-        var margin = Math.max(10, ep * 2.5);
+        var margin = Math.max(12, ep * 3);
         var svgW = W + margin * 2, svgH = H + margin * 2;
         var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
         var gradId = "grad-story-" + uid, innerGradId = "grad-inner-story-" + uid, clipId = "clip-story-" + uid;
@@ -5241,6 +6790,42 @@
           smallHeartsSvg += '<path d="' + heartShape(0, y, smallHeartSize) + '" fill="' + blanc + '"/>';
           smallHeartsSvg += '<path d="' + heartShape(W, y, smallHeartSize) + '" fill="' + blanc + '"/>';
         }
+        // Volutes filigrane aux 4 coins : double courbe qui s'échappe dans
+        // la marge + point final. (sx, sy) = direction extérieure du coin.
+        var traitFinStory = Math.max(0.9, ep * 0.3);
+        function voluteCoin(cx, cy, sx, sy) {
+          var X = function (v) { return cx + v * sx; };
+          var Y = function (v) { return cy + v * sy; };
+          var curl = "M " + X(-margin * 0.05) + " " + Y(-margin * 0.1)
+            + " C " + X(-margin * 0.6) + " " + Y(-margin * 0.15) + " " + X(-margin * 0.85) + " " + Y(-margin * 0.7) + " " + X(-margin * 0.45) + " " + Y(-margin * 0.9)
+            + " C " + X(-margin * 0.15) + " " + Y(-margin * 1.05) + " " + X(0) + " " + Y(-margin * 0.75) + " " + X(-margin * 0.12) + " " + Y(-margin * 0.5);
+          return '<path d="' + curl + '" fill="none" stroke="' + palette.clair + '" stroke-width="' + traitFinStory + '" stroke-linecap="round" opacity="0.9"/>'
+            + '<circle cx="' + X(-margin * 0.12) + '" cy="' + Y(-margin * 0.5) + '" r="' + Math.max(1, ep * 0.28) + '" fill="' + blanc + '" opacity="0.9"/>';
+        }
+        var volutes = voluteCoin(0, 0, 1, 1) + voluteCoin(W, 0, -1, 1) + voluteCoin(W, H, -1, -1) + voluteCoin(0, H, 1, -1);
+        // Étincelles 4-pointes dans la marge (milieu des arêtes). animer →
+        // scintillement en cascade (opacity SMIL déphasée), sinon fixes.
+        var sparkR = Math.max(3.5, ep * 0.9);
+        var sparkPos = [
+          [W / 2, -margin * 0.5],
+          [W + margin * 0.5, H / 2],
+          [W / 2, H + margin * 0.5]
+        ];
+        var sparklesSvg = "";
+        for (var si = 0; si < sparkPos.length; si++) {
+          var sAnim = animer
+            ? '<animate attributeName="opacity" values="0.15;0.95;0.15" dur="2.4s" begin="' + (si * 0.8).toFixed(1) + 's" repeatCount="indefinite"/>'
+            : "";
+          sparklesSvg += '<path d="' + sparkleShape(sparkPos[si][0], sparkPos[si][1], sparkR) + '" fill="' + blanc + '" opacity="0.85">' + sAnim + "</path>";
+        }
+        // Étincelle voyageuse (animer) : UN animateMotion sur le tracé du
+        // bord (path= direct — recette runner cyberpunk). SUR le bord :
+        // la marge est rognée par overflow:hidden/clip-path du parent →
+        // visible sur widgets ET bord du canvas.
+        var traveler = animer
+          ? '<g opacity="0.95"><animateMotion dur="7s" repeatCount="indefinite" path="' + borderPath + '"/>'
+            + '<path d="' + sparkleShape(0, 0, sparkR) + '" fill="' + blanc + '"/></g>'
+          : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + palette.vif + '"/><stop offset="50%" stop-color="' + palette.clair + '"/><stop offset="100%" stop-color="' + palette.profond + '"/></linearGradient>'
@@ -5252,8 +6837,11 @@
           + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="round"/>'
           + '<path d="' + borderPath + '" fill="none" stroke="url(#' + innerGradId + ')" stroke-width="' + Math.max(1, ep * 0.3) + '" stroke-linejoin="round" opacity="0.7"/>'
           + "</g>"
+          + volutes
           + "<g>" + cornerHeartsSvg + "</g>"
           + '<g opacity="0.75">' + smallHeartsSvg + "</g>"
+          + sparklesSvg
+          + traveler
           + "</svg>";
       }
 
@@ -5267,7 +6855,11 @@
         var rEff = Math.min(r, W / 4, H / 4);
         return "path('M " + rEff + " 0 L " + (W - rEff) + " 0 Q " + W + " 0 " + W + " " + rEff + " L " + W + " " + (H - rEff) + " Q " + W + " " + H + " " + (W - rEff) + " " + H + " L " + rEff + " " + H + " Q 0 " + H + " 0 " + (H - rEff) + " L 0 " + rEff + " Q 0 0 " + rEff + " 0 Z')";
       }
-      function renderThinLine(W, H, idCadre, strokeWidth, couleur, couleurFin) {
+      // Double filet (trait principal + filet externe décalé), accents L
+      // aux coins, point de « fermoir » signature milieu-haut.
+      // animer → segment comète balayant le bord (stroke-dashoffset SMIL
+      // sur pathLength=100 — un seul attribut animé).
+      function renderThinLine(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
         var p = {
           principal: c1,
@@ -5275,24 +6867,29 @@
         };
         var ep = clampStrokeWidth(strokeWidth);
         var r = Math.min(getThinLineClipSize(ep), W / 4, H / 4);
-        var margin = Math.max(4, ep);
+        var filetGap = Math.max(3, ep * 1.1);
+        var margin = Math.max(6, ep * 1.5);
         var svgW = W + margin * 2, svgH = H + margin * 2;
         var cornerLen = Math.max(10, ep * 3);
-        var cornerGap = Math.max(3, ep * 0.8);
+        var cornerGap = filetGap + Math.max(2, ep * 0.5);
+        var borderPath = "M " + r + " 0 L " + (W - r) + " 0 Q " + W + " 0 " + W + " " + r + " L " + W + " " + (H - r) + " Q " + W + " " + H + " " + (W - r) + " " + H + " L " + r + " " + H + " Q 0 " + H + " 0 " + (H - r) + " L 0 " + r + " Q 0 0 " + r + " 0 Z";
+        var comet = animer
+          ? '<path d="' + borderPath + '" fill="none" stroke="' + p.accent + '" stroke-width="' + Math.max(1.2, ep * 0.7) + '" stroke-linecap="round" pathLength="100" stroke-dasharray="7 93" stroke-dashoffset="0">'
+            + '<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4s" repeatCount="indefinite"/></path>'
+          : "";
+        var fermoirR = Math.max(1.6, ep * 0.45);
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + r + '" ry="' + r + '" fill="none" stroke="' + p.principal + '" stroke-width="' + ep + '"/>'
+          + '<rect x="' + (-filetGap) + '" y="' + (-filetGap) + '" width="' + (W + filetGap * 2) + '" height="' + (H + filetGap * 2) + '" rx="' + (r + filetGap) + '" ry="' + (r + filetGap) + '" fill="none" stroke="' + p.accent + '" stroke-width="' + Math.max(0.6, ep * 0.28) + '" opacity="0.55"/>'
           + '<g stroke="' + p.accent + '" stroke-width="' + Math.max(1, ep * 0.6) + '" fill="none" stroke-linecap="square">'
           + '<path d="M ' + (-cornerGap) + " " + (cornerLen + cornerGap) + " L " + (-cornerGap) + " " + (-cornerGap) + " L " + (cornerLen + cornerGap) + " " + (-cornerGap) + '"/>'
           + '<path d="M ' + (W - cornerLen - cornerGap) + " " + (-cornerGap) + " L " + (W + cornerGap) + " " + (-cornerGap) + " L " + (W + cornerGap) + " " + (cornerLen + cornerGap) + '"/>'
           + '<path d="M ' + (-cornerGap) + " " + (H - cornerLen - cornerGap) + " L " + (-cornerGap) + " " + (H + cornerGap) + " L " + (cornerLen + cornerGap) + " " + (H + cornerGap) + '"/>'
           + '<path d="M ' + (W - cornerLen - cornerGap) + " " + (H + cornerGap) + " L " + (W + cornerGap) + " " + (H + cornerGap) + " L " + (W + cornerGap) + " " + (H - cornerLen - cornerGap) + '"/>'
           + "</g>"
-          + '<g fill="' + p.accent + '">'
-          + '<circle cx="' + (W / 2) + '" cy="0" r="' + Math.max(2, ep * 0.5) + '"/>'
-          + '<circle cx="' + (W / 2) + '" cy="' + H + '" r="' + Math.max(2, ep * 0.5) + '"/>'
-          + '<circle cx="0" cy="' + (H / 2) + '" r="' + Math.max(2, ep * 0.5) + '"/>'
-          + '<circle cx="' + W + '" cy="' + (H / 2) + '" r="' + Math.max(2, ep * 0.5) + '"/>'
-          + "</g></svg>";
+          + '<circle cx="' + (W / 2) + '" cy="0" r="' + fermoirR + '" fill="' + p.accent + '" stroke="' + p.principal + '" stroke-width="' + Math.max(0.5, ep * 0.15) + '"/>'
+          + comet
+          + "</svg>";
       }
 
       // --- Hexagon ---
@@ -5313,7 +6910,7 @@
         }
         return "M " + pts.join(" L ") + " Z";
       }
-      function renderHexagon(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+      function renderHexagon(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
         var p = {
           principal: c1,
@@ -5323,32 +6920,73 @@
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
         var s = Math.min(getHexagonClipSize(ep), W / 4, H / 4);
-        var margin = Math.max(10, ep * 2.5);
+        var margin = Math.max(10, ep * 2.6);
         var svgW = W + margin * 2, svgH = H + margin * 2;
         var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
         var gradId = "grad-hex-" + uid, clipId = "clip-hex-" + uid;
         var borderPath = ["M " + s + " 0", "L " + (W - s) + " 0", "L " + W + " " + (s * 0.5), "L " + W + " " + (H - s * 0.5), "L " + (W - s) + " " + H, "L " + s + " " + H, "L 0 " + (H - s * 0.5), "L 0 " + (s * 0.5), "Z"].join(" ");
         var hexR = Math.max(5, ep * 1.4);
-        var corners = [
-          { cx: s * 0.5, cy: s * 0.35 }, { cx: W - s * 0.5, cy: s * 0.35 },
-          { cx: s * 0.5, cy: H - s * 0.35 }, { cx: W - s * 0.5, cy: H - s * 0.35 }
+        var traitFin = Math.max(1, ep * 0.35);
+        // Grappes d'alvéoles dans la marge des 4 coins (un hexagone
+        // principal + 2 satellites). animer → rotation lente (UN
+        // animateTransform par grappe).
+        var clusterD = s * 0.9 + hexR * 0.9;
+        var clusters = [
+          { cx: -clusterD * 0.4, cy: -clusterD * 0.4 },
+          { cx: W + clusterD * 0.4, cy: -clusterD * 0.4 },
+          { cx: W + clusterD * 0.4, cy: H + clusterD * 0.4 },
+          { cx: -clusterD * 0.4, cy: H + clusterD * 0.4 }
         ];
-        var cornerHexes = corners.map(function (c) {
-          return '<path d="' + hexPath(c.cx, c.cy, hexR) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.35) + '"/>';
+        var cornerHexes = clusters.map(function (c, i) {
+          var inner = '<path d="' + hexPath(c.cx, c.cy, hexR) + '" fill="' + p.profond + '" fill-opacity="0.25" stroke="' + p.clair + '" stroke-width="' + traitFin + '"/>'
+            + '<path d="' + hexPath(c.cx + hexR * 1.9, c.cy, hexR * 0.55) + '" fill="none" stroke="' + p.principal + '" stroke-width="' + traitFin * 0.7 + '" opacity="0.8"/>'
+            + '<path d="' + hexPath(c.cx - hexR * 0.95, c.cy + hexR * 1.65, hexR * 0.55) + '" fill="none" stroke="' + p.principal + '" stroke-width="' + traitFin * 0.7 + '" opacity="0.8"/>';
+          var anim = animer
+            ? '<animateTransform attributeName="transform" type="rotate" from="0 ' + c.cx + " " + c.cy + '" to="' + (i % 2 === 0 ? 360 : -360) + " " + c.cx + " " + c.cy + '" dur="10s" repeatCount="indefinite"/>'
+            : "";
+          return "<g>" + anim + inner + "</g>";
         }).join("");
+        // Nœuds aux 8 sommets du bord + glyphes hexagonaux aux milieux
+        // des 4 arêtes (marge extérieure).
+        var sommets = [
+          [s, 0], [W - s, 0],
+          [W, s * 0.5], [W, H - s * 0.5],
+          [W - s, H], [s, H],
+          [0, H - s * 0.5], [0, s * 0.5]
+        ];
+        var noeudR = Math.max(1.2, ep * 0.3);
+        var noeuds = sommets.map(function (n) {
+          return '<circle cx="' + n[0] + '" cy="' + n[1] + '" r="' + noeudR + '" fill="' + p.clair + '"/>';
+        }).join("");
+        var glypheR = hexR * 0.65;
+        var glyphes = [
+          hexPath(W / 2, -margin * 0.45, glypheR),
+          hexPath(W / 2, H + margin * 0.45, glypheR),
+          hexPath(-margin * 0.45, H / 2, glypheR),
+          hexPath(W + margin * 0.45, H / 2, glypheR)
+        ].map(function (d) {
+          return '<path d="' + d + '" fill="none" stroke="' + p.clair + '" stroke-width="' + traitFin * 0.8 + '" opacity="0.5"/>';
+        }).join("");
+        // Nœud voyageur : UN groupe animé le long du bord (path= direct,
+        // pas de mpath — support universel CEF/WebView).
+        var voyageur = animer
+          ? "<g><animateMotion dur=\"6s\" repeatCount=\"indefinite\" path=\"" + borderPath + "\"/>"
+            + '<circle r="' + Math.max(2.2, ep * 0.5) + '" fill="' + p.clair + '" opacity="0.4"/>'
+            + '<circle r="' + Math.max(1.4, ep * 0.32) + '" fill="#ffffff"/></g>'
+          : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + p.principal + '"/><stop offset="100%" stop-color="' + p.profond + '"/></linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
           + '<g clip-path="url(#' + clipId + ')">'
-          + '<path d="' + borderPath + '" fill="none" stroke="' + p.principal + '" stroke-width="' + (ep * 2) + '" stroke-linejoin="miter" opacity="0.2"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + p.principal + '" stroke-width="' + (ep * 2.2) + '" stroke-linejoin="miter" opacity="0.2"/>'
           + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
           + '<path d="' + borderPath + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" stroke-linejoin="miter" opacity="0.6"/>'
           + "</g>"
-          + '<g opacity="0.7">' + cornerHexes
-          + '<path d="' + hexPath(W / 2, 0, hexR * 0.7) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" opacity="0.5"/>'
-          + '<path d="' + hexPath(W / 2, H, hexR * 0.7) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" opacity="0.5"/></g>'
+          + cornerHexes + glyphes
+          + '<g opacity="0.85">' + noeuds + "</g>"
+          + voyageur
           + '<path d="' + borderPath + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.4" transform="translate(' + (ep * 0.6) + " " + (ep * 0.6) + ") scale(" + Math.max(0.01, 1 - (ep * 1.2) / W) + " " + Math.max(0.01, 1 - (ep * 1.2) / H) + ')"/>'
           + "</svg>";
       }
@@ -5374,7 +7012,7 @@
           x2: Math.round(50 + dx * scale), y2: Math.round(50 + dy * scale)
         };
       }
-      function renderMGStyle(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+      function renderMGStyle(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var cPrincipal = (couleur && /^#[0-9a-f]{6}$/i.test(couleur)) ? couleur : "#ffffff";
         var cAccent = (couleurFin && /^#[0-9a-f]{6}$/i.test(couleurFin)) ? couleurFin : "#000000";
         var angle = isFinite(gradientAngle) ? gradientAngle : 135;
@@ -5426,6 +7064,14 @@
           { x: W + circuitPad - 8, y: midY - 22 }, { x: W + circuitPad - 8, y: midY + 22 }
         ].map(function (n) { return '<circle cx="' + n.x + '" cy="' + n.y + '" r="' + Math.max(1.5, ep * 0.35) + '" fill="' + cAccent + '" opacity="0.5"/>'; }).join("");
         var diodeR = Math.max(2.5, ep * 0.6), diodeX = midX, diodeY = -margin * 0.4;
+        // animer → balayage radar : segment accentué sur le tracé du bord
+        // (dashoffset SMIL sur pathLength=100 — recette thin-line). SUR le
+        // bord : la marge est rognée par overflow:hidden/clip-path du
+        // parent → visible sur widgets ET bord du canvas.
+        var sweep = animer
+          ? '<path d="' + borderPath + '" fill="none" stroke="' + cAccent + '" stroke-width="' + Math.max(1.2, ep * 0.55) + '" stroke-linecap="round" pathLength="100" stroke-dasharray="8 92" stroke-dashoffset="0">'
+            + '<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4.5s" repeatCount="indefinite"/></path>'
+          : "";
         var bangW = Math.max(2, ep * 0.55), bangH = Math.max(12, ep * 3.5), bangX = W + margin * 0.3, bangY = -margin * 0.25;
         var tickCount = 9, tickW = Math.max(1, ep * 0.25), tickH = Math.max(3, ep * 0.8), tickStart = sx + 4, tickEnd = W - sx - 4;
         var ticks = [];
@@ -5457,6 +7103,264 @@
           + '<circle cx="' + diodeX + '" cy="' + diodeY + '" r="' + diodeR + '" fill="' + cAccent + '" stroke="' + cPrincipal + '" stroke-width="' + Math.max(0.5, ep * 0.15) + '"/>'
           + '<g><rect x="' + (bangX - bangW / 2) + '" y="' + (bangY - bangH) + '" width="' + bangW + '" height="' + (bangH * 0.72) + '" fill="' + cAccent + '"/><rect x="' + (bangX - bangW / 2) + '" y="' + (bangY - bangH * 0.12) + '" width="' + bangW + '" height="' + bangW + '" fill="' + cAccent + '"/></g>'
           + ticks.join("")
+          + sweep
+          + "</svg>";
+      }
+
+      // --- Arena ---
+      // Bordure néon « console rétro » (réf. Xbox 360) : octogone allongé,
+      // canal sombre sous un tube lumineux double filet, médaillons « orb »
+      // (anneau + croix X incurvée) sertis sur les 4 biseaux, cartouches
+      // sombres à cheval (haut décalé droite, bas centré), ailerons
+      // triangulaires latéraux, nœuds aux 8 sommets. Tout sur le tracé ou
+      // clippé dans la forme — marge rognée, intérieur libre.
+      function getArenaBevels(sw) {
+        var ep = clampStrokeWidth(sw);
+        return { bx: Math.max(16, Math.round(ep * 4.2)), by: Math.max(10, Math.round(ep * 2.4)) };
+      }
+      function getArenaClipPath(W, H, sw) {
+        var b = getArenaBevels(sw);
+        var bx = Math.min(b.bx, W / 4), by = Math.min(b.by, H / 4);
+        return "path('M " + bx + " 0 L " + (W - bx) + " 0 L " + W + " " + by + " L " + W + " " + (H - by) + " L " + (W - bx) + " " + H + " L " + bx + " " + H + " L 0 " + (H - by) + " L 0 " + by + " Z')";
+      }
+      function renderArena(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
+        var principal = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var profond = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(principal, 0.35);
+        var clair = bpmEclaircir(principal, 0.5);
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var b = getArenaBevels(ep);
+        var bx = Math.min(b.bx, W / 4), by = Math.min(b.by, H / 4);
+        var margin = Math.max(4, ep);
+        var svgW = W + offset * 2 + margin * 2, svgH = H + offset * 2 + margin * 2;
+        var viewX = -(offset + margin), viewY = -(offset + margin);
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-arena-" + uid, orbGradId = "orb-grad-arena-" + uid, clipId = "clip-arena-" + uid;
+        var borderPath = "M " + bx + " 0 L " + (W - bx) + " 0 L " + W + " " + by + " L " + W + " " + (H - by) + " L " + (W - bx) + " " + H + " L " + bx + " " + H + " L 0 " + (H - by) + " L 0 " + by + " Z";
+        var d = Math.max(2.5, ep * 1.1), di = d * 1.4;
+        var echoPath = "M " + (bx + di) + " " + d + " L " + (W - bx - di) + " " + d + " L " + (W - d) + " " + (by + di) + " L " + (W - d) + " " + (H - by - di) + " L " + (W - bx - di) + " " + (H - d) + " L " + (bx + di) + " " + (H - d) + " L " + d + " " + (H - by - di) + " L " + d + " " + (by + di) + " Z";
+        var orbR = Math.max(6, Math.min(bx, by) * 1.25, ep * 2);
+        var orbW = Math.max(1.6, ep * 0.55);
+        var bevelLen = Math.hypot(bx, by) || 1;
+        var orbCentres = [
+          [bx / 2 + (by / bevelLen) * orbR * 0.22, by / 2 + (bx / bevelLen) * orbR * 0.22],
+          [W - bx / 2 - (by / bevelLen) * orbR * 0.22, by / 2 + (bx / bevelLen) * orbR * 0.22],
+          [W - bx / 2 - (by / bevelLen) * orbR * 0.22, H - by / 2 - (bx / bevelLen) * orbR * 0.22],
+          [bx / 2 + (by / bevelLen) * orbR * 0.22, H - by / 2 - (bx / bevelLen) * orbR * 0.22]
+        ];
+        var orbs = orbCentres.map(function (c) {
+          var xr = orbR * 0.6;
+          return "<g>"
+            + '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="' + orbR + '" fill="rgba(6,10,4,0.65)" stroke="' + clair + '" stroke-width="' + orbW + '"/>'
+            + '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="' + (orbR - orbW * 0.9) + '" fill="url(#' + orbGradId + ')" opacity="0.9"/>'
+            + '<path d="M ' + (c[0] - xr) + " " + (c[1] - xr) + " Q " + c[0] + " " + c[1] + " " + (c[0] + xr) + " " + (c[1] + xr) + " M " + (c[0] + xr) + " " + (c[1] - xr) + " Q " + c[0] + " " + c[1] + " " + (c[0] - xr) + " " + (c[1] + xr) + '" fill="none" stroke="#ffffff" stroke-width="' + Math.max(1.4, ep * 0.5) + '" stroke-linecap="round" opacity="0.95"/>'
+            + "</g>";
+        }).join("");
+        var orbsGroupe = animer
+          ? '<g>' + orbs + '<animate attributeName="opacity" values="1;0.55;1" dur="3.5s" repeatCount="indefinite"/></g>'
+          : "<g>" + orbs + "</g>";
+        var traitFin = Math.max(1.2, ep * 0.35);
+        var cw = Math.max(18, bx * 1.15), ch = Math.max(4.5, ep * 1.7), cd = cw * 0.3;
+        var dotPt = Math.max(1.4, ep * 0.45);
+        function cartouche(cx, cy, tx, ty) {
+          var nx = -ty, ny = tx;
+          var P = function (t, n) { return (cx + tx * t + nx * n) + " " + (cy + ty * t + ny * n); };
+          var hexa = "M " + P(-cw + cd, -ch) + " L " + P(cw - cd, -ch) + " L " + P(cw, 0) + " L " + P(cw - cd, ch) + " L " + P(-cw + cd, ch) + " L " + P(-cw, 0) + " Z";
+          var barre = "M " + P(-cw * 0.5, ch * 0.35) + " L " + P(cw * 0.5, ch * 0.35);
+          var ptG = P(-cw + cd * 1.2, ch * 0.35).split(" ");
+          var ptD = P(cw - cd * 1.2, ch * 0.35).split(" ");
+          return '<path d="' + hexa + '" fill="rgba(6,10,4,0.75)" stroke="' + clair + '" stroke-width="' + traitFin + '"/>'
+            + '<path d="' + barre + '" fill="none" stroke="' + clair + '" stroke-width="' + Math.max(1, traitFin * 0.7) + '" opacity="0.6"/>'
+            + '<circle cx="' + ptG[0] + '" cy="' + ptG[1] + '" r="' + dotPt + '" fill="' + clair + '"/>'
+            + '<circle cx="' + ptD[0] + '" cy="' + ptD[1] + '" r="' + dotPt + '" fill="' + clair + '"/>';
+        }
+        var wingL = Math.max(5, ep * 2.2), wingT = Math.max(7, ep * 3);
+        function aileron(cx, cy, nx, ny) {
+          var tx = -ny, ty = nx;
+          var P = function (t, n) { return (cx + tx * t + nx * n) + " " + (cy + ty * t + ny * n); };
+          var kite = "M " + P(-wingT, -wingL * 0.35) + " L " + P(0, wingL) + " L " + P(wingT, -wingL * 0.35) + " L " + P(0, -wingL) + " Z";
+          return '<path d="' + kite + '" fill="rgba(6,10,4,0.7)" stroke="' + clair + '" stroke-width="' + traitFin + '"/>';
+        }
+        var decors = (W > cw * 4 && H > wingT * 4)
+          ? cartouche(W * 0.72, 0, 1, 0) + cartouche(W / 2, H, 1, 0)
+            + aileron(0, H / 2, 1, 0) + aileron(W, H / 2, -1, 0)
+          : "";
+        var sommets = [
+          [bx, 0], [W - bx, 0], [W, by], [W, H - by],
+          [W - bx, H], [bx, H], [0, H - by], [0, by]
+        ];
+        var noeudR = Math.max(1.3, ep * 0.35);
+        var noeuds = sommets.map(function (n) {
+          return '<circle cx="' + n[0] + '" cy="' + n[1] + '" r="' + noeudR + '" fill="' + clair + '"/>';
+        }).join("");
+        var dotR = Math.max(1.8, ep * 0.5);
+        var voyageur = animer
+          ? "<g>" + '<animateMotion dur="5s" repeatCount="indefinite" path="' + borderPath + '"/>'
+            + '<circle r="' + (dotR * 2.4) + '" fill="' + clair + '" opacity="0.35"/>'
+            + '<circle r="' + dotR + '" fill="#ffffff"/>' + "</g>"
+          : "";
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + principal + '"/><stop offset="100%" stop-color="' + profond + '"/></linearGradient>'
+          + '<radialGradient id="' + orbGradId + '" cx="35%" cy="30%" r="75%"><stop offset="0%" stop-color="' + clair + '"/><stop offset="100%" stop-color="' + profond + '"/></radialGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="rgba(6,10,4,0.55)" stroke-width="' + (ep * 3.4) + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + principal + '" stroke-width="' + (ep * 2.6) + '" stroke-linejoin="miter" opacity="0.28"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + clair + '" stroke-width="' + Math.max(0.8, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.5"/>'
+          + '<path d="' + echoPath + '" fill="none" stroke="' + clair + '" stroke-width="' + Math.max(1, ep * 0.28) + '" stroke-linejoin="miter" opacity="0.75"/>'
+          + noeuds
+          + decors
+          + orbsGroupe
+          + "</g>"
+          + voyageur
+          + "</svg>";
+      }
+
+      // --- Tribal ---
+      // Encre « tatouage tribal » classique : QUE des courbes pleines.
+      // Silhouette aux coins balayés en courbes concaves ; sur chaque arête
+      // un motif symétrique (pointe-étoile centrale rentrante, griffes-crocs
+      // pleines en éventail, fines balayures vers les coins) ; équerres de
+      // visée arrondies en retrait des coins. Marge rognée, centre libre.
+      function getTribalCorner(sw) {
+        var ep = clampStrokeWidth(sw);
+        return { cx: Math.max(12, Math.round(ep * 3)), cy: Math.max(9, Math.round(ep * 2.4)) };
+      }
+      function tribalPath(W, H, sw) {
+        var c = getTribalCorner(sw);
+        var cx = Math.min(c.cx, W / 4), cy = Math.min(c.cy, H / 4);
+        return "M " + cx + " 0 L " + (W - cx) + " 0 "
+          + "Q " + (W - cx * 0.15) + " " + (cy * 0.15) + " " + W + " " + cy + " "
+          + "L " + W + " " + (H - cy) + " "
+          + "Q " + (W - cx * 0.15) + " " + (H - cy * 0.15) + " " + (W - cx) + " " + H + " "
+          + "L " + cx + " " + H + " "
+          + "Q " + (cx * 0.15) + " " + (H - cy * 0.15) + " 0 " + (H - cy) + " "
+          + "L 0 " + cy + " "
+          + "Q " + (cx * 0.15) + " " + (cy * 0.15) + " " + cx + " 0 Z";
+      }
+      function getTribalClipPath(W, H, sw) {
+        return "path('" + tribalPath(W, H, sw) + "')";
+      }
+      function pointeCentrale(P, c, w, h) {
+        return "M " + P(c, -h * 0.2)
+          + " Q " + P(c + w * 0.22, h * 0.3) + " " + P(c + w, h * 0.4)
+          + " Q " + P(c + w * 0.26, h * 0.5) + " " + P(c, h)
+          + " Q " + P(c - w * 0.26, h * 0.5) + " " + P(c - w, h * 0.4)
+          + " Q " + P(c - w * 0.22, h * 0.3) + " " + P(c, -h * 0.2) + " Z";
+      }
+      function griffe(P, t0, s, w, h, L) {
+        return "M " + P(t0, h * 0.06)
+          + " Q " + P(t0 + s * L * 0.3, h * 1.05) + " " + P(t0 + s * L, h * 0.12)
+          + " Q " + P(t0 + s * L * 0.55, h * 0.4) + " " + P(t0 + s * w, h * 0.02)
+          + " Z";
+      }
+      function balayure(P, t0, t1, peak, ep) {
+        var mid = (t0 + t1) / 2;
+        var th = Math.max(0.9, ep * 0.3);
+        return "M " + P(t0, ep * 0.35)
+          + " Q " + P(mid, peak) + " " + P(t1, ep * 0.3)
+          + " Q " + P(mid, peak + th) + " " + P(t0, ep * 0.35 + th * 0.6)
+          + " Z";
+      }
+      function motifBord(x1, y1, x2, y2, nx, ny, ep) {
+        var len = Math.hypot(x2 - x1, y2 - y1) || 1;
+        var dx = (x2 - x1) / len, dy = (y2 - y1) / len;
+        var P = function (t, prof) { return (x1 + dx * t + nx * prof) + " " + (y1 + dy * t + ny * prof); };
+        var hMax = Math.max(9, ep * 2.4);
+        var pad = hMax * 1.9;
+        var demi = len / 2 - pad;
+        if (demi < hMax * 1.5) return { corps: "", balayures: "" };
+        var c = len / 2;
+        var corps = [], balayures = [];
+        var sw = hMax * 0.38;
+        corps.push(pointeCentrale(P, c, sw, hMax * 1.1));
+        var nGriffe = demi > hMax * 3.6 ? 2 : 1;
+        for (var si = 0; si < 2; si++) {
+          var s = si === 0 ? 1 : -1;
+          var cur = c + s * (sw + hMax * 0.55);
+          for (var i = 0; i < nGriffe; i++) {
+            var k = 1 - i * 0.3;
+            corps.push(griffe(P, cur, s, hMax * 0.42 * k, hMax * k, hMax * 1.45 * k + hMax * 0.4));
+            cur += s * (hMax * 1.85 * k + hMax * 0.45);
+          }
+          var b0 = cur + s * hMax * 0.2;
+          var b1 = s > 0 ? len - pad * 0.25 : pad * 0.25;
+          if (Math.abs(b1 - b0) > hMax * 1.6) {
+            balayures.push(balayure(P, b0, b1, -ep * 0.15, ep));
+            balayures.push(balayure(P, b0 + s * hMax * 0.15, b1, hMax * 0.55, ep));
+          }
+        }
+        return { corps: corps.join(" "), balayures: balayures.join(" ") };
+      }
+      function equerre(cx0, cy0, sx, sy, ix, iy, ax, ay, r) {
+        var X = function (v) { return cx0 + v * sx; };
+        var Y = function (v) { return cy0 + v * sy; };
+        return "M " + X(ix + ax) + " " + Y(iy)
+          + " L " + X(ix + r) + " " + Y(iy)
+          + " Q " + X(ix) + " " + Y(iy) + " " + X(ix) + " " + Y(iy + r)
+          + " L " + X(ix) + " " + Y(iy + ay);
+      }
+      function renderTribal(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
+        var principal = bpmHexValide(couleur) ? couleur : "#111111";
+        var profond = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(principal, 0.4);
+        var clair = bpmEclaircir(principal, 0.4);
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var c = getTribalCorner(ep);
+        var cx = Math.min(c.cx, W / 4), cy = Math.min(c.cy, H / 4);
+        var margin = Math.max(4, ep);
+        var svgW = W + offset * 2 + margin * 2, svgH = H + offset * 2 + margin * 2;
+        var viewX = -(offset + margin), viewY = -(offset + margin);
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-tribal-" + uid, clipId = "clip-tribal-" + uid;
+        var borderPath = tribalPath(W, H, ep);
+        var mHaut = motifBord(cx * 1.15, 0, W - cx * 1.15, 0, 0, 1, ep);
+        var mDroite = motifBord(W, cy * 1.15, W, H - cy * 1.15, -1, 0, ep);
+        var mBas = motifBord(W - cx * 1.15, H, cx * 1.15, H, 0, -1, ep);
+        var mGauche = motifBord(0, H - cy * 1.15, 0, cy * 1.15, 1, 0, ep);
+        var corps = mHaut.corps + " " + mDroite.corps + " " + mBas.corps + " " + mGauche.corps;
+        var sweeps = mHaut.balayures + " " + mDroite.balayures + " " + mBas.balayures + " " + mGauche.balayures;
+        var motif = "<g>"
+          + (animer ? '<animate attributeName="opacity" values="0.85;1;0.85" dur="4s" repeatCount="indefinite"/>' : "")
+          + '<path d="' + sweeps + '" fill="url(#' + gradId + ')" opacity="0.85"/>'
+          + '<path d="' + corps + '" fill="url(#' + gradId + ')"/></g>';
+        var ix = Math.min(W * 0.09, Math.max(cx * 1.6, ep * 2.6));
+        var iy = Math.min(H * 0.11, Math.max(cy * 1.6, ep * 2.6));
+        var ax = Math.max(12, W * 0.045);
+        var ay = Math.max(9, H * 0.05);
+        var eqW = Math.max(1.3, ep * 0.45);
+        var equerres = W > 130 && H > 90
+          ? '<path d="' + equerre(0, 0, 1, 1, ix, iy, ax, ay, 2.5) + " "
+            + equerre(W, 0, -1, 1, ix, iy, ax, ay, 2.5) + " "
+            + equerre(W, H, -1, -1, ix, iy, ax, ay, 2.5) + " "
+            + equerre(0, H, 1, -1, ix, iy, ax, ay, 2.5)
+            + '" fill="none" stroke="' + clair + '" stroke-width="' + eqW + '" stroke-linecap="round" opacity="0.85"/>'
+          : "";
+        var dotR = Math.max(1.8, ep * 0.5);
+        var voyageur = animer
+          ? "<g>" + '<animateMotion dur="5.5s" repeatCount="indefinite" path="' + borderPath + '"/>'
+            + '<circle r="' + (dotR * 2.4) + '" fill="' + clair + '" opacity="0.35"/>'
+            + '<circle r="' + dotR + '" fill="#ffffff"/>' + "</g>"
+          : "";
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + principal + '"/><stop offset="100%" stop-color="' + profond + '"/></linearGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="rgba(6,6,6,0.5)" stroke-width="' + (ep * 3.2) + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + principal + '" stroke-width="' + (ep * 2.4) + '" stroke-linejoin="miter" opacity="0.22"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + clair + '" stroke-width="' + Math.max(0.8, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.45"/>'
+          + motif
+          + equerres
+          + "</g>"
+          + voyageur
           + "</svg>";
       }
 
@@ -5466,14 +7370,18 @@
         story: renderStory,
         "thin-line": renderThinLine,
         hexagon: renderHexagon,
-        mgstyle: renderMGStyle
+        mgstyle: renderMGStyle,
+        arena: renderArena,
+        tribal: renderTribal
       };
       var CADRES_CLIP_PATHS = {
         cyberpunk: getCyberpunkClipPath,
         story: getStoryClipPath,
         "thin-line": getThinLineClipPath,
         hexagon: getHexagonClipPath,
-        mgstyle: getMGStyleClipPath
+        mgstyle: getMGStyleClipPath,
+        arena: getArenaClipPath,
+        tribal: getTribalClipPath
       };
 
       function genererCadreSVG(cadre, W, H, idCadre) {
@@ -5484,11 +7392,11 @@
         var couleurFin = cadre.couleurFin || "";
         var gradientAngle = isFinite(cadre.gradientAngle) ? cadre.gradientAngle : 135;
         if (style === "arrondis" || style === "carre") {
-          return renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle);
+          return renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle, cadre.animer === true);
         }
         var fn = CADRES_RENDERERS[style];
         if (fn) {
-          return fn(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle);
+          return fn(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, cadre.animer === true);
         }
         return "";
       }
@@ -5514,6 +7422,7 @@
         return (cadre.style || "") + "|"
           + (cadre.strokeWidth || 0) + "|" + (cadre.couleur || "") + "|"
           + (cadre.couleurFin || "") + "|" + (cadre.gradientAngle ?? "") + "|"
+          + (cadre.animer === true ? "a1" : "a0") + "|"
           + Math.round(W) + "x" + Math.round(H);
       }
 
@@ -5812,6 +7721,294 @@
         }
       }
 
+      // ===== Modules HUD (scene.modules) =====
+      // Couche séparée des widgets : un singleton par id (horloge / musique /
+      // objectifs) dans #modules-root (z 9000). Rendu create/update/remove
+      // par snapshot ; les valeurs live sont poussées par textContent/width
+      // (majModuleHorloge 1 s, majModuleMusique via le tick musique 250 ms,
+      // majModulesObjectifs sur frames communaute/viewers/goal-twitch).
+      var modulesRoot = null;
+      var modulesMap = {}; // id → { el, key, ... refs DOM }
+      var MODULE_IDS = ["horloge", "musique", "objectifs"];
+
+      function assurerModulesRoot() {
+        if (modulesRoot) return;
+        modulesRoot = document.createElement("div");
+        modulesRoot.id = "modules-root";
+        stageEl.appendChild(modulesRoot);
+      }
+
+      /// Style commun (position/taille/police/opacité/accent) — à chaque
+      /// snapshot (suit les resizes et le changement de cadre à chaud).
+      function appliquerStyleModule(entry, m, fsDefaut) {
+        var el = entry.el;
+        el.style.left = m.x + "px";
+        el.style.top = m.y + "px";
+        el.style.width = m.largeur + "px";
+        el.style.height = m.hauteur + "px";
+        var fs = m.taille || fsDefaut;
+        el.style.setProperty("--mod-fs", Math.max(8, Math.round(fs)) + "px");
+        el.style.setProperty("--mod-font", m.police ? "'" + m.police + "', 'Segoe UI', sans-serif" : "'Segoe UI', system-ui, sans-serif");
+        var op = typeof m.opacite === "number" ? Math.min(1, Math.max(0, m.opacite)) : 0.45;
+        el.style.setProperty("--mod-opacite", String(op));
+        el.style.setProperty("--mod-accent", bpmResoudreCouleurs().p);
+        // Cadre SVG de la scène autour du module (opt-in). Dims connues
+        // (inline px) → mesurable immédiatement après insertion.
+        if (m.cadre) appliquerCadreOverlay(el, "module-" + entry.id);
+        else nettoyerCadreOverlay(el, "module-" + entry.id);
+      }
+
+      function creerModuleEl(id) {
+        var el = document.createElement("div");
+        el.className = "module " + id;
+        return el;
+      }
+
+      function renderModules(scene) {
+        var mods = (scene && scene.modules) || {};
+        assurerModulesRoot();
+        for (var i = 0; i < MODULE_IDS.length; i++) {
+          var id = MODULE_IDS[i];
+          var m = mods[id];
+          var entry = modulesMap[id];
+          if (!m || !m.actif) {
+            if (entry) {
+              nettoyerCadreOverlay(entry.el, "module-" + id);
+              entry.el.remove();
+              delete modulesMap[id];
+            }
+            continue;
+          }
+          if (id === "horloge") renderModuleHorloge(entry, m);
+          else if (id === "musique") renderModuleMusique(entry, m);
+          else renderModuleObjectifs(entry, m);
+        }
+        assurerTickHorloge();
+        if (modulesMap.musique) assurerTickMusique();
+      }
+
+      // --- Horloge ---
+      function renderModuleHorloge(entry, m) {
+        if (!entry) {
+          var el = creerModuleEl("horloge");
+          el.innerHTML =
+            '<div class="mod-fond"></div>' +
+            '<span class="mh-date"></span><span class="mh-sep"></span>' +
+            '<span class="mh-heure"></span>';
+          modulesRoot.appendChild(el);
+          entry = modulesMap.horloge = {
+            id: "horloge", el: el,
+            dateEl: el.querySelector(".mh-date"),
+            sepEl: el.querySelector(".mh-sep"),
+            heureEl: el.querySelector(".mh-heure"),
+          };
+        }
+        entry.afficherDate = m.afficherDate !== false;
+        entry.secondes = m.secondes === true;
+        entry.format12h = m.format12h === true;
+        entry.dateEl.style.display = entry.afficherDate ? "" : "none";
+        entry.sepEl.style.display = entry.afficherDate ? "" : "none";
+        appliquerStyleModule(entry, m, m.hauteur * 0.42);
+        majModuleHorloge();
+      }
+
+      function pad2(n) { return String(n).padStart(2, "0"); }
+
+      function majModuleHorloge() {
+        var e = modulesMap.horloge;
+        if (!e) return;
+        var d = new Date();
+        if (e.afficherDate) {
+          e.dateEl.textContent =
+            pad2(d.getDate()) + " / " + pad2(d.getMonth() + 1) + " / " + pad2(d.getFullYear() % 100);
+        }
+        var h = d.getHours();
+        var suffixe = "";
+        if (e.format12h) {
+          suffixe = h >= 12 ? "PM" : "AM";
+          h = h % 12 || 12;
+        }
+        var txt = pad2(h) + " : " + pad2(d.getMinutes());
+        if (e.secondes) txt += " : " + pad2(d.getSeconds());
+        e.heureEl.textContent = txt;
+        if (suffixe) {
+          var sp = document.createElement("span");
+          sp.className = "mh-ampm";
+          sp.textContent = suffixe;
+          e.heureEl.appendChild(sp);
+        }
+      }
+
+      /// Tick 1 s partagé : démarré au premier module horloge, s'auto-arrête
+      /// quand il disparaît.
+      var horlogeTimer = null;
+      function assurerTickHorloge() {
+        if (!modulesMap.horloge) {
+          if (horlogeTimer) { clearInterval(horlogeTimer); horlogeTimer = null; }
+          return;
+        }
+        if (horlogeTimer) return;
+        horlogeTimer = setInterval(majModuleHorloge, 1000);
+      }
+
+      // --- Musique en cours ---
+      var MM_NB_POINTS = 5;
+      function renderModuleMusique(entry, m) {
+        if (!entry) {
+          var el = creerModuleEl("musique");
+          var pts = "";
+          for (var i = 0; i < MM_NB_POINTS; i++) pts += "<i></i>";
+          el.innerHTML =
+            '<div class="mod-fond"></div>' +
+            '<div class="mm-carte"><div class="mm-icone">♫</div>' +
+              '<div class="mm-txt"><div class="mm-titre"></div><div class="mm-sous"></div></div></div>' +
+            '<div class="mm-temps"><span class="mm-pos">00:00</span>' +
+              '<span class="mm-points">' + pts + '</span><span class="mm-rest">00:00</span></div>';
+          modulesRoot.appendChild(el);
+          entry = modulesMap.musique = {
+            id: "musique", el: el, key: null,
+            titreEl: el.querySelector(".mm-titre"),
+            sousEl: el.querySelector(".mm-sous"),
+            posEl: el.querySelector(".mm-pos"),
+            restEl: el.querySelector(".mm-rest"),
+            pointEls: el.querySelectorAll(".mm-points i"),
+          };
+        }
+        entry.el.classList.toggle("sans-temps", m.afficherTemps === false);
+        appliquerStyleModule(entry, m, m.hauteur * 0.24);
+        majModuleMusique();
+      }
+
+      /// MAJ texte + temps + points du module musique — lit musiqueCourant /
+      /// musiqueAudio (même page). Texte seulement si changé.
+      function majModuleMusique() {
+        var e = modulesMap.musique;
+        if (!e) return;
+        var key = musiqueCourant ? musiqueCourant.titre + "|" + musiqueCourant.demandeur : "";
+        if (e.key !== key) {
+          e.key = key;
+          if (musiqueCourant) {
+            e.titreEl.textContent = musiqueCourant.titre;
+            e.sousEl.textContent = musiqueCourant.demandeur
+              ? "Demandé par @" + musiqueCourant.demandeur : "";
+          } else {
+            e.titreEl.textContent = "Aucune musique";
+            e.sousEl.textContent = "Lance la musique avec !rs";
+          }
+        }
+        var cur = 0, dur = NaN;
+        if (musiqueAudio && musiqueCourant) {
+          cur = musiqueAudio.currentTime;
+          dur = musiqueAudio.duration;
+        }
+        e.posEl.textContent = musiqueCourant ? muFmtPad(cur) : "00:00";
+        e.restEl.textContent = isFinite(dur) ? muFmtPad(Math.max(0, dur - cur)) : "00:00";
+        var pct = isFinite(dur) && dur > 0 ? cur / dur : 0;
+        var allumes = Math.round(pct * MM_NB_POINTS);
+        for (var i = 0; i < e.pointEls.length; i++) {
+          e.pointEls[i].classList.toggle("on", i < allumes);
+        }
+      }
+
+      /// mm:ss avec minutes sur 2 chiffres (pastille temps).
+      function muFmtPad(s) {
+        if (!isFinite(s) || s < 0) return "00:00";
+        return pad2(Math.floor(s / 60)) + ":" + pad2(Math.floor(s % 60));
+      }
+
+      // --- Objectifs du stream ---
+      function renderModuleObjectifs(entry, m) {
+        if (!entry) {
+          var el = creerModuleEl("objectifs");
+          el.innerHTML = '<div class="mod-fond"></div><div class="mo-titre"></div>';
+          modulesRoot.appendChild(el);
+          entry = modulesMap.objectifs = {
+            id: "objectifs", el: el, key: null, lignes: [],
+            titreEl: el.querySelector(".mo-titre"),
+            ligneEls: {}, // ligne.id → { el, labelEl, actuelEl, cibleEl, fillEl }
+          };
+        }
+        entry.titreEl.textContent = m.titre || "";
+        var lignes = m.lignes || [];
+        // Rebuild des lignes uniquement si la liste (ids/ordre/config) change.
+        var key = JSON.stringify(lignes);
+        if (entry.key !== key) {
+          entry.key = key;
+          entry.lignes = lignes;
+          Object.keys(entry.ligneEls).forEach(function (k) { entry.ligneEls[k].el.remove(); });
+          entry.ligneEls = {};
+          var vide = entry.el.querySelector(".mo-vide");
+          if (vide) vide.remove();
+          if (!lignes.length) {
+            var v = document.createElement("div");
+            v.className = "mo-vide";
+            v.textContent = "Ajoute des objectifs dans la modale Modules";
+            entry.el.appendChild(v);
+          }
+          for (var i = 0; i < lignes.length; i++) {
+            var lEl = document.createElement("div");
+            lEl.className = "mo-ligne";
+            lEl.innerHTML =
+              '<div class="mo-haut"><span class="mo-label"></span>' +
+              '<span class="mo-val"><span class="mo-actuel">N/A</span> / <span class="mo-cible">—</span></span></div>' +
+              '<div class="mo-bar"><div class="mo-fill"></div></div>';
+            entry.el.appendChild(lEl);
+            entry.ligneEls[lignes[i].id] = {
+              el: lEl,
+              labelEl: lEl.querySelector(".mo-label"),
+              actuelEl: lEl.querySelector(".mo-actuel"),
+              cibleEl: lEl.querySelector(".mo-cible"),
+              fillEl: lEl.querySelector(".mo-fill"),
+            };
+          }
+        }
+        // Taille : bornée pour que N lignes tiennent dans la hauteur.
+        var n = Math.max(1, lignes.length);
+        var fs = Math.min(m.hauteur / (n * 2.4 + (m.titre ? 1.6 : 0.8)), m.largeur * 0.075);
+        appliquerStyleModule(entry, m, fs);
+        majModulesObjectifs();
+      }
+
+      /// Libellé d'une ligne : label saisi > description du goal lié > label
+      /// du type Helix > label de la métrique.
+      function moLabel(l) {
+        if (l.label) return l.label;
+        if (l.goalId) {
+          var g = goalsTwitchMap[l.goalId];
+          if (g) return g.description || GOAL_TTYPE_LABELS[g.goal_type] || "Objectif";
+          return "Objectif Twitch";
+        }
+        return GOAL_MET_LABELS[l.metrique || "followers"] || "Objectif";
+      }
+
+      /// MAJ valeurs/barres de toutes les lignes (frames communaute/viewers/
+      /// goal-twitch + rendu). textContent/width uniquement.
+      function majModulesObjectifs() {
+        var e = modulesMap.objectifs;
+        if (!e) return;
+        for (var i = 0; i < e.lignes.length; i++) {
+          var l = e.lignes[i];
+          var refs = e.ligneEls[l.id];
+          if (!refs) continue;
+          var actuel, cible;
+          if (l.goalId) {
+            var g = goalsTwitchMap[l.goalId];
+            actuel = g ? g.actuel : undefined;
+            cible = g ? g.cible : 0;
+          } else {
+            actuel = goalValeur(l.plateforme || "twitch", l.metrique || "followers");
+            cible = l.cible || 0;
+          }
+          refs.labelEl.textContent = moLabel(l);
+          refs.actuelEl.textContent =
+            typeof actuel === "number" ? actuel.toLocaleString("fr-FR") : "N/A";
+          refs.cibleEl.textContent = cible ? cible.toLocaleString("fr-FR") : "—";
+          var pct = cible && typeof actuel === "number"
+            ? Math.min(100, Math.round((actuel / cible) * 100)) : 0;
+          refs.fillEl.style.width = pct + "%";
+        }
+      }
+
       // Appliquer un snapshot reçu : met à jour currentScene, les dims canvas,
       // rend la scène, et rafraîchit les overlays (bandeau, alerte, welcome).
       // Extraite du handler WS pour être réutilisée par le fondu (rendu différé
@@ -5839,11 +8036,24 @@
         }
       }
 
+      // Référence vers la WS courante pour les frames MONTANTES
+      // (diffusion → Rust : resync speedrun/écran-attente, musique-ended).
+      // `ws` est local à connect() et recréé à chaque reconnexion — on garde
+      // la dernière socket ouverte ici.
+      var wsCourant = null;
+      /// Envoie une frame JSON vers le serveur :4321 (no-op si déconnectée).
+      function wsSend(obj) {
+        if (wsCourant && wsCourant.readyState === 1) {
+          wsCourant.send(JSON.stringify(obj));
+        }
+      }
+
       function connect() {
         const proto = location.protocol === "https:" ? "wss:" : "ws:";
         const ws = new WebSocket(proto + "//" + location.host + "/ws");
 
         ws.onopen = () => {
+          wsCourant = ws;
           // Demander le resync de l'état speedrun (LSS) — la diffusion peut
           // se (re)connecter après le chargement du .lss côté dashboard, auquel
           // cas elle a manqué l'event WS. Le serveur re-émet la dernière run.
@@ -5856,8 +8066,12 @@
           // (actif:false si jamais togglé — couvre la connexion avant le 1er
           // toggle).
           ws.send(JSON.stringify({ type: "just-chatting-resync" }));
+          // Resync musique : si une piste jouait pendant le reload du
+          // browser source (OBS), le serveur re-émet musique-play.
+          ws.send(JSON.stringify({ type: "musique-resync" }));
         };
         ws.onclose = () => {
+          if (wsCourant === ws) wsCourant = null;
           setTimeout(connect, 2000);
         };
         ws.onmessage = (ev) => {
@@ -5915,17 +8129,20 @@
               rerenderViewersBars();
               // Widgets goal métrique "viewers" de cette plateforme.
               majGoalWidgets(msg.plateforme);
+              majModulesObjectifs();
             } else if (msg.type === "communaute") {
               // Compteurs communauté (followers/subs/sub_points/abonnes) —
               // déjà dédupliqués côté Rust. Maj des widgets goal concernés.
               communauteParPlateforme[msg.plateforme] = msg;
               majGoalWidgets(msg.plateforme);
+              majModulesObjectifs();
             } else if (msg.type === "goal-twitch") {
               // Creator Goal Twitch déclaré : progression d'un objectif lié
               // (EventSub channel.goal.* temps réel + poll viewers.rs en
               // secours). termine = le goal a pris fin côté Twitch.
               goalsTwitchMap[msg.id] = msg;
               majGoalWidgetsLies();
+              majModulesObjectifs();
             } else if (msg.type === "goal-atteint") {
               // Objectif franchi (viewers.rs — une fois par crossing ≥ cible,
               // réarmé sous la cible). Célébration contenue dans le widget.
@@ -5939,6 +8156,27 @@
             } else if (msg.type === "welcome-clip-config") {
               // Config overlay (position/taille) — applique au root welcome.
               applyWelcomeOverlayConfig(msg.config || {});
+            } else if (msg.type === "presentation-show") {
+              // Présentation streamer : affiche voile + rideaux + carte.
+              playPresentationShow(msg);
+            } else if (msg.type === "presentation-hide") {
+              // Rideaux se referment puis tout est masqué (~1,2 s).
+              stopPresentation();
+            } else if (msg.type === "presentation-mode") {
+              // Bascule card/theatrical à chaud (toggle dashboard).
+              appliquerModePresentation(msg.mode || "theatrical");
+            } else if (msg.type === "presentation-clip-play") {
+              // Lecteur clip plein écran au-dessus de la carte.
+              presentationClipPlay(msg);
+            } else if (msg.type === "presentation-clip-stop") {
+              // Retire le lecteur clip (retour à la carte).
+              presentationClipStop();
+            } else if (msg.type === "presentation-audio-play") {
+              // Joue une piste (voix one-shot, musique en boucle).
+              presentationAudioPlay(msg.piste, msg.src);
+            } else if (msg.type === "presentation-audio-stop") {
+              // Stoppe une piste (ou "toutes").
+              presentationAudioStop(msg.piste);
             } else if (msg.type === "bandeau-premier-message-play") {
               playBandeauPM(msg);
             } else if (msg.type === "bandeau-premier-message-stop") {
@@ -5966,6 +8204,16 @@
               playPad(msg);
             } else if (msg.type === "pad-stop") {
               stopPad();
+            } else if (msg.type === "musique-play") {
+              // "!rs <titre>" : joue la piste + ligne défilante dans les
+              // widgets chat. piste = {id, titre, src, demandeur}.
+              playMusique(msg);
+            } else if (msg.type === "musique-stop") {
+              stopMusique();
+            } else if (msg.type === "musique-pause") {
+              pauseMusique(!!msg.pause);
+            } else if (msg.type === "musique-volume") {
+              musiqueAppliquerVolume(msg.volume);
             } else if (msg.type === "input-viewer-etat") {
               // État des entrées (capture globale Rust → WS direct, throttle
               // 30Hz). Maj DOM directe des keycaps/boutons (pas de re-render).
@@ -6009,13 +8257,22 @@
       // canvas (le stage n'est jamais rescalé — cf. commentaire en tête de fichier).
 
       var welcomeRoot = null;       // div racine positionnable (x/y/w/h, z)
+      var welcomeVoileEl = null;    // voile noir opaque plein écran (spotlight)
       var welcomeClipEl = null;     // div.widget.welcome-clip (carte verticale)
       var welcomeEnteteEl = null;   // en-tête : avatar rond + pseudo + CTA + bio
       var welcomeAvatarEl = null;
       var welcomePseudoEl = null;
+      var welcomeMsgEl = null;      // message de bienvenue (visible en spotlight)
       var welcomeBioEl = null;
-      var welcomeVideoWrapEl = null; // wrapper 16:9 (padding-bottom)
+      var welcomeFavorisEl = null;  // rangée des streamers mis en avant (spotlight)
+      var welcomeVideoWrapEl = null; // wrapper 16:9 (aspect-ratio)
       var welcomeVideoEl = null;
+      var welcomeDroiteEl = null;    // colonne droite : titre + clip (spotlight)
+      var welcomePlateformeEl = null; // titre « Streamer Twitch » (spotlight)
+      // Mode courant : false = squelette de position, true = spotlight plein
+      // écran (utiliser_squelette = false dans la config welcome).
+      var welcomeSpotlight = false;
+      var welcomeSpotTimer = null;  // setTimeout fin d'intro spotlight (3 s)
 
       // Config par défaut (320x352, ratio ~11:10 — carte avatar+bio+clip 16:9).
       var welcomeConfig = { x: 1480, y: 580, largeur: 320, hauteur: 352 };
@@ -6046,6 +8303,9 @@
         welcomePseudoEl = document.createElement("span");
         welcomePseudoEl.className = "welcome-clip-pseudo";
 
+        welcomeMsgEl = document.createElement("span");
+        welcomeMsgEl.className = "welcome-clip-message";
+
         var ctaEl = document.createElement("span");
         ctaEl.className = "welcome-clip-cta";
         ctaEl.textContent = "Checkout and follow";
@@ -6054,30 +8314,54 @@
         welcomeBioEl.className = "welcome-clip-bio";
         welcomeBioEl.style.display = "none";
 
+        welcomeFavorisEl = document.createElement("div");
+        welcomeFavorisEl.className = "welcome-clip-favoris";
+        welcomeFavorisEl.style.display = "none";
+
         welcomeEnteteEl.appendChild(welcomeAvatarEl);
         welcomeEnteteEl.appendChild(welcomePseudoEl);
+        welcomeEnteteEl.appendChild(welcomeMsgEl);
         welcomeEnteteEl.appendChild(ctaEl);
         welcomeEnteteEl.appendChild(welcomeBioEl);
+        welcomeEnteteEl.appendChild(welcomeFavorisEl);
 
         welcomeVideoEl = document.createElement("video");
         welcomeVideoEl.className = "welcome-clip-video";
         welcomeVideoEl.playsInline = true;
         welcomeVideoEl.autoplay = true;
-        welcomeVideoEl.muted = false;
+        welcomeVideoEl.muted = PREVIEW;
         welcomeVideoEl.controls = false;
         welcomeVideoEl.preload = "auto";
 
         var videoWrap = document.createElement("div");
         videoWrap.className = "welcome-clip-video-wrap";
-        videoWrap.style.display = "none";
 
         videoWrap.appendChild(welcomeVideoEl);
 
         welcomeVideoWrapEl = videoWrap;
 
+        welcomePlateformeEl = document.createElement("span");
+        welcomePlateformeEl.className = "welcome-clip-plateforme";
+        welcomePlateformeEl.textContent = "Streamer Twitch";
+
+        // Colonne droite : titre (spotlight) + clip. Cachée tant qu'aucun
+        // clip n'est prêt — c'est elle qu'on affiche/masque, pas le wrap.
+        welcomeDroiteEl = document.createElement("div");
+        welcomeDroiteEl.className = "welcome-clip-droite";
+        welcomeDroiteEl.style.display = "none";
+        welcomeDroiteEl.appendChild(welcomePlateformeEl);
+        welcomeDroiteEl.appendChild(videoWrap);
+
         welcomeClipEl.appendChild(welcomeEnteteEl);
-        welcomeClipEl.appendChild(videoWrap);
+        welcomeClipEl.appendChild(welcomeDroiteEl);
         welcomeRoot.appendChild(welcomeClipEl);
+        // Voile noir opaque plein écran (mode spotlight) — même z 9999 que le
+        // root mais inséré AVANT dans le DOM : la carte reste au-dessus.
+        welcomeVoileEl = document.createElement("div");
+        welcomeVoileEl.className = "welcome-clip-voile";
+        welcomeVoileEl.style.zIndex = "9999";
+        welcomeVoileEl.style.display = "none";
+        stageEl.appendChild(welcomeVoileEl);
         stageEl.appendChild(welcomeRoot);
 
         applyWelcomeOverlayConfig(welcomeConfig);
@@ -6086,12 +8370,28 @@
       /// Applique la config (x/y/largeur) au root welcome. La hauteur est
       /// auto — la carte s'ajuste exactement à son contenu (avatar + bio +
       /// clip 16:9), sans espace vide en dessous.
+      /// cfg.utiliser_squelette (welcome-clip-config) bascule le mode
+      /// spotlight ; absent (position-overlay-config partagé) = mode conservé.
       function applyWelcomeOverlayConfig(cfg) {
         if (!welcomeRoot) return;
+        if (typeof cfg.utiliser_squelette === "boolean") {
+          welcomeSpotlight = !cfg.utiliser_squelette;
+        }
         if (typeof cfg.x === "number") welcomeConfig.x = cfg.x;
         if (typeof cfg.y === "number") welcomeConfig.y = cfg.y;
         if (typeof cfg.largeur === "number") welcomeConfig.largeur = cfg.largeur;
         if (typeof cfg.hauteur === "number") welcomeConfig.hauteur = cfg.hauteur;
+        if (welcomeSpotlight) {
+          // Spotlight : carte centrée à 85 % via la classe .spot — nettoyer
+          // les styles inline posés par le mode squelette (ils gagneraient).
+          welcomeRoot.classList.add("spot");
+          welcomeRoot.style.left = "";
+          welcomeRoot.style.top = "";
+          welcomeRoot.style.width = "";
+          welcomeRoot.style.height = "";
+          return;
+        }
+        welcomeRoot.classList.remove("spot");
         welcomeRoot.style.left = welcomeConfig.x + "px";
         welcomeRoot.style.top = welcomeConfig.y + "px";
         welcomeRoot.style.width = welcomeConfig.largeur + "px";
@@ -6117,12 +8417,71 @@
           welcomeAvatarEl.style.display = "none";
         }
         welcomePseudoEl.textContent = viewer.display_name || viewer.login || "";
+        // Message de bienvenue : rendu par CSS en mode spotlight seulement.
+        welcomeMsgEl.textContent = msg.message || "";
         if (viewer.bio) {
           welcomeBioEl.textContent = viewer.bio;
           welcomeBioEl.style.display = "-webkit-box";
         } else {
           welcomeBioEl.style.display = "none";
         }
+
+        // Streamers mis en avant par le viewer (sous la bio, spotlight).
+        // msg.favoris = [{login, display_name, avatar, en_live}] — vide ou
+        // absent hors spotlight / non-Twitch / fetch échoué.
+        welcomeFavorisEl.innerHTML = "";
+        var favoris = Array.isArray(msg.favoris) ? msg.favoris : [];
+        if (favoris.length) {
+          favoris.slice(0, 6).forEach(function (f) {
+            var item = document.createElement("div");
+            item.className = "welcome-clip-favori";
+            var img = document.createElement("img");
+            img.src = f.avatar || "";
+            img.alt = "";
+            var nom = document.createElement("span");
+            nom.className = "fav-nom";
+            nom.textContent = f.display_name || f.login || "";
+            item.appendChild(img);
+            if (f.en_live) {
+              var live = document.createElement("span");
+              live.className = "fav-live";
+              item.appendChild(live);
+            }
+            item.appendChild(nom);
+            welcomeFavorisEl.appendChild(item);
+          });
+          welcomeFavorisEl.style.display = "flex";
+        } else {
+          welcomeFavorisEl.style.display = "none";
+        }
+
+        // Mode d'affichage porté par la frame play : squelette de position
+        // (défaut) ou spotlight plein écran (voile noir + carte 85 %).
+        if (typeof msg.utiliser_squelette === "boolean") {
+          welcomeSpotlight = !msg.utiliser_squelette;
+        }
+        // Pose la classe .spot + la position selon le mode.
+        applyWelcomeOverlayConfig({});
+
+        // Voile noir plein écran (spotlight uniquement), fondu 350 ms.
+        // Le toggle passe par un rAF : sinon le navigateur ne voit jamais
+        // opacity:0 (display:none → block + classe dans le même tick) et le
+        // fondu d'entrée ne jouerait pas.
+        if (welcomeVoileEl) {
+          welcomeVoileEl.style.display = welcomeSpotlight ? "block" : "none";
+          var voileSpot = welcomeSpotlight;
+          var voile = welcomeVoileEl;
+          requestAnimationFrame(function () {
+            voile.classList.toggle("visible", voileSpot);
+          });
+        }
+
+        // Phase intro spotlight : avatar seul 3 s puis split gauche/droite.
+        if (welcomeSpotTimer) {
+          clearTimeout(welcomeSpotTimer);
+          welcomeSpotTimer = null;
+        }
+        welcomeRoot.classList.toggle("intro", welcomeSpotlight);
 
         // Afficher le root + la carte IMMÉDIATEMENT (le viewer voit tout de
         // suite qui arrive, pendant que la vidéo buffer en arrière-plan).
@@ -6141,37 +8500,632 @@
         // pendant le buffering → pas d'écran noir.
         welcomeVideoEl.src = clip.mp4_url || "";
 
-        welcomeVideoEl.oncanplay = function () {
-          welcomeVideoWrapEl.style.display = "block";
-          welcomeVideoEl.play().catch(function () {});
-          // La vidéo change la hauteur de la carte → re-mesurer le cadre.
-          requestAnimationFrame(function () {
-            appliquerCadreOverlay(welcomeClipEl, "welcome");
-          });
-          // One-shot : nettoyer après le 1er canplay.
-          welcomeVideoEl.oncanplay = null;
-        };
+        if (welcomeSpotlight) {
+          // Spotlight : la vidéo buffer pendant l'intro (3 s) puis démarre au
+          // split. Le timer Rust a déjà +3 s (INTRO_SPOTLIGHT_MS).
+          welcomeVideoEl.oncanplay = function () {
+            // Le clip change la hauteur de la carte → re-mesurer le cadre.
+            requestAnimationFrame(function () {
+              appliquerCadreOverlay(welcomeClipEl, "welcome");
+            });
+            welcomeVideoEl.oncanplay = null;
+          };
+          welcomeSpotTimer = setTimeout(function () {
+            welcomeSpotTimer = null;
+            if (!welcomeRoot || welcomeRoot.style.display !== "block") return;
+            welcomeRoot.classList.remove("intro");
+            welcomeDroiteEl.style.display = "flex";
+            welcomeVideoEl.play().catch(function () {});
+            requestAnimationFrame(function () {
+              appliquerCadreOverlay(welcomeClipEl, "welcome");
+            });
+          }, 3000);
+        } else {
+          welcomeVideoEl.oncanplay = function () {
+            welcomeDroiteEl.style.display = "flex";
+            welcomeVideoEl.play().catch(function () {});
+            // La vidéo change la hauteur de la carte → re-mesurer le cadre.
+            requestAnimationFrame(function () {
+              appliquerCadreOverlay(welcomeClipEl, "welcome");
+            });
+            // One-shot : nettoyer après le 1er canplay.
+            welcomeVideoEl.oncanplay = null;
+          };
+        }
 
         // À la fin de la vidéo → le timer Rust émettra welcome-clip-stop.
         // (pas de stop automatique ici — le timer Rust est la source de vérité)
       }
 
       /// Stop : cacher l'overlay + reset vidéo + retirer le cadre SVG.
+      /// Coupe aussi l'intro spotlight en cours + masque le voile noir.
       function stopWelcomeClip() {
         if (!welcomeRoot) return;
+        if (welcomeSpotTimer) {
+          clearTimeout(welcomeSpotTimer);
+          welcomeSpotTimer = null;
+        }
         welcomeVideoEl.oncanplay = null;
         welcomeVideoEl.onerror = null;
         welcomeVideoEl.pause();
         welcomeVideoEl.removeAttribute("src");
         welcomeVideoEl.load();
-        welcomeVideoWrapEl.style.display = "none";
+        welcomeDroiteEl.style.display = "none";
         welcomeVideoEl.style.display = "block";
+        welcomeFavorisEl.innerHTML = "";
+        welcomeFavorisEl.style.display = "none";
         welcomeRoot.style.display = "none";
+        welcomeRoot.classList.remove("intro");
+        if (welcomeVoileEl) {
+          welcomeVoileEl.classList.remove("visible");
+          welcomeVoileEl.style.display = "none";
+        }
         if (welcomeClipEl) nettoyerCadreOverlay(welcomeClipEl, "welcome");
       }
 
       // Initialiser l'overlay welcome dès le démarrage (avant connect).
       initWelcomeOverlay();
+
+      // ===== Présentation streamer : overlay autonome =====
+      //
+      // Portage de la feature « streamers favoris » de l'ancienne app.
+      // Overlay plein écran (z 10000+, au-dessus de toute la pile) piloté par
+      // les frames presentation-* du dashboard (déclenchement 100 % manuel).
+      // Deux modes : "theatrical" (voile + orbes + rideaux qui s'ouvrent,
+      // carte 2 colonnes) et "card" (carte compacte seule, fondu simple).
+      // Le clip joue dans un lecteur dédié par-dessus (z 10003) ; l'audio
+      // (voix/musique) via <audio> sur /medias/ (même origine :4321).
+
+      var presVoileEl = null;    // voile sombre + orbes + sol/spots/poussière
+      var presRideauG = null;    // rideau gauche (50 % de large)
+      var presRideauD = null;    // rideau droit
+      var presValanceEl = null;  // cantonné festonné (haut, permanent theatrical)
+      var presEmbrasseG = null;  // embrasse dorée gauche (rideau froncé)
+      var presEmbrasseD = null;  // embrasse dorée droite
+      var presPublicEl = null;   // rangées de spectateurs (premier plan)
+      var presRootEl = null;     // conteneur carte (centré flex)
+      var presAvatarEl = null;
+      var presNomEl = null;
+      var presLoginEl = null;
+      var presBadgesEl = null;
+      var presBioEl = null;
+      var presJeuEl = null;      // jeu courant (« Joue à … »)
+      var presLienEl = null;     // twitch.tv/<login>
+      var presLiveEl = null;     // bandeau EN DIRECT + viewers
+      var presTitreLiveEl = null;
+      var presJeuxEl = null;     // boîtes des jeux récents
+      var presClipsEl = null;    // grille 2×2 des clips récents
+      var presFondEl = null;     // fond plein écran (bannière chaîne)
+      var presFondImgEl = null;
+      var presClipRootEl = null; // lecteur clip plein écran
+      var presClipTitreEl = null;
+      var presClipVideoEl = null;
+
+      var presMode = "theatrical"; // mode courant ("theatrical" | "card")
+      var presVisible = false;
+      var presHideTimer = null;    // fin de la fermeture (rideaux ~1,2 s)
+      // Audios courants : { voix: HTMLAudioElement|null, musique: … }
+      var presAudios = { voix: null, musique: null };
+
+      /// Crée l'overlay présentation une fois (au démarrage). Idempotent.
+      function initPresentationOverlay() {
+        if (presRootEl) return;
+
+        // Voile sombre + orbes animés (theatrical uniquement).
+        presVoileEl = document.createElement("div");
+        presVoileEl.className = "pres-voile";
+        // Fond « écran de cinéma » (bannière de chaîne) : 1er enfant du
+        // voile → tout le décor (orbes/sol/spots/poussière) reste dessus.
+        presFondEl = document.createElement("div");
+        presFondEl.className = "pres-fond";
+        presFondEl.style.display = "none";
+        presFondImgEl = document.createElement("img");
+        presFondImgEl.className = "pres-fond-img";
+        presFondImgEl.alt = "";
+        presFondEl.appendChild(presFondImgEl);
+        presVoileEl.appendChild(presFondEl);
+        ["o1", "o2", "o3"].forEach(function (n) {
+          var orbe = document.createElement("div");
+          orbe.className = "pres-orbe " + n;
+          presVoileEl.appendChild(orbe);
+        });
+        // Sol de scène + faisceaux convergents + poussière : enfants du
+        // voile → ils apparaissent/disparaissent avec son fondu.
+        var presSol = document.createElement("div");
+        presSol.className = "pres-sol";
+        presVoileEl.appendChild(presSol);
+        ["s1", "s2", "s3"].forEach(function (n) {
+          var spot = document.createElement("div");
+          spot.className = "pres-spot " + n;
+          var spotI = document.createElement("div");
+          spotI.className = "pres-spot-i";
+          spot.appendChild(spotI);
+          presVoileEl.appendChild(spot);
+        });
+        for (var ip = 0; ip < 20; ip++) {
+          var p = document.createElement("div");
+          p.className = "pres-poussiere";
+          var sz = 2 + Math.random() * 3;
+          p.style.width = sz + "px";
+          p.style.height = sz + "px";
+          p.style.left = (22 + Math.random() * 56) + "%";
+          p.style.top = (8 + Math.random() * 78) + "%";
+          p.style.setProperty("--pd", (8 + Math.random() * 9) + "s");
+          p.style.setProperty("--pdl", (-Math.random() * 14) + "s");
+          presVoileEl.appendChild(p);
+        }
+
+        presRideauG = document.createElement("div");
+        presRideauG.className = "pres-rideau gauche";
+        presRideauG.style.display = "none";
+        presRideauD = document.createElement("div");
+        presRideauD.className = "pres-rideau droite";
+        presRideauD.style.display = "none";
+
+        // Cantonné + embrasses (theatrical uniquement).
+        presValanceEl = document.createElement("div");
+        presValanceEl.className = "pres-valance";
+        presValanceEl.style.display = "none";
+        presEmbrasseG = document.createElement("div");
+        presEmbrasseG.className = "pres-embrasse gauche";
+        presEmbrasseG.style.display = "none";
+        presEmbrasseD = document.createElement("div");
+        presEmbrasseD.className = "pres-embrasse droite";
+        presEmbrasseD.style.display = "none";
+
+        // Public au premier plan (rangées générées une fois — le décor est
+        // figé ensuite, seules les animations CSS tournent).
+        presPublicEl = document.createElement("div");
+        presPublicEl.className = "pres-public";
+        presPublicEl.style.display = "none";
+        construirePublic(presPublicEl);
+
+        presRootEl = document.createElement("div");
+        presRootEl.className = "pres-root";
+
+        var carte = document.createElement("div");
+        carte.className = "pres-carte";
+
+        // Colonne gauche : avatar → nom → @login → badges → bio → jeu → lien.
+        var colG = document.createElement("div");
+        colG.className = "pres-col-gauche";
+
+        presAvatarEl = document.createElement("img");
+        presAvatarEl.className = "pres-avatar";
+        presAvatarEl.alt = "";
+
+        presNomEl = document.createElement("span");
+        presNomEl.className = "pres-nom";
+        presLoginEl = document.createElement("span");
+        presLoginEl.className = "pres-login";
+        presBadgesEl = document.createElement("div");
+        presBadgesEl.className = "pres-badges";
+        presBioEl = document.createElement("span");
+        presBioEl.className = "pres-bio";
+        presJeuEl = document.createElement("span");
+        presJeuEl.className = "pres-jeu-courant";
+        presLienEl = document.createElement("span");
+        presLienEl.className = "pres-lien";
+
+        colG.appendChild(presAvatarEl);
+        colG.appendChild(presNomEl);
+        colG.appendChild(presLoginEl);
+        colG.appendChild(presBadgesEl);
+        colG.appendChild(presBioEl);
+        colG.appendChild(presJeuEl);
+        colG.appendChild(presLienEl);
+
+        // Colonne droite : EN DIRECT + titre live + jeux récents + clips.
+        var colD = document.createElement("div");
+        colD.className = "pres-col-droite";
+
+        presLiveEl = document.createElement("span");
+        presLiveEl.className = "pres-live";
+        presTitreLiveEl = document.createElement("span");
+        presTitreLiveEl.className = "pres-titre-live";
+        presJeuxEl = document.createElement("div");
+        presJeuxEl.className = "pres-jeux";
+        presClipsEl = document.createElement("div");
+        presClipsEl.className = "pres-clips";
+
+        colD.appendChild(presLiveEl);
+        colD.appendChild(presTitreLiveEl);
+        colD.appendChild(presJeuxEl);
+        colD.appendChild(presClipsEl);
+
+        carte.appendChild(colG);
+        carte.appendChild(colD);
+        presRootEl.appendChild(carte);
+        // Référence directe vers la carte (les classes .visible/mode y sont).
+        presRootEl._carte = carte;
+
+        // Lecteur clip plein écran (au-dessus de tout).
+        presClipRootEl = document.createElement("div");
+        presClipRootEl.className = "pres-clip-root";
+        presClipTitreEl = document.createElement("span");
+        presClipTitreEl.className = "pres-clip-titre";
+        presClipVideoEl = document.createElement("video");
+        presClipVideoEl.className = "pres-clip-video";
+        presClipVideoEl.playsInline = true;
+        presClipVideoEl.controls = false;
+        presClipVideoEl.preload = "auto";
+        presClipVideoEl.muted = PREVIEW;
+        // Fin naturelle → retour à la carte (le dashboard peut aussi
+        // stopper via presentation-clip-stop).
+        presClipVideoEl.onended = function () {
+          presentationClipStop();
+        };
+        presClipRootEl.appendChild(presClipTitreEl);
+        presClipRootEl.appendChild(presClipVideoEl);
+
+        stageEl.appendChild(presVoileEl);
+        stageEl.appendChild(presRideauG);
+        stageEl.appendChild(presRideauD);
+        stageEl.appendChild(presValanceEl);
+        stageEl.appendChild(presEmbrasseG);
+        stageEl.appendChild(presEmbrasseD);
+        stageEl.appendChild(presRootEl);
+        stageEl.appendChild(presPublicEl);
+        stageEl.appendChild(presClipRootEl);
+      }
+
+      /// Remplit .pres-public : 3 rangées de places (fauteuil bordeaux +
+      /// silhouette tête/épaules) avec perspective — la rangée la plus
+      /// proche est une rangée de grosses têtes floues sans fauteuil,
+      /// coupée par le bas de l'écran. ~15 % des fauteuils restent vides.
+      function construirePublic(root) {
+        var rangees = [
+          { bottom: 118, siegeW: 88,  siegeH: 74, tete: 44, gap: 126, offset: 24,  couleur: "#181116", flou: 0 },
+          { bottom: 16,  siegeW: 116, siegeH: 94, tete: 60, gap: 160, offset: 92,  couleur: "#0b0709", flou: 0 },
+          { bottom: -26, siegeW: 0,   siegeH: 0,  tete: 86, gap: 215, offset: 158, couleur: "#040203", flou: 1.6 }
+        ];
+        rangees.forEach(function (r) {
+          var rangee = document.createElement("div");
+          rangee.className = "pres-rangee";
+          rangee.style.bottom = r.bottom + "px";
+          for (var x = r.offset; x < 1920; x += r.gap + Math.round((Math.random() - 0.5) * 30)) {
+            var place = document.createElement("div");
+            place.className = "pres-place";
+            place.style.left = x + "px";
+            place.style.width = (r.siegeW ? r.siegeW + 24 : r.tete + 60) + "px";
+            place.style.height = (r.siegeH + r.tete * 1.1 + 40) + "px";
+            if (r.siegeW) {
+              var siege = document.createElement("div");
+              siege.className = "pres-siege";
+              siege.style.width = r.siegeW + "px";
+              siege.style.height = r.siegeH + "px";
+              place.appendChild(siege);
+            }
+            // ~15 % des places restent vides (fauteuil sans spectateur) —
+            // sauf la rangée avant qui n'a pas de fauteuil.
+            if (!r.siegeW || Math.random() >= 0.15) {
+              var tete = document.createElement("div");
+              tete.className = "pres-tete";
+              var t = Math.round(r.tete * (0.88 + Math.random() * 0.24));
+              tete.style.width = t + "px";
+              tete.style.height = Math.round(t * 1.08) + "px";
+              tete.style.bottom = Math.round(r.siegeH * 0.55) + "px";
+              tete.style.left = (50 + (Math.random() - 0.5) * 14) + "%";
+              tete.style.background = r.couleur;
+              if (r.flou) tete.style.filter = "blur(" + r.flou + "px)";
+              tete.style.setProperty("--sw", (4 + Math.random() * 3.5) + "s");
+              tete.style.setProperty("--swd", (-Math.random() * 8) + "s");
+              place.appendChild(tete);
+            }
+            rangee.appendChild(place);
+          }
+          root.appendChild(rangee);
+        });
+      }
+
+      /// Formate les viewers compacts (1234 → "1 234").
+      function presFormatViewers(n) {
+        return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, " ");
+      }
+
+      /// Affiche la présentation : remplit les champs puis lance la
+      /// chorégraphie selon le mode. Idempotent (un show en remplace un
+      /// autre — nettoyage préalable).
+      function playPresentationShow(msg) {
+        if (!presRootEl) return;
+        var d = msg.donnees || {};
+        var mode = msg.mode === "card" ? "card" : "theatrical";
+
+        // Annuler une fermeture en cours (show pendant les 1,2 s de rideaux).
+        if (presHideTimer) {
+          clearTimeout(presHideTimer);
+          presHideTimer = null;
+        }
+        presentationClipStop();
+        presentationAudioStop("toutes");
+
+        presMode = mode;
+        presVisible = true;
+
+        // Champs — vides = élément masqué (display:none, pas de trou visuel).
+        presAvatarEl.src = d.avatar || "";
+        presAvatarEl.style.display = d.avatar ? "block" : "none";
+        presNomEl.textContent = d.display_name || d.login || "";
+        presLoginEl.textContent = d.login ? "@" + d.login : "";
+
+        presBadgesEl.innerHTML = "";
+        if (d.broadcaster_type === "partner" || d.broadcaster_type === "affiliate") {
+          var badge = document.createElement("span");
+          badge.className = "pres-badge" +
+            (d.broadcaster_type === "affiliate" ? " affiliate" : "");
+          badge.textContent =
+            d.broadcaster_type === "partner" ? "PARTNER" : "AFFILIATE";
+          presBadgesEl.appendChild(badge);
+          presBadgesEl.style.display = "flex";
+        } else {
+          presBadgesEl.style.display = "none";
+        }
+
+        presBioEl.textContent = d.bio || "";
+        presBioEl.style.display = d.bio ? "-webkit-box" : "none";
+        presJeuEl.textContent = d.jeu_courant ? "Joue à : " + d.jeu_courant : "";
+        presJeuEl.style.display = d.jeu_courant ? "block" : "none";
+        presLienEl.textContent = d.login ? "twitch.tv/" + d.login : "";
+        presLienEl.style.display = d.login ? "block" : "none";
+
+        // Bandeau EN DIRECT (badge + viewers) — caché hors-ligne.
+        if (d.en_live) {
+          presLiveEl.textContent =
+            "EN DIRECT" +
+            (typeof d.viewers_live === "number"
+              ? " · " + presFormatViewers(d.viewers_live)
+              : "");
+          presLiveEl.style.display = "inline-flex";
+          presTitreLiveEl.textContent = d.titre_live || "";
+          presTitreLiveEl.style.display = d.titre_live ? "block" : "none";
+        } else {
+          presLiveEl.style.display = "none";
+          presTitreLiveEl.style.display = "none";
+        }
+
+        // Jeux récents (box art + nom), max 4 déjà borné côté Rust.
+        presJeuxEl.innerHTML = "";
+        var jeux = Array.isArray(d.jeux_recents) ? d.jeux_recents : [];
+        jeux.forEach(function (g) {
+          var item = document.createElement("div");
+          item.className = "pres-jeu";
+          var img = document.createElement("img");
+          // Les box_art Helix ont des placeholders {width}x{height}.
+          img.src = (g.box_art_url || "")
+            .replace("{width}", "96")
+            .replace("{height}", "128");
+          img.alt = "";
+          var nom = document.createElement("span");
+          nom.textContent = g.name || "";
+          item.appendChild(img);
+          item.appendChild(nom);
+          presJeuxEl.appendChild(item);
+        });
+        presJeuxEl.style.display = jeux.length ? "flex" : "none";
+
+        // Clips récents : 4 premiers en grille 2×2 (thumb + durée + titre).
+        presClipsEl.innerHTML = "";
+        var clips = Array.isArray(d.clips) ? d.clips.slice(0, 4) : [];
+        clips.forEach(function (c) {
+          var item = document.createElement("div");
+          item.className = "pres-clip";
+          var img = document.createElement("img");
+          img.src = c.thumbnail_url || "";
+          img.alt = "";
+          var duree = document.createElement("span");
+          duree.className = "duree";
+          duree.textContent = Math.round(c.duration || 0) + "s";
+          var titre = document.createElement("span");
+          titre.className = "titre";
+          titre.textContent = c.title || "";
+          item.appendChild(img);
+          item.appendChild(duree);
+          item.appendChild(titre);
+          presClipsEl.appendChild(item);
+        });
+        presClipsEl.style.display = clips.length ? "grid" : "none";
+
+        // Fond « écran de cinéma » : la bannière de chaîne couvre la scène
+        // (sous les effets + le contenu). Absente → fond dégradé classique.
+        presFondImgEl.src = d.banniere || "";
+        presFondEl.style.display = d.banniere ? "block" : "none";
+
+        // Chorégraphie d'entrée selon le mode.
+        presRootEl.classList.toggle("mode-card", mode === "card");
+        var carte = presRootEl._carte;
+        carte.classList.remove("visible");
+        presRootEl.style.display = "flex";
+
+        if (mode === "card") {
+          // Carte seule : pas de voile complet ni rideaux ni décor ni
+          // public, fondu direct.
+          presVoileEl.style.display = "block";
+          presRideauG.style.display = "none";
+          presRideauD.style.display = "none";
+          presValanceEl.classList.remove("visible");
+          presValanceEl.style.display = "none";
+          presEmbrasseG.classList.remove("open");
+          presEmbrasseD.classList.remove("open");
+          presEmbrasseG.style.display = "none";
+          presEmbrasseD.style.display = "none";
+          presPublicEl.classList.remove("visible");
+          presPublicEl.style.display = "none";
+          requestAnimationFrame(function () {
+            presVoileEl.classList.add("visible");
+            carte.classList.add("visible");
+          });
+        } else {
+          // Théâtral : voile + rideaux fermés + cantonné + public →
+          // ouverture (1,2 s) → la carte apparaît en cours d'ouverture
+          // (delay CSS 0,65 s) ; les embrasses suivent (delay CSS 0,75 s).
+          presVoileEl.style.display = "block";
+          presRideauG.classList.remove("open");
+          presRideauD.classList.remove("open");
+          presEmbrasseG.classList.remove("open");
+          presEmbrasseD.classList.remove("open");
+          presRideauG.style.display = "block";
+          presRideauD.style.display = "block";
+          presValanceEl.style.display = "block";
+          presEmbrasseG.style.display = "block";
+          presEmbrasseD.style.display = "block";
+          presPublicEl.style.display = "block";
+          // Double rAF : laisser le navigateur peindre les rideaux fermés
+          // avant d'ajouter .open — sinon pas de transition visible.
+          requestAnimationFrame(function () {
+            presVoileEl.classList.add("visible");
+            presValanceEl.classList.add("visible");
+            presPublicEl.classList.add("visible");
+            requestAnimationFrame(function () {
+              presRideauG.classList.add("open");
+              presRideauD.classList.add("open");
+              presEmbrasseG.classList.add("open");
+              presEmbrasseD.classList.add("open");
+              carte.classList.add("visible");
+            });
+          });
+        }
+      }
+
+      /// Bascule le mode à chaud (toggle dashboard pendant la présentation).
+      /// Rejoue la chorégraphie visuelle sans re-télécharger les données.
+      function appliquerModePresentation(mode) {
+        if (!presRootEl || !presVisible) return;
+        presMode = mode === "card" ? "card" : "theatrical";
+        var carte = presRootEl._carte;
+        presRootEl.classList.toggle("mode-card", presMode === "card");
+        if (presMode === "card") {
+          // Retirer rideaux + décor + public immédiatement (refermés
+          // instantanément, comme les rideaux).
+          presRideauG.classList.remove("open");
+          presRideauD.classList.remove("open");
+          presRideauG.style.display = "none";
+          presRideauD.style.display = "none";
+          presValanceEl.classList.remove("visible");
+          presValanceEl.style.display = "none";
+          presEmbrasseG.classList.remove("open");
+          presEmbrasseD.classList.remove("open");
+          presEmbrasseG.style.display = "none";
+          presEmbrasseD.style.display = "none";
+          presPublicEl.classList.remove("visible");
+          presPublicEl.style.display = "none";
+          carte.classList.add("visible");
+        } else {
+          presRideauG.style.display = "block";
+          presRideauD.style.display = "block";
+          presValanceEl.style.display = "block";
+          presEmbrasseG.style.display = "block";
+          presEmbrasseD.style.display = "block";
+          presPublicEl.style.display = "block";
+          carte.classList.remove("visible");
+          // Double rAF comme playPresentationShow : un frame pour peindre
+          // les éléments affichés, sinon les transitions ne jouent pas.
+          requestAnimationFrame(function () {
+            presValanceEl.classList.add("visible");
+            presPublicEl.classList.add("visible");
+            requestAnimationFrame(function () {
+              presRideauG.classList.add("open");
+              presRideauD.classList.add("open");
+              presEmbrasseG.classList.add("open");
+              presEmbrasseD.classList.add("open");
+              carte.classList.add("visible");
+            });
+          });
+        }
+      }
+
+      /// Ferme la présentation : les rideaux se referment (théâtral) puis
+      /// tout est masqué après la transition. En mode card : fondu simple.
+      function stopPresentation() {
+        if (!presRootEl || !presVisible) return;
+        presVisible = false;
+        var carte = presRootEl._carte;
+        carte.classList.remove("visible");
+        presVoileEl.classList.remove("visible");
+
+        if (presMode === "theatrical") {
+          presRideauG.classList.remove("open");
+          presRideauD.classList.remove("open");
+          // Les embrasses s'effacent sans délai (le transition-delay n'est
+          // posé que dans .open) — les rideaux se referment derrière elles.
+          presEmbrasseG.classList.remove("open");
+          presEmbrasseD.classList.remove("open");
+        }
+        presValanceEl.classList.remove("visible");
+        presPublicEl.classList.remove("visible");
+        // Attendre la fin des transitions (rideaux 1,2 s > voile/public 0,6 s).
+        if (presHideTimer) clearTimeout(presHideTimer);
+        presHideTimer = setTimeout(function () {
+          presHideTimer = null;
+          presRootEl.style.display = "none";
+          presVoileEl.style.display = "none";
+          presRideauG.style.display = "none";
+          presRideauD.style.display = "none";
+          presValanceEl.style.display = "none";
+          presEmbrasseG.style.display = "none";
+          presEmbrasseD.style.display = "none";
+          presPublicEl.style.display = "none";
+        }, presMode === "theatrical" ? 1250 : 500);
+
+        // Couper clip + audios tout de suite (pas à la fin des rideaux).
+        presentationClipStop();
+        presentationAudioStop("toutes");
+      }
+
+      /// Joue un clip en plein écran par-dessus la carte.
+      function presentationClipPlay(msg) {
+        if (!presClipRootEl) return;
+        presClipTitreEl.textContent = msg.titre || "";
+        presClipVideoEl.oncanplay = null;
+        presClipVideoEl.onerror = null;
+        presClipRootEl.classList.add("visible");
+        presClipVideoEl.src = msg.mp4_url || "";
+        presClipVideoEl.oncanplay = function () {
+          presClipVideoEl.oncanplay = null;
+          presClipVideoEl.play().catch(function () {});
+        };
+        presClipVideoEl.onerror = function () {
+          // Clip injouable → retirer le lecteur (retour à la carte).
+          presentationClipStop();
+        };
+      }
+
+      /// Retire le lecteur clip (retour à la carte présentation).
+      function presentationClipStop() {
+        if (!presClipRootEl) return;
+        presClipRootEl.classList.remove("visible");
+        presClipVideoEl.oncanplay = null;
+        presClipVideoEl.onerror = null;
+        presClipVideoEl.pause();
+        presClipVideoEl.removeAttribute("src");
+        presClipVideoEl.load();
+      }
+
+      /// Joue une piste audio : voix = one-shot, musique = boucle (elle
+      /// accompagne la présentation jusqu'au stop/hide). src = "medias/…".
+      function presentationAudioPlay(piste, src) {
+        if (!src || PREVIEW) return;
+        presentationAudioStop(piste);
+        var audio = new Audio("/" + src);
+        audio.loop = piste === "musique";
+        audio.play().catch(function () {});
+        presAudios[piste] = audio;
+      }
+
+      /// Stoppe une piste audio, ou "toutes".
+      function presentationAudioStop(piste) {
+        var clefs = piste === "toutes" ? ["voix", "musique"] : [piste];
+        clefs.forEach(function (k) {
+          var a = presAudios[k];
+          if (a) {
+            a.pause();
+            a.currentTime = 0;
+            presAudios[k] = null;
+          }
+        });
+      }
+
+      // Initialiser l'overlay présentation dès le démarrage.
+      initPresentationOverlay();
 
       // ===== Bandeau premier message : overlay autonome =====
       //
@@ -6202,6 +9156,18 @@
         if (!m) return "224, 224, 224";
         var n = parseInt(m[1], 16);
         return ((n >> 16) & 0xff) + ", " + ((n >> 8) & 0xff) + ", " + (n & 0xff);
+      }
+
+      /// Luminance perceptuelle 0-255 d'un hex (rec.601) — 0 si invalide.
+      function bpmLuminance(hex) {
+        var m = /^#([0-9a-f]{6})$/i.exec(String(hex || ""));
+        if (!m) return 0;
+        var n = parseInt(m[1], 16);
+        return (
+          ((n >> 16) & 0xff) * 0.299 +
+          ((n >> 8) & 0xff) * 0.587 +
+          (n & 0xff) * 0.114
+        );
       }
 
       /// Assombrit une couleur hex d'un ratio (0 = inchangé, 1 = noir).
@@ -6238,7 +9204,12 @@
         if (!cadre || !cadre.actif) return BPM_COULEURS_DEFAUT;
         var c1 = bpmHexValide(cadre.couleur) ? cadre.couleur : null;
         var c2 = bpmHexValide(cadre.couleurFin) ? cadre.couleurFin : null;
-        if (c1 && c2) return { p: c1, s: c2 };
+        if (c1 && c2) {
+          // Cadre noir→couleur (défaut StreamOS) : couleur est #000000 — la
+          // teinte visible est l'extrémité la plus lumineuse du gradient.
+          if (bpmLuminance(c1) < bpmLuminance(c2)) return { p: c2, s: c1 };
+          return { p: c1, s: c2 };
+        }
         if (c1) return { p: c1, s: bpmAssombrir(c1, 0.25) };
         return BPM_COULEURS_DEFAUT;
       }
@@ -6529,6 +9500,7 @@
           vid.className = "alerte-media";
           vid.src = "/" + a.media;
           vid.autoplay = true;
+          vid.muted = PREVIEW;
           vid.setAttribute("playsinline", "");
           vid.oncanplay = function () {
             vid.oncanplay = null;
@@ -6558,7 +9530,7 @@
           alerteAudio.pause();
           alerteAudio = null;
         }
-        if (a.son && a.media_kind !== "video") {
+        if (a.son && a.media_kind !== "video" && !PREVIEW) {
           try {
             alerteAudio = new Audio("/" + a.son);
             alerteAudio.volume = 0.8;
@@ -6696,6 +9668,7 @@
           vid.className = "commande-media";
           vid.src = "/" + c.media;
           vid.autoplay = true;
+          vid.muted = PREVIEW;
           vid.setAttribute("playsinline", "");
           vid.oncanplay = function () {
             vid.oncanplay = null;
@@ -6726,7 +9699,7 @@
           commandeAudio.pause();
           commandeAudio = null;
         }
-        if (c.son && c.media_kind !== "video") {
+        if (c.son && c.media_kind !== "video" && !PREVIEW) {
           try {
             commandeAudio = new Audio("/" + c.son);
             commandeAudio.volume = 0.8;
@@ -6784,6 +9757,361 @@
 
       // Initialiser l'overlay commande dès le démarrage.
       initCommandeOverlay();
+
+      // ===== Musique (!rs → bibliothèque locale → audio + ligne défilante) =====
+      //
+      // Frames WS : musique-play {piste:{id,titre,src,demandeur}, volume}
+      // (UNE piste à la fois — Rust fait la file) / musique-stop /
+      // musique-pause {pause} / musique-volume {volume}. L'affichage est la
+      // ligne défilante .chat-musique dans l'en-tête de CHAQUE widget chat
+      // (sous la barre viewers ; visible aussi en mode bulles car élément
+      // séparé). La fin de piste est remontée en upstream WS
+      // ("musique-ended" {id}) → Rust avance la file ; id vérifié côté Rust
+      // (dedup si plusieurs browser sources connectées).
+      // PREVIEW (miniature dashboard) : aucune lecture audio — le dashboard
+      // entendrait la musique en double sinon.
+
+      var musiqueAudio = null;
+      // Piste courante pour la ligne défilante : {id, titre, demandeur}.
+      var musiqueCourant = null;
+      var musiqueVolume = 0.8;
+
+      /// Remplit une ligne .chat-musique (deux copies du texte = défilement
+      /// bouclé sans saut). txt vide → élément vidé (display:none via :empty).
+      function remplirMusiqueEl(el, txt) {
+        if (!txt) {
+          el.innerHTML = "";
+          return;
+        }
+        var esc = escapeHtml(txt);
+        el.innerHTML =
+          '<span class="musique-defile"><span>' + esc + "</span><span>" +
+          esc + "</span></span>";
+        // Durée proportionnelle à la longueur du titre (min 8 s).
+        var duree = Math.max(8, txt.length * 0.22);
+        el.firstChild.style.animationDuration = duree + "s";
+      }
+
+      /// Met à jour la ligne défilante de TOUS les widgets chat (comme
+      /// rerenderViewersBars — widgetMap peut contenir plusieurs chats).
+      function majMusiqueMarquee() {
+        var txt = musiqueCourant
+          ? "♪ " + musiqueCourant.titre + " — " + musiqueCourant.demandeur
+          : "";
+        widgetMap.forEach(function (entry) {
+          if (entry.musiqueEl) remplirMusiqueEl(entry.musiqueEl, txt);
+        });
+      }
+
+      /// Joue une piste (frame musique-play). La ligne défilante est mise à
+      /// jour même en PREVIEW (info utile sur la miniature, audio coupé).
+      function playMusique(msg) {
+        var p = msg.piste || {};
+        if (musiqueAudio) {
+          musiqueAudio.pause();
+          musiqueAudio = null;
+        }
+        musiqueCourant = {
+          id: p.id || "",
+          titre: p.titre || "",
+          demandeur: p.demandeur || "",
+        };
+        if (typeof msg.volume === "number") musiqueVolume = msg.volume;
+        majMusiqueMarquee();
+        majMusiqueWidgets();
+        if (PREVIEW || !p.src) return;
+        try {
+          var audio = new Audio("/" + p.src);
+          audio.volume = musiqueVolume;
+          var idCapture = musiqueCourant.id;
+          // Durée fiable → remontée "musique-meta" : Rust la pose sur la
+          // LectureEnCours (progression du lecteur dans l'onglet Musique).
+          audio.onloadedmetadata = function () {
+            if (isFinite(audio.duration)) {
+              wsSend({ type: "musique-meta", id: idCapture, duree_s: audio.duration });
+            }
+          };
+          // Fin OU erreur → remontée "musique-ended" : Rust avance la file.
+          // Le clear local de la ligne est immédiat (ne pas attendre le WS).
+          audio.onended = function () {
+            wsSend({ type: "musique-ended", id: idCapture });
+            if (musiqueCourant && musiqueCourant.id === idCapture) {
+              eqArreter();
+              musiqueCourant = null;
+              majMusiqueMarquee();
+              majMusiqueWidgets();
+            }
+          };
+          audio.onerror = audio.onended;
+          var pPlay = audio.play();
+          if (pPlay && pPlay.catch) {
+            // Autoplay refusé → remonter ended pour ne pas bloquer la file.
+            pPlay.catch(function () {
+              wsSend({ type: "musique-ended", id: idCapture });
+            });
+          }
+          musiqueAudio = audio;
+          eqDemarrer(p.src);
+        } catch (e) {}
+      }
+
+      /// Stoppe la piste : audio coupé + ligne effacée (musique-stop).
+      function stopMusique() {
+        eqArreter();
+        if (musiqueAudio) {
+          musiqueAudio.pause();
+          musiqueAudio = null;
+        }
+        musiqueCourant = null;
+        majMusiqueMarquee();
+        majMusiqueWidgets();
+      }
+
+      /// Pause/reprendre la piste courante (musique-pause {pause}).
+      /// L'ombre de l'équalizer suit (sinon le spectre afficherait de la
+      /// musique pendant que le stream est en pause).
+      function pauseMusique(pause) {
+        if (!musiqueAudio) return;
+        if (pause) {
+          musiqueAudio.pause();
+          if (eqShadow) eqShadow.pause();
+        } else {
+          musiqueAudio.play().catch(function () {});
+          if (eqShadow) {
+            eqShadow.currentTime = musiqueAudio.currentTime;
+            eqShadow.play().catch(function () {});
+          }
+        }
+      }
+
+      /// Volume à chaud (musique-volume {volume}) — appliqué à l'audio courant
+      /// et mémorisé pour les pistes suivantes.
+      function musiqueAppliquerVolume(v) {
+        if (typeof v === "number") musiqueVolume = v;
+        if (musiqueAudio) musiqueAudio.volume = musiqueVolume;
+      }
+
+      // ===== Équalizer spectre (audio « ombre » muette → AnalyserNode) =====
+      //
+      // L'<audio> AUDIBLE (musiqueAudio) n'entre JAMAIS dans le graphe Web
+      // Audio : createMediaElementSource est irréversible et un AudioContext
+      // suspendu couperait le son du stream. À la place, une seconde
+      // <audio> muette joue le même fichier → source → analyser → gain(0)
+      // → destination. Si le contexte ne démarre pas → fallback bandes
+      // simulées (même rendu). Les bandes alimentent les widgets musique
+      // locaux ET l'upstream "musique-spectrum" (~8 Hz) → relayé par Rust
+      // vers le lecteur Winamp du dashboard.
+
+      var eqCtx = null;
+      var eqShadow = null;
+      var eqAnalyser = null;
+      var eqData = null;
+      var eqMode = "off"; // "reel" | "simule" | "off"
+      var eqTimer = null;
+      var eqSent = 0;
+      var NB_BANDES = 16;
+      var eqBands = [];
+      for (var eqi = 0; eqi < NB_BANDES; eqi++) eqBands.push(0);
+      // Peak dots : crête par bande retombant doucement (signature Winamp).
+      var eqPeaks = [];
+      for (var eqj = 0; eqj < NB_BANDES; eqj++) eqPeaks.push(0);
+
+      /// Démarre l'ombre + le graphe pour la piste src (appelé par
+      /// playMusique après musiqueAudio). Échec → mode simulé.
+      function eqDemarrer(src) {
+        eqArreter();
+        try {
+          var AC = window.AudioContext || window.webkitAudioContext;
+          if (!eqCtx && AC) eqCtx = new AC();
+          if (eqCtx) {
+            eqShadow = new Audio("/" + src);
+            var srcNode = eqCtx.createMediaElementSource(eqShadow);
+            eqAnalyser = eqCtx.createAnalyser();
+            eqAnalyser.fftSize = 64; // 32 bins → 16 bandes par paires
+            eqAnalyser.smoothingTimeConstant = 0.75;
+            var gain = eqCtx.createGain();
+            gain.gain.value = 0; // MUET : l'ombre ne sort rien
+            srcNode.connect(eqAnalyser);
+            eqAnalyser.connect(gain);
+            gain.connect(eqCtx.destination);
+            eqShadow.currentTime = 0;
+            eqShadow.play().catch(function () {});
+            var p = eqCtx.resume();
+            eqMode = "simule"; // provisoire tant que resume n'a pas tranché
+            if (p && p.then) {
+              p.then(function () {
+                eqMode = eqCtx && eqCtx.state === "running" ? "reel" : "simule";
+              }).catch(function () {
+                eqMode = "simule";
+              });
+            }
+          } else {
+            eqMode = "simule";
+          }
+        } catch (e) {
+          eqMode = "simule";
+        }
+        eqTimer = setInterval(eqTick, 66);
+      }
+
+      /// Stoppe l'ombre + le tick ; bandes à plat (une frame plate envoyée
+      /// pour reset visuel du lecteur).
+      function eqArreter() {
+        if (eqTimer) {
+          clearInterval(eqTimer);
+          eqTimer = null;
+        }
+        if (eqShadow) {
+          try {
+            eqShadow.pause();
+          } catch (e) {}
+          eqShadow = null;
+        }
+        eqAnalyser = null;
+        eqData = null;
+        eqMode = "off";
+        for (var i = 0; i < NB_BANDES; i++) {
+          eqBands[i] = 0;
+          eqPeaks[i] = 0;
+        }
+        majMusiqueEq();
+        if (musiqueCourant) {
+          wsSend({
+            type: "musique-spectrum",
+            id: musiqueCourant.id,
+            bands: eqBands.slice(),
+          });
+        }
+      }
+
+      /// Tick EQ (~66 ms) : échantillonne les bandes réelles (analyser) ou
+      /// simulées, met à jour les barres des widgets musique et envoie le
+      /// spectre upstream ~1 frame sur 4 (~8 Hz).
+      function eqTick() {
+        var playing = !!(musiqueAudio && !musiqueAudio.paused);
+        if (eqMode === "reel" && eqAnalyser) {
+          if (!eqData || eqData.length !== eqAnalyser.frequencyBinCount) {
+            eqData = new Uint8Array(eqAnalyser.frequencyBinCount);
+          }
+          eqAnalyser.getByteFrequencyData(eqData);
+          for (var i = 0; i < NB_BANDES; i++) {
+            var v = Math.max(eqData[i * 2] || 0, eqData[i * 2 + 1] || 0);
+            // Montée immédiate, décroissance douce (effet Winamp).
+            eqBands[i] = Math.max(v, eqBands[i] - 18);
+          }
+        } else {
+          var t = Date.now() / 1000;
+          for (var k = 0; k < NB_BANDES; k++) {
+            var cible = playing
+              ? 60 +
+                140 *
+                  Math.abs(Math.sin(t * (0.7 + k * 0.13) + k)) *
+                  (0.55 + 0.45 * Math.sin(t * 2.3 + k * 2))
+              : 0;
+            eqBands[k] += (cible - eqBands[k]) * (playing ? 0.35 : 0.2);
+          }
+        }
+        // Peak dots : accrochent la bande, retombent en ~1,5 s (66 ms × 11).
+        for (var pi = 0; pi < NB_BANDES; pi++) {
+          eqPeaks[pi] = Math.max(eqPeaks[pi] - 11, eqBands[pi]);
+        }
+        majMusiqueEq();
+        eqSent++;
+        if (musiqueCourant && eqSent % 4 === 0) {
+          wsSend({
+            type: "musique-spectrum",
+            id: musiqueCourant.id,
+            bands: eqBands.map(Math.round),
+          });
+        }
+      }
+
+      // ===== Widgets musique — maj DOM incrémentale (tick + events) =====
+
+      /// mm:ss depuis des secondes (--:-- si non fini/négatif).
+      function muFmt(s) {
+        if (!isFinite(s) || s < 0) return "--:--";
+        var m = Math.floor(s / 60);
+        return m + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+      }
+
+      /// MAJ texte + temps + barre d'UN widget musique. Texte seulement si
+      /// changé (muKey) — le reste suit musiqueAudio.currentTime/duration.
+      function majMusiqueWidget(entry) {
+        var titre = musiqueCourant
+          ? "♪ " + musiqueCourant.titre + " — " + musiqueCourant.demandeur
+          : "";
+        if (entry.muKey !== titre) {
+          entry.muKey = titre;
+          entry.muTxtEls[0].textContent = titre;
+          entry.muTxtEls[1].textContent = titre;
+          entry.muDefileEl.style.animationDuration =
+            Math.max(8, titre.length * 0.22) + "s";
+        }
+        var cur = 0;
+        var dur = NaN;
+        if (musiqueAudio && musiqueCourant) {
+          cur = musiqueAudio.currentTime;
+          dur = musiqueAudio.duration;
+        }
+        entry.muPosEl.textContent = muFmt(cur);
+        entry.muRestEl.textContent = isFinite(dur)
+          ? " -" + muFmt(Math.max(0, dur - cur))
+          : "";
+        entry.muFillEl.style.width =
+          (isFinite(dur) && dur > 0 ? Math.min(100, (cur / dur) * 100) : 0) + "%";
+      }
+
+      /// MAJ tous les widgets musique (appelé aux transitions play/stop)
+      /// + le module HUD musique (même source musiqueCourant/musiqueAudio).
+      function majMusiqueWidgets() {
+        widgetMap.forEach(function (entry) {
+          if (entry.kind === "musique") majMusiqueWidget(entry);
+        });
+        majModuleMusique();
+      }
+
+      /// MAJ les barres EQ + peak dots de tous les widgets musique.
+      function majMusiqueEq() {
+        widgetMap.forEach(function (entry) {
+          if (entry.kind !== "musique" || !entry.muBars) return;
+          for (var i = 0; i < NB_BANDES; i++) {
+            entry.muBars[i].style.height =
+              Math.max(4, Math.round((eqBands[i] / 255) * 100)) + "%";
+            if (entry.muPeakEls && entry.muPeakEls[i]) {
+              var peakPct = Math.min(100, Math.round((eqPeaks[i] / 255) * 100));
+              var dot = entry.muPeakEls[i];
+              // Masqué tant que la crête ne dépasse pas la barre.
+              if (eqPeaks[i] > eqBands[i] + 6) {
+                dot.style.display = "block";
+                dot.style.bottom = peakPct + "%";
+              } else {
+                dot.style.display = "none";
+              }
+            }
+          }
+        });
+      }
+
+      /// Tick position 250 ms partagé : démarré à la création d'un widget
+      /// musique OU du module HUD musique, s'auto-arrête quand plus aucun
+      /// n'existe.
+      var musiqueUiTimer = null;
+      function assurerTickMusique() {
+        if (musiqueUiTimer) return;
+        musiqueUiTimer = setInterval(function () {
+          var actif = !!modulesMap.musique;
+          widgetMap.forEach(function (entry) {
+            if (entry.kind === "musique") actif = true;
+          });
+          if (!actif) {
+            clearInterval(musiqueUiTimer);
+            musiqueUiTimer = null;
+            return;
+          }
+          majMusiqueWidgets();
+        }, 250);
+      }
 
       // ===== Pad numérique (16 touches Numpad × 3 plages → overlay diffusion) =====
       //
@@ -6860,6 +10188,7 @@
           vid.className = "pad-media";
           vid.src = "/" + media;
           vid.autoplay = true;
+          vid.muted = PREVIEW;
           vid.volume = volume;
           vid.setAttribute("playsinline", "");
           if (bounce) vid.classList.add("pad-bounce");
@@ -6901,7 +10230,7 @@
         } else if (son && mediaKind !== "video") {
           sonSrc = son;
         }
-        if (sonSrc) {
+        if (sonSrc && !PREVIEW) {
           try {
             padAudio = new Audio("/" + sonSrc);
             padAudio.volume = volume;
@@ -7172,7 +10501,7 @@
         // Son : porté par la vidéo (muted = !son) — appliqué à chaque frame
         // pour que les réglages son/volume soient live pendant l'attente.
         if (eaMediaEl && eaMediaEl.tagName === "VIDEO") {
-          eaMediaEl.muted = !etat.son;
+          eaMediaEl.muted = !etat.son || PREVIEW;
           eaMediaEl.volume = Math.max(
             0,
             Math.min(1, typeof etat.volume === "number" ? etat.volume : 0.5)

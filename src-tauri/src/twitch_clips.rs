@@ -46,6 +46,11 @@ pub struct ClipInfo {
     pub broadcaster_id: String,
     pub broadcaster_login: String,
     pub broadcaster_name: String,
+    /// game_id Helix du clip (catégorie diffusée au moment du clip).
+    /// Vide si le clip n'a pas de catégorie. Utilisé par la présentation
+    /// streamer pour déduire les jeux récents (game_info).
+    #[serde(default)]
+    pub game_id: String,
 }
 
 /// Clip résolu : ClipInfo + URL MP4 signée prête à être lue par <video>.
@@ -55,6 +60,19 @@ pub struct ClipResolu {
     pub info: ClipInfo,
     pub mp4_url: String,
     pub duree_ms: u64,
+}
+
+/// Un streamer mis en avant sur la page d'accueil d'une chaîne Twitch
+/// (étagère « streamerShelf » de type AUTOHOST — le streamer la configure
+/// dans les paramètres de sa chaîne). Sérialisé dans la frame
+/// welcome-clip-play pour le rendu favoris côté diffusion.
+#[derive(Debug, Clone, Serialize)]
+pub struct StreamerFavori {
+    pub login: String,
+    pub display_name: String,
+    pub avatar: String,
+    /// true si le streamer est actuellement en live.
+    pub en_live: bool,
 }
 
 // ===== Cache URL signée =====
@@ -122,6 +140,7 @@ pub async fn liste_clips(
             broadcaster_id: c["broadcaster_id"].as_str().unwrap_or("").to_string(),
             broadcaster_login: c["broadcaster_login"].as_str().unwrap_or("").to_string(),
             broadcaster_name: c["broadcaster_name"].as_str().unwrap_or("").to_string(),
+            game_id: c["game_id"].as_str().unwrap_or("").to_string(),
         });
     }
 
@@ -217,6 +236,91 @@ pub async fn clip_aleatoire_resolu(
         mp4_url,
         duree_ms,
     }))
+}
+
+// ===== Streamers mis en avant (étagère page d'accueil) =====
+
+/// Récupère les streamers mis en avant par un streamer sur sa page d'accueil
+/// Twitch (`user.channel.home.shelves.streamerShelf`, type AUTOHOST — la
+/// liste « favoris » configurable dans les paramètres de la chaîne).
+/// GQL public (Client-Id web), zéro auth. Jamais fatal : toute erreur ou
+/// timeout → liste vide (l'appelant affiche alors la carte sans favoris).
+/// `max` borne la taille de l'étagère demandée.
+pub async fn favoris_channel(login: &str, max: u32) -> Vec<StreamerFavori> {
+    if login.is_empty() {
+        return Vec::new();
+    }
+    match gql_streamer_shelf(login, max).await {
+        Ok(v) => v,
+        Err(e) => {
+            eprintln!("[TwitchClips] streamerShelf({}) échoué : {}", login, e);
+            Vec::new()
+        }
+    }
+}
+
+/// Appel GQL streamerShelf → liste des streamers mis en avant.
+/// Timeout 4 s : appelé sur le chemin de lecture d'un clip de bienvenue,
+/// il ne doit pas retarder le démarrage au-delà du raisonnable.
+async fn gql_streamer_shelf(login: &str, max: u32) -> Result<Vec<StreamerFavori>, String> {
+    let client = shared_client();
+    let query = r#"query StreamerShelf($login: String!, $max: Int) {
+        user(login: $login) {
+            channel { home { shelves {
+                streamerShelf(first: $max) { edges { node {
+                    login displayName profileImageURL(width: 300)
+                    stream { id }
+                } } }
+            } } }
+        }
+    }"#;
+
+    let body = serde_json::json!([{
+        "operationName": "StreamerShelf",
+        "variables": { "login": login, "max": max },
+        "query": query
+    }]);
+
+    let resp = tokio::time::timeout(
+        Duration::from_secs(4),
+        client
+            .post(GQL_URL)
+            .header("Client-Id", GQL_CLIENT_ID)
+            .header("Content-Type", "application/json")
+            .body(body.to_string())
+            .send(),
+    )
+    .await
+    .map_err(|_| "GQL streamerShelf: timeout 4s".to_string())?
+    .map_err(|e| format!("GQL streamerShelf POST: {}", e))?;
+
+    let text = resp
+        .text()
+        .await
+        .map_err(|e| format!("GQL streamerShelf body: {}", e))?;
+    let json: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("GQL streamerShelf parse: {}", e))?;
+
+    let edges = json[0]["data"]["user"]["channel"]["home"]["shelves"]["streamerShelf"]["edges"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+
+    let mut favoris = Vec::with_capacity(edges.len());
+    for e in edges {
+        let node = &e["node"];
+        let login = node["login"].as_str().unwrap_or("").to_string();
+        if login.is_empty() {
+            continue;
+        }
+        favoris.push(StreamerFavori {
+            display_name: node["displayName"].as_str().unwrap_or(login.as_str()).to_string(),
+            avatar: node["profileImageURL"].as_str().unwrap_or("").to_string(),
+            en_live: !node["stream"].is_null(),
+            login,
+        });
+    }
+    Ok(favoris)
 }
 
 // ===== GQL interne =====

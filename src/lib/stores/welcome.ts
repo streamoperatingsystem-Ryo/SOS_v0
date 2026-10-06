@@ -119,6 +119,11 @@ export async function welcomeSetDureeAffichage(ms: number): Promise<void> {
   await refresh();
 }
 
+export async function welcomeSetUtiliserSquelette(actif: boolean): Promise<void> {
+  await tauri.welcomeSetUtiliserSquelette(actif);
+  await refresh();
+}
+
 export async function welcomeSauverViewer(
   login: string,
   config: WelcomeViewerConfig

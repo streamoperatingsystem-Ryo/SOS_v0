@@ -1,10 +1,12 @@
 <script lang="ts">
-  // Modale "Interactions chat" — tout ce qui est déclenché par le chat :
+  // Modale "Interactions Live" — interactions chat + outils live :
   //   (1) onglet Clip de bienvenue : attribution followers→clips, file +
   //       contrôles, config overlay (mini-canvas drag/resize),
   //   (2) onglet Bandeau premier message : config globale,
   //   (3) onglet Alertes : config par type (follow/raid/sub/resub/subgift/
-  //       bits) + position overlay (migré depuis la sidebar Toolbar).
+  //       bits) + position overlay (migré depuis la sidebar Toolbar),
+  //   (4) onglet Planning : le vrai planning Twitch (Helix /schedule) —
+  //       vues semaine/mois/liste, glisser-déposer de jacquettes, vacances.
   //   (Commandes chat : prévues, pas encore implémentées — pas d'onglet.)
   import { followers, chargerFollowers, broadcaster } from "../stores/communaute";
   import {
@@ -24,6 +26,7 @@
     welcomeSetConfigGlobaleActif,
     welcomeTesterClip,
     welcomeSetDureeAffichage,
+    welcomeSetUtiliserSquelette,
   } from "../stores/welcome";
   import {
     bandeauEtat,
@@ -69,6 +72,22 @@
     NOMS_AFFICHAGE,
     NB_PLAGES,
   } from "../stores/padNumerique";
+  import {
+    presentationEtat,
+    chargerPresentation,
+    presentationFavoriSauver,
+    presentationFavoriSupprimer,
+    presentationFavoriSetSon,
+    presentationFavoriSetMode,
+    presentationRechercher,
+    presentationLancer,
+    presentationFermer,
+    presentationClipJouer,
+    presentationClipStopper,
+    presentationAudioJouer,
+    presentationAudioStopper,
+    ecouterSon,
+  } from "../stores/presentation";
   import { sceneStore } from "../stores/scene";
   import { t } from "../stores/langue";
   import { get } from "svelte/store";
@@ -80,14 +99,25 @@
     type CommandeConfig,
     type PositionOverlayConfig,
     type ToucheConfig,
+    type PresentationSearchResult,
   } from "../tauri";
   import Modal from "./Modal.svelte";
+  import PlanningTab from "./PlanningTab.svelte";
+  import MusiqueTab from "./MusiqueTab.svelte";
 
   let { onFermer = () => {} }: { onFermer?: () => void } = $props();
 
   // Onglet actif.
   let tab = $state<
-    "bienvenue" | "bandeau" | "alertes" | "commandes" | "pad" | "position"
+    | "bienvenue"
+    | "bandeau"
+    | "alertes"
+    | "commandes"
+    | "pad"
+    | "presentation"
+    | "planning"
+    | "musique"
+    | "position"
   >("bienvenue");
 
   // Section sélectionnée dans les onglets master-detail (liste gauche).
@@ -95,6 +125,160 @@
   let secBandeau = $state<
     "general" | "duree" | "position" | "test" | "apparence"
   >("general");
+
+  // ===== Présentation streamer (portage « streamers favoris ») =====
+  let secPresentation = $state<"recherche" | "favoris" | "diffusion">("favoris");
+  let presEtat = $derived($presentationEtat);
+  let presFavoris = $derived(presEtat?.favoris ?? []);
+  let presCourant = $derived(presEtat?.courant ?? null);
+  let presVisible = $derived(presEtat?.visible ?? false);
+
+  // Recherche de chaîne.
+  let presQuery = $state("");
+  let presResultats = $state<PresentationSearchResult[]>([]);
+  let presSearching = $state(false);
+  // Erreur des actions (recherche, lancer, sons) — affichée en haut du panneau.
+  let presErreur = $state<string | null>(null);
+  // user_id en cours de lancement / slug de clip en cours de résolution
+  // (spinners sur les boutons — le 1er resolve MP4 peut prendre ~1 s).
+  let presLancant = $state<string | null>(null);
+  let presClipEnCours = $state<string | null>(null);
+  // Login du favori sélectionné dans la liste (panneau détail).
+  let presFavSel = $state<string | null>(null);
+  let presFavActif = $derived(
+    presFavoris.find((f) => f.login === presFavSel) ?? null
+  );
+  // Pistes audio du favori sélectionné (tuples typés — évite l'union
+  // string|null|undefined du destructuring inline dans le markup).
+  let presPistes = $derived.by(() => {
+    const f = presFavActif;
+    if (!f) return [] as { id: string; src: string | null | undefined }[];
+    return [
+      { id: "voix", src: f.son_voix },
+      { id: "musique", src: f.son_musique },
+    ];
+  });
+  // Favori du streamer actuellement présenté (sons à jour — undefined si le
+  // streamer présenté n'est pas enregistré en favori).
+  let presFavCourant = $derived.by(() => {
+    const c = presCourant;
+    if (!c) return null;
+    return presFavoris.find((f) => f.login === c.login) ?? null;
+  });
+  // Charge l'état Rust une seule fois à la première ouverture de l'onglet.
+  let presCharge = false;
+
+  async function onTabPresentation() {
+    tab = "presentation";
+    if (!presCharge) {
+      presCharge = true;
+      await chargerPresentation();
+    }
+  }
+
+  async function onPresRechercher() {
+    const q = presQuery.trim();
+    if (!q || presSearching) return;
+    presSearching = true;
+    presErreur = null;
+    try {
+      presResultats = await presentationRechercher(q);
+    } catch (e) {
+      presErreur = String(e);
+      presResultats = [];
+    } finally {
+      presSearching = false;
+    }
+  }
+
+  async function onPresAjouterFavori(r: PresentationSearchResult) {
+    presErreur = null;
+    try {
+      // thumbnail_url = vignette live (pas l'avatar) — elle est remplacée par
+      // le vrai avatar au premier lancer (refresh cache côté Rust).
+      await presentationFavoriSauver({
+        user_id: r.id,
+        login: r.login.toLowerCase(),
+        display_name: r.display_name,
+        avatar: r.thumbnail_url,
+        son_voix: null,
+        son_musique: null,
+        mode: "theatrical",
+      });
+      presFavSel = r.login.toLowerCase();
+      secPresentation = "favoris";
+    } catch (e) {
+      presErreur = String(e);
+    }
+  }
+
+  async function onPresLancer(userId: string, mode?: string) {
+    if (presLancant) return;
+    presLancant = userId;
+    presErreur = null;
+    try {
+      await presentationLancer(userId, mode);
+      secPresentation = "diffusion";
+    } catch (e) {
+      presErreur = String(e);
+    } finally {
+      presLancant = null;
+    }
+  }
+
+  async function onPresFermer() {
+    try {
+      await presentationFermer();
+    } catch (e) {
+      presErreur = String(e);
+    }
+  }
+
+  async function onPresClipJouer(slug: string) {
+    if (presClipEnCours) return;
+    presClipEnCours = slug;
+    presErreur = null;
+    try {
+      await presentationClipJouer(slug);
+    } catch (e) {
+      presErreur = String(e);
+    } finally {
+      presClipEnCours = null;
+    }
+  }
+
+  async function onPresImporterSon(login: string, piste: string) {
+    presErreur = null;
+    try {
+      const rel = await tauri.importSon();
+      if (rel) await presentationFavoriSetSon(login, piste, rel);
+    } catch (e) {
+      presErreur = String(e);
+    }
+  }
+
+  async function onPresMode(login: string, mode: string) {
+    try {
+      await presentationFavoriSetMode(login, mode);
+    } catch (e) {
+      presErreur = String(e);
+    }
+  }
+
+  async function onPresSupprimer(login: string) {
+    presErreur = null;
+    try {
+      await presentationFavoriSupprimer(login);
+      if (presFavSel === login) presFavSel = null;
+    } catch (e) {
+      presErreur = String(e);
+    }
+  }
+
+  /// Nom de fichier d'un chemin medias/… (affichage dans les lignes sons).
+  function presBasename(src: string): string {
+    return src.split("/").pop() ?? src;
+  }
 
   // ===== Alertes (config par type + overlay) =====
   const NOMS_ALERTE: Record<string, string> = {
@@ -454,6 +638,9 @@
   // ===== File d'attente =====
   let etat = $derived($welcomeEtat);
   let actif = $derived(etat?.config_globale_actif ?? false);
+  // Mode d'affichage : true = squelette de position (défaut), false =
+  // spotlight plein écran (voile noir + carte 85 % + intro avatar 3 s).
+  let utiliserSquelette = $derived(etat?.utiliser_squelette ?? true);
   let current = $derived(etat?.current ?? null);
   let queue = $derived(etat?.en_attente ?? []);
 
@@ -621,7 +808,7 @@
   }
 </script>
 
-<Modal title={$t("interactions.titre")} onClose={onFermer}>
+<Modal title={$t("interactions.titre")} onClose={onFermer} maxWidth="1200px" crochet="var(--crochet-rose)">
   <div class="tabs">
     <button class="tab" class:active={tab === "bienvenue"} onclick={() => (tab = "bienvenue")}>
       {$t("interactions.tabBienvenue")}
@@ -641,6 +828,23 @@
       onclick={() => { tab = "pad"; void chargerPad(); }}
     >
       {$t("interactions.tabPad")}
+    </button>
+    <button
+      class="tab"
+      class:active={tab === "presentation"}
+      onclick={() => { void onTabPresentation(); }}
+    >
+      {$t("interactions.tabPresentation")}
+    </button>
+    <button
+      class="tab"
+      class:active={tab === "planning"}
+      onclick={() => (tab = "planning")}
+    >
+      {$t("interactions.tabPlanning")}
+    </button>
+    <button class="tab" class:active={tab === "musique"} onclick={() => (tab = "musique")}>
+      {$t("interactions.tabMusique")}
     </button>
     <button class="tab" class:active={tab === "position"} onclick={() => (tab = "position")}>
       {$t("interactions.tabPosition")}
@@ -689,6 +893,16 @@
                   />
                   <span>{$t("interactions.bienvenue.actifs")}</span>
                 </label>
+
+                <label class="toggle">
+                  <input
+                    type="checkbox"
+                    checked={utiliserSquelette}
+                    onchange={(e) => welcomeSetUtiliserSquelette(e.currentTarget.checked)}
+                  />
+                  <span>{$t("interactions.bienvenue.utiliserSquelette")}</span>
+                </label>
+                <p class="hint">{$t("interactions.bienvenue.utiliserSqueletteHint")}</p>
 
                 <div class="duree-row">
                   <span class="field-label">{$t("interactions.bienvenue.dureeAffichage")}</span>
@@ -1607,6 +1821,334 @@
       </div>
     {/if}
 
+    {#if tab === "presentation"}
+      <div class="tab-body">
+        <div class="alertes-layout">
+          <!-- Colonne gauche : sections de l'onglet -->
+          <div class="alertes-liste">
+            <button
+              class="alerte-select"
+              class:selected={secPresentation === "recherche"}
+              onclick={() => (secPresentation = "recherche")}
+            >
+              <span class="alerte-nom">{$t("interactions.presentation.secRecherche")}</span>
+            </button>
+            <button
+              class="alerte-select"
+              class:selected={secPresentation === "favoris"}
+              onclick={() => (secPresentation = "favoris")}
+            >
+              <span class="alerte-nom">{$t("interactions.presentation.secFavoris")}</span>
+            </button>
+            <button
+              class="alerte-select"
+              class:selected={secPresentation === "diffusion"}
+              onclick={() => (secPresentation = "diffusion")}
+              disabled={!presVisible}
+            >
+              <span class="alerte-nom">{$t("interactions.presentation.secDiffusion")}</span>
+            </button>
+          </div>
+
+          <!-- Panneau droit : contenu de la section sélectionnée -->
+          <div class="alerte-detail">
+            {#if presErreur}
+              <p class="hint pres-erreur">{presErreur}</p>
+            {/if}
+
+            {#if secPresentation === "recherche"}
+              <!-- Recherche de chaîne Twitch -->
+              <div class="bloc">
+                <div class="bloc-titre">{$t("interactions.presentation.rechercheTitre")}</div>
+                <div class="pres-search-row">
+                  <input
+                    class="search-input"
+                    type="text"
+                    placeholder={$t("interactions.presentation.rechercherPlaceholder")}
+                    bind:value={presQuery}
+                    onkeydown={(e) => { if (e.key === "Enter") void onPresRechercher(); }}
+                  />
+                  <button
+                    class="action"
+                    onclick={onPresRechercher}
+                    disabled={presSearching || !presQuery.trim()}
+                  >
+                    {presSearching ? "…" : $t("commun.rechercher")}
+                  </button>
+                </div>
+                <p class="hint">{$t("interactions.presentation.rechercheHint")}</p>
+
+                {#if presResultats.length > 0}
+                  <ul class="queue-list">
+                    {#each presResultats as r (r.id)}
+                      <li class="item">
+                        <img src={r.thumbnail_url} alt="" class="thumb" />
+                        <div class="item-info">
+                          <div class="item-pseudo">
+                            {r.display_name}
+                            {#if r.is_live}
+                              <span class="pres-live-dot"></span>
+                            {/if}
+                          </div>
+                          <div class="item-clip">@{r.login}</div>
+                        </div>
+                        <div class="item-actions">
+                          <button
+                            class="mini-btn"
+                            title={$t("interactions.presentation.ajouterFavori")}
+                            onclick={() => onPresAjouterFavori(r)}
+                          >
+                            ＋
+                          </button>
+                          <button
+                            class="mini-btn"
+                            title={$t("interactions.presentation.presenter")}
+                            onclick={() => onPresLancer(r.id)}
+                            disabled={presLancant !== null}
+                          >
+                            {presLancant === r.id ? "…" : "🎭"}
+                          </button>
+                        </div>
+                      </li>
+                    {/each}
+                  </ul>
+                {/if}
+              </div>
+            {/if}
+
+            {#if secPresentation === "favoris"}
+              <!-- Liste des favoris + détail du favori sélectionné -->
+              <div class="attribution-body">
+                <div class="followers-list">
+                  <h3>{$t("interactions.presentation.favorisTitre", { n: presFavoris.length })}</h3>
+                  {#if presFavoris.length === 0}
+                    <p class="empty">{$t("interactions.presentation.aucunFavori")}</p>
+                  {:else}
+                    <ul>
+                      {#each presFavoris as f (f.login)}
+                        <li>
+                          <button
+                            class="follower-row"
+                            class:selected={presFavSel === f.login}
+                            onclick={() => (presFavSel = f.login)}
+                          >
+                            {#if f.avatar}
+                              <img src={f.avatar} alt="" class="avatar" />
+                            {/if}
+                            <span class="login">{f.display_name}</span>
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                </div>
+
+                {#if presFavActif}
+                  <div class="clip-picker">
+                    <h3>{presFavActif.display_name} <span class="pres-at">@{presFavActif.login}</span></h3>
+
+                    <!-- Mode d'affichage (persisté — bascule à chaud si ce
+                         streamer est actuellement présenté). -->
+                    <div class="field-label">{$t("interactions.presentation.modeTitre")}</div>
+                    <div class="media-modes pres-mode-2">
+                      <button
+                        class="mode-btn"
+                        class:active={presFavActif.mode === "theatrical"}
+                        onclick={() => onPresMode(presFavActif.login, "theatrical")}
+                      >
+                        {$t("interactions.presentation.modeTheatral")}
+                      </button>
+                      <button
+                        class="mode-btn"
+                        class:active={presFavActif.mode === "card"}
+                        onclick={() => onPresMode(presFavActif.login, "card")}
+                      >
+                        {$t("interactions.presentation.modeCarte")}
+                      </button>
+                    </div>
+
+                    <!-- Pistes audio (voix + musique, fichiers medias/). -->
+                    <div class="field-label">{$t("interactions.presentation.sonsTitre")}</div>
+                    {#each presPistes as p (p.id)}
+                      <div class="pres-son-row">
+                        <span class="pres-son-label">
+                          {p.id === "voix" ? $t("interactions.presentation.sonVoix") : $t("interactions.presentation.sonMusique")}
+                        </span>
+                        {#if p.src}
+                          <span class="pres-son-nom" title={p.src}>{presBasename(p.src)}</span>
+                          <button
+                            class="mini-btn"
+                            title={$t("interactions.presentation.ecouter")}
+                            onclick={() => ecouterSon(p.src as string)}
+                          >
+                            ▶
+                          </button>
+                          <button
+                            class="mini-btn"
+                            title={$t("interactions.presentation.retirerSon")}
+                            onclick={() => presentationFavoriSetSon(presFavActif.login, p.id, null)}
+                          >
+                            ✕
+                          </button>
+                        {:else}
+                          <button
+                            class="mini-btn"
+                            onclick={() => onPresImporterSon(presFavActif.login, p.id)}
+                          >
+                            ＋ {$t("commun.importer")}
+                          </button>
+                        {/if}
+                      </div>
+                    {/each}
+                    <p class="hint">{$t("interactions.presentation.sonsHint")}</p>
+
+                    <div class="actions-bar">
+                      <button
+                        class="action"
+                        onclick={() => onPresLancer(presFavActif.user_id)}
+                        disabled={presLancant !== null}
+                      >
+                        {presLancant === presFavActif.user_id ? "…" : `🎭 ${$t("interactions.presentation.presenter")}`}
+                      </button>
+                      <button
+                        class="mini-btn"
+                        title={$t("interactions.presentation.retirerFavori")}
+                        onclick={() => onPresSupprimer(presFavActif.login)}
+                      >
+                        ✕ {$t("commun.retirer")}
+                      </button>
+                    </div>
+                  </div>
+                {:else if presFavoris.length > 0}
+                  <div class="clip-picker">
+                    <p class="empty">{$t("interactions.presentation.selectionnezFavori")}</p>
+                  </div>
+                {/if}
+              </div>
+            {/if}
+
+            {#if secPresentation === "diffusion"}
+              <!-- Contrôles de la présentation en cours -->
+              <div class="bloc">
+                {#if presCourant}
+                  <div class="bloc-titre">{$t("interactions.presentation.enCoursTitre", { nom: presCourant.display_name })}</div>
+
+                  <div class="actions-bar">
+                    <button class="action" onclick={onPresFermer}>
+                      {$t("interactions.presentation.fermer")}
+                    </button>
+                    <button class="action" onclick={() => presentationClipStopper()}>
+                      {$t("interactions.presentation.stopClip")}
+                    </button>
+                  </div>
+
+                  <!-- Bascule de mode à chaud. -->
+                  <div class="field-label">{$t("interactions.presentation.modeTitre")}</div>
+                  <div class="media-modes pres-mode-2">
+                    <button
+                      class="mode-btn"
+                      class:active={presCourant.mode === "theatrical"}
+                      onclick={() => onPresMode(presCourant.login, "theatrical")}
+                    >
+                      {$t("interactions.presentation.modeTheatral")}
+                    </button>
+                    <button
+                      class="mode-btn"
+                      class:active={presCourant.mode === "card"}
+                      onclick={() => onPresMode(presCourant.login, "card")}
+                    >
+                      {$t("interactions.presentation.modeCarte")}
+                    </button>
+                  </div>
+
+                  <!-- Pistes audio du favori (si enregistré + configuré). -->
+                  {#if presFavCourant && (presFavCourant.son_voix || presFavCourant.son_musique)}
+                    <div class="field-label">{$t("interactions.presentation.sonsTitre")}</div>
+                    <div class="actions-bar">
+                      {#if presFavCourant.son_voix}
+                        <button
+                          class="test-btn"
+                          onclick={() =>
+                            presentationAudioJouer("voix", presFavCourant.son_voix as string)
+                          }
+                        >
+                          ▶ {$t("interactions.presentation.sonVoix")}
+                        </button>
+                      {/if}
+                      {#if presFavCourant.son_musique}
+                        <button
+                          class="test-btn"
+                          onclick={() =>
+                            presentationAudioJouer("musique", presFavCourant.son_musique as string)
+                          }
+                        >
+                          ▶ {$t("interactions.presentation.sonMusique")}
+                        </button>
+                      {/if}
+                      <button
+                        class="test-btn stop"
+                        onclick={() => presentationAudioStopper("toutes")}
+                      >
+                        ⏹ {$t("interactions.presentation.stopSons")}
+                      </button>
+                    </div>
+                  {:else}
+                    <p class="hint">{$t("interactions.presentation.sonsFavoriHint")}</p>
+                  {/if}
+
+                  <!-- Clips récents : clic = lecture sur le stream. -->
+                  <div class="field-label">{$t("interactions.presentation.clipsTitre", { n: presCourant.clips.length })}</div>
+                  {#if presCourant.clips.length === 0}
+                    <p class="empty">{$t("interactions.presentation.aucunClip")}</p>
+                  {:else}
+                    <ul class="clips-list">
+                      {#each presCourant.clips as clip (clip.id)}
+                        <li>
+                          <div class="clip-row">
+                            <img src={clip.thumbnail_url} alt="" class="thumb" />
+                            <div class="clip-info">
+                              <div class="clip-title">{clip.title}</div>
+                              <div class="clip-meta">{Math.round(clip.duration)}s · {clip.created_at.slice(0, 10)}</div>
+                            </div>
+                          </div>
+                          <div class="clip-actions">
+                            <button
+                              class="test-btn"
+                              title={$t("interactions.presentation.jouerClip")}
+                              onclick={() => onPresClipJouer(clip.id)}
+                              disabled={presClipEnCours !== null}
+                            >
+                              {presClipEnCours === clip.id ? "…" : $t("interactions.presentation.jouer")}
+                            </button>
+                          </div>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
+                {:else}
+                  <p class="empty">{$t("interactions.presentation.aucunePresentation")}</p>
+                {/if}
+              </div>
+            {/if}
+          </div>
+        </div>
+      </div>
+    {/if}
+
+    {#if tab === "planning"}
+      <!-- Pleine largeur : la grille semaine + colonne jeux remplissent les
+           1200px de la modale (le max-width:680px de .tab-body est levé). -->
+      <div class="tab-body tab-body-planning">
+        <PlanningTab />
+      </div>
+    {/if}
+
+    {#if tab === "musique"}
+      <div class="tab-body">
+        <MusiqueTab />
+      </div>
+    {/if}
+
     {#if tab === "position"}
       <div class="tab-body">
         <p class="hint">
@@ -1958,9 +2500,13 @@
     word-break: break-all;
   }
 
-  /* Tabs — mêmes patterns que CadresModal (bordures var(--accent-ui), pas de radius) */
+  /* Tabs — mêmes patterns que CadresModal (bordures var(--accent-ui), pas de
+     radius). flex-wrap + nowrap sur les labels : 8 onglets dépassent la
+     largeur sur écran vertical → retour à la ligne ENTRE les onglets (2e
+     rangée) au lieu de texte tronqué dans les boutons. */
   .tabs {
     display: flex;
+    flex-wrap: wrap;
     flex-shrink: 0;
     gap: 0.2rem;
     border-bottom: 1px solid var(--bordure-ui);
@@ -1975,6 +2521,7 @@
     padding: 0.4rem 0.8rem;
     cursor: pointer;
     opacity: 0.6;
+    white-space: nowrap;
     transition: background 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
   }
   .tab:hover {
@@ -2000,6 +2547,11 @@
     width: 100%;
     margin: 0 auto;
   }
+  /* Onglet Planning : la grille semaine + colonne jeux remplissent toute la
+     largeur de la modale (1200px) — pas de centrage à 680px. */
+  .tab-body-planning {
+    max-width: none;
+  }
   /* Bloc = carte visuelle (bordure + radius + padding) — structure claire. */
   .bloc {
     display: flex;
@@ -2017,25 +2569,9 @@
     border-bottom: 1px solid var(--bordure-ui);
     padding-bottom: 0.2rem;
   }
-  /* Selecteur de police (bandeau) — même style que TitreEditForm. */
+  /* Le select police utilise la recette globale (app.css — select). */
   .police-select {
     width: 100%;
-    padding: 0.4rem 0.5rem;
-    background: var(--fond-controle);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-  .police-select:focus {
-    outline: none;
-    border-color: var(--accent-ui);
-  }
-  .police-select option {
-    padding: 0.3rem;
-    background: var(--fond);
-    color: var(--texte);
   }
 
   /* Checkbox — accent violet néon */
@@ -2417,6 +2953,60 @@
   }
   .clip-meta {
     font-size: 0.75rem;
+    opacity: 0.6;
+  }
+
+  /* ===== Onglet Présentation streamer ===== */
+  .pres-erreur {
+    color: var(--danger-ui, #e5484d);
+    font-weight: 600;
+    margin: 0 0 0.35rem;
+  }
+  .pres-search-row {
+    display: flex;
+    gap: 0.35rem;
+    align-items: stretch;
+  }
+  .pres-search-row .search-input {
+    flex: 1;
+    min-width: 0;
+  }
+  .pres-mode-2 {
+    grid-template-columns: repeat(2, 1fr);
+  }
+  .pres-son-row {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0;
+  }
+  .pres-son-label {
+    width: 4.2rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+  .pres-son-nom {
+    flex: 1;
+    min-width: 0;
+    font-size: 0.75rem;
+    opacity: 0.7;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pres-live-dot {
+    display: inline-block;
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: #e91916;
+    margin-left: 0.3rem;
+    vertical-align: middle;
+  }
+  .pres-at {
+    font-size: 0.75rem;
+    font-weight: 400;
     opacity: 0.6;
   }
 
