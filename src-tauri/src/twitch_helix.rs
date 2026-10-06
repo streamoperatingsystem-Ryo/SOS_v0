@@ -40,7 +40,7 @@ async fn helix_get(path: &str, query: &[(&str, &str)], access: &str) -> Result<s
     let client = shared_client();
 
     // 1er essai avec l'access token de la session.
-    let resp = client
+    let mut resp = client
         .get(format!("{}{}", HELIX_BASE, path))
         .header("Authorization", format!("Bearer {}", access))
         .header("Client-Id", CLIENT_ID)
@@ -49,9 +49,8 @@ async fn helix_get(path: &str, query: &[(&str, &str)], access: &str) -> Result<s
         .await
         .map_err(|e| HelixError::Autre(format!("Helix GET: {}", e)))?;
 
-    let status = resp.status();
     // 401 → refresh + 1 retry. On lit le refresh token depuis le keyring.
-    if status == reqwest::StatusCode::UNAUTHORIZED {
+    if resp.status() == reqwest::StatusCode::UNAUTHORIZED {
         let tokens = twitch_auth::lire_tokens()
             .map_err(|e| HelixError::Autre(format!("Coffre: {}", e)))?
             .ok_or(HelixError::Deconnecte)?;
@@ -64,8 +63,8 @@ async fn helix_get(path: &str, query: &[(&str, &str)], access: &str) -> Result<s
         twitch_auth::sauver_tokens(&new_tokens)
             .map_err(|e| HelixError::Autre(format!("Coffre save: {}", e)))?;
 
-        // Retry avec le nouveau token.
-        let resp2 = client
+        // Retry avec le nouveau token (repasse par les gardes 403/404 après).
+        resp = client
             .get(format!("{}{}", HELIX_BASE, path))
             .header("Authorization", format!("Bearer {}", new_tokens.access))
             .header("Client-Id", CLIENT_ID)
@@ -73,13 +72,19 @@ async fn helix_get(path: &str, query: &[(&str, &str)], access: &str) -> Result<s
             .send()
             .await
             .map_err(|e| HelixError::Autre(format!("Helix GET retry: {}", e)))?;
-
-        return parse_resp(resp2).await;
     }
 
     // 403 → NeedReauth (scopes manquants). JAMAIS de Device Code auto.
-    if status == reqwest::StatusCode::FORBIDDEN {
+    if resp.status() == reqwest::StatusCode::FORBIDDEN {
         return Err(HelixError::NeedReauth);
+    }
+
+    // 404 sur GET /schedule = la chaîne n'a JAMAIS créé de planning (un
+    // planning vide est un 404, pas un array vide — comportement Twitch
+    // documenté) : Null → schedule_get lit segments[]/vacation absents =
+    // planning vide, l'onglet affiche une grille vide au lieu d'une erreur.
+    if resp.status() == reqwest::StatusCode::NOT_FOUND && path == "/schedule" {
+        return Ok(serde_json::Value::Null);
     }
 
     parse_resp(resp).await
@@ -204,8 +209,15 @@ async fn helix_write(
         return parse_resp(resp2).await;
     }
 
-    // 403 → NeedReauth (scopes manquants).
+    // 403 → NeedReauth (scopes manquants) — SAUF le 403 « chaîne non
+    // affiliée » de POST /schedule/segment, dont le corps dit explicitement
+    // "non-recurring" : remonté en Autre pour que l'appelant distingue un
+    // scope manquant (reconnexion) d'un droit chaîne absent (repli récurrent).
     if status == reqwest::StatusCode::FORBIDDEN {
+        let b = resp.text().await.unwrap_or_default();
+        if b.contains("non-recurring") {
+            return Err(HelixError::Autre(format!("Helix HTTP 403: {}", b)));
+        }
         return Err(HelixError::NeedReauth);
     }
 
@@ -356,6 +368,8 @@ pub struct BroadcasterInfo {
     pub login: String,
     pub display_name: String,
     pub profile_image_url: String,
+    /// Bannière/entête de chaîne (offline_image_url). Vide si non définie.
+    pub offline_image_url: String,
     pub broadcaster_type: String,
     pub description: String,
 }
@@ -665,7 +679,7 @@ pub async fn stream_viewers(broadcaster_id: &str, access: &str) -> Result<Option
 }
 
 /// Broadcaster : GET /users?id=... — display_name, profile_image_url,
-/// broadcaster_type, description.
+/// offline_image_url, broadcaster_type, description.
 pub async fn broadcaster(user_id: &str, access: &str) -> Result<BroadcasterInfo, HelixError> {
     let body = helix_get("/users", &[("id", user_id)], access).await?;
 
@@ -688,6 +702,10 @@ pub async fn broadcaster(user_id: &str, access: &str) -> Result<BroadcasterInfo,
             .unwrap_or("")
             .to_string(),
         profile_image_url: data["profile_image_url"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+        offline_image_url: data["offline_image_url"]
             .as_str()
             .unwrap_or("")
             .to_string(),
@@ -1424,5 +1442,285 @@ pub async fn automod_resolve(
         "action": if autoriser { "ALLOW" } else { "DENY" },
     });
     helix_post("/moderation/automod/message", &[], &body, access).await?;
+    Ok(())
+}
+
+// ===== Planning Twitch (schedule) — onglet Planning de la modale Interactions =====
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScheduleSegment {
+    /// id Helix — pour un récurrent, chaque occurrence hebdo a un id propre
+    /// (encodé segmentID + semaine ISO) : PATCH/DELETE d'une occurrence
+    /// récurrente impacte la série, pas seulement ce créneau.
+    pub id: String,
+    pub start_time: String,
+    pub end_time: String,
+    pub title: String,
+    /// Catégorie liée (vide = segment sans jeu déclaré).
+    #[serde(default)]
+    pub category_id: String,
+    #[serde(default)]
+    pub category_name: String,
+    pub is_recurring: bool,
+    /// Some(date ISO) = annulé (récurrent : prochaine occurrence annulée).
+    pub canceled_until: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScheduleResp {
+    pub segments: Vec<ScheduleSegment>,
+    /// Vacances déclarées (dates ISO). Vides = pas de vacances.
+    pub vacation_start: String,
+    pub vacation_end: String,
+}
+
+/// Paramètres de création d'un segment (POST /schedule/segment).
+/// Clés snake_case — le struct se désérialise tel quel depuis le frontend
+/// (même convention que ChatSettingsPatch).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct ScheduleSegmentNew {
+    /// RFC3339.
+    pub start_time: String,
+    /// IANA (ex. Europe/Paris) — requis par Twitch.
+    pub timezone: String,
+    /// false = ponctuel (affiliés/partenaires uniquement — repli récurrent
+    /// côté commande si Twitch refuse) ; true = toutes les semaines.
+    pub is_recurring: bool,
+    /// Minutes 30-1380 (sérialisées en CHAÎNE à l'envoi — format Twitch).
+    pub duration_min: u32,
+    pub category_id: Option<String>,
+    pub title: Option<String>,
+}
+
+/// Corps partiel pour PATCH /schedule/segment (Option = champ non touché).
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct ScheduleSegmentPatch {
+    /// RFC3339. Déplaçable uniquement sur les ponctuels (un récurrent ne se
+    /// déplace pas : il se supprime + recrée — géré côté UI).
+    pub start_time: Option<String>,
+    /// Requis par Twitch quand start_time est envoyé (IANA, ex. Europe/Paris).
+    pub timezone: Option<String>,
+    /// Minutes 30-1380 (sérialisées en CHAÎNE — format Twitch).
+    pub duration_min: Option<u32>,
+    pub category_id: Option<String>,
+    pub title: Option<String>,
+    /// Annuler (true) / rétablir (false). Récurrent = prochaine occurrence.
+    pub is_canceled: Option<bool>,
+}
+
+/// Parse un segment Helix (objet JSON) en ScheduleSegment.
+fn parse_segment(s: &serde_json::Value) -> ScheduleSegment {
+    ScheduleSegment {
+        id: s["id"].as_str().unwrap_or("").to_string(),
+        start_time: s["start_time"].as_str().unwrap_or("").to_string(),
+        end_time: s["end_time"].as_str().unwrap_or("").to_string(),
+        title: s["title"].as_str().unwrap_or("").to_string(),
+        category_id: s["category"]["id"].as_str().unwrap_or("").to_string(),
+        category_name: s["category"]["name"].as_str().unwrap_or("").to_string(),
+        is_recurring: s["is_recurring"].as_bool().unwrap_or(false),
+        canceled_until: s["canceled_until"].as_str().map(|v| v.to_string()),
+    }
+}
+
+/// Lecture du planning : GET /schedule?broadcaster_id=&start_time=&first=25.
+/// ⚠️ `data` est un OBJET {segments[], vacation} — pas un array comme les
+/// autres endpoints ; le curseur de pagination est à la racine de la réponse.
+/// Aucun scope requis (token user suffit). `start_time` RFC3339 : Twitch ne
+/// renvoie que les segments à partir de cette date ; un récurrent se déroule
+/// en occurrences hebdo (id propre à chacune). Pagination bornée MAX_PAGES.
+pub async fn schedule_get(
+    broadcaster_id: &str,
+    start_time: Option<&str>,
+    access: &str,
+) -> Result<ScheduleResp, HelixError> {
+    let mut segments: Vec<ScheduleSegment> = Vec::new();
+    let mut vacation_start = String::new();
+    let mut vacation_end = String::new();
+    let mut after: Option<String> = None;
+
+    for _ in 0..MAX_PAGES {
+        let mut query: Vec<(&str, &str)> = vec![
+            ("broadcaster_id", broadcaster_id),
+            ("first", "25"),
+        ];
+        if let Some(st) = start_time {
+            query.push(("start_time", st));
+        }
+        if let Some(cursor) = &after {
+            query.push(("after", cursor));
+        }
+
+        let body = helix_get("/schedule", &query, access).await?;
+        let data = &body["data"];
+
+        if let Some(segs) = data["segments"].as_array() {
+            for s in segs {
+                segments.push(parse_segment(s));
+            }
+        }
+        if !data["vacation"].is_null() {
+            vacation_start = data["vacation"]["start_time"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+            vacation_end = data["vacation"]["end_time"]
+                .as_str()
+                .unwrap_or("")
+                .to_string();
+        }
+
+        after = body["pagination"]["cursor"].as_str().map(|s| s.to_string());
+        if after.is_none() {
+            break;
+        }
+    }
+
+    Ok(ScheduleResp {
+        segments,
+        vacation_start,
+        vacation_end,
+    })
+}
+
+/// Créer un segment : POST /schedule/segment?broadcaster_id= {start_time,
+/// timezone, is_recurring, duration, category_id?, title?}.
+/// ⚠️ `duration` est une CHAÎNE JSON en minutes (bornes 30-1380), pas un
+/// nombre — format documenté Twitch. `timezone` IANA requis. Non-affilié :
+/// Twitch refuse les ponctuels avec un 403 "non-recurring" (distingué de
+/// NeedReauth dans helix_write) — le repli récurrent est dans la commande.
+/// Retourne le segment créé (data.segments[0]).
+pub async fn schedule_segment_create(
+    broadcaster_id: &str,
+    access: &str,
+    params: &ScheduleSegmentNew,
+) -> Result<ScheduleSegment, HelixError> {
+    if !(30..=1380).contains(&params.duration_min) {
+        return Err(HelixError::Autre(format!(
+            "Durée hors bornes (30-1380) : {}",
+            params.duration_min
+        )));
+    }
+    let mut body = serde_json::json!({
+        "start_time": params.start_time,
+        "timezone": params.timezone,
+        "is_recurring": params.is_recurring,
+        "duration": params.duration_min.to_string(),
+    });
+    if let Some(c) = &params.category_id {
+        if !c.is_empty() {
+            body["category_id"] = serde_json::json!(c);
+        }
+    }
+    if let Some(t) = &params.title {
+        if !t.is_empty() {
+            body["title"] = serde_json::json!(t);
+        }
+    }
+    let resp = helix_post(
+        "/schedule/segment",
+        &[("broadcaster_id", broadcaster_id)],
+        &body,
+        access,
+    )
+    .await?;
+    let s = resp["data"]["segments"]
+        .as_array()
+        .and_then(|a| a.first())
+        .ok_or_else(|| HelixError::Autre("schedule/segment: data.segments[0] absent".into()))?;
+    Ok(parse_segment(s))
+}
+
+/// Modifier un segment : PATCH /schedule/segment?broadcaster_id&id=
+/// (corps partiel — seuls les champs Some sont envoyés). ⚠️ Sur un segment
+/// récurrent, title/category/duration s'appliquent à TOUTE la série et
+/// start_time n'est pas modifiable — la confirmation est côté UI.
+pub async fn schedule_segment_update(
+    broadcaster_id: &str,
+    access: &str,
+    segment_id: &str,
+    patch: &ScheduleSegmentPatch,
+) -> Result<(), HelixError> {
+    if let Some(d) = patch.duration_min {
+        if !(30..=1380).contains(&d) {
+            return Err(HelixError::Autre(format!(
+                "Durée hors bornes (30-1380) : {}",
+                d
+            )));
+        }
+    }
+    let mut body = serde_json::json!({});
+    if let Some(s) = &patch.start_time {
+        body["start_time"] = serde_json::json!(s);
+    }
+    if let Some(tz) = &patch.timezone {
+        body["timezone"] = serde_json::json!(tz);
+    }
+    if let Some(d) = patch.duration_min {
+        body["duration"] = serde_json::json!(d.to_string());
+    }
+    if let Some(c) = &patch.category_id {
+        body["category_id"] = serde_json::json!(c);
+    }
+    if let Some(t) = &patch.title {
+        body["title"] = serde_json::json!(t);
+    }
+    if let Some(b) = patch.is_canceled {
+        body["is_canceled"] = serde_json::json!(b);
+    }
+    if body.as_object().map(|o| o.is_empty()).unwrap_or(true) {
+        return Ok(());
+    }
+    let query = [("broadcaster_id", broadcaster_id), ("id", segment_id)];
+    helix_patch("/schedule/segment", &query, &body, access).await?;
+    Ok(())
+}
+
+/// Supprimer un segment : DELETE /schedule/segment?broadcaster_id&id=
+/// ⚠️ Sur un récurrent → supprime TOUTE la série (la confirmation « toute
+/// la série sera supprimée » est affichée côté UI).
+pub async fn schedule_segment_delete(
+    broadcaster_id: &str,
+    access: &str,
+    segment_id: &str,
+) -> Result<(), HelixError> {
+    let query = [("broadcaster_id", broadcaster_id), ("id", segment_id)];
+    helix_delete("/schedule/segment", &query, access).await?;
+    Ok(())
+}
+
+/// Vacances : PATCH /schedule/settings — tous les paramètres EN QUERY
+/// (endpoint sans corps, helix_write PATCH sans body). actif=false → juste
+/// is_vacation_enabled=false ; actif=true → dates RFC3339 + timezone requis.
+pub async fn schedule_settings_vacances(
+    broadcaster_id: &str,
+    access: &str,
+    actif: bool,
+    debut: Option<&str>,
+    fin: Option<&str>,
+    timezone: &str,
+) -> Result<(), HelixError> {
+    if actif
+        && (debut.map(|d| d.is_empty()).unwrap_or(true)
+            || fin.map(|f| f.is_empty()).unwrap_or(true))
+    {
+        return Err(HelixError::Autre(
+            "Vacances : dates début/fin requises".into(),
+        ));
+    }
+    let actif_s = actif.to_string();
+    let mut query: Vec<(&str, &str)> = vec![
+        ("broadcaster_id", broadcaster_id),
+        ("is_vacation_enabled", &actif_s),
+    ];
+    if actif {
+        if let Some(d) = debut {
+            query.push(("vacation_start_time", d));
+        }
+        if let Some(f) = fin {
+            query.push(("vacation_end_time", f));
+        }
+        query.push(("timezone", timezone));
+    }
+    helix_write("PATCH", "/schedule/settings", &query, None, access).await?;
     Ok(())
 }
