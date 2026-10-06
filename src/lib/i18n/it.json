@@ -339,6 +339,7 @@
     "creerInputViewer": "Creare un widget input viewer",
     "creerSpeedrun": "Creare un widget speedrun",
     "creerGoal": "Creare un widget obiettivo",
+    "creerMusique": "Creare un widget musica",
     "hintEdition": "Cliccare un widget o lo sfondo per modificarlo",
     "connexions": "Connessioni",
     "chatOn": "Chat ON",
@@ -353,6 +354,14 @@
     "moderationTitle": "Controlli del canale",
     "diagnostic": "Diagnostica",
     "diagnosticTitle": "Aprire la diagnostica dei consumi (CPU, RAM, attività…)",
+    "preview": "Anteprima",
+    "previewTitle": "Miniatura live della diffusione + proiettore OBS — l'intestazione attiva/disattiva la miniatura",
+    "previewFenetre": "Finestra",
+    "previewMoniteur": "Monitor {n}",
+    "previewOuvrir": "Aprire il proiettore",
+    "previewOuvert": "Proiettore aperto sullo schermo scelto",
+    "previewHint": "Clic sulla miniatura o sul pulsante = proiettore anteprima OBS sullo schermo scelto. Camera e catture OBS non appaiono nella miniatura (renderizzate da OBS, non dalla pagina).",
+    "previewObsHint": "Connetta OBS (sezione OBS) per aprire il proiettore.",
     "hote": "Host",
     "port": "Porta",
     "motDePasse": "Password",
@@ -473,6 +482,14 @@
     "remplacerMedia": "Sostituire il media",
     "importerMedia": "Importare un media",
     "supprimerMedia": "Eliminare il media",
+    "carrousel": "Carosello di immagini",
+    "carrouselCreer": "Creare un carosello",
+    "carrouselAjouter": "Aggiungere immagini",
+    "carrouselVider": "Svuotare la lista",
+    "carrouselSec": "Intervallo",
+    "carrouselMonter": "Spostare su",
+    "carrouselDescendre": "Spostare giù",
+    "carrouselRetirer": "Rimuovere",
     "transformerWidget": "Trasformare in widget",
     "transformerFlottant": "Trasformare in flottante",
     "cadreWidgetRetirer": "Rimuovere la cornice da questo widget",
@@ -518,6 +535,10 @@
     "reconnecterTwitch": "Riconnettere Twitch",
     "goalsRecharger": "Ricaricare",
     "goalsVide": "Nessun obiettivo attivo. Ne dichiari uno nella Sua Creator Dashboard di Twitch.",
+    "musiqueMode": "Modalità di visualizzazione",
+    "musiqueModePlayer": "Lettore",
+    "musiqueModeEq": "Equalizzatore",
+    "musiqueHint": "Mini-lettore Winamp sulla diffusione: titolo scorrevole, equalizzatore a spettro reale e progresso. L'audio resta sulla sorgente browser OBS — il widget è solo una visualizzazione.",
     "goalLie": "Collegato",
     "goalDelier": "Scollegare l'obiettivo Twitch",
     "goalTermine": "Terminato",
@@ -577,7 +598,8 @@
       "welcome-clip": "Clip di benvenuto",
       "input-viewer": "Input Viewer",
       "speedrun": "Splitter",
-      "goal": "Obiettivo"
+      "goal": "Obiettivo",
+      "musique": "Musica"
     },
     "fit": {
       "ajuster": "Adattare",
@@ -719,11 +741,14 @@
     "tabPad": "Pad numerico",
     "tabPresentation": "Presentazione",
     "tabPlanning": "Programmazione",
+    "tabMusique": "Musica",
     "tabPosition": "Scheletro di posizione",
     "bienvenue": {
       "secFile": "Coda",
       "secAttribution": "Assegnazione",
       "actifs": "Clip di benvenuto attivati",
+      "utiliserSquelette": "Usare lo scheletro di posizione",
+      "utiliserSqueletteHint": "Deselezionato: velo nero a schermo intero, avatar in intro 3 s poi clip centrato (85 % dello schermo)",
       "dureeAffichage": "Durata di visualizzazione",
       "naturelle": "Naturale",
       "dureeHint": "0 = durata naturale del clip · 1-30s = forzata",
@@ -799,6 +824,51 @@
       "supprimerTitle": "Eliminare questo comando",
       "aucuneSelection": "Nessun comando selezionato — ne crei uno.",
       "defautTemplate": "{pseudo} usa {commande}!"
+    },
+    "musique": {
+      "titreInfo": "Come funziona",
+      "intro": "Gli spettatori richiedono un brano scrivendo «!rs <titolo>» in chat (Twitch, YouTube, Kick, TikTok). La musica suona sulla diffusione (sorgente browser OBS) — i Suoi spettatori la sentono, e il titolo scorre nell'intestazione del widget chat.",
+      "introCommandes": "Comandi chat: !rs <titolo> (richiedere) · !file (vedere la coda) · !retirer (rimuovere la propria richiesta) · !skip (Lei e i Suoi mod). Le conferme vengono pubblicate nella chat Twitch (le altre piattaforme sono di sola lettura).",
+      "introNommage": "Catalogo 100 % locale: solo la musica che LEI importa qui sotto è riproducibile — niente viene cercato online. Il nome del file diventa il titolo richiesto (es. «Artista - Titolo.mp3» → !rs artista titolo). Formati: mp3, ogg, wav, m4a, flac — max 50 MB.",
+      "enCours": "In riproduzione",
+      "aucunePiste": "Nessuna musica in riproduzione — le richieste degli spettatori si accumulano in coda.",
+      "demandePar": "richiesto da {pseudo}",
+      "pause": "Pausa",
+      "reprendre": "Riprendere",
+      "rejouer": "Riprodurre la traccia dall'inizio",
+      "shade": "Ridurre / espandere il lettore (shade)",
+      "skip": "Salta",
+      "stop": "Fermare tutto",
+      "confirmStop": "Fermare la riproduzione E svuotare la coda?",
+      "file": "Coda",
+      "fileVide": "Coda vuota — le richieste !rs appariranno qui.",
+      "vider": "Svuotare la coda",
+      "monter": "Spostare su nella coda",
+      "descendre": "Spostare giù nella coda",
+      "retirer": "Rimuovere dalla coda",
+      "bibliotheque": "Biblioteca locale",
+      "importer": "Importare musica",
+      "biblioVide": "Biblioteca vuota — importi i Suoi file audio affinché gli spettatori possano richiederli con !rs.",
+      "ecouter": "Ascoltare (sul Suo PC, non sulla diffusione)",
+      "tester": "Riprodurre sulla diffusione (test)",
+      "supprimer": "Eliminare questo file",
+      "confirmSuppr": "Eliminare «{titre}» dalla biblioteca?",
+      "reglages": "Impostazioni",
+      "actif": "Richieste !rs attivate",
+      "commandeRs": "Comando di richiesta",
+      "commandeSkip": "Comando skip (mod)",
+      "commandeRetirer": "Comando rimuovi",
+      "commandeFile": "Comando coda",
+      "cooldown": "Cooldown per spettatore (s)",
+      "maxParViewer": "Max richieste / spettatore (0 = illimitate)",
+      "fileMax": "Dimensione max della coda",
+      "reponsesChat": "Conferme nella chat (Twitch)",
+      "enregistrer": "Salvare le impostazioni",
+      "sauveOk": "Impostazioni salvate",
+      "sauveKo": "Salvataggio non riuscito",
+      "hintModeration": "!skip è riservato a Lei e ai Suoi moderatori. I nomi dei comandi devono essere distinti e non possono riprendere un comando chat esistente (e viceversa).",
+      "confirmer": "Confermare",
+      "annuler": "Annullare"
     },
     "pad": {
       "hintIntro": "Pad numerico: 16 tasti Numpad × 3 banchi. Prema un tasto del tastierino numerico per attivare un suono, un'immagine o un video come overlay sulla diffusione. + e - del numpad cambiano banco. Posizione/dimensione si regolano nella scheda «Scheletro di posizione» (condiviso con welcome/avvisi/comandi). L'audio è riprodotto su entrambi i lati: diffusione (OBS lo cattura per gli spettatori) + dashboard (lo sente sul Suo PC).",
@@ -941,10 +1011,24 @@
     "pageSuivante": "Pagina successiva",
     "pagePrecedente": "Pagina precedente",
     "tournezPages": "Sfogli le pagine",
+    "chapitres": {
+      "comprendre": "Capire StreamOS",
+      "reglages": "Le tre impostazioni iniziali",
+      "reperer": "Orientarsi nell'applicazione",
+      "chat": "La chat",
+      "widgets": "Widget e media",
+      "cadres": "Le cornici",
+      "live": "Animare la diretta",
+      "direct": "Andare in diretta",
+      "plusLoin": "Per andare oltre"
+    },
     "pages": {
       "couverture": {
         "titre": "Guida dello streamer",
         "sous": "StreamOS — la Sua regia di streaming, in tutta semplicità."
+      },
+      "sommaire": {
+        "titre": "Indice"
       },
       "principe": {
         "titre": "Cosa fa StreamOS per Lei",
@@ -964,6 +1048,25 @@
         "e4": "Colleghi la Sua **chat**: Twitch e YouTube chiedono un codice da convalidare online; Kick e TikTok si connettono con un semplice nome utente.",
         "note": "I modelli di scena restano disponibili in qualsiasi momento con il pulsante «**+ Scena**» in alto."
       },
+      "obs": {
+        "titre": "Collegare OBS, passo dopo passo",
+        "p1": "La sezione **OBS** della barra laterale cambia colore da sola: **rosso**, StreamOS non vede OBS; **verde**, tutto è a posto.",
+        "l1": "«**OBS non raggiungibile**»: OBS non è aperto, o il suo server WebSocket è spento. Apra OBS, poi Strumenti → **WebSocket Server Settings** → spunti «Enable WebSocket server».",
+        "l2": "«**Password mancante o non valida**»: nella stessa finestra, clicchi «**Show Connect Info**», copi la password e la incolli qui.",
+        "l3": "Il campo **Host** resta al suo valore predefinito finché OBS gira sullo stesso computer.",
+        "p2": "Una volta connesso, i pulsanti **Avviare lo stream** e **Avviare la registrazione** si attivano nella stessa sezione.",
+        "note": "Non ha ancora OBS? Il link «**Scaricare OBS Studio**» in fondo alla sezione apre la pagina ufficiale."
+      },
+      "modeles": {
+        "titre": "Scegliere la Sua scena modello",
+        "p1": "Al primo avvio, la finestra «**Benvenuto in StreamOS**» propone scene pronte all'uso. Un clic, e widget, cornice e posizioni sono sistemati per Lei.",
+        "l1": "**Gaming** (e le sue varianti 4:3 e schermo intero): cattura del gioco, camera, chat, tastiera o gamepad.",
+        "l2": "**Just Chatting**: grande camera a sinistra, chat a destra.",
+        "l3": "**Speedrun**: splitter a sinistra, chat a destra, tastiera in basso.",
+        "l4": "**Minimale**: una chat discreta e una cornice sottile — tutto lo spazio per il gioco.",
+        "p2": "Tutto resta modificabile in seguito. Per costruire tutto da sé, scelga «**Partire da una pagina vuota**».",
+        "note": "Una scena modello **non sostituisce mai** una scena esistente: si aggiunge accanto."
+      },
       "cartes": {
         "titre": "**Clic sinistro**, **clic destro**",
         "p1": "Un **clic sinistro** su qualsiasi elemento della zona centrale apre la sua scheda in cima al pannello laterale sinistro: un riquadro tratteggiato ben visibile, che raccoglie tutto ciò che quell'elemento permette.",
@@ -973,6 +1076,36 @@
         "l3": "Lo sfondo dell'applicazione → tratteggi arancioni.",
         "p2": "Un **clic destro** su un widget apre un menu contestuale fatto di semplici scorciatoie (duplicare, cambiare l'ordine, eliminare). Tutte queste opzioni si trovano anche con un **clic sinistro**, nella sua scheda del pannello laterale sinistro.",
         "note": "La scheda si richiude da sola quando non è più selezionato nulla — un altro clic e ritorna."
+      },
+      "barreLaterale": {
+        "titre": "La barra laterale, dall'alto in basso",
+        "p1": "Tutto si pilota dal **pannello a sinistra**. Una sola sezione si apre alla volta; le altre sono semplici pulsanti che aprono una finestra.",
+        "l1": "**Widget**: creare un widget (media, chat, camera, input viewer, speedrun, obiettivo, musica).",
+        "l2": "**Connessioni**: Twitch, YouTube, Kick, TikTok — un pallino verde per piattaforma connessa.",
+        "l3": "**Interazioni live**, **Schermata di attesa**, **Just Chatting**, **Canale**, **Diagnostica**: le finestre di controllo della diretta.",
+        "l4": "**OBS**: connessione, stream e registrazione.",
+        "l5": "**Anteprima**: miniatura di ciò che vedono i Suoi spettatori.",
+        "l6": "**Personalizzazione**: cornici e immagine di sfondo. In fondo, la **Guida dello streamer** (questo libro) appena sopra **Ergonomia**: sfondo del pannello, finestra e barra delle scorciatoie.",
+        "note": "Ogni sezione aperta prende il colore della sua scheda: blu per Widget, verde per Connessioni, oro per OBS…"
+      },
+      "scenes": {
+        "titre": "Le Sue scene",
+        "p1": "La barra in alto elenca **le Sue scene**. Clicchi su «**Le Sue scene**» per espanderle, poi su un nome per aprirla: la diffusione cambia immediatamente.",
+        "l1": "«**Scena**» crea una nuova scena, da un modello o da una pagina vuota.",
+        "l2": "Un **clic destro** su una scena: **Rinominare**, **Duplicare**, **Mostrare / Nascondere il titolo**, **Eliminare**.",
+        "l3": "**Trascini** una scena per cambiarne l'ordine nella barra.",
+        "l4": "L'eliminazione chiede sempre una conferma — niente si perde per errore.",
+        "note": "Ogni scena conserva i propri widget, il proprio sfondo e la propria cornice: passare dall'una all'altra non mescola nulla."
+      },
+      "plateformes": {
+        "titre": "Collegare ogni piattaforma",
+        "p1": "Sezione **Connessioni** della barra laterale. Ogni riga ha il suo pallino: grigio = disconnessa, verde = online.",
+        "l1": "**Twitch** e **YouTube**: clicchi **Connettere**, appare un codice — lo inserisca sulla pagina web indicata, tutto qui. Nessuna password viene digitata in StreamOS.",
+        "l2": "**Kick**: digiti il nome del Suo canale (come appare nell'indirizzo kick.com/…) poi **Connettere**.",
+        "l3": "**TikTok**: digiti il Suo nome utente poi **Connettere**. La diretta deve essere in corso.",
+        "l4": "**YouTube**: il pulsante **Chat ON / Chat OFF** interrompe la lettura della chat senza disconnettersi.",
+        "p2": "Al prossimo avvio, StreamOS **si riconnette da solo** alle piattaforme già collegate.",
+        "note": "Un messaggio di errore appare sotto la lista se una connessione fallisce: dice cosa fare."
       },
       "chat": {
         "titre": "La chat unificata",
@@ -990,11 +1123,90 @@
         "l2": "Sposti la finestra di cattura: la cattura OBS la **segue da sola**, senza regolazioni.",
         "l3": "La camera viene ritagliata nella **forma della cornice scelta** — cerchio, esagono…"
       },
+      "medias": {
+        "titre": "Importare un media",
+        "p1": "Un'immagine, un video, un logo: **trascini il file** dal Suo computer sulla striscia «**Trascinare qui i .PNG o immagini/video**», in fondo alla zona centrale. Un widget media appare subito.",
+        "l1": "Dalla scheda di un widget media: «**Sostituire il media**» o «**Eliminare il media**».",
+        "l2": "Più immagini insieme → «**Creare un carosello**»: scorrono all'**intervallo** scelto.",
+        "l3": "Per lo sfondo della scena: un **clic sinistro sullo sfondo** poi «**Importare uno sfondo**» — oppure «**Mettere un'app/gioco come sfondo**».",
+        "note": "I video **.mkv** vengono convertiti automaticamente all'importazione — nessuna operazione da parte Sua."
+      },
+      "carteEdition": {
+        "titre": "La scheda di modifica",
+        "p1": "La scheda che si apre con un **clic sinistro** su un widget è organizzata in schede. Ogni impostazione si applica **in diretta** sulla diffusione.",
+        "l1": "**Contenuto**: ciò che viene mostrato — media, filtro e stile della chat, dispositivo camera, modalità dell'input viewer… e la cornice di quel widget.",
+        "l2": "**Trasformazione**: la bussola 3D per inclinare il widget, la **Visualizzazione** del media (adattare, riempire, stirare…), **Zoom**, **Rotazione** e spostamento.",
+        "l3": "**Effetti**: luminosità, contrasto, tonalità, sfocatura, pixelizzazione, **Capovolgimento**, e il morphing (**Ingrandire / Ridurre** cliccando sul media). Un pulsante **Reset** per scheda rimette tutto a posto.",
+        "note": "Un video aggiunge la scheda **Riproduzione**; tutti i widget hanno la scheda **Duplicare** (copia speculare, pronta da allineare)."
+      },
       "cadres": {
         "titre": "Frame SVG",
         "p1": "**Un'unica impostazione** veste tutti i Suoi widget e il bordo della scena: stesso stile, stesso colore, ovunque.",
         "p2": "Apra la modale Frame dalla sezione **Personalizzazione** della barra laterale: il modello scelto si applica in diretta alla trasmissione.",
         "note": "Avvisi e banner riprendono automaticamente i **colori del frame attivo**."
+      },
+      "cadresModale": {
+        "titre": "La finestra «I Suoi frame»",
+        "p1": "Nove stili tra cui scegliere — Arrotondati, Quadrato, MGStyle, Cyberpunk, Story, Thin Line, Esagono, Arena, Tribale — ognuno con il suo colore e il suo spessore.",
+        "e1": "Barra laterale → **Personalizzazione** → «**I Suoi frame**». Clicchi uno stile nella galleria: l'anteprima si aggiorna.",
+        "e2": "Regoli lo **Spessore** e il **Gradiente** di colori. Attivi «**Animazione**» se vuole che il gradiente si muova.",
+        "e3": "Clicchi «**Frame attivato**»: si applica a tutti i Suoi widget. «**Bordo dell'app**» aggiunge la stessa cornice tutto intorno alla diffusione.",
+        "note": "Un widget può fare eccezione: nella sua scheda, «**Rimuovere la cornice da questo widget**»."
+      },
+      "alertes": {
+        "titre": "Avvisi e clip di benvenuto",
+        "p1": "Barra laterale → «**Interazioni live**». Questa finestra raccoglie tutto ciò che reagisce ai Suoi spettatori durante la diretta.",
+        "l1": "Scheda **Avvisi**: follow, raid, sub, resub, sub regalata, bits (Twitch). Scelga un tipo a sinistra, poi il suo media, il suo testo e lo attivi. «**Testare l'avviso sulla diffusione**» lo riproduce senza aspettare un follow vero.",
+        "l2": "Scheda **Clip di benvenuto**: un clip riprodotto quando un follower arriva in chat. «**Assegnazione auto**» dà un clip a ciascuno; può anche scegliere il clip a mano, spettatore per spettatore.",
+        "l3": "Scheda **Scheletro di posizione**: trascini l'overlay dove lo vuole sullo schermo — la posizione vale per avvisi, clip e comandi.",
+        "note": "Tutto viene riprodotto sulla **diffusione OBS**, mai nella dashboard: usi l'Anteprima per verificare."
+      },
+      "bandeau": {
+        "titre": "Banner primo messaggio",
+        "p1": "Un banner sottolinea il **primo messaggio** di ogni spettatore nella Sua chat, su tutte le piattaforme. Abbastanza per salutare ogni nuovo arrivato.",
+        "e1": "**Interazioni live** → scheda **Banner primo messaggio** → spunti «**Banner primo messaggio attivato**».",
+        "e2": "Scelga **Alto** o **Basso** dello schermo e la **durata di visualizzazione** (da 2 a 20 secondi).",
+        "e3": "«**Testare il banner**» mostra un banner fittizio sulla diffusione per verificarne il rendering.",
+        "note": "Nuovo stream? «**Reimpostare la sessione**» rende di nuovo tutti gli spettatori «primi» — altrimenti un habitué non riattiva mai il banner."
+      },
+      "attente": {
+        "titre": "La schermata di attesa",
+        "p1": "Una pausa? La schermata di attesa mostra un **media** o un **decorato animato** con un **conto alla rovescia**, solo sulla diffusione. La Sua dashboard resta libera.",
+        "e1": "Barra laterale → «**Schermata di attesa**». Importi un media, o lasci lo stile **Firma StreamOS** o **Minimale**.",
+        "e2": "Regoli la **durata del cronometro** e posizioni timer e titolo trascinandoli nell'anteprima.",
+        "e3": "Clicchi «**Avviare la schermata di attesa**». Per tornare: «**Riprendere**».",
+        "note": "Se il Suo media ha audio, spunti «**Suono attivato**»: StreamOS si occupa del routing audio in OBS."
+      },
+      "justChatting": {
+        "titre": "Just Chatting",
+        "p1": "Voglia di chiacchierare senza il gioco? Il pulsante «**Just Chatting**» della barra laterale passa la diffusione a **solo camera + chat**, in un clic.",
+        "p2": "Nulla viene modificato nella Sua scena: riclicchi, tutto torna esattamente come prima. Il pallino verde indica che la modalità è attiva.",
+        "note": "La modalità è **spenta a ogni avvio** di StreamOS — nessuna brutta sorpresa lanciando la diretta."
+      },
+      "previsualisation": {
+        "titre": "Verificare prima di lanciare",
+        "p1": "La sezione **Anteprima** mostra una **miniatura in diretta** della diffusione: esattamente ciò che vedranno i Suoi spettatori.",
+        "l1": "Scelga **Finestra** o un **Monitor**, poi «**Aprire il proiettore**»: OBS apre un'anteprima grande sullo schermo voluto.",
+        "l2": "Un clic sulla miniatura fa la stessa cosa.",
+        "note": "La camera e le catture di gioco **non** appaiono nella miniatura (sono renderizzate da OBS) — ci sono eccome nel proiettore."
+      },
+      "demarrer": {
+        "titre": "Avviare",
+        "p1": "Tutto pronto? La diretta parte **senza uscire da StreamOS**.",
+        "e1": "Sezione **OBS**: clicchi «**Avviare lo stream**». Il pallino diventa verde, il pulsante diventa «**Fermare lo stream**».",
+        "e2": "Per conservare una copia locale: «**Avviare la registrazione**», indipendente dallo stream.",
+        "e3": "A fine sessione, gli stessi pulsanti fermano entrambi.",
+        "note": "Il pulsante **Avviare lo streaming** della barra in alto fa la stessa cosa, sempre a portata di mano."
+      },
+      "plusLoin": {
+        "titre": "E inoltre…",
+        "p1": "Il percorso principale è fatto. Il resto si scopre nell'applicazione, ogni finestra spiegando cosa fa.",
+        "l1": "**Canale**: moderazione Twitch e YouTube — bannare, VIP, moderatori, titolo e categoria dello stream, pubblicità, modalità scudo.",
+        "l2": "**Interazioni live** → **Comandi**, **Pad numerico**, **Presentazione**, **Programmazione** Twitch, **Musica** richiesta dai Suoi spettatori con «!rs».",
+        "l3": "Widget **Obiettivo** (follower, sub…), **Speedrun** (splitter cronometro), **Input viewer** (tastiera, mouse, gamepad a schermo).",
+        "l4": "**Diagnostica**: il consumo di CPU e memoria di StreamOS, in diretta.",
+        "l5": "**Ergonomia** → **barra delle scorciatoie**: una piccola barra sempre visibile, anche sopra il gioco.",
+        "l6": "Il selettore di **lingua** in alto: l'applicazione parla otto lingue."
       },
       "fin": {
         "titre": "Tocca a Lei",

@@ -747,6 +747,8 @@
       "secFile": "Queue",
       "secAttribution": "Assignment",
       "actifs": "Welcome clips enabled",
+      "utiliserSquelette": "Use the position skeleton",
+      "utiliserSqueletteHint": "Unchecked: full-screen black veil, avatar in 3s intro then centered clip (85% of screen)",
       "dureeAffichage": "Display duration",
       "naturelle": "Natural",
       "dureeHint": "0 = natural clip duration · 1-30s = forced",
@@ -1009,10 +1011,24 @@
     "pageSuivante": "Next page",
     "pagePrecedente": "Previous page",
     "tournezPages": "Turn the pages",
+    "chapitres": {
+      "comprendre": "Understanding StreamOS",
+      "reglages": "The three startup settings",
+      "reperer": "Finding your way around the app",
+      "chat": "Chat",
+      "widgets": "Widgets & media",
+      "cadres": "Frames",
+      "live": "Bringing the stream to life",
+      "direct": "Going live",
+      "plusLoin": "Going further"
+    },
     "pages": {
       "couverture": {
         "titre": "Streamer's guide",
         "sous": "StreamOS — your streaming control room, made simple."
+      },
+      "sommaire": {
+        "titre": "Contents"
       },
       "principe": {
         "titre": "What StreamOS does for you",
@@ -1032,6 +1048,25 @@
         "e4": "Connect your **chat**: Twitch and YouTube ask for a code to validate online; Kick and TikTok connect with just a username.",
         "note": "Scene templates remain available anytime via the \"**+ Scene**\" button at the top."
       },
+      "obs": {
+        "titre": "Connecting OBS, step by step",
+        "p1": "The sidebar's **OBS** section changes color by itself: **red**, StreamOS can't see OBS; **green**, everything is in place.",
+        "l1": "\"**OBS is unreachable**\": OBS isn't open, or its WebSocket server is off. Open OBS, then Tools → **WebSocket Server Settings** → check \"Enable WebSocket server\".",
+        "l2": "\"**Password missing or invalid**\": in that same window, click \"**Show Connect Info**\", copy the password and paste it here.",
+        "l3": "The **Host** field keeps its default value as long as OBS runs on the same computer.",
+        "p2": "Once connected, the **Start stream** and **Start recording** buttons become active in the same section.",
+        "note": "No OBS yet? The \"**Download OBS Studio**\" link at the bottom of the section opens the official page."
+      },
+      "modeles": {
+        "titre": "Choosing your scene template",
+        "p1": "On first launch, the \"**Welcome to StreamOS**\" window offers ready-to-use scenes. One click, and widgets, frame and positions are set for you.",
+        "l1": "**Gaming** (and its 4:3 and fullscreen variants): game capture, camera, chat, keyboard or gamepad.",
+        "l2": "**Just Chatting**: large camera on the left, chat on the right.",
+        "l3": "**Speedrun**: splitter on the left, chat on the right, keyboard at the bottom.",
+        "l4": "**Minimal**: a discreet chat and a thin frame — all the room for the game.",
+        "p2": "Everything stays editable afterward. To build it all yourself, choose \"**Start from a blank page**\".",
+        "note": "A scene template **never** replaces an existing scene: it is added next to it."
+      },
       "cartes": {
         "titre": "**Left click**, **right click**",
         "p1": "A **left click** on any element in the central area opens its card at the top of the left side panel: a clearly visible dotted box gathering everything that element allows.",
@@ -1041,6 +1076,36 @@
         "l3": "The app background → orange dots.",
         "p2": "A **right click** on a widget opens a context menu made of simple shortcuts (duplicate, reorder, delete). All these options are also found with a **left click**, in its card in the left side panel.",
         "note": "The card closes by itself when nothing is selected anymore — another click and it's back."
+      },
+      "barreLaterale": {
+        "titre": "The sidebar, top to bottom",
+        "p1": "Everything is driven from the **left panel**. Only one section opens at a time; the others are simple buttons that open a window.",
+        "l1": "**Widgets**: create a widget (media, chat, camera, input viewer, speedrun, goal, music).",
+        "l2": "**Connections**: Twitch, YouTube, Kick, TikTok — a green dot per connected platform.",
+        "l3": "**Live interactions**, **Waiting screen**, **Just Chatting**, **Channel**, **Diagnostic**: the stream control windows.",
+        "l4": "**OBS**: connection, stream and recording.",
+        "l5": "**Preview**: miniature of what your viewers see.",
+        "l6": "**Personalization**: frames and background image. At the very bottom, the **Streamer's guide** (this book) just above **Ergonomics**: dashboard background, window and shortcuts bar.",
+        "note": "Each open section takes its card's color: blue for Widgets, green for Connections, gold for OBS…"
+      },
+      "scenes": {
+        "titre": "Your scenes",
+        "p1": "The top bar lists **your scenes**. Click \"**Your scenes**\" to unfold them, then a name to open it: the broadcast switches instantly.",
+        "l1": "\"**Scene**\" creates a new scene, from a template or a blank page.",
+        "l2": "A **right click** on a scene: **Rename**, **Duplicate**, **Show / Hide title**, **Delete**.",
+        "l3": "**Drag** a scene to change its order in the bar.",
+        "l4": "Deletion always asks for confirmation — nothing is lost by accident.",
+        "note": "Each scene keeps its own widgets, background and frame: switching between them never mixes anything."
+      },
+      "plateformes": {
+        "titre": "Connecting each platform",
+        "p1": "The sidebar's **Connections** section. Each row has its dot: grey = disconnected, green = online.",
+        "l1": "**Twitch** and **YouTube**: click **Connect**, a code appears — enter it on the indicated web page, that's it. No password is ever typed into StreamOS.",
+        "l2": "**Kick**: type your channel name (as it appears in the kick.com/… address) then **Connect**.",
+        "l3": "**TikTok**: type your username then **Connect**. The live must be running.",
+        "l4": "**YouTube**: the **Chat ON / Chat OFF** button pauses chat reading without disconnecting.",
+        "p2": "On the next launch, StreamOS **reconnects by itself** to the platforms already linked.",
+        "note": "An error message appears under the list if a connection fails: it tells you what to do."
       },
       "chat": {
         "titre": "The unified chat",
@@ -1058,11 +1123,90 @@
         "l2": "Move the capture window: the OBS capture **follows it on its own**, no setup.",
         "l3": "The camera is cut to the **shape of the chosen frame** — circle, hexagon…"
       },
+      "medias": {
+        "titre": "Importing a media",
+        "p1": "An image, a video, a logo: **drag the file** from your computer onto the \"**Drop your .PNG here or images/video**\" strip at the bottom of the central area. A media widget appears instantly.",
+        "l1": "From a media widget's card: \"**Replace media**\" or \"**Delete media**\".",
+        "l2": "Several images at once → \"**Create a carousel**\": they cycle at the chosen **interval**.",
+        "l3": "For the scene background: a **left click on the background** then \"**Import a background**\" — or \"**Set an app/game as background**\".",
+        "note": "**.mkv** videos are converted automatically on import — nothing to do on your side."
+      },
+      "carteEdition": {
+        "titre": "The editing card",
+        "p1": "The card that opens on a **left click** on a widget is organized in tabs. Every setting applies **live** to the broadcast.",
+        "l1": "**Content**: what is displayed — media, chat filter and style, camera device, input viewer mode… and this widget's frame.",
+        "l2": "**Transformation**: the 3D compass to tilt the widget, the media **Display** (fit, fill, stretch…), **Zoom**, **Rotation** and offset.",
+        "l3": "**Effects**: brightness, contrast, hue, blur, pixelation, **Mirror**, and morphing (**Grow / Shrink** by clicking the media). A **Reset** button per tab puts everything back flat.",
+        "note": "A video adds the **Playback** tab; every widget has the **Duplicate** tab (a mirrored copy, ready to align)."
+      },
       "cadres": {
         "titre": "SVG frames",
         "p1": "**A single setting** dresses all your widgets and the scene border: same style, same color, everywhere.",
         "p2": "Open the Frames modal from the sidebar's **Personalization** section: the chosen model applies live to the broadcast.",
         "note": "Alerts and banners automatically reuse the **active frame's colors**."
+      },
+      "cadresModale": {
+        "titre": "The \"Your frames\" window",
+        "p1": "Nine styles to choose from — Rounded, Square, MGStyle, Cyberpunk, Story, Thin Line, Hexagon, Arena, Tribal — each with its color and thickness.",
+        "e1": "Sidebar → **Personalization** → \"**Your frames**\". Click a style in the gallery: the preview updates.",
+        "e2": "Adjust the **Thickness** and the color **Gradient**. Enable \"**Animation**\" if you want the gradient to move.",
+        "e3": "Click \"**Frame enabled**\": it applies to all your widgets. \"**App border**\" adds the same frame all around the broadcast.",
+        "note": "A widget can be an exception: in its card, \"**Remove frame from this widget**\"."
+      },
+      "alertes": {
+        "titre": "Alerts & welcome clip",
+        "p1": "Sidebar → \"**Live interactions**\". This window gathers everything that reacts to your viewers during the stream.",
+        "l1": "**Alerts** tab: follow, raid, sub, resub, gift sub, bits (Twitch). Pick a type on the left, then its media, its text, and enable it. \"**Test the alert on the broadcast**\" plays it without waiting for a real follow.",
+        "l2": "**Welcome clip** tab: a clip played when a follower arrives in chat. \"**Auto-assign**\" gives everyone a clip; you can also pick the clip by hand, viewer by viewer.",
+        "l3": "**Position skeleton** tab: drag the overlay where you want it on screen — the position applies to alerts, clips and commands.",
+        "note": "Everything plays on the **OBS broadcast**, never in the dashboard: use the Preview to check."
+      },
+      "bandeau": {
+        "titre": "First message banner",
+        "p1": "A banner highlights each viewer's **first message** in your chat, across all platforms. A way to say hello to every newcomer.",
+        "e1": "**Live interactions** → **First message banner** tab → check \"**First message banner enabled**\".",
+        "e2": "Choose **Top** or **Bottom** of screen and the **display duration** (2 to 20 seconds).",
+        "e3": "\"**Test the banner**\" shows a fake banner on the broadcast to check the render.",
+        "note": "New stream? \"**Reset session**\" makes all viewers \"first\" again — otherwise a regular never retriggers the banner."
+      },
+      "attente": {
+        "titre": "The waiting screen",
+        "p1": "Taking a break? The waiting screen shows a **media** or an **animated decor** with a **countdown**, on the broadcast only. Your dashboard stays free.",
+        "e1": "Sidebar → \"**Waiting screen**\". Import a media, or keep the **StreamOS signature** or **Minimal** style.",
+        "e2": "Set the **timer duration** and place the timer and title by dragging them in the preview.",
+        "e3": "Click \"**Launch the waiting screen**\". To come back: \"**Resume**\".",
+        "note": "If your media has sound, check \"**Sound enabled**\": StreamOS handles the audio routing in OBS."
+      },
+      "justChatting": {
+        "titre": "Just Chatting",
+        "p1": "Feel like chatting without the game? The \"**Just Chatting**\" button in the sidebar switches the broadcast to **camera + chat only**, in one click.",
+        "p2": "Nothing is modified in your scene: click again, everything comes back exactly as before. The green dot shows the mode is active.",
+        "note": "The mode is **off at every StreamOS startup** — no bad surprise when launching the stream."
+      },
+      "previsualisation": {
+        "titre": "Checking before going live",
+        "p1": "The **Preview** section shows a **live miniature** of the broadcast: exactly what your viewers will see.",
+        "l1": "Choose **Windowed** or a **Monitor**, then \"**Open projector**\": OBS opens a large preview on the chosen screen.",
+        "l2": "A click on the miniature does the same thing.",
+        "note": "The camera and game captures do **not** appear in the miniature (they are rendered by OBS) — they do show in the projector."
+      },
+      "demarrer": {
+        "titre": "Starting",
+        "p1": "All set? The stream launches **without leaving StreamOS**.",
+        "e1": "**OBS** section: click \"**Start stream**\". The dot turns green, the button becomes \"**Stop stream**\".",
+        "e2": "To keep a local copy: \"**Start recording**\", independent from the stream.",
+        "e3": "At the end of the session, the same buttons stop both.",
+        "note": "The **Start streaming** button in the top bar does the same thing, always at hand."
+      },
+      "plusLoin": {
+        "titre": "And also…",
+        "p1": "The main tour is done. The rest is discovered in the app, each window explaining what it does.",
+        "l1": "**Channel**: Twitch and YouTube moderation — ban, VIP, moderators, stream title and category, ads, shield mode.",
+        "l2": "**Live interactions** → **Commands**, **Numpad**, **Presentation**, Twitch **Schedule**, **Music** requested by your viewers with \"!rs\".",
+        "l3": "**Goal** widgets (followers, subs…), **Speedrun** (chrono splitter), **Input viewer** (keyboard, mouse, gamepad on screen).",
+        "l4": "**Diagnostic**: StreamOS CPU and memory usage, live.",
+        "l5": "**Ergonomics** → **shortcuts bar**: a small bar always visible, even over the game.",
+        "l6": "The **language** selector at the top: the app speaks eight languages."
       },
       "fin": {
         "titre": "Your turn",
