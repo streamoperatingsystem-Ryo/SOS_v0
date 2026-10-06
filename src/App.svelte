@@ -3,14 +3,16 @@
   import { listen, emitTo } from "@tauri-apps/api/event";
   import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore, syncCapturesOBS } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene, exportScene, importScene } from "./lib/stores/scenes";
-  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, ecranAttenteModalOpen, guideLivreOpen } from "./lib/stores/ui";
+  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "./lib/stores/obs";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
   import { initTwitchLive } from "./lib/stores/twitchLive";
+  import { initPlanning } from "./lib/stores/planning";
   import { connecterKick, deconnecterKick, lireSlugSauve } from "./lib/stores/kick";
   import { connecterYoutube, deconnecterYoutube } from "./lib/stores/youtube";
   import { connecterTiktok, deconnecterTiktok, lireUsernameSauve } from "./lib/stores/tiktok";
   import { initRaccourcis, masquerRaccourcis } from "./lib/stores/raccourcis";
+  import { initFenetre } from "./lib/stores/fenetre";
   import { chargerCommunaute, resetCommunaute, chargerCommunauteYoutube } from "./lib/stores/communaute";
   import { initSpeedrun, chargerPreferencesSpeedrun } from "./lib/stores/speedrun";
   import { initObjectifs } from "./lib/stores/objectifs";
@@ -34,6 +36,7 @@
   import ConsoModal from "./lib/components/ConsoModal.svelte";
   import DupliquerSceneModal from "./lib/components/DupliquerSceneModal.svelte";
   import EcranAttenteModal from "./lib/components/EcranAttenteModal.svelte";
+  import ModulesModal from "./lib/components/ModulesModal.svelte";
   import GuideLivre from "./lib/components/GuideLivre.svelte";
   import Drapeau from "./lib/components/Drapeau.svelte";
   import { chargerPresets } from "./lib/stores/presets";
@@ -42,6 +45,7 @@
   import { chargerAlertes } from "./lib/stores/alertes";
   import { initPositionOverlay, chargerPositionOverlay } from "./lib/stores/positionOverlay";
   import { initPad, chargerPad } from "./lib/stores/padNumerique";
+  import { initPresentation, chargerPresentation } from "./lib/stores/presentation";
   import { ecranAttenteStore, initEcranAttente, chargerEcranAttente, toggleEcranAttente } from "./lib/stores/ecranAttente";
   import { jcActif, initJustChatting, chargerJustChatting, toggleJustChatting } from "./lib/stores/justChatting";
   import { fondSidebar } from "./lib/stores/fondSidebar";
@@ -390,6 +394,10 @@
     //     file AutoMod alimentée même modale fermée). Garde "une fois" dans le store.
     await initTwitchLive();
 
+    // 3a2. initPlanning (listener twitch:deconnecte → reset des segments
+    //      planning affichés). Garde "une fois" dans le store.
+    await initPlanning();
+
     // 3b. initWelcome (listeners welcome:etat + welcome:attribution-progress)
     //     + charge l'état initial de la queue + registre.
     await initWelcome();
@@ -429,6 +437,12 @@
     await initEcranAttente();
     await chargerEcranAttente();
 
+    // 3f-quater. Présentation streamer : listener presentation:etat (CRUD
+    //     favoris + show/hide + bascule de mode) + état initial (favoris
+    //     persistés + présentation en cours — null en pratique, RAM only).
+    await initPresentation();
+    await chargerPresentation();
+
     // 3f-ter. Just Chatting : listener (just-chatting:etat) + hook post-sync
     //     captures (re-envoie la scène dérivée si la scène change pendant
     //     que le mode est actif) + état initial (OFF au boot, runtime).
@@ -440,6 +454,9 @@
     //     être créée avant que le dashboard ait fini son init → elle demande
     //     l'état des connexions pour ses pastilles).
     await initRaccourcis();
+    // Fenêtre principale : préférence persistée (écran + mode de démarrage)
+    // pour les contrôles de la section Ergonomie.
+    await initFenetre();
     await listen<{ id: string }>("raccourcis:action", (e) => {
       void dispatchRaccourcis(e.payload.id);
     });
@@ -677,7 +694,7 @@
          Refresh OBS) puis Langue. Poussé à droite (margin-left: auto). -->
     <div class="tb-groupe tb-outils">
       <SceneBar />
-      <button class="indicateur" onclick={() => presetsModalOpen.set("creation")} title={$t("sceneBar.nouvelle")} aria-label={$t("sceneBar.nouvelle")}>+ {$t("sceneBar.nouvelle")}</button>
+      <button class="indicateur tb-action" onclick={() => presetsModalOpen.set("creation")} title={$t("sceneBar.nouvelle")} aria-label={$t("sceneBar.nouvelle")}>+ <span class="tb-label">{$t("sceneBar.nouvelle")}</span></button>
       <button class="indicateur tb-action" onclick={exportScene} title={$t("commun.exporter")} aria-label={$t("commun.exporter")}>
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
         <span class="tb-label">{$t("commun.exporter")}</span>
@@ -792,6 +809,12 @@
 <!-- Modale Écran d'attente (BRB) — gère son propre {#if $ecranAttenteModalOpen}
      interne (même pattern que TitreModal). Média rendu diffusion uniquement. -->
 <EcranAttenteModal />
+
+<!-- Modale Modules HUD — la valeur porte le module sélectionné
+     ("horloge" via le lanceur Toolbar, id du module au clic canvas). -->
+{#if $modulesModalOpen}
+  <ModulesModal />
+{/if}
 
 <!-- Overlay plein écran « Guide du streamer » (livre feuilletable) —
      lancé depuis la section Ergonomie du pied de sidebar. -->
@@ -957,7 +980,7 @@
     border-color: var(--accent-ui);
     box-shadow: var(--btn-inset-hover), var(--glow-ui);
   }
-  /* Libellé de repli topbar (<1000px) : .lg-court = initiale du bouton
+  /* Libellé de repli topbar (<1200px) : .lg-court = initiale du bouton
      Langue. */
   .lg-court {
     display: none;
@@ -1090,9 +1113,12 @@
   /* ===== Responsive topbar (scopé header — ne touche ni sidebar ni
      modales). Une seule ligne à toutes les largeurs : on masque des
      libellés, jamais de wrap. ===== */
-  /* <1000px : Exporter/Importer en icône seule, Langue en initiale.
+  /* <1200px : Exporter/Importer/+ Scène en icône seule, Langue en
+     initiale. Seuil volontairement au-dessus des 1080px CSS d'un écran
+     portrait (le palier 999px laissait les libellés pleins en portrait →
+     les boutons de droite étaient rognés par overflow:clip).
      Paddings resserrés en dernier recours. */
-  @media (max-width: 999px) {
+  @media (max-width: 1199px) {
     header {
       padding: 0.35rem 0.5rem;
     }
@@ -1117,6 +1143,13 @@
     }
     .langue-btn .lg-court {
       display: inline;
+    }
+  }
+  /* <800px : le logo (décoratif, ~90px de boîte) disparaît — l'espace
+     récupéré va aux boutons sur les fenêtres vraiment étroites. */
+  @media (max-width: 799px) {
+    .logo-img {
+      display: none;
     }
   }
   .row {

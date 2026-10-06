@@ -55,7 +55,8 @@
     "largeur": "Breite",
     "importerSon": "Sound importieren",
     "retirerMedia": "Medium entfernen",
-    "retirerSon": "Sound entfernen"
+    "retirerSon": "Sound entfernen",
+    "hauteur": "Höhe"
   },
   "presets": {
     "creationRefusee": "Erstellung aus Vorlage abgelehnt: {erreur}",
@@ -261,7 +262,9 @@
       "cyberpunk": "Cyberpunk",
       "story": "Story",
       "thinLine": "Thin Line",
-      "hexagon": "Sechseck"
+      "hexagon": "Sechseck",
+      "arena": "Arena",
+      "tribal": "Tribal"
     }
   },
   "cadresModal": {
@@ -273,6 +276,8 @@
     "desactive": "Rahmen deaktiviert",
     "bordActive": "App-Rand: aktiviert",
     "bordDesactive": "App-Rand: deaktiviert",
+    "animerActive": "Animation: aktiviert",
+    "animerDesactive": "Animation: deaktiviert",
     "epaisseur": "Stärke",
     "degrade": "Verlauf"
   },
@@ -338,8 +343,8 @@
     "connexions": "Verbindungen",
     "chatOn": "Chat AN",
     "chatOff": "Chat AUS",
-    "interactions": "Chat-Interaktionen",
-    "interactionsTitle": "Chat-Interaktionen öffnen (Begrüßungsclips, Alerts…)",
+    "interactions": "Live-Interaktionen",
+    "interactionsTitle": "Live-Interaktionen öffnen (Begrüßungsclips, Alerts, Zeitplan…)",
     "ecranAttente": "Wartebildschirm",
     "ecranAttenteTitle": "Wartebildschirm öffnen (Medium + Timer auf der Ausgabe)",
     "justChatting": "Just Chatting",
@@ -366,7 +371,6 @@
     "guideTitle": "Guide öffnen — was StreamOS für Sie tut",
     "cadreActif": "Aktiver Rahmen (Widgets + App-Rand)",
     "cadreInactif": "Kein aktiver Rahmen",
-    "raccourcis": "Shortcuts",
     "barreMasquer": "Leiste ausblenden",
     "barreAfficher": "Leiste einblenden",
     "bord": {
@@ -377,7 +381,58 @@
     },
     "moniteur": "Monitor {n}",
     "principal": "(Hauptmonitor)",
-    "raccourcisHint": "Leiste immer im Vordergrund, am gewählten Rand angedockt. Über Spielen im randlosen Fenstermodus sichtbar — nicht im exklusiven Vollbild."
+    "raccourcisHint": "Leiste immer im Vordergrund, am gewählten Rand angedockt. Über Spielen im randlosen Fenstermodus sichtbar — nicht im exklusiven Vollbild.",
+    "mode": {
+      "fenetre": "Fenster",
+      "maximise": "Maximiert",
+      "fullscreen": "Vollbild"
+    },
+    "demarrageHint": "Monitor und Anzeigemodus beim Start — sofort angewendet. Im Fenstermodus werden letzte Position und Größe wiederhergestellt.",
+    "modules": "Module",
+    "modulesTitle": "HUD-Module der Szene öffnen (Uhr, laufende Musik, Stream-Ziele)"
+  },
+  "modules": {
+    "titre": "Module",
+    "cliquerConfigurer": "Ziehen zum Verschieben, Griffe zum Vergrößern — Klicken zum Konfigurieren",
+    "afficher": "Modul anzeigen",
+    "position": "Position und Größe",
+    "style": "Gestaltung",
+    "options": "Optionen",
+    "policeDefaut": "Standard (System)",
+    "taille": "Textgröße (px)",
+    "opacite": "Hintergrund-Deckkraft",
+    "cadre": "Szenenrahmen um das Modul",
+    "nom": {
+      "horloge": "Uhr",
+      "musique": "Laufende Musik",
+      "objectifs": "Stream-Ziele"
+    },
+    "hint": {
+      "horloge": "Datum und Uhrzeit durch einen Strich getrennt, in Canvas-Pixeln. Kann auch direkt auf dem Canvas verschoben/vergrößert werden.",
+      "musique": "Karte „Läuft gerade“ + Zeit-/Fortschritts-Bubble — gespeist aus der Musikwarteschlange (!rs).",
+      "objectifs": "Zeilen „Metrik — Wert / Ziel“ mit Fortschrittsbalken. Jede Zeile = eine gemessene Metrik oder ein verknüpftes Twitch-Ziel."
+    },
+    "horloge": {
+      "date": "Datum anzeigen (TT / MM / JJ)",
+      "secondes": "Sekunden anzeigen",
+      "h12": "12-Stunden-Format (AM/PM)"
+    },
+    "musique": {
+      "temps": "Zeit-/Fortschritts-Bubble anzeigen",
+      "rien": "Keine Musik",
+      "lancer": "Musik mit !rs starten",
+      "demandePar": "Gewünscht von @{pseudo}"
+    },
+    "objectifs": {
+      "titre": "Blocktitel",
+      "titrePh": "Stream-Ziele",
+      "labelPh": "Beschriftung (optional)",
+      "ajouter": "Ziel hinzufügen",
+      "monter": "Nach oben",
+      "descendre": "Nach unten",
+      "lier": "Twitch-Ziel verknüpfen",
+      "vide": "Ziele in der Modul-Modal hinzufügen"
+    }
   },
   "app": {
     "obsTitle": "OBS WebSocket (siehe OBS-Abschnitt in der Seitenleiste)",
@@ -656,12 +711,14 @@
     "bientot": "Bald verfügbar"
   },
   "interactions": {
-    "titre": "Chat-Interaktionen",
+    "titre": "Live-Interaktionen",
     "tabBienvenue": "Begrüßungsclip",
     "tabBandeau": "Erste-Nachricht-Banner",
     "tabAlertes": "Alerts",
     "tabCommandes": "Befehle",
     "tabPad": "Numpad",
+    "tabPresentation": "Präsentation",
+    "tabPlanning": "Zeitplan",
     "tabPosition": "Positions-Skelett",
     "bienvenue": {
       "secFile": "Warteschlange",
@@ -766,6 +823,39 @@
       "testHint": "Der Test löst die Taste in der Ausgabe aus + spielt lokales Audio.",
       "hintSelection": "Wählen Sie eine Taste im Raster links zum Konfigurieren. Die Tasten + und - sind reserviert (Bereichsnavigation)."
     },
+    "presentation": {
+      "secRecherche": "Suche",
+      "secFavoris": "Favoriten",
+      "secDiffusion": "Auf Sendung",
+      "rechercheTitre": "Twitch-Kanalsuche",
+      "rechercherPlaceholder": "Kanalname…",
+      "rechercheHint": "Suchen Sie einen Twitch-Kanal, um ihn zu Favoriten hinzuzufügen oder direkt auf dem Stream zu präsentieren (Favoriten behalten Anzeigemodus und Sounds).",
+      "ajouterFavori": "Zu Favoriten hinzufügen",
+      "presenter": "Auf dem Stream präsentieren",
+      "favorisTitre": "Favoriten ({n})",
+      "aucunFavori": "Keine Favoriten — über die Suche hinzufügen.",
+      "selectionnezFavori": "Wählen Sie links einen Favoriten zum Konfigurieren.",
+      "modeTitre": "Anzeigemodus",
+      "modeTheatral": "🎭 Theatralisch",
+      "modeCarte": "▮ Karte",
+      "sonsTitre": "Präsentations-Sounds",
+      "sonVoix": "Stimme",
+      "sonMusique": "Musik",
+      "sonsHint": "Die Stimme wird einmal abgespielt; die Musik läuft während der Präsentation in einer Schleife. Dateien in medias/ — nur auf der Übertragung hörbar.",
+      "ecouter": "Sound anhören",
+      "retirerSon": "Sound entfernen",
+      "retirerFavori": "Aus Favoriten entfernen",
+      "enCoursTitre": "Laufende Präsentation — {nom}",
+      "fermer": "Präsentation schließen",
+      "stopClip": "Clip stoppen",
+      "stopSons": "Sounds stoppen",
+      "sonsFavoriHint": "Speichern Sie diesen Streamer als Favorit, um seine Präsentations-Sounds zu konfigurieren.",
+      "clipsTitre": "Neueste Clips ({n})",
+      "aucunClip": "Keine Clips für diesen Streamer verfügbar.",
+      "jouerClip": "Diesen Clip auf dem Stream abspielen",
+      "jouer": "Abspielen",
+      "aucunePresentation": "Keine aktive Präsentation — starten Sie eine über Suche oder Favoriten."
+    },
     "position": {
       "hintIntro": "Position und Größe des gemeinsamen Skeletts der Overlays „Begrüßungsclip“ und „Alerts“. Ziehen zum Verschieben, Ecken zum Skalieren. Die Position wird live auf die Ausgabe angewendet.",
       "overlay": "Overlay",
@@ -787,8 +877,67 @@
     "testSuppression": "Test & Löschung",
     "testHint": "Der Test umgeht Cooldowns. Ohne Medium: Symbol + Text."
   },
+  "planning": {
+    "connecterTwitch": "Twitch verbinden, um den Zeitplan zu verwalten.",
+    "scopesManquants": "Fehlende Twitch-Rechte für den Zeitplan (channel:manage:schedule). Konto neu verbinden, um sie zu erteilen.",
+    "reconnecter": "Twitch neu verbinden",
+    "precedent": "Vorheriger Zeitraum",
+    "suivant": "Nächster Zeitraum",
+    "aujourdhui": "Heute",
+    "vueSemaine": "Woche",
+    "vueMois": "Monat",
+    "vueListe": "Liste",
+    "vacances": "Urlaub",
+    "vacancesHint": "Twitch-Urlaubszeitraum: Der Zeitplan wird Zuschauern in diesem Zeitraum ausgeblendet.",
+    "vacancesPeriode": "Urlaub: {debut} bis {fin}",
+    "vacancesDu": "Vom",
+    "vacancesAu": "bis",
+    "vacancesActiver": "Aktivieren",
+    "vacancesDesactiver": "Deaktivieren",
+    "annuler": "Abbrechen",
+    "confirmer": "Bestätigen",
+    "stream": "Stream",
+    "jeux": "Twitch-Spiele",
+    "rechercherJeu": "Spiel oder Kategorie suchen…",
+    "glisserHint": "Ziehe ein Cover auf den Zeitplan, um einen Slot zu erstellen, oder auf ein Segment, um sein Spiel zu ändern.",
+    "aucunResultat": "Kein Ergebnis.",
+    "aucunJeu": "Suche ein Spiel, um es zum Zeitplan hinzuzufügen.",
+    "nonAffilieHint": "Nicht-affilierter Kanal: Twitch akzeptiert nur wiederkehrende Slots (jede Woche).",
+    "segment": "Segment",
+    "segTitre": "Titel",
+    "segDate": "Datum",
+    "segHeure": "Uhrzeit",
+    "segDuree": "Dauer",
+    "segJeuHint": "Ziehe ein anderes Cover auf die Segmentkarte, um das Spiel zu ändern.",
+    "serieHint": "Wiederkehrendes Segment: Änderungen gelten für die gesamte Serie.",
+    "appliquer": "Anwenden",
+    "retour": "Zurück",
+    "supprimer": "Löschen",
+    "annulerStream": "Diesen Stream absagen",
+    "retablirStream": "Diesen Stream wiederherstellen",
+    "rendreRecurrent": "Jede Woche",
+    "rendrePonctuel": "Nur einmal",
+    "toutesLesSemaines": "Jede Woche",
+    "annuleBadge": "Abgesagt",
+    "aucunSegment": "Kein Segment in diesem Zeitraum. Ziehe ein Spiel-Cover, um eines zu erstellen.",
+    "creeOk": "Segment auf Twitch erstellt.",
+    "majOk": "Segment aktualisiert.",
+    "supprOk": "Segment gelöscht.",
+    "deplaceOk": "Segment verschoben.",
+    "annuleOk": "Stream abgesagt.",
+    "retabliOk": "Stream wiederhergestellt.",
+    "vacOk": "Urlaub aktiviert.",
+    "vacOff": "Urlaub deaktiviert.",
+    "confirmSerie": "Wiederkehrendes Segment: Diese Änderung gilt für die gesamte Serie. Fortfahren?",
+    "confirmSuppr": "Dieses Segment aus dem Twitch-Zeitplan löschen?",
+    "confirmSupprSerie": "Wiederkehrendes Segment: Das Löschen entfernt die GESAMTE Serie aus dem Twitch-Zeitplan. Fortfahren?",
+    "confirmSerieRecreate": "Das Verschieben eines wiederkehrenden Segments löscht die GESAMTE Serie und erstellt sie am neuen Slot neu. Fortfahren?",
+    "confirmVersRecurrent": "Dieses Segment wird gelöscht und als wiederkehrend neu erstellt (jede Woche). Fortfahren?",
+    "confirmVersPonctuel": "Die gesamte Serie wird gelöscht und durch diesen einzelnen Slot ersetzt. Fortfahren?"
+  },
   "guide": {
     "fermer": "Guide schließen",
+    "retourSommaire": "Inhalt",
     "pageSuivante": "Nächste Seite",
     "pagePrecedente": "Vorherige Seite",
     "tournezPages": "Blättern Sie um",

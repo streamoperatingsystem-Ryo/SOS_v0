@@ -165,6 +165,55 @@ commandes `twitch_live_*` dans `lib.rs`, helpers Helix dans
   widget média dédupliqué par nom de fichier — un second clic met à jour,
   n'empile pas — + UN seul `commitScene`.
 
+## Planning Twitch — onglet Planning (modale « Interactions Live », Helix)
+
+Onglet « Planning » de `InteractionViewerModal.svelte` (la modale
+« Interactions chat » a été renommée « Interactions Live » : bouton Toolbar
+`toolbar.interactions`, titre `interactions.titre`, largeur portée à
+1200 px). Composant `PlanningTab.svelte`, store `stores/planning.ts`,
+commandes `twitch_planning_*` dans `lib.rs`, helpers `schedule_*` dans
+`twitch_helix.rs`. **Helix uniquement — le planning Twitch est la source
+de vérité, zéro persistance locale** : relu à l'ouverture de l'onglet et
+après chaque mutation.
+
+- **Scope** : `channel:manage:schedule` (SCOPES). Vieux token → 403 =
+  `need_reauth` → banner de reconnexion (jamais de device flow auto).
+- **GET /schedule** : `data` est un OBJET `{segments[], vacation}` — pas un
+  array ; curseur de pagination à la racine (`first=25`, borné MAX_PAGES).
+  Un segment récurrent sort une occurrence par semaine, chacune avec son
+  propre `id` Helix. ⚠️ Chaîne sans planning = **404 « schedule was not
+  found »** (pas un array vide) — `helix_get` convertit ce 404 en
+  `Value::Null` (garde limitée à `path == "/schedule"`, retry 401 inclus),
+  `schedule_get` le lit comme planning vide.
+- **POST /schedule/segment** : `duration` est une CHAÎNE JSON en minutes
+  (30–1380), `timezone` IANA requis (`planningTimezone()` =
+  `Intl.resolvedOptions()`). Glisser-déposer d'une jacquette → création
+  PONCTUELLE 1 h ; chaîne non affiliée → Twitch refuse les non-récurrents
+  avec un 403 « non-recurring » que `helix_write` distingue de NeedReauth
+  (lecture du corps) → la commande retente en `is_recurring=true`
+  automatiquement.
+- **PATCH /schedule/segment** : corps partiel `ScheduleSegmentPatch`
+  (clés snake_case — même convention que `ChatSettingsPatch`).
+  ⚠️ Sur un récurrent, title/category/duration s'appliquent à TOUTE la
+  série ; `start_time` n'est PAS modifiable sur un récurrent → changer
+  jour/heure = DELETE + re-POST (confirmé « toute la série » dans l'UI,
+  création d'abord pour ne pas perdre la série en cas d'échec).
+  `is_canceled` annule la prochaine occurrence.
+- **DELETE /schedule/segment** : supprime TOUTE la série d'un récurrent —
+  confirmé dans l'UI. Drop d'une jacquette sur une carte segment =
+  PATCH `category_id` (confirmé si récurrent).
+- **Vacances** : PATCH `/schedule/settings` — tous les paramètres EN QUERY
+  (endpoint sans corps) : `is_vacation_enabled`, `vacation_start_time`,
+  `vacation_end_time` (RFC3339 — convertis depuis les inputs `date` dans
+  `planningSetVacances`), `timezone`.
+- **DnD** : dataTransfer JSON sous MIME `application/x-sos-planning`
+  (`{type:"categorie"}` / `{type:"segment"}`). Seuls les segments ponctuels
+  sont draggables ; les jacquettes de la colonne droite viennent de
+  `twitch_live_search_categories` / `twitch_live_game_info` (cache
+  `planningJacquettes` par category_id, placeholders `{width}x{height}`
+  remplacés au rendu). Vues semaine (drop → heure), mois (drop → jour,
+  heure 20h par défaut), liste.
+
 ## Architecture chat — flux des messages
 
 ```
@@ -633,6 +682,71 @@ Dialog fichier (mp4/webm/mkv + images) → validate_and_copy_media (lib.rs)
 - **Sous-titres** : `-sn` les dropped (compatibilité MP4/browser).
 - **Binaire absent** : message clair « ffmpeg sidecar indisponible ».
 
+## Carrousel d'images — widget média + fond de scène (2026-10-05)
+
+Diaporama d'images sur deux surfaces : `mediaSlides` (widget média) et
+`bgSlides` (fond de scène). **Images uniquement** (png/jpg/jpeg/gif/webp) —
+pas de vidéos en v1, pas de shuffle, boucle séquentielle.
+
+### Contrat
+
+- `MediaSlide { rel, nom }` (scene.rs + tauri.ts, camelCase figé) — `rel` =
+  chemin `medias/<uuid>.<ext>` servi par :4321, `nom` = nom original affiché
+  dans la liste d'édition.
+- `Option<Vec<MediaSlide>>` + `Option<f64>` (sec) avec `serde(default,
+  skip_serializing_if = "Option::is_none")` → rétro-compat : les anciennes
+  scènes n'ont pas les champs.
+- **Priorité** : liste non vide > média unique (`media`/`bgMedia` restent
+  stockés et redeviennent visibles si la liste est vidée) ; `bgObsSource`
+  garde la priorité absolue sur le fond (règle figée).
+- Intervalle : `mediaSlidesSec`/`bgSlidesSec`, défaut 5 s, min 1 s.
+- Fondu enchaîné fixe ~800 ms **borné à la moitié de l'intervalle**
+  (`min(800ms, sec×500)`).
+
+### Le timer vit dans `diffusion.html` (jamais le dashboard)
+
+Le dashboard ne commit QUE les mutations de liste/intervalle — **aucun
+commit par slide** (un seul écrivain, pas de trafic snapshot par avance).
+La boucle continue même dashboard inactif/déconnecté.
+
+- **Widget** : pile d'`<img class="slide">` superposées (opacity 0/1,
+  transition CSS bornée), `setInterval` recréé quand `slidesKey`
+  (JSON des rels) change ; `slideSec` mémorisé pour recaler le timer sans
+  reconstruire. `slidesArreter` à CHAQUE destruction d'entry (delete,
+  transition kind↔morph, carrousel→média unique).
+- **Chemin morph widget** : la source cachée swap de `src` par intervalle —
+  l'élément est REMPLACÉ si la famille change (un `<video>` n'affiche pas
+  d'image) ; re-render `morphRendreWidget` au `load` de chaque slide (le
+  rendu image est one-shot — la boucle rAF ne couvre que les vidéos).
+- **Fond** : `bgState.slides[]` d'imgs cachées (`#bg img` display:none,
+  sources drawImage) ; le tick de `startBgLoop` avance à `nextAt` et
+  `peindreFond` dessine courante + précédente avec `globalAlpha` pendant
+  `fadeDur`. `stopBgLoop` à la sortie de carrousel (sinon rAF tourne à
+  vide ; la branche vidéo la relance). Morph/pixel fond : le crossfade est
+  dans `dessinerContenuFond` (srcPrev + alphaCur) → couvert par tous les
+  chemins.
+
+### Import multi
+
+`import_medias_multi` (lib.rs) : `blocking_pick_files` filtré « Images »
+(IMG_EXT) → `validate_and_copy_media` par fichier (mêmes gardes extension/
+taille/magic bytes) → `ImportCheminsResult` (ok + erreurs concaténées).
+AUCUNE mutation de scène côté Rust — le store pose les slides puis commit.
+
+### Édition (`CarteEdition.svelte`)
+
+Snippet partagé `carrouselBloc` (widget onglet Contenu + fond onglet
+Contenu + branche « aucun fond ») : liste ordonnée (↑↓✕), « Ajouter des
+images » / « Créer un carrousel », slider intervalle 1–60 s (brouillon
+pendant drag, commit au change), « Vider la liste ».
+
+### Preview dashboard
+
+`Widget.svelte` + `Canvas.svelte` : index local cyclé par `$effect` (swap
+de `src`, pas de fondu). Morph/pixel preview : source = slide courante.
+Garde morph assouplie : `(!bgIsVideo || bgSlidesList)` (fond vidéo +
+carrousel d'images → slides morphables).
+
 ## Widget caméra — source OBS "SOS-Caméra" (2026-09-12)
 
 > ⚠️ **CONTRATS FIGÉS** (refonte 2026-09-12, remplace l'ancien système getUserMedia) :
@@ -932,7 +1046,8 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
   pause + reset la vidéo. Fix au passage : `cfg.duree_ms` → `cfgType.duree_ms`
   (référence indéfinie latente, masquée par court-circuit `||`).
 - **Couleur du texte = couleur du cadre widget** : si `currentScene.cadreWidget`
-  actif → `bpmResoudreCouleurs().p` (même résolution que le bandeau) ; sinon
+  actif → `bpmResoudreCouleurs().p` (même résolution que le bandeau — `.p` =
+  extrémité la plus lumineuse du gradient depuis 2026-10-04) ; sinon
   la couleur configurée du type/commande.
 - **Import média alerte** : commande `import_alerte_media(kind_attendu)` —
   dialog filtré (Images/Vidéos) → `validate_and_copy_media` (helper commun
@@ -947,6 +1062,45 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
   l'overlay est visible (changement de cadre à chaud). Clip-path appliqué à la
   carte pour les cadres à forme (cyberpunk/story/hexagon/arrondis). Le bandeau
   premier message reste en couleurs dérivées (pas de SVG — barre pleine largeur).
+
+### Clip de bienvenue — mode spotlight plein écran + favoris (2026-10-05)
+
+> Checkbox « utiliser le squelette de position » (section Général, défaut
+> COCHÉ = comportement historique). Décochée → mode spotlight : voile noir
+> opaque + présentation centrée à 85 %, indépendante du squelette.
+
+- **Config** : `ConfigGlobale.utiliser_squelette: bool` (`serde(default=true)`
+  → rétro-compat des `clips_bienvenue.json` existants) + miroir dans
+  `QueueEtat` + flag `utiliser_squelette` dans les frames `welcome-clip-play`
+  (queue ET test) et `welcome-clip-config`. Commande
+  `welcome_set_utiliser_squelette`.
+- **Timer** : `INTRO_SPOTLIGHT_MS = 3000` (welcome.rs) — ajouté au timer
+  (`jouer_item` + `tester_clip`) en spotlight : le clip ne démarre qu'après
+  l'intro avatar de 3 s, la durée configurée reste inchangée (elle s'applique
+  à la présentation complète). Sync avec le `setTimeout(3000)` de
+  diffusion.html.
+- **Rendu diffusion** (`playWelcomeClip`) : `.welcome-clip-voile` (noir
+  opaque plein écran, z 9999 inséré AVANT `welcomeRoot` → la carte reste
+  au-dessus, fondu 350 ms via rAF) + `.welcome-clip-root.spot` (centré
+  `translate(-50%,-50%)`, `width: 85%`, flex row). Phase `.intro` : avatar
+  seul 44cqw sur toute la carte, textes/clip/favoris masqués ; au bout de
+  3 s → split : colonne gauche 42 % (avatar + pseudo + message + CTA + bio +
+  favoris), colonne droite = titre « STREAMER TWITCH » (dégradé violet
+  `#9146ff`, letter-spacing, glow) + clip **16:9 strict** (`aspect-ratio`,
+  `align-self: center`, rien en dessous). Transition `flex-basis` 600 ms.
+  `welcomeDroiteEl` = la colonne droite entière — c'est elle qu'on affiche/
+  masque (squelette : canplay ; spotlight : fin d'intro), pas le wrap vidéo.
+- **Favoris du viewer** : `twitch_clips::favoris_channel(login, max)` → GQL
+  public `user.channel.home.shelves.streamerShelf` (étagère AUTOHOST =
+  streamers mis en avant sur la page d'accueil Twitch, Client-Id web, zéro
+  auth, timeout 4 s, jamais fatal → `[]`). Fetch en `tokio::join!` avec la
+  résolution MP4 (queue + test), spotlight+Twitch uniquement. Champ
+  `favoris` de la frame play : `{login, display_name, avatar, en_live}`
+  (max 6) — rendu sous la bio à gauche (avatars ronds + pastille verte si
+  live). ⚠️ Test manuel : `tester_clip` n'a que `display_name` → login
+  dérivé en lowercase (fetch silencieusement vide si display ≠ login).
+- **i18n** : `interactions.bienvenue.utiliserSquelette` +
+  `utiliserSqueletteHint` (fr uniquement, fallback convention TRADUCTIONS).
 
 ### Commandes chat — "!commande" tapée par un viewer (2026-09-14)
 
@@ -981,6 +1135,105 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
   (master-detail : liste gauche + bouton « + Ajouter », détail = Commande /
   Média / Texte / Comportement / Test & suppression).
 
+### Musique — "!rs <titre>" demandé par un viewer (bibliothèque LOCALE)
+
+> Nouveau module `musique.rs`. Catalogue = fichiers audio importés par le
+> streamer dans `medias/musique/` (servis par :4321 via le ServeDir `/medias`
+> existant — sous-dossier = zéro changement serveur). **Rien n'est cherché
+> en ligne** : le nom du fichier EST le titre demandable (nettoyé : `_` →
+> espace). Le contraire de commandes.rs : les pistes durent des minutes →
+> file NON bornée à 5 (refus explicite à `file_max`=20, jamais d'éviction
+> silencieuse) et PAS de timer de libération — l'avancement est piloté par
+> l'event `ended`/`error` de l'`<audio>` de la diffusion, remonté en WS
+> upstream `musique-ended {id}` (id vérifié = dedup multi-clients).
+
+- **Hook** : `MusiqueState::on_message(plateforme, pseudo, texte, est_mod)`
+  appelé à côté du hook commandes dans les 4 modules chat. Retourne
+  `Option<String>` = accusé chat (`✓ ajouté (position N)` / `✗ introuvable`
+  / `⏳ cooldown` / `✗ file pleine`) — posté en PRIVMSG par twitch_chat.rs
+  (seule plateforme avec canal d'envoi ; `reponses_chat` off = silence).
+- **est_mod par plateforme** (`!skip` = mods + streamer) : Twitch = tag
+  `badges` contient `moderator/`/`broadcaster/` OU pseudo == login ;
+  YouTube = badges déjà normalisés (`moderator`/`broadcaster`) ; Kick =
+  `sender.identity.badges[].type` OU `sender.slug` == `KickState.slug_courant()`
+  (pub(crate) désormais) ; TikTok = `unique_id` == username suivi (pas de
+  badge exposé par PirateTok).
+- **Commandes chat** (noms configurables `musique_config.json`, défauts) :
+  `!rs` demander (cooldown viewer + `max_par_viewer`=3 + `file_max`) ;
+  `!skip` (mod uniquement — silence pour les viewers) ; `!retirer` (sa
+  dernière demande en file) ; `!file` (en cours + 3 suivantes).
+  **Collision** : `commande_set_config` refuse un nom repris par les
+  commandes musique (`noms_reserves`), et inversement.
+- **WS** : `musique-play {piste:{id,titre,src,demandeur}, volume}` /
+  `musique-stop` / `musique-pause {pause}` / `musique-volume`. La diffusion
+  joue UN `<audio>` global (`PREVIEW` → muet) + remplit `.chat-musique`
+  (phrase défilante marquee, 2 copies + translateX -50%) dans l'en-tête de
+  CHAQUE widget chat — élément SÉPARÉ de `.chat-viewers` (cachée en mode
+  bulles, la ligne musique doit rester visible). `wsCourant`/`wsSend` =
+  référence stable pour l'upstream (`ws` local à `connect()` est recréé
+  aux reconnexions) ; `musique-resync` à l'open → `reemit` rejoue le play
+  courant (reload OBS en cours de piste). Au passage : barre viewers
+  centrée (`justify-content:center` sur `.chat-viewers`).
+- **Dashboard** : event `musique:update` (état complet : config + en_cours
+  + file + bibliothèque + progression + cooldowns_actifs — pas de diff).
+  Onglet « Musique » de la modale Interactions Live (`MusiqueTab.svelte`,
+  composant séparé comme PlanningTab) : encart explicite « catalogue
+  local », lecteur Winamp (`LecteurMusique.svelte`, voir ci-dessous), file
+  (monter/descendre/retirer/vider), bibliothèque (import multi, écouter
+  = preview local `ecouterSon`, tester = play diffusion, supprimer).
+- **Progression + cooldowns dans `etat()`** : `en_cours` reste sérialisé
+  en `MusiqueItem` (contrat WS inchangé) ; le timing vit dans
+  `LectureEnCours` {item, debut, pausee, debut_pause, pause_accum,
+  duree_s}. `etat()` expose `progression {position_ms, pausee, duree_s}`
+  (SNAPSHOT figé à l'emit — le lecteur l'avance en tick local 250 ms,
+  zéro trafic périodique) et `cooldowns_actifs [{pseudo, restant_s}]`
+  triés. `pause(bool)` trace `debut_pause`/`pause_accum` ; `reemit()`
+  reset le timing (la piste repart à 0 après reload OBS, duree_s
+  conservée) ; `on_meta(id, duree_s)` reçoit la durée remontée par
+  `loadedmetadata` de l'<audio> diffusion (upstream `musique-meta`, seule
+  source fiable — routée dans `server.rs` à côté de `musique-ended`).
+- **Équalizer spectre réel** : côté diffusion, une `<audio>` « ombre »
+  MUETTE joue le même fichier → `createMediaElementSource` → AnalyserNode
+  → gain(0) → destination (l'<audio> AUDIBLE n'entre JAMAIS dans le
+  graphe — un AudioContext suspendu couperait le son du stream). Tick
+  66 ms → 16 bandes ; upstream `musique-spectrum {id, bands}` ~8 Hz →
+  `server.rs` le re-émet en `musique:spectrum` (Tauri) pour le lecteur
+  dashboard. Fallback bandes simulées si ctx indisponible ; pause de
+  l'ombre synchronisée sur `musique-pause`.
+- **Lecteur Winamp dashboard** (`LecteurMusique.svelte`, intégré dans le
+  bloc « en cours » de l'onglet Musique — deck complet façon Winamp 2.x) :
+  barre de titre dégradé nuit `WINAMP` + **shade cliquable** (tout le
+  deck se replie sous la barre, état local), clutterbar `O A I D V`,
+  grand compteur LED `mm:ss`, écran LCD vert phosphore (marquee `♪ titre
+  — @demandeur [plateforme]`, 2 copies + translateX -50% ; indicateurs
+  décoratifs kbps/kHz/stereo — pas de métadonnées bitrate, le fichier
+  joue côté diffusion), équalizer 16 bandes (réel via `musique:spectrum`,
+  simulé si frames >600 ms) + **peak dots** ambrés (crêtes accrochant la
+  bande, retombées ~1,5 s), barre de progression crantée (affichage seul
+  — pas de seek en v1), transport ⏮⏯⏹⏭⏏✕≡ (⏮ = `musiqueTester(src)`
+  rejoue la piste, ⏏ = `importerMusique()` ; stop garde la confirmation
+  de l'onglet via prop `demanderConfirm`), **playlist intégrée** (piste
+  courante `1▸` surlignée + file numérotée ↑↓✕ — le bloc « File
+  d'attente » de l'onglet a été SUPPRIMÉ, la file vit dans le deck),
+  chips `CD pseudo Ns` décrémentés en local.
+- **Widget scène `musique`** (`createMusiqueWidget`, 340×140) : rendu dans
+  `diffusion.html` (branche `wtype === "musique"`, modèle `goal` — create/
+  update/reuse via `widgetMap`, kind `musique`) : mini barre de titre
+  `WINAMP` dégradé nuit + LCD marquee + temps
+  (`musiqueAudio.currentTime/duration` — même page) + 16 barres EQ avec
+  **peak dots** (`eqPeaks[]` décrémenté dans `eqTick`, affiché si crête
+  > bande) + barre crantée ; tick 250 ms partagé démarré à la création.
+  Option `musiqueMode` : `"player"` (défaut, tout) / `"eq"` (bandes
+  seules, classe `mu-eq-only` — titre masqué aussi) — `setMusiqueConfig`,
+  carte d'édition, vignette dashboard dans `Widget.svelte` (mini titre +
+  LCD + EQ live via les stores).
+- **Import** : `musique_importer` — dialog multi-fichiers, nom lisible
+  CONSERVÉ (≠ uuid des alertes : c'est le titre demandé), exts
+  `mp3/ogg/wav/m4a/flac`, magic bytes (`fLaC`, `ftyp` offset 4), ≤ 50 Mo
+  (10 Mo des alertes est trop juste pour la musique), collision → `-2`.
+- **Télémétrie** : `musique-play` whitelisté → kind `musique`, plateforme
+  `multi` (attribution impossible depuis la frame seule).
+
 ### Fichiers
 
 | Fichier | Rôle |
@@ -988,6 +1241,10 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
 | `src-tauri/src/position_overlay.rs` | Source de vérité unifiée : `PositionOverlayConfig` + `PositionOverlayState` (persistée `position_overlay.json`), WS `position-overlay-config` |
 | `src-tauri/src/alertes.rs` | Moteur : config 6 types (persistée `alertes_config.json`), file, cooldowns, templates, overlay (lit depuis PositionOverlayState), WS |
 | `src-tauri/src/commandes.rs` | Commandes chat `!cmd` : config par commande (persistée `commandes_config.json`), file + cooldowns + timer, hooks chat, WS `commande-config/-play/-stop` |
+| `src-tauri/src/musique.rs` | Musique `!rs` : bibliothèque locale `medias/musique/`, file non bornée + cooldowns + max/viewer, hooks chat (accusés Twitch), WS `musique-play/-stop/-pause/-volume`, upstream `musique-ended/-resync/-meta/-spectrum`, `LectureEnCours` (timing progression) + `cooldowns_actifs` dans `etat()` |
+| `src/lib/stores/musique.ts` | Store musique : `musiqueEtat` (`musique:update`), `musiqueBands`/`musiqueBandsTs` (`musique:spectrum`), `initMusique`, config/import/contrôles file |
+| `src/lib/components/LecteurMusique.svelte` | Lecteur « Winamp 2.x » de l'onglet Musique : barre de titre + shade, compteur LED, LCD marquee + indicateurs, EQ 16 bandes + peak dots (réel/simulé), barre progression, transport ⏮⏯⏹⏭⏏ + volume, playlist intégrée (file), chips cooldowns — tick local 250 ms sur snapshot `progression` |
+| `src/lib/components/MusiqueTab.svelte` | Onglet « Musique » de la modale Interactions Live : lecteur Winamp (file incluse), bibliothèque, réglages |
 | `src-tauri/src/twitch_chat.rs` | `irc_command()` + `parse_irc_tags()` + `parse_usernotice()` + tag bits |
 | `src-tauri/src/lib.rs` | `AlertesState` + `PositionOverlayState` + commandes `alertes_*` / `alerte_declencher` / `import_son` / `import_alerte_media` / `position_overlay_etat` / `position_overlay_set` |
 | `src/lib/stores/positionOverlay.ts` | Store unifié : `positionOverlay`, `initPositionOverlay`, `chargerPositionOverlay`, `sauverPositionOverlay` |
@@ -1255,7 +1512,8 @@ morphs: [{ x, y, rayon, intensite, mode }]  (normalisés 0-1, ordre = cumul)
   `.section` porte un encadré `--bordure-ui` (accent cadre), renforcé
   `--bordure-ui-active` quand ouverte (le contenu déplié reste dans le
   cadre) ; section OBS non connectée = texte `--message-error-color` +
-  liseré rouge `inset 3px 0 0` à gauche.
+  liseré rouge `inset 3px 0 0` à gauche. Chaque `.section` porte aussi une
+  classe permanente `.sec-*` (couleurs → crochet, cf. « Crochets colorés »).
 - **Accent primaire** : `--accent-rose` (`#d4888f`) — bouton « Vos scènes »
   (pilule pleine : dégradé vertical léger + liseré sombre, glow au survol).
   Quand le cadre SVG de l'app est actif, la pilule suit `--cadre-couleur`
@@ -1348,6 +1606,40 @@ contenir le z-index négatif. `@keyframes btn-shine` = sweep `translateX` +
 Invisible par défaut (teinté `--btn-tint` = transparent) ; réapparaît sur
 les boutons sémantiques qui reposent un `--btn-tint` coloré.
 
+### Crochets colorés — sections + modales (2026-10-04)
+
+> Le « crochet » = liseré vertical de 3px `inset 3px 0 0` sur le bord gauche.
+> Présent EN PERMANENCE sur chaque section de la sidebar et sur le flanc
+> gauche de chaque modale — couleur = celle du bouton/section d'origine.
+
+- **Sections** (`Toolbar.svelte`) : chaque `.section` porte une classe
+  PERMANENTE `.sec-*` (`sec-widgets`, `sec-connexions`, `sec-interactions`,
+  `sec-attente`, `sec-jc`, `sec-moderation`, `sec-diagnostic`, `sec-obs`,
+  `sec-perso`, `sec-ergo`) qui pose DEUX variables
+  indépendamment de l'ouverture :
+  - `--accent-carte` : teinte carte SOMBRE (`--carte-*` 950/700 — fond +
+    bordure pointillée de la carte ouverte, `.cible-*` reste conditionnel) ;
+  - `--accent-crochet` : teinte VIVE (`--crochet-*` niveaux 400-500,
+    glace.css) — la barre `.header` l'utilise pleine teinte
+    (`box-shadow: inset 3px 0 0 var(--accent-crochet, var(--accent-ui))`).
+  - Hiérarchie au survol : `.header:hover` repasse la barre en `--accent-ui`
+    + glow ; `.etat-erreur` (OBS non connecté) la repasse en
+    `--message-error-color` — le rouge sémantique prime toujours.
+- **Modales** (`Modal.svelte`) : prop `crochet` (couleur CSS, défaut
+  `var(--accent-ui)`) → `--crochet-modal` sur `.modal-shell`, empilé dans le
+  box-shadow après le glow existant (`inset 3px 0 0`, suit le
+  border-radius). Chaque modale passe la couleur de son bouton lanceur :
+  Interactions `rose`, Écran d'attente `cyan`, Modération `indigo`,
+  Diagnostic `teal`, Cadres `violet`, ObsSource `dore`, Device `vert`,
+  widgets (suppr/titre/speedrun) `--message-error-color` (carte widget
+  rouge), Titre du fond `orange`, InputBinding `jaune`, scènes (presets/
+  dupliquer) `--accent-rose` saumon.
+- **Tokens** (`tokens.css`) : les teintes vives dédiées sont
+  `--t-bleu-500/emeraude-500/jaune-500/ardoise-400/rose-500/cyan-500/
+  indigo-500/teal-500` ; violet/ambre/orange réutilisent la palette. Ne
+  JAMAIS utiliser les `--carte-*` (950/700) pour une barre de 3px —
+  invisibles sur `--fond-panneau`.
+
 ### Pastille de message centré — recette `.msg-pill` (2026-09-19)
 
 > Badge centré sur un widget ou le fond du canvas (lecture OBS, input
@@ -1359,7 +1651,7 @@ les boutons sémantiques qui reposent un `--btn-tint` coloré.
 - `.msg-pill-text` : sur le `<span>` texte — 4 lignes max + ellipsis (`-webkit-line-clamp:4` ; `min-width:0` requis pour le shrink flex).
 - `.msg-pill-icon` : icône ▶ à `1.08em` (suit le clamp cqw).
 - **Prérequis cqw** : un ancêtre `container-type: inline-size` (`.widget-3d`, `.bg-layer`, `.titre-zone`), sinon fallback % viewport.
-- Couleur de texte par contexte : classe locale (`.input-viewer-obs` = `--message-user-action-color`) ou inline (`lectureCouleur`/`bgLectureCouleur` = couleur réelle du cadre SVG).
+- Couleur de texte : `--texte` par défaut ; les badges « rendu dans OBS » (`.lecture-obs` widget vidéo, `.lecture-obs-fond` fond canvas, `.input-viewer-obs`) partagent `--message-user-action-color` (orange) via une règle globale app.css — un seul message = une seule couleur, lisible quel que soit le cadre (2026-10-04 : remplace l'ancien `color:` inline = couleur du cadre, illisible quand l'utilisateur choisissait une couleur sombre — NE PAS réintroduire).
 
 ### Couleurs de marque des plateformes (décoratif, 2026-09-15)
 
@@ -1543,6 +1835,27 @@ widgets reste actif. Ce n'est PAS une seconde config : même CadreConfig,
 juste une cible de rendu masquable. Vieilles scènes sans le champ → `true`
 (rétro-compat). Toggles : `CadresModal` (« Bord de l'app », désactivé si
 cadre inactif) + carte fond de `CarteEdition`.
+
+**Animation (`animer`, 2026-10-05)** : `CadreConfig.animer` (bool,
+`#[serde(default)]` → false, opt-in via le toggle « Animation » de
+`CadresModal`). Quand true, chaque renderer émet UNE animation signature en
+SMIL **sur le tracé du bord** — jamais dans la marge extérieure : la marge
+est rognée par `overflow:hidden` + `clip-path` du parent sur les widgets
+(.widget / .widget-3d / .apercu de la modale) et hors canvas pour le bord
+de l'app → une anim en marge est invisible (leçon 2026-10-05 : halo diode
+mgstyle et étincelles story ne s'affichaient nulle part). Signatures :
+cyberpunk = runner lumineux, hexagon = nœud voyageur — les deux en
+`animateMotion` avec attribut `path=` direct (PAS de `mpath`/`xlink:href` :
+non résolus par les vieux CEF d'OBS → runner figé) + grappes d'alvéoles
+rotatives (`animateTransform`, décor marge), story = étincelle voyageuse
+(`animateMotion` sur borderPath), thin-line/mgstyle/carre/arrondis =
+segment comète (`stroke-dashoffset` sur `pathLength="100"`). Jamais de
+filtre animé. `animer` est propagé :
+`CadreOpts.animer` → `genererSVG`/`genererCadreSVG` (les 3 sites : TS +
+diffusion.html + chat-popout.html), `cadreKey`/`majEtatCadre` l'incluent
+(re-render au toggle). EXCEPTION perf : les bulles chat forcent
+`animer=false` (`decorerCadreMsg`/`decorerCadreMsgDims` — ~200 SVG animés
+par widget hors budget).
 
 **Cadre par défaut** (`CadreConfig::defaut_scene`, scene.rs — MIROIR de
 `CADRE_WIDGET_DEFAUT`, scene.ts) : MGStyle, noir → violet #8b5cf6, épaisseur
@@ -1963,8 +2276,10 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
 - `raccourcis-closed` — Rust → dashboard : fermeture externe (sync Toolbar).
 
 Frontend : `stores/raccourcis.ts` (visible/bord/monitorIndex/moniteurs +
-init/appliquer/masquer), section accordéon « Raccourcis » dans Toolbar
-(show/hide, 4 bords, `<select>` moniteurs, hint borderless).
+init/appliquer/masquer), bloc en queue de la section « Ergonomie » de la
+Toolbar (show/hide, 4 bords, `<select>` moniteurs, hint borderless —
+l'ancienne section accordéon « Raccourcis » a été supprimée, son contenu
+migré tel quel dans Ergonomie).
 
 ## Sorties OBS — stream & record (2026-09-20)
 
@@ -2005,6 +2320,54 @@ init/appliquer/masquer), section accordéon « Raccourcis » dans Toolbar
   suffit, `setConnexions` itère tous les `[data-plat]` (zéro JS ajouté).
   Payload `raccourcis:connexions` étendu : `stream` / `record` (bools),
   poussés par le même `$effect`/`pushRaccourcisConnexions` d'App.svelte.
+
+## Section Prévisualisation — miniature live + projecteur OBS (2026-XX)
+
+Section **accordéon standard** de la barre latérale (`.sec-preview`,
+carte jaune `.cible-preview`, section `"preview"` dans `ui.ts`) : pliée =
+tout démonté (l'iframe est détruite → zéro coût, c'est le lazy-loading) ;
+ouverte = miniature + sélecteur écran + bouton projecteur. Deux fonctions :
+
+- **Miniature live** : `<iframe src="http://127.0.0.1:4321/?preview">`
+  rendue aux dims du canvas scène puis réduite par `transform: scale()`
+  dans une boîte `aspect-ratio` (~224 px de large). `pointer-events:none`
+  sur l'iframe : le clic monte au bouton → ouvre le projecteur OBS.
+  `previewMonIdx` (écran choisi) persisté en `localStorage` ; les moniteurs
+  OBS sont relus à l'ouverture de la section ($effect).
+- **`?preview` dans `diffusion.html`** : const `PREVIEW`
+  (`URLSearchParams`). Tout le son coupé (alertes, welcome, présentation,
+  commande, pad, écran d'attente) et vidéos **persistantes figées**
+  (widgets média, fond, média-fond — `currentTime` posé pour afficher la
+  bonne frame). Le reste reste live (chat, alertes visuelles, JC, écran
+  d'attente). Sans le param (source OBS), la page est **inchangée**.
+  ⚠️ La miniature ne montre que la couche overlay : caméra et captures
+  OBS sont des trous dans la page (rendues par OBS sous la source
+  navigateur — le vrai rendu = le projecteur OBS).
+- **Projecteur OBS** (équivalent du clic droit OBS → « Ouvrir le
+  projecteur (prévisualisation) ») : obs-websocket
+  `OpenVideoMixProjector` (`videoMixType: OBS_WEBSOCKET_VIDEO_MIX_TYPE_PREVIEW` — l'enum
+  côté websocket est préfixé `OBS_WEBSOCKET_VIDEO_MIX_TYPE_*`, PAS
+  `OBS_VIDEOMIX_TYPE_*` → "invalid enum value" sinon),
+  `monitorIndex` choisi, **-1 = fenêtré**). Le select des écrans vient de
+  `GetMonitorList` — les indices sont **ceux d'OBS**, pas ceux de
+  `raccourcis_moniteurs` (Win32). One-shot comme tout `obs.rs` :
+  connect → requête → close. Pas de suivi d'ouverture : fermer le
+  projecteur se fait dans Windows/OBS. Après `result=true`, la nouvelle
+  fenêtre projecteur est remontée au premier plan (poll ~2 s, la fenêtre
+  arrive en différé sur le thread UI d'OBS).
+- **Fenêtres projecteur = titre + obs64.exe** : les fenêtres Qt d'OBS
+  partagent la classe générique `Qt<ver>QWindowIcon` (PAS "OBSProjector")
+  → `hwnds_projecteurs()` matche titre contenant "project" + exe
+  obs64.exe. `fermer_projecteurs()` envoie WM_CLOSE à chacune.
+- **Par défaut au boot = projecteur fermé** : OBS restaure ses projecteurs
+  d'une session à l'autre → `obsConnect` appelle `obs_projecteur_fermer`
+  à chaque connexion réussie (fermeture active, pas d'option). Non-fatal
+  et silencieux.
+- Chaînage : `stores/obs.ts` (`obsMoniteurs`, `ouvrirProjecteurPreview`
+  — credentials via `obsCreds()`) → `tauri.ts` → commandes
+  `obs_projecteur_moniteurs` / `obs_projecteur_preview` /
+  `obs_projecteur_fermer` (lib.rs) → `moniteurs_liste` /
+  `ouvrir_projecteur_preview` / `fermer_projecteurs` (obs.rs).
 
 ## Just Chatting — overlay non-destructif caméra + chat (2026-XX)
 
@@ -2352,11 +2715,20 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 
 ### Lanceur & montage
 
+- **Lanceur du guide** = section LANCEUR DIRECT `.section.sec-guide`
+  (`Toolbar.svelte`, icône livre + `toolbar.guide` + chevron — même
+  mécanique que Modération / Diagnostic, pas un accordéon). Pied fixe de
+  la sidebar **juste au-dessus d'Ergonomie** (sibling de l'aside dans
+  `.sidebar-col`, hors zone scrollable). Crochet `--crochet-ardoise` —
+  même famille qu'Ergonomie, les deux entrées du bas forment un bloc.
+  (Sorti d'Ergonomie le 2026-10-06 : avant, c'était un `.action` dans le
+  contenu de l'accordéon.)
 - **Section « Ergonomie »** = pied fixe de la sidebar (`Toolbar.svelte`,
   `.section.dash-fond` — sibling de l'aside, `flex-shrink:0`, hors zone
-  scrollable). Accordéon standard (`toggleSection("ergonomie")`, union
-  `Section` de `ui.ts`) regroupant le fond du chrome dashboard (ex-« Fond
-  du dashboard », déplacé là) + le lanceur du guide. Carte **ardoise** à
+  scrollable, sous le lanceur du guide). Accordéon standard
+  (`toggleSection("ergonomie")`, union `Section` de `ui.ts`) regroupant
+  le fond du chrome dashboard (ex-« Fond du dashboard », déplacé là) +
+  fenêtre de démarrage + barre de raccourcis. Carte **ardoise** à
   l'ouverture : `--carte-ardoise` (glace.css ← `--t-ardoise-700` — niveau
   700 exigé : un 950 serait invisible en bordure pointillée sur
   `--fond-panneau`), variante `.cible-ergo` au même mécanisme que les
@@ -2390,6 +2762,26 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
   sur `.livre`) ; masquées aux extrémités. Clavier `←`/`→` + `Escape` ;
   clic-overlay pointerdown+pointerup (pattern `Modal.svelte`) ; ✕
   recette `.modal-close`.
+- **Sommaire cliquable (2026-10-06)** : bloc `{ type: "sommaire" }` rendu
+  depuis `chapitres()` (contenu.ts). `allerA(folio)` → cible
+  `ceil((folio-1)/2)` feuilles ; les feuilles intermédiaires tournent **en
+  cascade** (`basculer(dir)` toutes les `ECART_CASCADE_MS = 120` ms), verrou
+  `enTransition` tenu jusqu'à `(n-1)×120 + DUREE_FLIP_MS` ; `timersCascade`
+  annulés dans `onDestroy`. `tourner()` = `basculer` + `armerFinTransition`.
+  Entrées = `<button class="sommaire-entree">` (titre + pointillés de
+  conduite + folio) → même neutralisation du chrome global que
+  `.zone-tourne`. Étiquette `.chapitre-label` (dorée, capitales) au-dessus
+  du titre quand la page porte `chapitreCle`.
+- **Retour au sommaire (2026-10-06)** : `<button class="retour-sommaire">`
+  UNIQUE, posé dans `.livre-scene` (**sibling de `.livre`, HORS du
+  contexte 3D des feuilles** — ni transform ni miroir : toujours au
+  même endroit, z-index 70), aligné sur le coin haut-gauche de la page
+  de gauche. Affiché via `pageGauche = PAGES[2*tournees-1]` : caché à
+  t=0 (garde), sur verso orphelin et quand la page de gauche EST le
+  sommaire. `allerA(FOLIO_SOMMAIRE)` avec `FOLIO_SOMMAIRE` calculé
+  depuis `PAGES.findIndex(id === "sommaire")` — jamais de folio en
+  dur. Label = `guide.retourSommaire` (8 locales). Même neutralisation
+  du chrome global que `.sommaire-entree`.
 - ⚠️ **Piège chrome global des boutons** : `app.css` applique
   `backdrop-filter:blur(6px)` + pseudo-éléments shine/reflet à TOUS les
   `<button>` → les `.zone-tourne` (72px pleine hauteur sur les tranches)
@@ -2415,10 +2807,27 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 
 ### Contenu (`src/lib/guide/contenu.ts`)
 
-- `BlocGuide` (`para|liste|etapes|note|sep`) + `PageGuide { id, titreCle,
-  blocs }` ; `PAGES[]` = ordre des faces. **Textes = clés i18n
-  uniquement** (`guide.pages.<id>.*` dans les 8 JSON — fr.json source de
-  vérité). Ajouter une page = 1 entrée `PAGES` + les clés ×8.
+- `BlocGuide` (`para|liste|etapes|note|sep|sommaire`) + `PageGuide { id,
+  titreCle, chapitreCle?, blocs }` ; `PAGES[]` = ordre des faces.
+  **Textes = clés i18n uniquement** (`guide.pages.<id>.*` +
+  `guide.chapitres.*` dans les 8 JSON — fr.json source de vérité).
+  Ajouter une page = 1 entrée `PAGES` + les clés ×8.
+- **Chapitres** : `chapitreCle` posée UNIQUEMENT sur la première page du
+  chapitre → crée l'entrée de sommaire ; `chapitres()` calcule le folio
+  (`index + 1`) — **jamais de numéro de page saisi à la main**. Insérer
+  une page décale les folios automatiquement.
+- **Parcours « principal » (24 faces, 9 chapitres, 2026-10-06)** :
+  couverture → sommaire → Comprendre (principe) → Trois réglages
+  (premierPas, obs, modeles) → Se repérer (cartes, barreLaterale, scenes)
+  → Chat (plateformes, chat) → Widgets & médias (widgets, medias,
+  carteEdition) → Cadres (cadres, cadresModale) → Faire vivre le live
+  (alertes, bandeau, attente, justChatting) → Passer en direct
+  (previsualisation, demarrer) → Pour aller plus loin (plusLoin) → fin.
+  L'ordre suit ce qu'un nouveau streamer FAIT, pas l'ordre de la sidebar.
+  Garder un nombre PAIR de faces (sinon verso orphelin décoratif).
+- **Capacité d'une face** : titre + 1 para + 4-6 puces courtes + 1 note
+  (`overflow:hidden`, pas de scroll). Page qui déborde → raccourcir le
+  TEXTE de la locale, jamais la mise en page.
 - **Marqueurs `**…**`** : rendus `<strong class="mot-cle">` bordeaux par
   `segments()` (split sur `**`). Les traductions doivent conserver le
   même nombre de marqueurs, autour des mots équivalents (jamais autour
@@ -2436,10 +2845,247 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 | Fichier | Rôle |
 |---|---|
 | `src/lib/components/GuideLivre.svelte` | Overlay + mécanique du livre (flip 3D, zones tranche, clavier, reprise localStorage) |
-| `src/lib/guide/contenu.ts` | Modèle de données `PAGES` / `BlocGuide` / `PageGuide` |
+| `src/lib/guide/contenu.ts` | Modèle de données `PAGES` / `BlocGuide` / `PageGuide` / `chapitres()` (sommaire calculé) |
 | `src/lib/stores/ui.ts` | `"ergonomie"` dans `Section` + flag `guideLivreOpen` |
-| `src/lib/components/Toolbar.svelte` | Section Ergonomie (pied fixe) + variante `.cible-ergo` |
+| `src/lib/components/Toolbar.svelte` | Lanceur `.sec-guide` (pied fixe) + section Ergonomie + variante `.cible-ergo` |
 | `src/App.svelte` | Import + montage `{#if $guideLivreOpen}` |
 | `src/theme/tokens.css` | Tokens `--t-*` palette livre + `--t-ardoise-700` |
 | `src/theme/glace.css` | Rôles `--livre-*` + `--carte-ardoise` |
 | `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `toolbar.ergonomie`/`guide`/`guideTitle` + section `guide` complète |
+
+## Fenêtre principale — écran + mode au démarrage (2026-10-04)
+
+> Section « Ergonomie » de la Toolbar : choix du moniteur de démarrage +
+> mode d'affichage (fenêtré / maximisé / fullscreen borderless). Appliqué
+> **immédiatement** (la fenêtre saute en direct) ET persisté pour le
+> prochain boot — même pattern que `raccourcis_appliquer`.
+
+- **Persistance** : `fenetre.json` (`config.rs::FenetreConfig`) —
+  `{ monitor_index, mode, geo? }`. `mode` ∈ `"fenetre"|"maximise"|
+  "fullscreen"` (`String` normalisé par `mode_valide`, défaut `"maximise"`
+  = comportement historique → migration douce, fichier absent = défauts).
+  `geo` = dernière géométrie fenêtrée en **px physiques**
+  (`outer_position` + `inner_size` — restaurée par `set_position` +
+  `set_size`, pas de dérive de décorations) ; `None` → centrage 1280×800
+  (= taille `tauri.conf.json`).
+- **Application** (`fenetre.rs::appliquer`) : normalisation AVANT le
+  déplacement — `set_fullscreen(false)` + `unmaximize()` (une fenêtre
+  maximisée/fullscreen ne se déplace pas par `set_position`), puis pose
+  dans le rect du moniteur cible (`maximize()`/`set_fullscreen(true)`
+  s'appliquent sur l'écran contenant la fenêtre). Index moniteur hors
+  bornes (écran débranché) → primaire, même règle que raccourcis.
+  `geo_intersecte` rejete une géométrie sauvée sur un autre écran
+  (pointerait hors écran) → repli centrage.
+- **Sauvegarde de `geo`** : recapturée par `capturer_geo` (no-op si
+  fullscreen/maximisé — jamais de pollution) à trois moments : hook
+  `CloseRequested` de la fenêtre main (enregistré dans
+  `appliquer_au_boot`), `app_arreter`/`app_redemarrer` (exit()/restart()
+  ne déclenchent pas forcément CloseRequested), et chaque
+  `fenetre_appliquer` (post-apply si mode fenêtré, pré-apply sinon).
+- **Anti-flash boot** : `"visible": false` dans `tauri.conf.json` →
+  `appliquer_au_boot` (setup) positionne/mode puis `show()`.
+- **Frontend** : sélecteur moniteur **partagé** avec la section
+  Raccourcis (`raccourcisMoniteurs` / `monsOptions` — la commande
+  `raccourcis_moniteurs` liste les écrans, pas de doublon). 3 boutons
+  `.action.small` façon `.bord-row` + `<select>` moniteur + hint i18n.
+
+| Fichier | Rôle |
+|---|---|
+| `src-tauri/src/fenetre.rs` | Commandes `fenetre_etat`/`fenetre_appliquer`, `appliquer_au_boot`, `sauver_geo`/`capturer_geo`, `geo_intersecte` |
+| `src-tauri/src/config.rs` | `FenetreConfig`/`FenetreGeo` + lire/sauver `fenetre.json` |
+| `src-tauri/src/lib.rs` | `mod fenetre`, handler, `appliquer_au_boot` dans setup, `sauver_geo` dans `app_arreter`/`app_redemarrer` |
+| `src-tauri/tauri.conf.json` | `"visible": false` (anti-flash — show() par le boot) |
+| `src/lib/tauri.ts` | `ModeFenetre`/`FenetreEtat` + `fenetreEtat`/`fenetreAppliquer` |
+| `src/lib/stores/fenetre.ts` | `fenetreMonitorIndex`/`fenetreMode` + `initFenetre`/`appliquerFenetre` |
+| `src/lib/components/Toolbar.svelte` | Contrôles écran+mode dans la section Ergonomie |
+| `src/App.svelte` | `initFenetre()` au boot |
+| `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `toolbar.mode.{fenetre,maximise,fullscreen}` + `toolbar.demarrageHint` |
+
+## Bandeau premier message — teinte cadre + mascotte animée (2026-10-04)
+
+> Correctifs sur l'overlay `.bandeau-pm-*` (z 9998, `diffusion.html` —
+> barre pleine largeur bas/haut, couleurs dérivées du cadre widget).
+
+- **Teinte = extrémité LA PLUS LUMINEUSE du gradient cadre** :
+  `bpmResoudreCouleurs` compare `couleur`/`couleurFin` via `bpmLuminance`
+  (rec.601, 0-255) et choisit la plus lumineuse comme primaire `p`. Raison :
+  le cadre défaut StreamOS est **noir→violet** (`#000000`→`#8b5cf6`) —
+  prendre `couleur` rendait la barre entière, le badge, le liseré et le
+  glow Streamy noirs (invisibles). `.p` sert aussi à la couleur de texte
+  des alertes/commandes (même résolution, cf. section alertes) — elles
+  gagnent la même lisibilité.
+- **Pop d'entrée de la mascotte** (`bpm-streamy-pop`, 0,7 s avec dépassement,
+  délai 0,35 s pour surgir après la glisse de la barre) : l'animation
+  n'existe que sous `.bandeau-pm-root.visible` — retirer la classe la
+  réarme pour le prochain message, zéro JS. ⚠️ `scaleX(-1)` (miroir) doit
+  être **répété dans chaque keyframe** — un keyframe `transform` remplace
+  le transform statique. Variante `bpm-streamy-pop-haut` inversée pour
+  `pos-haut` (Streamy est sous la barre, elle descend ; transform-origin
+  50% 0%).
+- **Limite connue** : un second premier message pendant que le bandeau est
+  déjà visible ne relance PAS le pop (`.visible` déjà posée, la classe
+  n'est pas re-appliquée dans `playBandeauPM`).
+
+## Présentation streamer — rideaux + bio + clips + sons (2026-10-05)
+
+> Portage de la feature « streamers favoris » de l'ancienne app React :
+> présentation théâtrale d'un streamer (rideaux qui s'ouvrent, bio, infos
+> chaîne, jeux récents, clips jouables, voix + musique). Déclenchement
+> **manuel uniquement** depuis le dashboard — pas de trigger sur arrivée chat.
+
+### Rust — `src-tauri/src/presentation.rs`
+
+- **`PresentationState`** (tauri::State, `lib.rs`) : `chat_tx` + `favoris`
+  (HashMap login→`FavoriConfig`, persisté `presentation_favoris.json` dans
+  `config::data_dir`) + `courant` (`Option<PresentationEtat>`, RAM — une
+  présentation ne survit pas au redémarrage, pas de resync diffusion).
+- **`FavoriConfig`** : `user_id`, `login`, `display_name`, `avatar`,
+  `son_voix`, `son_musique` (chemins `medias/...` validés par préfixe +
+  existence), `mode` (`"theatrical"` | `"card"` — bascule à chaud via frame
+  `presentation-mode` si le streamer est en cours d'affichage).
+- **`lancer(user_id, mode, access)`** : `tokio::join!` des 4 fetchs Helix
+  indépendants — `broadcaster` (fatal), `channel_info`, `stream_viewers`,
+  `liste_clips` (gracieux) → dédup des `game_id` des clips → `game_info`
+  (max 4 jeux récents) → frame `presentation-show` + `courant` + refresh
+  du cache favori. `ClipInfo.game_id` (`#[serde(default)]`, additif) a été
+  ajouté pour la déduction des jeux. `PresentationDonnees.banniere` =
+  `offline_image_url` Helix (bannière/entête de chaîne, "" si absente) —
+  `BroadcasterInfo.offline_image_url` mappé dans `twitch_helix.rs`.
+- **Contrôles** : `fermer` (`presentation-hide`), `clip_jouer` (résolution
+  MP4 signée au clic via `twitch_clips::resoudre_mp4` — les URL GQL
+  expirent, jamais résolues à l'avance), `clip_stopper`, `audio_jouer` /
+  `audio_stopper` (piste `voix`|`musique`, loop pour la musique).
+- **12 commandes** `presentation_*` dans `lib.rs` : recherche
+  (`search_channels` Helix), favoris CRUD + son + mode, lancer/fermer/
+  clip/audio/etat. Émet `presentation:etat` (`{favoris, courant}`) au
+  frontend à chaque mutation.
+
+### Frames WS `chat_tx` → diffusion :4321
+
+`presentation-show` (données complètes + `sons`), `presentation-hide`,
+`presentation-mode`, `presentation-clip-play` (`{mp4_url,titre,duree_ms}`),
+`presentation-clip-stop`, `presentation-audio-play` (`{piste,url,loop}`),
+`presentation-audio-stop` (`{piste}` — ou toutes si absent).
+
+### Diffusion (`diffusion.html`, vanilla JS — z-index 10000-10004)
+
+- **Overlay autonome** (theatrical) : `.pres-voile` contient dans l'ordre
+  `.pres-fond` (bannière de chaîne `donnees.banniere`, plein écran
+  `object-fit:cover` + scrim dégradé `::after` — 1er enfant pour que tout
+  le décor reste au-dessus ; masqué si bannière absente), orbes animés,
+  `.pres-sol` (plancher), 3 `.pres-spot` (faisceaux clip-path balancés)
+  et ~20 `.pres-poussiere` (particules en dérive).
+- **Rideaux** `.pres-rideau` : plis larges 88 px + ourlet doré, ouverture
+  `translateX(±27 %) scaleX(0.5)` en 1,2 s → les panneaux restent froncés
+  en bordure (~220 px/côté), retenus par `.pres-embrasse` dorées (fade
+  retardé 0,75 s — le `transition-delay` n'est posé que dans `.open`).
+  `.pres-valance` : cantonné festonné permanent en haut (proscenium).
+- **Contenu plaqué sur scène** : `.pres-carte` SANS panneau (plus de fond/
+  bordure — lisibilité par text-shadows + scrim), 2 colonnes (profil/bio/
+  stats/lien chaîne | EN DIRECT + jeu + jeux récents + grille 4 clips),
+  max-width 73 % pour rester dans l'ouverture des rideaux.
+- **Public** `.pres-public` (z 10003 — devant le contenu, sous le clip) :
+  3 rangées de fauteuils bordeaux + têtes silhouettées générées par
+  `construirePublic` (~15 % de places vides, balancement `pres-tete-sway`).
+- **Mode carte** : `.pres-carte` compacte (colonne) — voile + fondu seuls,
+  sans rideaux ni décor ni public.
+- **Lecteur clip** : `<video>` MP4 plein écran (z 10004), contrôlé par
+  `presentation-clip-play` / `presentation-clip-stop`. Pas d'iframe Twitch.
+- **Audio** : `Audio()` voix (once) + musique (loop) servis depuis
+  `/medias/...` sur :4321 — même plomberie que les sons alertes/pad.
+- Esc/clic voile = fermeture locale uniquement (l'état Rust persiste).
+
+### Dashboard — onglet « Présentation » (`InteractionViewerModal.svelte`)
+
+3 sous-onglets : **Recherche** (`presentation_recherche` → résultats
+Helix, ajout favori / présentation directe), **Favoris** (master-detail :
+mode, sons voix/musique importés via `import_son` existant, retrait),
+**Diffusion** (état courant, clip, stop sons/clip, fermeture). Store
+`stores/presentation.ts` (`initPresentation` + `chargerPresentation`
+appelés au boot dans `App.svelte`), wrappers `tauri.ts`. i18n
+`interactions.presentation.*` + `tabPresentation` dans les 8 locales.
+
+### Limites / hors scope (validé)
+
+- Pas de déclenchement automatique à l'arrivée d'un streamer dans le chat.
+- Pas de resync : une présentation lancée avant l'ouverture du navigateur
+  source n'est pas rejouée (comportement voulu, état RAM).
+- Aucun scope Twitch supplémentaire — tout passe par les helpers Helix
+  existants et les scopes déjà en keyring.
+
+## Modules HUD — horloge / musique / objectifs (2026-10-05)
+
+> Couche d'affichage scène-persistée SÉPARÉE des widgets
+> (`Scene.modules`, pas un `type` de widget). Trois modules fixes
+> (clés `MODULE_IDS`), chacun affichable/cachable/configuré par
+> scène, positionné en **px canvas** par drag/resize direct sur le
+> canvas dashboard. Rendus au z 9000+ en diffusion (au-dessus de
+> tous les widgets) + cadre optionnel réutilisant le gradient du
+> cadre de scène (jamais le CadreSVG imposé — le module est une
+> carte, pas un widget).
+
+- **`ModuleHud` (scene.rs)** : struct UNIQUE pour les 3 modules —
+  `actif/x/y/largeur/hauteur/police/taille/opacite/cadre` communs
+  + options spécifiques optionnelles ignorées par les autres
+  (`afficherDate/secondes/format12h`, `afficherTemps`,
+  `titre`/`lignes` pour objectifs). Patch générique
+  `Partial<ModuleHud>` côté frontend. camelCase volontaire —
+  contrat JSON direct avec scene.ts.
+- **`LigneObjectif`** : une ligne du bloc objectifs =
+  `{ id, label?, plateforme?, metrique?, cible?, goalId? }`.
+  `goalId` = Creator Goal Twitch lié (valeur lue en direct via le
+  frame `goal-twitch`, comme le widget goal) ; sinon ligne libre
+  plateforme+métrique+cible manuelle. Ordre persistant
+  (monter/descendre dans la modale).
+- **Setters** (`stores/scene.ts`) : `setModule(id, patch)` (upsert
+  sur `MODULE_DEFAUTS` + commit), `ajouterLigneObjectif`,
+  `setLigneObjectif`, `retirerLigneObjectif`, `deplacerLigneObjectif`.
+  `moduleCourant(id)` = config effective (défauts si absent).
+  `scene_vierge` compte les modules comme du contenu (test
+  `scene_vierge_detecte_contenu` couvre les 3 cas).
+- **`ModuleHud.svelte`** : carte drag/resize (mêmes 8 poignées et
+  règles min 80×36 que l'overlay d'interactions — diviseur de
+  `scale` obligatoire, même invariant que les widgets). Clic =
+  `modulesModalOpen.set(id)`. Aperçu statique réel (date/heure du
+  jour, première piste de la file, lignes objectifs avec valeurs
+  live `$valeursGoals`/`$goalsTwitch` + suggestion `goalSuggestion`).
+- **`ModulesModal.svelte`** : master-detail 3 modules (badge
+  ON/OFF). Champs X/Y/L/H = complément précis du drag/resize.
+  Bloc objectifs : éditeur de lignes libres (label, plateforme,
+  métrique, cible + Suggérer, réordonner, supprimer) + liaison
+  Creator Goal Twitch (même liste `twitch_goals_lister` que la
+  CarteEdition goal — relue, zéro persistance, `need_reauth` →
+  bouton reconnexion).
+- **Diffusion** (`diffusion.html`) : `renderModules` (create/update/
+  remove par id dans `#modules-root`, z 9000 — DOM conservé entre
+  snapshots, rebuild uniquement au changement de structure) —
+  appelé dans `renderScene`. `.module` + `appliquerStyleModule`
+  (position/dims/police/`--mod-fs`/`--mod-opacite`/`--mod-accent`
+  depuis `bpmResoudreCouleurs`) ; `cadre: true` → `appliquerCadreOverlay`
+  (même overlay SVG de cadre que les overlays existants, opt-in).
+  Ticks : `assurerTickHorloge` (1 s, auto-arrêt), `assurerTickMusique`
+  (250 ms partagé avec les widgets musique — même invariant) ;
+  `majModuleMusique` est appelée depuis `majMusiqueWidgets`
+  (transitions play/stop, jamais de rebuild DOM) ;
+  `majModulesObjectifs` est appelée depuis les sinks `viewers` /
+  `communaute` / `goal-twitch` (valeurs patchées in-place via
+  `ligneEls`, jamais de re-render).
+- **i18n** : `modules.*` + `toolbar.modules*` dans les 8 locales
+  (rendu diffusion non traduit — labels objectifs viennent du
+  module, `goalTwitchLabel`/`goalMetriqueLabel` restent FR comme
+  les widgets goal).
+
+| Fichier | Rôle |
+|---|---|
+| `src-tauri/src/scene.rs` | `ModuleHud`, `LigneObjectif`, `ScenesModules`, `Scene.modules` (serde default) |
+| `src-tauri/src/scenes.rs` | `scene_vierge` compte les modules + test |
+| `src/lib/tauri.ts` | `ModuleHud`/`LigneObjectif`/`ModuleId`/`MODULE_IDS`/`ScenesModules` + `Scene.modules` |
+| `src/lib/stores/scene.ts` | `moduleDefaut`/`moduleCourant`/`setModule` + setters lignes |
+| `src/lib/components/ModuleHud.svelte` | Carte drag/resize + aperçu statique |
+| `src/lib/components/ModulesModal.svelte` | Master-detail config (modale Modules) |
+| `src/lib/components/Canvas.svelte` | Couche modules après les widgets |
+| `src/lib/components/Toolbar.svelte` | Lanceur « Modules » (lanceur direct) |
+| `src/lib/stores/ui.ts` | `modulesModalOpen: ModuleId \| null` |
+| `src/App.svelte` | Montage `{#if $modulesModalOpen}` |
+| `src-tauri/resources/diffusion.html` | CSS `.module`/`.mh-*`/`.mm-*`/`.mo-*` + `renderModules`/`majModule*`/`assurerTick*` |
+| `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `modules.*` + `toolbar.modules*` + `commun.hauteur` |

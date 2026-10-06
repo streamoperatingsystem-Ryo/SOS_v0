@@ -55,7 +55,8 @@
     "largeur": "幅",
     "importerSon": "効果音をインポート",
     "retirerMedia": "メディアを取り外す",
-    "retirerSon": "効果音を取り外す"
+    "retirerSon": "効果音を取り外す",
+    "hauteur": "高さ"
   },
   "presets": {
     "creationRefusee": "プリセットからの作成が拒否されました:{erreur}",
@@ -261,7 +262,9 @@
       "cyberpunk": "サイバーパンク",
       "story": "ストーリー",
       "thinLine": "細い線",
-      "hexagon": "六角形"
+      "hexagon": "六角形",
+      "arena": "Arena",
+      "tribal": "トライバル"
     }
   },
   "cadresModal": {
@@ -273,6 +276,8 @@
     "desactive": "フレーム無効",
     "bordActive": "アプリの縁:有効",
     "bordDesactive": "アプリの縁:無効",
+    "animerActive": "アニメーション:有効",
+    "animerDesactive": "アニメーション:無効",
     "epaisseur": "太さ",
     "degrade": "グラデーション"
   },
@@ -338,8 +343,8 @@
     "connexions": "接続",
     "chatOn": "チャット ON",
     "chatOff": "チャット OFF",
-    "interactions": "チャット連携",
-    "interactionsTitle": "チャット連携を開く(歓迎クリップ・アラート…)",
+    "interactions": "ライブ連携",
+    "interactionsTitle": "ライブ連携を開く(歓迎クリップ・アラート・スケジュール…)",
     "ecranAttente": "待機画面",
     "ecranAttenteTitle": "待機画面を開く(配信のメディア + タイマー)",
     "justChatting": "Just Chatting",
@@ -366,7 +371,6 @@
     "guideTitle": "ガイドを開く — StreamOS でできること",
     "cadreActif": "フレーム有効(ウィジェット + アプリの縁)",
     "cadreInactif": "有効なフレームなし",
-    "raccourcis": "ショートカット",
     "barreMasquer": "ツールバーを隠す",
     "barreAfficher": "ツールバーを表示",
     "bord": {
@@ -377,7 +381,58 @@
     },
     "moniteur": "モニター {n}",
     "principal": "(メイン)",
-    "raccourcisHint": "ツールバーは常に最前面で、選んだ端にドックします。ボーダーレスウィンドウのゲーム上では見えますが、専有全画面では見えません。"
+    "raccourcisHint": "ツールバーは常に最前面で、選んだ端にドックします。ボーダーレスウィンドウのゲーム上では見えますが、専有全画面では見えません。",
+    "mode": {
+      "fenetre": "ウィンドウ",
+      "maximise": "最大化",
+      "fullscreen": "フルスクリーン"
+    },
+    "demarrageHint": "起動時のモニターと表示モード——即時適用。ウィンドウモードでは前回の位置とサイズを復元。",
+    "modules": "モジュール",
+    "modulesTitle": "シーンの HUD モジュールを開く（時計、再生中の曲、配信目標）"
+  },
+  "modules": {
+    "titre": "モジュール",
+    "cliquerConfigurer": "ドラッグで移動、ハンドルでリサイズ — クリックで設定",
+    "afficher": "モジュールを表示",
+    "position": "位置とサイズ",
+    "style": "スタイル",
+    "options": "オプション",
+    "policeDefaut": "デフォルト（システム）",
+    "taille": "文字サイズ (px)",
+    "opacite": "背景の不透明度",
+    "cadre": "モジュールの周囲にシーンの枠",
+    "nom": {
+      "horloge": "時計",
+      "musique": "再生中",
+      "objectifs": "配信目標"
+    },
+    "hint": {
+      "horloge": "日付と時刻を縦線で区切った表示（キャンバスのピクセル単位）。キャンバス上で直接ドラッグ/リサイズも可能です。",
+      "musique": "「再生中」カード + 時間/プログレスのピル — 音楽キュー (!rs) から供給。",
+      "objectifs": "「指標 — 現在値 / 目標」の行とプログレスバー。各行 = 計測された指標またはリンク済みの Twitch 目標。"
+    },
+    "horloge": {
+      "date": "日付を表示 (DD / MM / YY)",
+      "secondes": "秒を表示",
+      "h12": "12 時間表記 (AM/PM)"
+    },
+    "musique": {
+      "temps": "時間/プログレスのピルを表示",
+      "rien": "再生なし",
+      "lancer": "!rs で音楽を再生",
+      "demandePar": "@{pseudo} のリクエスト"
+    },
+    "objectifs": {
+      "titre": "ブロックのタイトル",
+      "titrePh": "配信目標",
+      "labelPh": "ラベル（任意）",
+      "ajouter": "目標を追加",
+      "monter": "上へ",
+      "descendre": "下へ",
+      "lier": "Twitch 目標をリンク",
+      "vide": "「モジュール」ウィンドウで目標を追加"
+    }
   },
   "app": {
     "obsTitle": "OBS WebSocket(サイドバーの OBS セクションを参照)",
@@ -656,12 +711,14 @@
     "bientot": "近日公開"
   },
   "interactions": {
-    "titre": "チャット連携",
+    "titre": "ライブ連携",
     "tabBienvenue": "歓迎クリップ",
     "tabBandeau": "初メッセージバナー",
     "tabAlertes": "アラート",
     "tabCommandes": "コマンド",
     "tabPad": "テンキー",
+    "tabPresentation": "プレゼンテーション",
+    "tabPlanning": "スケジュール",
     "tabPosition": "位置フレーム",
     "bienvenue": {
       "secFile": "キュー",
@@ -766,6 +823,39 @@
       "testHint": "テストは配信でキーを発動し、ローカル音声も再生します。",
       "hintSelection": "左のグリッドでキーを選んで設定してください。+ と - キーは予約済み(グループ切り替え)。"
     },
+    "presentation": {
+      "secRecherche": "検索",
+      "secFavoris": "お気に入り",
+      "secDiffusion": "配信中",
+      "rechercheTitre": "Twitch チャンネル検索",
+      "rechercherPlaceholder": "チャンネル名…",
+      "rechercheHint": "Twitch チャンネルを検索してお気に入りに追加するか、配信で直接プレゼンします（お気に入りは表示モードとサウンドを保持）。",
+      "ajouterFavori": "お気に入りに追加",
+      "presenter": "配信でプレゼン",
+      "favorisTitre": "お気に入り ({n})",
+      "aucunFavori": "お気に入りはありません — 「検索」タブから追加してください。",
+      "selectionnezFavori": "左のお気に入りを選択して設定してください。",
+      "modeTitre": "表示モード",
+      "modeTheatral": "🎭 シアトリカル",
+      "modeCarte": "▮ カード",
+      "sonsTitre": "プレゼン用サウンド",
+      "sonVoix": "ボイス",
+      "sonMusique": "ミュージック",
+      "sonsHint": "ボイスは1回再生、ミュージックはプレゼン中ループします。ファイルは medias/ — 配信側でのみ聞こえます。",
+      "ecouter": "サウンドを試聴",
+      "retirerSon": "このサウンドを削除",
+      "retirerFavori": "お気に入りから削除",
+      "enCoursTitre": "プレゼン中 — {nom}",
+      "fermer": "プレゼンを閉じる",
+      "stopClip": "クリップ停止",
+      "stopSons": "サウンド停止",
+      "sonsFavoriHint": "この配信者をお気に入りに登録してプレゼン用サウンドを設定してください。",
+      "clipsTitre": "最新クリップ ({n})",
+      "aucunClip": "この配信者のクリップはありません。",
+      "jouerClip": "このクリップを配信で再生",
+      "jouer": "再生",
+      "aucunePresentation": "プレゼンは実行されていません — 「検索」または「お気に入り」から開始してください。"
+    },
     "position": {
       "hintIntro": "「歓迎クリップ」と「アラート」オーバーレイで共有されるフレームの位置とサイズ。ドラッグで移動、角でサイズ変更。位置はリアルタイムで配信に適用されます。",
       "overlay": "オーバーレイ",
@@ -787,8 +877,67 @@
     "testSuppression": "テストと削除",
     "testHint": "テストはクールダウンをバイパスします。メディアなしの場合:アイコン + テキスト。"
   },
+  "planning": {
+    "connecterTwitch": "スケジュールを管理するにはTwitchに接続してください。",
+    "scopesManquants": "スケジュール用のTwitch権限が不足しています(channel:manage:schedule)。再接続して付与してください。",
+    "reconnecter": "Twitchに再接続",
+    "precedent": "前の期間",
+    "suivant": "次の期間",
+    "aujourdhui": "今日",
+    "vueSemaine": "週",
+    "vueMois": "月",
+    "vueListe": "リスト",
+    "vacances": "休暇",
+    "vacancesHint": "Twitchの休暇期間:この期間中、スケジュールは視聴者に表示されません。",
+    "vacancesPeriode": "休暇:{debut}〜{fin}",
+    "vacancesDu": "開始",
+    "vacancesAu": "終了",
+    "vacancesActiver": "有効化",
+    "vacancesDesactiver": "無効化",
+    "annuler": "キャンセル",
+    "confirmer": "確認",
+    "stream": "配信",
+    "jeux": "Twitchゲーム",
+    "rechercherJeu": "ゲームまたはカテゴリを検索…",
+    "glisserHint": "カバーをスケジュールにドラッグして枠を作成、またはセグメントにドラッグしてゲームを変更。",
+    "aucunResultat": "結果がありません。",
+    "aucunJeu": "ゲームを検索してスケジュールに追加してください。",
+    "nonAffilieHint": "非アフィリエイトチャンネル:定期枠(毎週)のみ作成可能です。",
+    "segment": "セグメント",
+    "segTitre": "タイトル",
+    "segDate": "日付",
+    "segHeure": "時刻",
+    "segDuree": "長さ",
+    "segJeuHint": "ゲームを変更するには、別のカバーをセグメントカードにドラッグしてください。",
+    "serieHint": "定期セグメント:変更はシリーズ全体に適用されます。",
+    "appliquer": "適用",
+    "retour": "戻る",
+    "supprimer": "削除",
+    "annulerStream": "この配信をキャンセル",
+    "retablirStream": "この配信を復元",
+    "rendreRecurrent": "毎週",
+    "rendrePonctuel": "1回のみ",
+    "toutesLesSemaines": "毎週",
+    "annuleBadge": "キャンセル済み",
+    "aucunSegment": "この期間にセグメントがありません。ゲームカバーをドラッグして作成してください。",
+    "creeOk": "Twitchにセグメントを作成しました。",
+    "majOk": "セグメントを更新しました。",
+    "supprOk": "セグメントを削除しました。",
+    "deplaceOk": "セグメントを移動しました。",
+    "annuleOk": "配信をキャンセルしました。",
+    "retabliOk": "配信を復元しました。",
+    "vacOk": "休暇を有効にしました。",
+    "vacOff": "休暇を無効にしました。",
+    "confirmSerie": "定期セグメント:この変更はシリーズ全体に適用されます。続行しますか?",
+    "confirmSuppr": "このセグメントをTwitchスケジュールから削除しますか?",
+    "confirmSupprSerie": "定期セグメント:削除するとシリーズ全体がTwitchスケジュールから削除されます。続行しますか?",
+    "confirmSerieRecreate": "定期セグメントを移動すると、シリーズ全体が削除され新しい枠で再作成されます。続行しますか?",
+    "confirmVersRecurrent": "このセグメントは削除され、定期枠(毎週)として再作成されます。続行しますか?",
+    "confirmVersPonctuel": "シリーズ全体が削除され、この1回の枠に置き換えられます。続行しますか?"
+  },
   "guide": {
     "fermer": "ガイドを閉じる",
+    "retourSommaire": "目次",
     "pageSuivante": "次のページ",
     "pagePrecedente": "前のページ",
     "tournezPages": "ページをめくる",

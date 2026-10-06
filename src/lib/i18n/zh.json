@@ -55,7 +55,8 @@
     "largeur": "宽度",
     "importerSon": "导入音效",
     "retirerMedia": "移除媒体",
-    "retirerSon": "移除音效"
+    "retirerSon": "移除音效",
+    "hauteur": "高度"
   },
   "presets": {
     "creationRefusee": "从预设创建被拒绝：{erreur}",
@@ -261,7 +262,9 @@
       "cyberpunk": "赛博朋克",
       "story": "Story",
       "thinLine": "细线",
-      "hexagon": "六边形"
+      "hexagon": "六边形",
+      "arena": "Arena",
+      "tribal": "部落"
     }
   },
   "cadresModal": {
@@ -273,6 +276,8 @@
     "desactive": "边框已禁用",
     "bordActive": "应用边缘：已启用",
     "bordDesactive": "应用边缘：已禁用",
+    "animerActive": "动画：已启用",
+    "animerDesactive": "动画：已禁用",
     "epaisseur": "粗细",
     "degrade": "渐变"
   },
@@ -338,8 +343,8 @@
     "connexions": "连接",
     "chatOn": "聊天 开",
     "chatOff": "聊天 关",
-    "interactions": "聊天互动",
-    "interactionsTitle": "打开聊天互动（欢迎剪辑、提醒…）",
+    "interactions": "直播互动",
+    "interactionsTitle": "打开直播互动（欢迎剪辑、提醒、日程…）",
     "ecranAttente": "等待画面",
     "ecranAttenteTitle": "打开等待画面（直播中的媒体 + 计时器）",
     "justChatting": "Just Chatting",
@@ -366,7 +371,6 @@
     "guideTitle": "打开指南 — StreamOS 能为您做什么",
     "cadreActif": "已启用边框（小组件 + 应用边缘）",
     "cadreInactif": "无启用的边框",
-    "raccourcis": "快捷键",
     "barreMasquer": "隐藏工具栏",
     "barreAfficher": "显示工具栏",
     "bord": {
@@ -377,7 +381,58 @@
     },
     "moniteur": "显示器 {n}",
     "principal": "（主显示器）",
-    "raccourcisHint": "工具栏始终置顶，停靠在所选边缘。在无边框窗口化游戏上方可见——独占全屏时不可见。"
+    "raccourcisHint": "工具栏始终置顶，停靠在所选边缘。在无边框窗口化游戏上方可见——独占全屏时不可见。",
+    "mode": {
+      "fenetre": "窗口",
+      "maximise": "最大化",
+      "fullscreen": "全屏"
+    },
+    "demarrageHint": "启动时的显示器和显示模式——立即应用。窗口模式下恢复上次的位置和大小。",
+    "modules": "模块",
+    "modulesTitle": "打开场景 HUD 模块（时钟、正在播放、直播目标）"
+  },
+  "modules": {
+    "titre": "模块",
+    "cliquerConfigurer": "拖动移动，拖柄调整大小 — 点击配置",
+    "afficher": "显示模块",
+    "position": "位置和大小",
+    "style": "外观",
+    "options": "选项",
+    "policeDefaut": "默认（系统）",
+    "taille": "文字大小 (px)",
+    "opacite": "背景不透明度",
+    "cadre": "模块周围显示场景边框",
+    "nom": {
+      "horloge": "时钟",
+      "musique": "正在播放",
+      "objectifs": "直播目标"
+    },
+    "hint": {
+      "horloge": "日期与时间由竖线分隔，单位为画布像素。也可以直接在画布上拖动/调整大小。",
+      "musique": "「正在播放」卡片 + 时间/进度小胶囊 — 由音乐队列 (!rs) 驱动。",
+      "objectifs": "「指标 — 当前值 / 目标」行，带进度条。每行 = 一个实测指标或一个已链接的 Twitch 目标。"
+    },
+    "horloge": {
+      "date": "显示日期 (DD / MM / YY)",
+      "secondes": "显示秒",
+      "h12": "12 小时制 (AM/PM)"
+    },
+    "musique": {
+      "temps": "显示时间/进度小胶囊",
+      "rien": "暂无播放",
+      "lancer": "用 !rs 开始播放",
+      "demandePar": "@{pseudo} 点播"
+    },
+    "objectifs": {
+      "titre": "区块标题",
+      "titrePh": "直播目标",
+      "labelPh": "标签（可选）",
+      "ajouter": "添加目标",
+      "monter": "上移",
+      "descendre": "下移",
+      "lier": "链接 Twitch 目标",
+      "vide": "在「模块」窗口中添加目标"
+    }
   },
   "app": {
     "obsTitle": "OBS WebSocket（见侧边栏 OBS 部分）",
@@ -656,12 +711,14 @@
     "bientot": "即将推出"
   },
   "interactions": {
-    "titre": "聊天互动",
+    "titre": "直播互动",
     "tabBienvenue": "欢迎剪辑",
     "tabBandeau": "首条消息横幅",
     "tabAlertes": "提醒",
     "tabCommandes": "命令",
     "tabPad": "数字小键盘",
+    "tabPresentation": "主播展示",
+    "tabPlanning": "日程",
     "tabPosition": "位置框架",
     "bienvenue": {
       "secFile": "队列",
@@ -766,6 +823,39 @@
       "testHint": "测试会在直播上触发该按键 + 播放本地音频。",
       "hintSelection": "在左侧网格中选择一个按键进行配置。+ 和 - 键为保留键（分组导航）。"
     },
+    "presentation": {
+      "secRecherche": "搜索",
+      "secFavoris": "收藏",
+      "secDiffusion": "直播中",
+      "rechercheTitre": "Twitch 频道搜索",
+      "rechercherPlaceholder": "频道名称…",
+      "rechercheHint": "搜索 Twitch 频道以添加到收藏或直接在直播中展示（收藏会保存显示模式和音效）。",
+      "ajouterFavori": "添加到收藏",
+      "presenter": "在直播中展示",
+      "favorisTitre": "收藏 ({n})",
+      "aucunFavori": "暂无收藏 — 请在「搜索」标签页中添加。",
+      "selectionnezFavori": "在左侧选择一个收藏进行配置。",
+      "modeTitre": "显示模式",
+      "modeTheatral": "🎭 剧场模式",
+      "modeCarte": "▮ 卡片模式",
+      "sonsTitre": "展示音效",
+      "sonVoix": "人声",
+      "sonMusique": "音乐",
+      "sonsHint": "人声播放一次；音乐在展示期间循环播放。文件位于 medias/ — 仅在直播中可听。",
+      "ecouter": "试听音效",
+      "retirerSon": "移除此音效",
+      "retirerFavori": "移出收藏",
+      "enCoursTitre": "正在展示 — {nom}",
+      "fermer": "关闭展示",
+      "stopClip": "停止片段",
+      "stopSons": "停止音效",
+      "sonsFavoriHint": "将此主播保存为收藏以配置其展示音效。",
+      "clipsTitre": "最新片段 ({n})",
+      "aucunClip": "该主播暂无可用片段。",
+      "jouerClip": "在直播中播放此片段",
+      "jouer": "播放",
+      "aucunePresentation": "暂无进行中的展示 — 请从「搜索」或「收藏」中启动。"
+    },
     "position": {
       "hintIntro": "“欢迎剪辑”和“提醒”叠加层共享的框架位置和大小。拖动移动，角落调整大小。位置实时应用到直播。",
       "overlay": "叠加层",
@@ -787,8 +877,67 @@
     "testSuppression": "测试与删除",
     "testHint": "测试会绕过冷却。无媒体时：图标 + 文本。"
   },
+  "planning": {
+    "connecterTwitch": "连接 Twitch 以管理日程。",
+    "scopesManquants": "缺少日程所需的 Twitch 权限（channel:manage:schedule）。请重新连接账号以授权。",
+    "reconnecter": "重新连接 Twitch",
+    "precedent": "上一时段",
+    "suivant": "下一时段",
+    "aujourdhui": "今天",
+    "vueSemaine": "周",
+    "vueMois": "月",
+    "vueListe": "列表",
+    "vacances": "假期",
+    "vacancesHint": "Twitch 假期时段：在此期间日程对观众隐藏。",
+    "vacancesPeriode": "假期：{debut} 至 {fin}",
+    "vacancesDu": "从",
+    "vacancesAu": "至",
+    "vacancesActiver": "启用",
+    "vacancesDesactiver": "停用",
+    "annuler": "取消",
+    "confirmer": "确认",
+    "stream": "直播",
+    "jeux": "Twitch 游戏",
+    "rechercherJeu": "搜索游戏或分类…",
+    "glisserHint": "将封面拖到日程上创建时段，或拖到分段上更换游戏。",
+    "aucunResultat": "无结果。",
+    "aucunJeu": "搜索游戏以添加到日程。",
+    "nonAffilieHint": "非附属频道：Twitch 仅接受定期时段（每周）。",
+    "segment": "分段",
+    "segTitre": "标题",
+    "segDate": "日期",
+    "segHeure": "时间",
+    "segDuree": "时长",
+    "segJeuHint": "要更换游戏，请将另一张封面拖到分段卡片上。",
+    "serieHint": "定期分段：更改将应用于整个系列。",
+    "appliquer": "应用",
+    "retour": "返回",
+    "supprimer": "删除",
+    "annulerStream": "取消此直播",
+    "retablirStream": "恢复此直播",
+    "rendreRecurrent": "每周",
+    "rendrePonctuel": "仅一次",
+    "toutesLesSemaines": "每周",
+    "annuleBadge": "已取消",
+    "aucunSegment": "此期间没有分段。拖动游戏封面即可创建。",
+    "creeOk": "已在 Twitch 创建分段。",
+    "majOk": "分段已更新。",
+    "supprOk": "分段已删除。",
+    "deplaceOk": "分段已移动。",
+    "annuleOk": "直播已取消。",
+    "retabliOk": "直播已恢复。",
+    "vacOk": "假期已启用。",
+    "vacOff": "假期已停用。",
+    "confirmSerie": "定期分段：此更改将应用于整个系列。继续吗？",
+    "confirmSuppr": "从 Twitch 日程中删除此分段？",
+    "confirmSupprSerie": "定期分段：删除将从 Twitch 日程中移除整个系列。继续吗？",
+    "confirmSerieRecreate": "移动定期分段将删除并在新时段重建整个系列。继续吗？",
+    "confirmVersRecurrent": "此分段将被删除并重新创建为定期时段（每周）。继续吗？",
+    "confirmVersPonctuel": "整个系列将被删除并替换为此单一时段。继续吗？"
+  },
   "guide": {
     "fermer": "关闭指南",
+    "retourSommaire": "目录",
     "pageSuivante": "下一页",
     "pagePrecedente": "上一页",
     "tournezPages": "翻动书页",

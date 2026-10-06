@@ -55,7 +55,8 @@
     "largeur": "Anchura",
     "importerSon": "Importar un sonido",
     "retirerMedia": "Quitar el medio",
-    "retirerSon": "Quitar el sonido"
+    "retirerSon": "Quitar el sonido",
+    "hauteur": "Altura"
   },
   "presets": {
     "creationRefusee": "Creación desde preset rechazada: {erreur}",
@@ -261,7 +262,9 @@
       "cyberpunk": "Cyberpunk",
       "story": "Story",
       "thinLine": "Thin Line",
-      "hexagon": "Hexágono"
+      "hexagon": "Hexágono",
+      "arena": "Arena",
+      "tribal": "Tribal"
     }
   },
   "cadresModal": {
@@ -273,6 +276,8 @@
     "desactive": "Marco desactivado",
     "bordActive": "Borde de la app: activado",
     "bordDesactive": "Borde de la app: desactivado",
+    "animerActive": "Animación: activada",
+    "animerDesactive": "Animación: desactivada",
     "epaisseur": "Grosor",
     "degrade": "Degradado"
   },
@@ -338,8 +343,8 @@
     "connexions": "Conexiones",
     "chatOn": "Chat ON",
     "chatOff": "Chat OFF",
-    "interactions": "Interacciones del chat",
-    "interactionsTitle": "Abrir las interacciones del chat (clips de bienvenida, alertas…)",
+    "interactions": "Interacciones en vivo",
+    "interactionsTitle": "Abrir las interacciones en vivo (clips de bienvenida, alertas, programación…)",
     "ecranAttente": "Pantalla de espera",
     "ecranAttenteTitle": "Abrir la pantalla de espera (medio + cronómetro en la difusión)",
     "justChatting": "Just Chatting",
@@ -366,7 +371,6 @@
     "guideTitle": "Abrir la guía — lo que StreamOS hace por usted",
     "cadreActif": "Marco activo (widgets + borde de la aplicación)",
     "cadreInactif": "Sin marco activo",
-    "raccourcis": "Atajos",
     "barreMasquer": "Ocultar la barra",
     "barreAfficher": "Mostrar la barra",
     "bord": {
@@ -377,7 +381,58 @@
     },
     "moniteur": "Monitor {n}",
     "principal": "(principal)",
-    "raccourcisHint": "Barra siempre encima, anclada al borde elegido. Visible sobre los juegos en ventana sin bordes — no en pantalla completa exclusiva."
+    "raccourcisHint": "Barra siempre encima, anclada al borde elegido. Visible sobre los juegos en ventana sin bordes — no en pantalla completa exclusiva.",
+    "mode": {
+      "fenetre": "Ventana",
+      "maximise": "Maximizada",
+      "fullscreen": "Pantalla completa"
+    },
+    "demarrageHint": "Monitor y modo de visualización al inicio — aplicados inmediatamente. En modo ventana se restauran la última posición y el tamaño.",
+    "modules": "Módulos",
+    "modulesTitle": "Abrir los módulos HUD de la escena (reloj, música en curso, objetivos del stream)"
+  },
+  "modules": {
+    "titre": "Módulos",
+    "cliquerConfigurer": "Arrastrar para mover, tiradores para redimensionar — clic para configurar",
+    "afficher": "Mostrar el módulo",
+    "position": "Posición y tamaño",
+    "style": "Formato",
+    "options": "Opciones",
+    "policeDefaut": "Por defecto (sistema)",
+    "taille": "Tamaño de texto (px)",
+    "opacite": "Opacidad del fondo",
+    "cadre": "Marco de la escena alrededor del módulo",
+    "nom": {
+      "horloge": "Reloj",
+      "musique": "Música en curso",
+      "objectifs": "Objetivos del stream"
+    },
+    "hint": {
+      "horloge": "Fecha y hora separadas por una línea, en píxeles del canvas. También se puede mover/redimensionar directamente en el canvas.",
+      "musique": "Tarjeta «sonando ahora» + pastilla de tiempo/progreso — alimentada por la cola de música (!rs).",
+      "objectifs": "Líneas «métrica — valor / objetivo» con barra de progreso. Cada línea = una métrica medida o un objetivo de Twitch vinculado."
+    },
+    "horloge": {
+      "date": "Mostrar la fecha (DD / MM / AA)",
+      "secondes": "Mostrar los segundos",
+      "h12": "Formato 12 h (AM/PM)"
+    },
+    "musique": {
+      "temps": "Mostrar la pastilla tiempo/progreso",
+      "rien": "Nada sonando",
+      "lancer": "Lanza la música con !rs",
+      "demandePar": "Pedido por @{pseudo}"
+    },
+    "objectifs": {
+      "titre": "Título del bloque",
+      "titrePh": "Objetivos del stream",
+      "labelPh": "Etiqueta (opcional)",
+      "ajouter": "Añadir un objetivo",
+      "monter": "Subir",
+      "descendre": "Bajar",
+      "lier": "Vincular un objetivo de Twitch",
+      "vide": "Añade objetivos en la ventana Módulos"
+    }
   },
   "app": {
     "obsTitle": "OBS WebSocket (ver sección OBS de la barra lateral)",
@@ -656,12 +711,14 @@
     "bientot": "Próximamente"
   },
   "interactions": {
-    "titre": "Interacciones del chat",
+    "titre": "Interacciones en vivo",
     "tabBienvenue": "Clip de bienvenida",
     "tabBandeau": "Banner de primer mensaje",
     "tabAlertes": "Alertas",
     "tabCommandes": "Comandos",
     "tabPad": "Pad numérico",
+    "tabPresentation": "Presentación",
+    "tabPlanning": "Programación",
     "tabPosition": "Esqueleto de posición",
     "bienvenue": {
       "secFile": "Cola",
@@ -766,6 +823,39 @@
       "testHint": "La Prueba dispara la tecla en la difusión + reproduce el audio local.",
       "hintSelection": "Seleccione una tecla en la cuadrícula de la izquierda para configurarla. Las teclas + y - están reservadas (navegación entre bancos)."
     },
+    "presentation": {
+      "secRecherche": "Búsqueda",
+      "secFavoris": "Favoritos",
+      "secDiffusion": "En emisión",
+      "rechercheTitre": "Búsqueda de canal de Twitch",
+      "rechercherPlaceholder": "Nombre del canal…",
+      "rechercheHint": "Busque un canal de Twitch para añadirlo a favoritos o presentarlo directamente en el stream (los favoritos conservan modo de visualización y sonidos).",
+      "ajouterFavori": "Añadir a favoritos",
+      "presenter": "Presentar en el stream",
+      "favorisTitre": "Favoritos ({n})",
+      "aucunFavori": "Sin favoritos — añádalos desde la pestaña Búsqueda.",
+      "selectionnezFavori": "Seleccione un favorito a la izquierda para configurarlo.",
+      "modeTitre": "Modo de visualización",
+      "modeTheatral": "🎭 Teatral",
+      "modeCarte": "▮ Tarjeta",
+      "sonsTitre": "Sonidos de presentación",
+      "sonVoix": "Voz",
+      "sonMusique": "Música",
+      "sonsHint": "La voz se reproduce una vez; la música suena en bucle durante la presentación. Archivos en medias/ — audibles solo en la emisión.",
+      "ecouter": "Escuchar el sonido",
+      "retirerSon": "Quitar este sonido",
+      "retirerFavori": "Quitar de favoritos",
+      "enCoursTitre": "Presentación en curso — {nom}",
+      "fermer": "Cerrar la presentación",
+      "stopClip": "Detener clip",
+      "stopSons": "Detener sonidos",
+      "sonsFavoriHint": "Guarde este streamer como favorito para configurar sus sonidos de presentación.",
+      "clipsTitre": "Clips recientes ({n})",
+      "aucunClip": "No hay clips disponibles para este streamer.",
+      "jouerClip": "Reproducir este clip en el stream",
+      "jouer": "Reproducir",
+      "aucunePresentation": "Ninguna presentación activa — inicie una desde Búsqueda o Favoritos."
+    },
     "position": {
       "hintIntro": "Posición y tamaño del esqueleto compartido por los overlays «Clip de bienvenida» y «Alertas». Arrastrar para mover, esquinas para redimensionar. La posición se aplica en directo en la difusión.",
       "overlay": "Overlay",
@@ -787,8 +877,67 @@
     "testSuppression": "Prueba y eliminación",
     "testHint": "La Prueba ignora los cooldowns. Sin medio: icono + texto."
   },
+  "planning": {
+    "connecterTwitch": "Conecta Twitch para gestionar la programación.",
+    "scopesManquants": "Faltan permisos de Twitch para la programación (channel:manage:schedule). Reconecta la cuenta para otorgarlos.",
+    "reconnecter": "Reconectar Twitch",
+    "precedent": "Período anterior",
+    "suivant": "Período siguiente",
+    "aujourdhui": "Hoy",
+    "vueSemaine": "Semana",
+    "vueMois": "Mes",
+    "vueListe": "Lista",
+    "vacances": "Vacaciones",
+    "vacancesHint": "Período de vacaciones de Twitch: la programación se oculta a los espectadores durante estas fechas.",
+    "vacancesPeriode": "Vacaciones: del {debut} al {fin}",
+    "vacancesDu": "Del",
+    "vacancesAu": "al",
+    "vacancesActiver": "Activar",
+    "vacancesDesactiver": "Desactivar",
+    "annuler": "Cancelar",
+    "confirmer": "Confirmar",
+    "stream": "Stream",
+    "jeux": "Juegos de Twitch",
+    "rechercherJeu": "Buscar un juego o una categoría…",
+    "glisserHint": "Arrastra una carátula a la programación para crear un horario, o a un segmento para cambiar su juego.",
+    "aucunResultat": "Sin resultados.",
+    "aucunJeu": "Busca un juego para añadirlo a la programación.",
+    "nonAffilieHint": "Canal no afiliado: Twitch solo acepta horarios recurrentes (cada semana).",
+    "segment": "Segmento",
+    "segTitre": "Título",
+    "segDate": "Fecha",
+    "segHeure": "Hora",
+    "segDuree": "Duración",
+    "segJeuHint": "Para cambiar el juego, arrastra otra carátula sobre la tarjeta del segmento.",
+    "serieHint": "Segmento recurrente: los cambios se aplican a toda la serie.",
+    "appliquer": "Aplicar",
+    "retour": "Volver",
+    "supprimer": "Eliminar",
+    "annulerStream": "Cancelar este stream",
+    "retablirStream": "Restablecer este stream",
+    "rendreRecurrent": "Cada semana",
+    "rendrePonctuel": "Solo una vez",
+    "toutesLesSemaines": "Cada semana",
+    "annuleBadge": "Cancelado",
+    "aucunSegment": "Ningún segmento en este período. Arrastra una carátula de juego para crear uno.",
+    "creeOk": "Segmento creado en Twitch.",
+    "majOk": "Segmento actualizado.",
+    "supprOk": "Segmento eliminado.",
+    "deplaceOk": "Segmento movido.",
+    "annuleOk": "Stream cancelado.",
+    "retabliOk": "Stream restablecido.",
+    "vacOk": "Vacaciones activadas.",
+    "vacOff": "Vacaciones desactivadas.",
+    "confirmSerie": "Segmento recurrente: este cambio se aplicará a toda la serie. ¿Continuar?",
+    "confirmSuppr": "¿Eliminar este segmento de la programación de Twitch?",
+    "confirmSupprSerie": "Segmento recurrente: eliminar quitará TODA la serie de la programación de Twitch. ¿Continuar?",
+    "confirmSerieRecreate": "Mover un segmento recurrente elimina y recrea TODA la serie en el nuevo horario. ¿Continuar?",
+    "confirmVersRecurrent": "Este segmento se eliminará y se recreará como recurrente (cada semana). ¿Continuar?",
+    "confirmVersPonctuel": "Toda la serie se eliminará y se reemplazará por este único horario. ¿Continuar?"
+  },
   "guide": {
     "fermer": "Cerrar la guía",
+    "retourSommaire": "Índice",
     "pageSuivante": "Página siguiente",
     "pagePrecedente": "Página anterior",
     "tournezPages": "Pasar las páginas",
