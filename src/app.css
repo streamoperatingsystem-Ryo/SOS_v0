@@ -176,6 +176,36 @@ textarea {
     box-shadow 0.15s ease;
 }
 
+/* Select natif — recette « verre » partagée (comme les boutons) :
+   --btn-surface/--btn-inset + bordure --bordure-ui, accent au hover/focus.
+   color-scheme: dark OBLIGATOIRE : sans lui, Chromium rend le contrôle ET
+   le popup natif en thème clair (blanc) — les règles option ne suffisent
+   pas sur Windows. Les composants n'ont plus à dupliquer ce bloc. */
+select {
+  padding: 0.4rem 0.5rem;
+  background: var(--btn-surface);
+  box-shadow: var(--btn-inset);
+  color: var(--texte);
+  border: 1px solid var(--bordure-ui);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  color-scheme: dark;
+}
+select:hover {
+  background: var(--btn-surface-hover);
+  box-shadow: var(--btn-inset-hover);
+  border-color: var(--accent-ui);
+}
+select:focus {
+  outline: none;
+  border-color: var(--accent-ui);
+}
+select option {
+  background: var(--fond);
+  color: var(--texte);
+}
+
 /* ===== Reflet animé « shine » au survol des boutons (2026-09-15) =====
    Sweep lumineux diagonal qui traverse le bouton une fois au :hover.
    One-shot (pas de boucle) → pas énergivore. Teinté --btn-tint (identitaire),
@@ -451,8 +481,10 @@ input[type="radio"] {
    viewer). Unifie les 3 copies dupliquées (.lecture-obs et
    .input-viewer-obs dans Widget.svelte, .lecture-obs-fond dans
    Canvas.svelte) — ne jamais re-copier ce bloc dans un composant.
-   Couleur de texte par contexte : classe locale (.input-viewer-obs) ou
-   inline style="color: ..." (couleur réelle du cadre SVG).
+   Couleur de texte : --texte par défaut ; les badges « rendu dans OBS »
+   (lecture-obs, lecture-obs-fond, input-viewer-obs) partagent la teinte
+   orange action utilisateur — jamais la couleur du cadre : illisible sur
+   fond --fond si l'utilisateur choisit une couleur sombre (2026-10-04).
    font-size en cqw → requiert un ancêtre container-type: inline-size
    (.widget-3d, .bg-layer, .titre-zone), sinon fallback % viewport. */
 .msg-pill {
@@ -492,6 +524,14 @@ input[type="radio"] {
   font-size: 1.08em;
   line-height: 1;
   flex-shrink: 0;
+}
+/* Badges « rendu dans OBS » (vidéo widget, fond canvas, input-viewer) :
+   teinte orange unique — un seul message (« affiché/en lecture dans
+   OBS ») = une seule couleur, lisible sur tout cadre. */
+.lecture-obs,
+.lecture-obs-fond,
+.input-viewer-obs {
+  color: var(--message-user-action-color);
 }
 
 /* ===== Menus contextuels clic droit — recette .ctx-* (2026-10-03) =====

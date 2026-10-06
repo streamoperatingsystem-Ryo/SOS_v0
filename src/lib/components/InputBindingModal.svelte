@@ -125,6 +125,7 @@
 <Modal
   title={$t("inputBinding.titre")}
   onClose={onCancel}
+  crochet="var(--crochet-jaune)"
   maxWidth="34rem"
   hint={$t("inputBinding.hint")}
 >

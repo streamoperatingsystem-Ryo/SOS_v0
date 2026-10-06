@@ -115,6 +115,7 @@
   <Modal
     title={$t("titreModal.titreWidget")}
     onClose={onAnnuler}
+    crochet="var(--message-error-color)"
     maxWidth="560px"
     hint={$t("titreModal.hintWidget")}
   >

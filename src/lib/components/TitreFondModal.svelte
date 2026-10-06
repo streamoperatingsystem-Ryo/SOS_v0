@@ -108,6 +108,7 @@
   <Modal
     title={$t("titreModal.titreFond")}
     onClose={onAnnuler}
+    crochet="var(--crochet-orange)"
     maxWidth="560px"
     hint={$t("titreModal.hintFond")}
   >

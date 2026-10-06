@@ -63,6 +63,20 @@
   --carte-dore: var(--t-ambre-950);
   --carte-verte: var(--t-emeraude-700);
   --carte-ardoise: var(--t-ardoise-700);
+  /* Couleurs vives des crochets de section (barre gauche de l'en-tête au
+     repos, Toolbar) — mêmes teintes que les --carte-* mais en vif : les
+     950/700 des cartes ouvertes sont invisibles en barre de 3px. */
+  --crochet-bleu: var(--t-bleu-500);
+  --crochet-vert: var(--t-emeraude-500);
+  --crochet-rose: var(--t-rose-500);
+  --crochet-cyan: var(--t-cyan-500);
+  --crochet-orange: var(--t-orange);
+  --crochet-indigo: var(--t-indigo-500);
+  --crochet-teal: var(--t-teal-500);
+  --crochet-dore: var(--t-ambre);
+  --crochet-violet: var(--t-violet);
+  --crochet-jaune: var(--t-jaune-500);
+  --crochet-ardoise: var(--t-ardoise-400);
   /* ===== Boutons — verre sombre translucide, aucune teinte colorée =====
      --btn-tint transparent : pas de couleur dans le fill ni le shine ;
      --btn-base = verre sombre translucide (le fond ambiant transparaît,

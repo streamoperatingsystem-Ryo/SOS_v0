@@ -114,6 +114,20 @@
   // Unfollows (historique des unfollows détectés au démarrage).
   let unfollowsData = $derived($unfollows);
 
+  // Filtre temps réel de la liste followers par la recherche (même pattern
+  // que InteractionViewerModal : filtre local, zéro appel API — le bouton
+  // « Rechercher » reste la résolution Helix exacte pour les non-followers).
+  let rechercheLower = $derived(recherche.trim().toLowerCase());
+  let followersFiltres = $derived(
+    rechercheLower === ""
+      ? (followersData?.liste ?? [])
+      : (followersData?.liste ?? []).filter(
+          (f) =>
+            f.login.toLowerCase().includes(rechercheLower) ||
+            f.display_name.toLowerCase().includes(rechercheLower)
+        )
+  );
+
   // Messages Twitch uniquement (pour la suppression).
   let messagesTwitch = $derived(
     messagesData.filter((m) => m.plateforme === "twitch" && m.message_id)
@@ -553,7 +567,7 @@
   }
 </script>
 
-<Modal title={$t("moderationModal.titre")} onClose={onFermer} maxWidth="900px">
+<Modal title={$t("moderationModal.titre")} onClose={onFermer} maxWidth="900px" crochet="var(--crochet-indigo)">
   <div class="tabs">
     <button class="tab" class:active={tab === "twitch"} onclick={() => (tab = "twitch")}>
       Twitch
@@ -1122,7 +1136,7 @@
                 <div class="bloc-titre">Followers ({followersData?.total ?? "…"})</div>
                 {#if followersData}
                   <div class="liste-scroll">
-                    {#each followersData.liste as f}
+                    {#each followersFiltres as f}
                       <div class="viewer-row">
                         <div class="liste-user">
                           {#if f.profile_image_url}

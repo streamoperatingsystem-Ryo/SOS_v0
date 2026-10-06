@@ -324,6 +324,7 @@
   <Modal
     title={$t("ecranAttenteModal.titre")}
     onClose={onFermer}
+    crochet="var(--crochet-cyan)"
     maxWidth="560px"
     hint={$t("ecranAttenteModal.hint")}
   >
@@ -680,24 +681,10 @@
     display: flex;
     gap: 0.4rem;
   }
+  /* Style = global (app.css) — reste le layout flex de la rangée. */
   .ea-select {
     flex: 1;
     min-width: 0;
-    padding: 0.4rem 0.5rem;
-    background: var(--fond-controle);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-  .ea-select:focus {
-    outline: none;
-    border-color: var(--accent-ui);
-  }
-  .ea-select option {
-    background: var(--fond);
-    color: var(--texte);
   }
   .ea-btn-refresh {
     flex: 0 0 auto;

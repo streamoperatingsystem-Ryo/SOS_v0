@@ -9,12 +9,18 @@
   import type { Snippet } from "svelte";
   import { t } from "../stores/langue";
 
+  // Prop `crochet` : couleur du liseré vertical pleine hauteur sur le bord
+  // gauche de la modale — même motif que le crochet des sections du
+  // dashboard (box-shadow inset 3px). Chaque modale passe la couleur du
+  // bouton/section qui la lance (rôles --crochet-* / accents) ; défaut
+  // --accent-ui pour les modales sans couleur dédiée.
   let {
     title,
     onClose,
     maxWidth = "900px",
     hint = "",
     headerExtra = null,
+    crochet = "var(--accent-ui)",
     children,
   }: {
     title: string;
@@ -22,6 +28,7 @@
     maxWidth?: string;
     hint?: string;
     headerExtra?: Snippet | null;
+    crochet?: string;
     children: Snippet;
   } = $props();
 
@@ -62,7 +69,7 @@
 >
   <div
     class="modal-shell"
-    style="max-width: {maxWidth}"
+    style="max-width: {maxWidth}; --crochet-modal: {crochet}"
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
     role="dialog"
@@ -103,7 +110,12 @@
     color: var(--texte);
     border: 1px solid var(--bordure-ui-active);
     border-radius: var(--rayon-grand);
-    box-shadow: 0 0 40px color-mix(in srgb, var(--accent-ui) 15%, transparent);
+    box-shadow:
+      0 0 40px color-mix(in srgb, var(--accent-ui) 15%, transparent),
+      /* Crochet pleine hauteur : liseré 3px sur le bord gauche, couleur du
+         bouton lanceur (--crochet-modal, prop crochet). L'inset suit le
+         border-radius — extrémités arrondies comme les sections. */
+      inset 3px 0 0 var(--crochet-modal);
     display: flex;
     flex-direction: column;
     width: 90vw;

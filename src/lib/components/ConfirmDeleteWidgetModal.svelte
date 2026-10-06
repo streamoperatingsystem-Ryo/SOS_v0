@@ -35,7 +35,7 @@
 <svelte:window onkeydown={onKeydown} />
 
 {#if open}
-  <Modal title={$t("confirmSupprWidget.titre")} onClose={onCancel} maxWidth="24rem" hint={$t("confirmSupprWidget.hint")}>
+  <Modal title={$t("confirmSupprWidget.titre")} onClose={onCancel} maxWidth="24rem" hint={$t("confirmSupprWidget.hint")} crochet="var(--message-error-color)">
     <div class="confirm-body">
       <div class="modal-actions confirm-actions">
         <button class="modal-action danger" onclick={onConfirm}>{$t("commun.oui")}</button>

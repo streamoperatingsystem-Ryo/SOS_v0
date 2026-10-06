@@ -35,6 +35,7 @@
   <Modal
     title={$t("twitchDevice.connexion", { plateforme: device ? "Twitch" : "YouTube" })}
     onClose={onAnnuler}
+    crochet="var(--crochet-vert)"
     maxWidth="24rem"
     hint={$t("twitchDevice.hint")}
   >

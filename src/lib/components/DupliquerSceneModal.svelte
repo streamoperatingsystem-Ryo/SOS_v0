@@ -63,6 +63,7 @@
   <Modal
     title={$t("dupliquerModal.titre")}
     onClose={fermer}
+    crochet="var(--accent-rose)"
     maxWidth="420px"
     hint={source
       ? $t("dupliquerModal.hintNom", { nom: source.nom })

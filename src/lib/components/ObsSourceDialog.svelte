@@ -89,6 +89,7 @@
 <Modal
   title={mode === "fond" ? $t("obsSourceDialog.titreFond") : $t("obsSourceDialog.titreWidget")}
   onClose={onClose}
+  crochet="var(--crochet-dore)"
   maxWidth="460px"
   hint={mode === "fond"
     ? $t("obsSourceDialog.hintFond")

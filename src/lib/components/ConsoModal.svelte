@@ -185,6 +185,7 @@
 <Modal
   title={$t("consoModal.titre")}
   onClose={onFermer}
+  crochet="var(--crochet-teal)"
   maxWidth="980px"
   hint={$t("consoModal.hint")}
 >

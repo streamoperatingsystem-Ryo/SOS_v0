@@ -149,6 +149,7 @@
 
 <Modal
   title={$t("speedrunConfig.titre")}
+  crochet="var(--message-error-color)"
   maxWidth="700px"
   hint={$t("speedrunConfig.hint")}
   onClose={onFermer}

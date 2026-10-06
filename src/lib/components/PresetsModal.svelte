@@ -103,6 +103,7 @@
 <Modal
   title={mode === "onboarding" ? $t("presetsModal.titreOnboarding") : $t("presetsModal.titreCreation")}
   onClose={mode === "onboarding" ? fermerOnboarding : fermer}
+  crochet="var(--accent-rose)"
   maxWidth="760px"
   hint={mode === "onboarding"
     ? $t("presetsModal.hintOnboarding")

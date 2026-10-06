@@ -50,6 +50,18 @@
      Niveau 700 (comme jaune-700 / emeraude-700) : une variante 950 serait
      invisible en bordure pointillée sur --fond-panneau. */
   --t-ardoise-700: #334155;
+  /* Teintes vives des crochets de section (barre gauche de l'en-tête,
+     Toolbar) — niveaux 400-500 : les teintes carte 950/700 servent au
+     fond/bordure des cartes ouvertes, invisibles en barre de 3px.
+     violet/ambre/orange/vert existent déjà dans la palette. */
+  --t-bleu-500: #3b82f6;
+  --t-emeraude-500: #10b981;
+  --t-jaune-500: #eab308;
+  --t-ardoise-400: #94a3b8;
+  --t-rose-500: #f43f5e;
+  --t-cyan-500: #06b6d4;
+  --t-indigo-500: #6366f1;
+  --t-teal-500: #14b8a6;
   /* Composites (dégradés + glows). */
   --t-gradient-sig: linear-gradient(135deg, #f97316, #ec4899, #8b5cf6);
   --t-glow-orange: 0 0 8px rgba(249, 115, 22, 0.4);

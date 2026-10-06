@@ -352,24 +352,9 @@
     border-color: var(--accent-ui);
     opacity: 1;
   }
+  /* Le select police utilise la recette globale (app.css — select). */
   .police-select {
     width: 100%;
-    padding: 0.4rem 0.5rem;
-    background: var(--fond-controle);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-  }
-  .police-select:focus {
-    outline: none;
-    border-color: var(--accent-ui);
-  }
-  .police-select option {
-    padding: 0.3rem;
-    background: var(--fond);
-    color: var(--texte);
   }
   .taille-row {
     display: flex;
