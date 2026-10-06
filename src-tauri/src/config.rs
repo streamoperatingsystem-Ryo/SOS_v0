@@ -248,6 +248,63 @@ pub fn sauver_raccourcis_config(app: &AppHandle, cfg: &RaccourcisConfig) -> Resu
         .map_err(|e| format!("Écrire raccourcis.json: {}", e))
 }
 
+// ===== Persistance fenêtre principale (écran + mode au démarrage) =====
+
+/// Dernière géométrie fenêtrée connue (px physiques) — restaurée quand le
+/// mode "fenetre" est choisi. Sauvegardée à la fermeture de l'app et à chaque
+/// `fenetre_appliquer` tant que la fenêtre est en mode fenêtré.
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FenetreGeo {
+    pub x: i32,
+    pub y: i32,
+    pub w: u32,
+    pub h: u32,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct FenetreConfig {
+    /// Index dans available_monitors() au moment de la sauvegarde.
+    /// Hors bornes (écran débranché) → primaire (même règle que raccourcis).
+    #[serde(default)]
+    pub monitor_index: usize,
+    /// "fenetre" | "maximise" | "fullscreen" — défaut "maximise"
+    /// (= comportement historique de tauri.conf.json).
+    #[serde(default = "default_mode_fenetre")]
+    pub mode: String,
+    /// Géométrie fenêtrée persistée. None tant que l'app n'a jamais été
+    /// quittée/configurée en mode fenêtré → centrage 1280×800 au restore.
+    #[serde(default)]
+    pub geo: Option<FenetreGeo>,
+}
+
+fn default_mode_fenetre() -> String {
+    "maximise".to_string()
+}
+
+/// Lit la config de la fenêtre principale (fenetre.json). None si absent.
+pub fn lire_fenetre_config(app: &AppHandle) -> Result<Option<FenetreConfig>, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("fenetre.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Lire fenetre.json: {}", e))?;
+    let cfg: FenetreConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("Parse fenetre.json: {}", e))?;
+    Ok(Some(cfg))
+}
+
+/// Sauve la config de la fenêtre principale (écrase si existe).
+pub fn sauver_fenetre_config(app: &AppHandle, cfg: &FenetreConfig) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("fenetre.json");
+    let json = serde_json::to_string(cfg)
+        .map_err(|e| format!("Serialize fenetre.json: {}", e))?;
+    fs::write(&path, json)
+        .map_err(|e| format!("Écrire fenetre.json: {}", e))
+}
+
 // ===== Persistance onboarding presets =====
 
 /// Lit le flag « onboarding fait » (onboarding.json). Absent = false (premier

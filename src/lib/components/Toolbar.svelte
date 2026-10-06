@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
-  import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "../stores/obs";
-  import { openSection, toggleSection, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen } from "../stores/ui";
+  import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, createMusiqueWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
+  import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview } from "../stores/obs";
+  import { openSection, toggleSection, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen } from "../stores/ui";
   import { jcActif, toggleJustChatting } from "../stores/justChatting";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
   import { connecterKick, deconnecterKick, kickErreur as kickErreurStore, lireSlugSauve } from "../stores/kick";
@@ -9,9 +9,10 @@
   import { connecterTiktok, deconnecterTiktok, lireUsernameSauve } from "../stores/tiktok";
   import { youtubeErreur as youtubeErreurStore, tiktokErreur as tiktokErreurStore, youtubeChatActif as youtubeChatActifStore } from "../stores/chat";
   import { raccourcisVisible, raccourcisBord, raccourcisMonitorIndex, raccourcisMoniteurs, appliquerRaccourcis, masquerRaccourcis } from "../stores/raccourcis";
+  import { fenetreMonitorIndex, fenetreMode, appliquerFenetre } from "../stores/fenetre";
   import { fondSidebar, importerFondSidebar, retirerFondSidebar } from "../stores/fondSidebar";
   import { fondDash, importerFondDash, retirerFondDash } from "../stores/fondDash";
-  import type { BordRaccourcis } from "../tauri";
+  import type { BordRaccourcis, ModeFenetre } from "../tauri";
   import { t } from "../stores/langue";
   import { get } from "svelte/store";
   import { onMount } from "svelte";
@@ -176,6 +177,93 @@
     if (!isNaN(idx)) await appliquerRaccourcis(raccBord, idx);
   }
 
+  // ===== Fenêtre principale : écran + mode de démarrage (Ergonomie) =====
+  // La liste des moniteurs est partagée avec le bloc barre de raccourcis
+  // (monsOptions / raccMons ci-dessus) — même section Ergonomie.
+  let fenMonIdx = $derived($fenetreMonitorIndex);
+  let fenMode = $derived($fenetreMode);
+
+  const MODES: ModeFenetre[] = ["fenetre", "maximise", "fullscreen"];
+
+  // Libellés traduits des modes ($t scopé interdit dans un {#each} → map).
+  let nomsModes = $derived.by(() => {
+    const tr = $t;
+    return Object.fromEntries(
+      MODES.map((m) => [m, tr("toolbar.mode." + m)])
+    ) as Record<ModeFenetre, string>;
+  });
+
+  // Chaque changement applique immédiatement : la fenêtre saute sur l'écran/
+  // mode choisi ET la préférence est persistée pour le prochain démarrage.
+  async function onFenMode(m: ModeFenetre) {
+    await appliquerFenetre(fenMonIdx, m);
+  }
+  async function onFenMoniteur(e: Event) {
+    const idx = parseInt((e.target as HTMLSelectElement).value, 10);
+    if (!isNaN(idx)) await appliquerFenetre(idx, fenMode);
+  }
+
+  // ===== Prévisualisation (miniature live :4321 + projecteur OBS) =====
+  // Section ACCORDÉON standard : pliée = tout démonté, l'iframe est
+  // détruite (zéro coût — c'est le lazy-loading) ; ouverte = miniature +
+  // contrôles. La miniature = iframe de la page diffusion en mode ?preview
+  // (muette, vidéos persistantes figées — zéro Rust : les frames WS sont
+  // déjà broadcast à tout client). Le clic sur la miniature ouvre le
+  // projecteur OBS « prévisualisation » sur l'écran choisi
+  // (OpenVideoMixProjector).
+  // ⚠️ La miniature ne montre que la couche overlay : caméra et captures
+  // OBS sont des trous dans la page — le vrai rendu = le projecteur OBS.
+  function lirePrevNum(cle: string, defaut: number): number {
+    try { const v = parseInt(localStorage.getItem(cle) ?? "", 10); return isNaN(v) ? defaut : v; }
+    catch { return defaut; }
+  }
+  function persisterPrev(cle: string, v: string): void {
+    try { localStorage.setItem(cle, v); } catch { /* ignore */ }
+  }
+
+  let previewMonIdx = $state(lirePrevNum("previewMonIdx", -1));
+  let previewMoniteurs = $derived($obsMoniteurs);
+  let previewBusy = $state(false);
+  // Feedback d'ouverture du projecteur : l'erreur obs-websocket serait sinon
+  // invisible (obsError ne s'affiche que dans la section OBS — accordéon
+  // fermé la plupart du temps) → clic qui semble « ne rien faire ».
+  let previewMsg = $state<string | null>(null);
+  let previewMsgOk = $state(false);
+  let previewBoxW = $state(0);
+  // Dims canvas de la scène → iframe rendue à taille réelle puis réduite par
+  // transform (même rendu que la source OBS, juste dézoomé).
+  let previewCanvasW = $derived($sceneStore.canvasW ?? 1920);
+  let previewCanvasH = $derived($sceneStore.canvasH ?? 1080);
+  let previewScale = $derived(previewBoxW > 0 ? previewBoxW / previewCanvasW : 0);
+
+  // Moniteurs OBS relus à l'ouverture de la section (non-fatal : [] si OBS
+  // absent — le select garde « Fenêtré »).
+  $effect(() => {
+    if (open === "preview") void chargerMoniteursObs();
+  });
+  function onPreviewMoniteur(e: Event) {
+    const idx = parseInt((e.target as HTMLSelectElement).value, 10);
+    previewMonIdx = isNaN(idx) ? -1 : idx;
+    persisterPrev("previewMonIdx", String(previewMonIdx));
+  }
+  async function onOuvrirProjecteur() {
+    // PAS de gate status === "connected" : la commande est one-shot, elle se
+    // connecte à OBS elle-même (comme les toggles stream/record — le statut
+    // "connected" ne reflète que le dernier obsConnect réussi).
+    if (previewBusy) return;
+    previewBusy = true;
+    previewMsg = null;
+    try {
+      await ouvrirProjecteurPreview(previewMonIdx);
+      previewMsg = $t("toolbar.previewOuvert");
+      previewMsgOk = true;
+    } catch (e) {
+      previewMsg = get(obsError) ?? String(e);
+      previewMsgOk = false;
+    }
+    previewBusy = false;
+  }
+
   onMount(async () => {
     await listen("popout-closed", () => {});
     if (!kickSlug) kickSlug = (await lireSlugSauve()) ?? "";
@@ -192,7 +280,7 @@
        portée par la .section elle-même quand elle est ouverte — elle englobe
        en-tête + contenu, au même format que les autres cartes. -->
   <div
-    class="section"
+    class="section sec-widgets"
     class:carte-edition={open === "widgets"}
     class:cible-widgets={open === "widgets"}
   >
@@ -213,6 +301,7 @@
         <button class="action" onclick={createInputViewerWidget}>{$t("toolbar.creerInputViewer")}</button>
         <button class="action" onclick={createSpeedrunWidget}>{$t("toolbar.creerSpeedrun")}</button>
         <button class="action" onclick={createGoalWidget}>{$t("toolbar.creerGoal")}</button>
+        <button class="action" onclick={createMusiqueWidget}>{$t("toolbar.creerMusique")}</button>
         <p class="hint">{$t("toolbar.hintEdition")}</p>
       </div>
     {/if}
@@ -221,7 +310,7 @@
   <!-- Section Connexions : carte vert foncé portée par la .section quand
        elle est ouverte — même mécanisme que les autres sections-cartes. -->
   <div
-    class="section"
+    class="section sec-connexions"
     class:carte-edition={open === "connexions"}
     class:cible-connexions={open === "connexions"}
   >
@@ -300,7 +389,7 @@
   <!-- Section Interactions chat : LANCEUR DIRECT (pas un accordéon — le clic
        ouvre la modale à onglets : Clip de bienvenue / Bandeau / Alertes).
        Tout est centralisé dans la modale, qui s'explique elle-même. -->
-  <div class="section">
+  <div class="section sec-interactions">
     <button
       class="header"
       onclick={() => interactionModalOpen.set(true)}
@@ -315,7 +404,7 @@
   <!-- Section Écran d'attente : LANCEUR DIRECT (pas un accordéon — le clic
        ouvre la modale de config/contrôle BRB). Le média est affiché sur la
        diffusion uniquement ; le chrono est détenu par Rust. -->
-  <div class="section">
+  <div class="section sec-attente">
     <button
       class="header"
       onclick={() => ecranAttenteModalOpen.set(true)}
@@ -327,11 +416,27 @@
     </button>
   </div>
 
+  <!-- Section Modules : LANCEUR DIRECT (pas un accordéon — le clic ouvre
+       la modale master-detail des modules HUD de la scène : horloge,
+       musique en cours, objectifs du stream). Le positionnement se fait
+       aussi au drag/resize direct sur le canvas. -->
+  <div class="section sec-modules">
+    <button
+      class="header"
+      onclick={() => modulesModalOpen.set("horloge")}
+      title={$t("toolbar.modulesTitle")}
+    >
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="4" width="8" height="7" rx="1.5"/><rect x="3" y="13" width="8" height="7" rx="1.5"/><rect x="13" y="13" width="8" height="7" rx="1.5"/></svg>
+      <span>{$t("toolbar.modules")}</span>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
   <!-- Section Just Chatting : TOGGLE DIRECT (pas un accordéon — le clic
        bascule l'overlay non-destructif de la diffusion : caméra + chat
        seuls, la scène n'est jamais modifiée). La pastille .dot reflète
        l'état runtime — OFF au boot, non persisté. -->
-  <div class="section">
+  <div class="section sec-jc">
     <button
       class="header output-btn"
       class:actif={$jcActif}
@@ -348,7 +453,7 @@
        ouvre la modale à onglets : Twitch / Kick / YouTube / TikTok / Trovo).
        Gestion des statuts/rôles : ban, timeout, VIP, modérateur, suppression
        de messages, clear chat. -->
-  <div class="section">
+  <div class="section sec-moderation">
     <button
       class="header"
       onclick={() => moderationModalOpen.set(true)}
@@ -363,7 +468,7 @@
   <!-- Section Diagnostic : LANCEUR DIRECT (pas un accordéon — le clic ouvre
        la modale de consommation : courbes CPU/RAM par processus et par
        fonction StreamOS + compteurs d'activité, mesures réelles 1 Hz). -->
-  <div class="section">
+  <div class="section sec-diagnostic">
     <button
       class="header"
       onclick={() => consoModalOpen.set(true)}
@@ -377,10 +482,10 @@
 
   <!-- Section OBS : carte noir/doré portée par la .section quand elle est
        ouverte — même mécanisme que les sections Widgets / Personnalisation /
-       Raccourcis. Les couleurs d'état de l'en-tête (rouge/vert) restent
+       Ergonomie. Les couleurs d'état de l'en-tête (rouge/vert) restent
        sémantiques et priment sur la teinte de la carte. -->
   <div
-    class="section"
+    class="section sec-obs"
     class:carte-edition={open === "obs"}
     class:cible-obs={open === "obs"}
   >
@@ -455,11 +560,69 @@
     {/if}
   </div>
 
+  <!-- Section Prévisualisation : accordéon standard — pliée = tout démonté
+       (iframe détruite → zéro coût), ouverte = miniature live + projecteur.
+       La carte jaune (.carte-edition.cible-preview) est portée par la
+       .section quand elle est ouverte, comme les autres sections. -->
+  <div
+    class="section sec-preview"
+    class:carte-edition={open === "preview"}
+    class:cible-preview={open === "preview"}
+  >
+    <button
+      class="header"
+      class:ouvert={open === "preview"}
+      onclick={() => toggleSection("preview")}
+      title={$t("toolbar.previewTitle")}
+    >
+      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+      <span>{$t("toolbar.preview")}</span>
+      <span class="chevron">›</span>
+    </button>
+    {#if open === "preview"}
+      <div class="content">
+        <!-- Miniature live : iframe de la page diffusion en mode ?preview
+             (son coupé, vidéos figées). pointer-events:none + le clic est
+             capté par le bouton → ouvre le projecteur OBS. -->
+        <button
+          class="preview-thumb"
+          bind:clientWidth={previewBoxW}
+          onclick={onOuvrirProjecteur}
+          disabled={previewBusy}
+          title={$t("toolbar.previewOuvrir")}
+          style="aspect-ratio: {previewCanvasW} / {previewCanvasH};"
+        >
+          <iframe
+            src="http://127.0.0.1:4321/?preview"
+            title={$t("toolbar.preview")}
+            tabindex="-1"
+            style="width: {previewCanvasW}px; height: {previewCanvasH}px; transform: scale({previewScale});"
+          ></iframe>
+        </button>
+        <select onchange={onPreviewMoniteur} disabled={previewBusy}>
+          <option value="-1" selected={previewMonIdx === -1}>{$t("toolbar.previewFenetre")}</option>
+          {#each previewMoniteurs as m (m.monitorIndex)}
+            <option value={m.monitorIndex} selected={previewMonIdx === m.monitorIndex}>
+              {m.monitorName || $t("toolbar.previewMoniteur", { n: m.monitorIndex + 1 })} — {m.monitorWidth}×{m.monitorHeight}
+            </option>
+          {/each}
+        </select>
+        <button class="action" onclick={onOuvrirProjecteur} disabled={previewBusy}>
+          {previewBusy ? $t("toolbar.connexionEnCours") : $t("toolbar.previewOuvrir")}
+        </button>
+        {#if previewMsg}
+          <p class="hint" class:msg-ok={previewMsgOk} class:msg-err={!previewMsgOk}>{previewMsg}</p>
+        {/if}
+        <p class="hint">{$t(status === "connected" ? "toolbar.previewHint" : "toolbar.previewObsHint")}</p>
+      </div>
+    {/if}
+  </div>
+
   <!-- Section Personnalisation (cadres SVG) : carte violette portée par la
        .section elle-même quand elle est ouverte — même mécanisme que la
        carte bleue de la section Widgets. -->
   <div
-    class="section"
+    class="section sec-perso"
     class:carte-edition={open === "personnalisation"}
     class:cible-perso={open === "personnalisation"}
   >
@@ -494,58 +657,37 @@
     {/if}
   </div>
 
-  <!-- Section Raccourcis : fenêtre TOPMOST dockée à un bord d'écran.
-       Afficher/masquer + choix du bord (appliqué immédiatement) + moniteur.
-       Carte jaune portée par la .section quand elle est ouverte. -->
-  <div
-    class="section"
-    class:carte-edition={open === "raccourcis"}
-    class:cible-raccourcis={open === "raccourcis"}
-  >
-    <button class="header" class:ouvert={open === "raccourcis"} onclick={() => toggleSection("raccourcis")}>
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M18 3a3 3 0 0 0-3 3v12a3 3 0 0 0 3 3 3 3 0 0 0 3-3 3 3 0 0 0-3-3H6a3 3 0 0 0-3 3 3 3 0 0 0 3 3 3 3 0 0 0 3-3V6a3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3h12a3 3 0 0 0 3-3 3 3 0 0 0-3-3z"/></svg>
-      <span>{$t("toolbar.raccourcis")}</span>
-      <span class="chevron">›</span>
-    </button>
-    {#if open === "raccourcis"}
-      <div class="content">
-        <button class="action" onclick={onToggleBarre}>
-          {raccVisible ? $t("toolbar.barreMasquer") : $t("toolbar.barreAfficher")}
-        </button>
-        <div class="bord-row">
-          {#each BORDS as b (b)}
-            <button
-              class="action small"
-              class:actif={raccBord === b}
-              onclick={() => onBord(b)}
-            >{nomsBords[b]}</button>
-          {/each}
-        </div>
-        <select onchange={onMoniteur}>
-          {#each monsOptions as m (m.index)}
-            <option value={m.index} selected={m.index === raccMonIdx}>
-              {m.label} — {m.largeur}×{m.hauteur}{m.suffixe}
-            </option>
-          {/each}
-        </select>
-        <p class="hint">
-          {$t("toolbar.raccourcisHint")}
-        </p>
-      </div>
-    {/if}
-  </div>
 </aside>
+
+<!-- Pied du panneau latéral — lanceur du Guide du streamer : LANCEUR
+     DIRECT (pas un accordéon — le clic ouvre l'overlay livre
+     feuilletable, même mécanique que Modération / Diagnostic). Sibling
+     de l'aside dans .sidebar-col → fixe en bas, HORS de la zone
+     scrollable, toujours visible, juste au-dessus d'Ergonomie. -->
+<div class="section sec-guide">
+  <button
+    class="header"
+    onclick={() => guideLivreOpen.set(true)}
+    title={$t("toolbar.guideTitle")}
+  >
+    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
+    <span>{$t("toolbar.guide")}</span>
+    <span class="chevron">›</span>
+  </button>
+</div>
 
 <!-- Pied du panneau latéral : section « Ergonomie » (accordéon, même
      mécanique que les sections de l'aside — une seule ouverte à la fois).
      Regroupe le fond du CHROME dashboard (topbar + sidebar — le canvas
-     reste opaque par-dessus, jamais touché) et le lanceur du Guide du
-     streamer (overlay livre feuilletable). Sibling de l'aside dans
+     reste opaque par-dessus, jamais touché), le placement de la fenêtre
+     principale ET la barre de raccourcis TOPMOST (migrée depuis
+     l'ancienne section « Raccourcis » de l'aside — même contenu :
+     afficher/masquer + bord + moniteur). Sibling de l'aside dans
      .sidebar-col → fixe en bas, HORS de la zone scrollable, toujours
      visible. Carte ardoise portée par la .section quand elle est ouverte ;
      la pastille .dot marque qu'un fond dashboard est posé. -->
 <div
-  class="section dash-fond"
+  class="section dash-fond sec-ergo"
   class:carte-edition={open === "ergonomie"}
   class:cible-ergo={open === "ergonomie"}
 >
@@ -563,9 +705,43 @@
       {#if fondDashImg}
         <button class="action small" onclick={retirerFondDash}>{$t("toolbar.fondRetirer")}</button>
       {/if}
-      <button class="action" onclick={() => guideLivreOpen.set(true)} title={$t("toolbar.guideTitle")}>
-        {$t("toolbar.guide")}
+      <div class="bord-row">
+        {#each MODES as m (m)}
+          <button
+            class="action small"
+            class:actif={fenMode === m}
+            onclick={() => onFenMode(m)}
+          >{nomsModes[m]}</button>
+        {/each}
+      </div>
+      <select onchange={onFenMoniteur}>
+        {#each monsOptions as m (m.index)}
+          <option value={m.index} selected={m.index === fenMonIdx}>
+            {m.label} — {m.largeur}×{m.hauteur}{m.suffixe}
+          </option>
+        {/each}
+      </select>
+      <p class="hint">{$t("toolbar.demarrageHint")}</p>
+      <button class="action" onclick={onToggleBarre}>
+        {raccVisible ? $t("toolbar.barreMasquer") : $t("toolbar.barreAfficher")}
       </button>
+      <div class="bord-row">
+        {#each BORDS as b (b)}
+          <button
+            class="action small"
+            class:actif={raccBord === b}
+            onclick={() => onBord(b)}
+          >{nomsBords[b]}</button>
+        {/each}
+      </div>
+      <select onchange={onMoniteur}>
+        {#each monsOptions as m (m.index)}
+          <option value={m.index} selected={m.index === raccMonIdx}>
+            {m.label} — {m.largeur}×{m.hauteur}{m.suffixe}
+          </option>
+        {/each}
+      </select>
+      <p class="hint">{$t("toolbar.raccourcisHint")}</p>
     </div>
   {/if}
 </div>
@@ -654,6 +830,24 @@
   .section:has(.header.ouvert) {
     border-color: var(--bordure-ui-active);
   }
+  /* Couleurs de section PERMANENTES : chaque .sec-* pose indépendamment de
+     l'ouverture --accent-carte (sombre, fond/bordure de la carte ouverte —
+     .cible-* reste conditionnel) et --accent-crochet (vif, barre gauche de
+     l'en-tête au repos — rôles --crochet-*, glace.css). */
+  .sec-widgets      { --accent-carte: var(--carte-bleue);    --accent-crochet: var(--crochet-bleu); }
+  .sec-connexions   { --accent-carte: var(--carte-verte);    --accent-crochet: var(--crochet-vert); }
+  .sec-interactions { --accent-crochet: var(--crochet-rose); }
+  .sec-attente      { --accent-crochet: var(--crochet-cyan); }
+  .sec-jc           { --accent-crochet: var(--crochet-orange); }
+  .sec-moderation   { --accent-crochet: var(--crochet-indigo); }
+  .sec-diagnostic   { --accent-crochet: var(--crochet-teal); }
+  .sec-obs          { --accent-carte: var(--carte-dore);     --accent-crochet: var(--crochet-dore); }
+  .sec-preview      { --accent-carte: var(--carte-jaune);    --accent-crochet: var(--crochet-jaune); }
+  .sec-perso        { --accent-carte: var(--carte-violette); --accent-crochet: var(--crochet-violet); }
+  .sec-ergo         { --accent-carte: var(--carte-ardoise);  --accent-crochet: var(--crochet-ardoise); }
+  /* Guide (pied fixe, lanceur direct) : crochet ardoise — même famille
+     qu'Ergonomie, les deux entrées du bas forment un bloc cohérent. */
+  .sec-guide        { --accent-crochet: var(--crochet-ardoise); }
   /* Item de liste : icône + label + chevron à droite. Plat au repos
      (transparent, comme la maquette) — la pilule verre n'apparaît qu'au
      survol ; la section ouverte prend une pilule neutre discrète
@@ -671,6 +865,13 @@
     display: flex;
     align-items: center;
     gap: 0.5rem;
+    /* Crochet permanent : liseré 3px gauche en couleur VIVE de la section
+       (--accent-crochet posé par la classe .sec-* permanente — rôles
+       --crochet-* niveaux 400-500, lisibles sur --fond-panneau). Fallback
+       --accent-ui si une section n'a pas de couleur. Le hover le remplace
+       par --accent-ui (.header:hover, spécificité supérieure) ;
+       .etat-erreur (rouge, OBS) prime aussi. */
+    box-shadow: inset 3px 0 0 var(--accent-crochet, var(--accent-ui));
     transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease,
       box-shadow 0.15s ease, text-shadow 0.15s ease;
   }
@@ -795,11 +996,6 @@
     --accent-carte-glow: color-mix(in srgb, var(--carte-violette) 45%, transparent);
     background: color-mix(in srgb, var(--accent-carte) 32%, var(--fond-panneau));
   }
-  .cible-raccourcis {
-    --accent-carte: var(--carte-jaune);
-    --accent-carte-glow: color-mix(in srgb, var(--carte-jaune) 45%, transparent);
-    background: color-mix(in srgb, var(--accent-carte) 32%, var(--fond-panneau));
-  }
   /* Noir/doré : ambré très sombre — les pointillés restent lisibles sans
      virer à l'orange vif. */
   .cible-obs {
@@ -810,6 +1006,11 @@
   .cible-connexions {
     --accent-carte: var(--carte-verte);
     --accent-carte-glow: color-mix(in srgb, var(--carte-verte) 45%, transparent);
+    background: color-mix(in srgb, var(--accent-carte) 32%, var(--fond-panneau));
+  }
+  .cible-preview {
+    --accent-carte: var(--carte-jaune);
+    --accent-carte-glow: color-mix(in srgb, var(--carte-jaune) 45%, transparent);
     background: color-mix(in srgb, var(--accent-carte) 32%, var(--fond-panneau));
   }
   /* Ardoise : teinte propre à la section Ergonomie (pied fixe) — la
@@ -855,6 +1056,45 @@
     border-color: var(--bordure-ui-active);
     box-shadow: var(--btn-inset);
   }
+  /* Miniature de prévisualisation : boîte noire au ratio du canvas scène,
+     l'iframe (:4321, dims réelles) est réduite par transform depuis le coin
+     haut-gauche. pointer-events:none sur l'iframe — le clic monte au bouton
+     qui ouvre le projecteur OBS. Chrome bouton global neutralisé (ni blur
+     ni sweep/reflet : la surface est un viewport, pas un bouton texte). */
+  .preview-thumb {
+    display: block;
+    width: 100%;
+    padding: 0;
+    border: 1px solid var(--bordure-ui);
+    border-radius: var(--rayon-petit);
+    overflow: hidden;
+    background: var(--fond);
+    cursor: pointer;
+    backdrop-filter: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  .preview-thumb::before,
+  .preview-thumb::after {
+    content: none;
+  }
+  .preview-thumb iframe {
+    display: block;
+    transform-origin: top left;
+    pointer-events: none;
+    border: 0;
+  }
+  .preview-thumb:hover:not(:disabled) {
+    border-color: var(--bordure-ui-active);
+    box-shadow: var(--glow-ui);
+  }
+  .preview-thumb:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+  /* Feedback projecteur (succès / échec obs-websocket) — couleurs
+     sémantiques, jamais codées en dur (règle figée couleurs). */
+  .hint.msg-ok { color: var(--message-ok-color); }
+  .hint.msg-err { color: var(--message-error-color); }
   .hint {
     font-size: 0.8rem;
     opacity: 0.6;
@@ -951,7 +1191,7 @@
     padding: 0.1rem 0.3rem;
     font-size: 0.78rem;
   }
-  /* ===== Section Raccourcis ===== */
+  /* Rangées de boutons de choix (bords barre raccourcis, modes fenêtre). */
   .bord-row {
     display: flex;
     flex-wrap: wrap;
@@ -972,17 +1212,8 @@
     border-color: var(--accent-ui);
     color: var(--accent-ui);
   }
+  /* Le style des selects est global (app.css) — reste la largeur pleine. */
   select {
-    background: var(--fond-controle);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    padding: 0.3rem 0.4rem;
-    font: inherit;
-    font-size: 0.85rem;
     width: 100%;
-  }
-  select:focus {
-    outline: none;
-    border-color: var(--accent-ui);
   }
 </style>

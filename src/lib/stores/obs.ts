@@ -2,7 +2,7 @@
 // La commande Rust obs_connect est one-shot : connecte, configure scène/source,
 // refresh la source, se déconnecte. Le statut "connected" signifie "configuration réussie".
 import { writable, get, type Writable } from "svelte/store";
-import { tauri } from "../tauri";
+import { tauri, type ObsMoniteur } from "../tauri";
 import { openSectionExplicit } from "./ui";
 import { t } from "./langue";
 
@@ -89,6 +89,12 @@ export async function obsConnect(
     // Lire l'état des sorties dans la foulée (non-fatal : les boutons toggle
     // restent utilisables, l'état s'alignera au premier toggle).
     void rafraichirOutputs();
+    // Projecteur : fermé par défaut. OBS restaure ses fenêtres projecteur
+    // d'une session à l'autre → on les ferme activement à chaque connexion
+    // réussie. Non-fatal + silencieux (pas d'obsError au boot).
+    void tauri
+      .obsProjecteurFermer()
+      .catch((e) => console.warn("obs projecteur fermer:", e));
   } catch (e) {
     obsStatus.set("error");
     const msg = messageClair(e);
@@ -148,6 +154,40 @@ export async function toggleRecordObs(): Promise<void> {
   const { host, port, password } = obsCreds();
   try {
     obsRecording.set(await tauri.obsToggleRecord(host, port, password));
+    obsError.set(null);
+  } catch (e) {
+    obsError.set(messageClair(e));
+    throw e;
+  }
+}
+
+// ===== Projecteur « Prévisualisation » (section Toolbar) =====
+// Liste des écrans vus par OBS (index OBS, pas Win32) + ouverture du
+// projecteur preview — clic droit « Ouvrir le projecteur » d'OBS depuis le
+// dashboard. Connexions one-shot comme toutes les commandes OBS.
+
+/// Moniteurs OBS pour le select (vide si OBS non connecté ou non relu).
+export const obsMoniteurs = writable<ObsMoniteur[]>([]);
+
+/// Relit la liste des moniteurs OBS. Non-fatal : [] en cas d'échec
+/// (OBS absent / non connecté) — le select affiche juste « Fenêtré ».
+export async function chargerMoniteursObs(): Promise<void> {
+  const { host, port, password } = obsCreds();
+  try {
+    obsMoniteurs.set(await tauri.obsProjecteurMoniteurs(host, port, password));
+  } catch (e) {
+    console.warn("obs moniteurs:", e);
+    obsMoniteurs.set([]);
+  }
+}
+
+/// Ouvre le projecteur OBS sur la prévisualisation (clic droit OBS).
+/// monitorIndex : index OBS (obsMoniteurs) ; -1 = projecteur fenêtré.
+/// Lève l'erreur traduite pour l'affichage (obsError).
+export async function ouvrirProjecteurPreview(monitorIndex: number): Promise<void> {
+  const { host, port, password } = obsCreds();
+  try {
+    await tauri.obsProjecteurPreview(host, port, password, monitorIndex);
     obsError.set(null);
   } catch (e) {
     obsError.set(messageClair(e));

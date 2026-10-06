@@ -462,6 +462,204 @@ pub async fn outputs_status(
     Ok((stream?, record?))
 }
 
+/// Liste les moniteurs vus par OBS (GetMonitorList) — sélecteur de la section
+/// Prévisualisation de la Toolbar. One-shot : connect → request → close.
+/// ⚠️ Les index sont ceux d'OBS (monitorIndex), PAS ceux de Win32
+/// (raccourcis_moniteurs) — le select doit être alimenté par CETTE liste.
+/// Retourne le tableau brut { monitorIndex, monitorName, monitorWidth,
+/// monitorHeight, monitorPositionX, monitorPositionY } sérialisé tel quel.
+pub async fn moniteurs_liste(
+    host: &str,
+    port: u16,
+    password: &str,
+) -> Result<Vec<Value>, String> {
+    let (mut write, mut read) = connect(host, port, password).await?;
+    let result = rpc(
+        &mut write,
+        &mut read,
+        "GetMonitorList",
+        "get_monitors",
+        json!({}),
+    )
+    .await;
+    let _ = write.close().await;
+    let data = result?;
+    Ok(data["monitors"].as_array().cloned().unwrap_or_default())
+}
+
+/// Ouvre un projecteur OBS sur la prévisualisation — équivalent du clic droit
+/// « Ouvrir le projecteur (prévisualisation) » d'OBS. Requête
+/// OpenVideoMixProjector avec mix OBS_VIDEOMIX_TYPE_PREVIEW.
+/// monitor_index = index OBS (moniteurs_liste) ; -1 = projecteur fenêtré.
+/// One-shot : connect → request → close. Ouvre un projecteur (ce n'est PAS un
+/// toggle : le fermer se fait dans Windows/OBS, pas via cette API).
+pub async fn ouvrir_projecteur_preview(
+    host: &str,
+    port: u16,
+    password: &str,
+    monitor_index: i32,
+) -> Result<(), String> {
+    // Snapshot AVANT : la fenêtre projecteur est créée en différé sur le
+    // thread UI d'OBS → on repérera la NOUVELLE fenêtre OBSProjector pour la
+    // remonter devant (elle s'ouvre sinon derrière le dashboard).
+    #[cfg(windows)]
+    let avant = hwnds_projecteurs();
+
+    let (mut write, mut read) = connect(host, port, password).await?;
+    let result = rpc(
+        &mut write,
+        &mut read,
+        "OpenVideoMixProjector",
+        "open_preview_projector",
+        json!({
+            // Enum obs-websocket : OBS_WEBSOCKET_VIDEO_MIX_TYPE_* (PREVIEW /
+            // PROGRAM / MULTIVIEW) — PAS OBS_VIDEOMIX_TYPE_* (refusé :
+            // "invalid enum value").
+            "videoMixType": "OBS_WEBSOCKET_VIDEO_MIX_TYPE_PREVIEW",
+            "monitorIndex": monitor_index
+        }),
+    )
+    .await;
+    let _ = write.close().await;
+    result?;
+
+    #[cfg(windows)]
+    {
+        // Poll ~2 s : la fenêtre apparaît quand la file UI d'OBS la traite.
+        // Cible = nouvelle fenêtre OBSProjector, fallback dernière connue
+        // (cas d'un projecteur déjà ouvert → re-raise, pas de création).
+        for _ in 0..10 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            let apres = hwnds_projecteurs();
+            let cible = apres
+                .iter()
+                .copied()
+                .find(|h| !avant.contains(h))
+                .or_else(|| apres.last().copied());
+            if let Some(h) = cible {
+                projecteur_premier_plan(h);
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// HWND des fenêtres projecteur d'OBS (preview, programme, multiview,
+/// source). ⚠️ La classe Win32 est la classe Qt GÉNÉRIQUE de toutes les
+/// fenêtres OBS ("Qt<ver>QWindowIcon") — pas "OBSProjector" : on identifie
+/// donc par titre contenant "project" (Projector/Projecteur/Proyector/
+/// Projektor…) ET processus obs64.exe (évite les faux positifs d'autres
+/// apps dont le titre contient "project").
+#[cfg(windows)]
+fn hwnds_projecteurs() -> Vec<isize> {
+    use windows::Win32::Foundation::{BOOL, CloseHandle, HWND, LPARAM};
+    use windows::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+        PROCESS_QUERY_LIMITED_INFORMATION,
+    };
+    use windows::Win32::UI::WindowsAndMessaging::{
+        EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+    };
+    use windows::core::PWSTR;
+
+    /// exe du processus = obs64.exe ?
+    fn est_obs(pid: u32) -> bool {
+        unsafe {
+            let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else {
+                return false;
+            };
+            let mut buf = [0u16; 260];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(
+                h,
+                PROCESS_NAME_WIN32,
+                PWSTR(buf.as_mut_ptr()),
+                &mut len,
+            )
+            .is_ok();
+            let _ = CloseHandle(h);
+            ok && String::from_utf16_lossy(&buf[..len as usize])
+                .to_lowercase()
+                .ends_with("obs64.exe")
+        }
+    }
+
+    unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+        let out = &mut *(lparam.0 as *mut Vec<isize>);
+        if IsWindowVisible(hwnd).as_bool() {
+            let mut buf = [0u16; 256];
+            let n = GetWindowTextW(hwnd, &mut buf);
+            if n > 0
+                && String::from_utf16_lossy(&buf[..n as usize])
+                    .to_lowercase()
+                    .contains("project")
+            {
+                let mut pid = 0u32;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                if pid != 0 && est_obs(pid) {
+                    out.push(hwnd.0 as isize);
+                }
+            }
+        }
+        BOOL(1)
+    }
+
+    let mut v: Vec<isize> = Vec::new();
+    unsafe {
+        let _ = EnumWindows(Some(cb), LPARAM(&mut v as *mut _ as isize));
+    }
+    v
+}
+
+/// Ferme toutes les fenêtres projecteur OBS (WM_CLOSE). Utilisé au boot
+/// quand l'option « projecteur au démarrage » est OFF (défaut) : OBS
+/// restaure ses projecteurs d'une session à l'autre — StreamOS impose
+/// « fermé » par défaut. Local Win32, pas besoin de WebSocket.
+/// Retourne le nombre de fenêtres fermées.
+#[cfg(windows)]
+pub fn fermer_projecteurs() -> u32 {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+    let hwnds = hwnds_projecteurs();
+    let n = hwnds.len() as u32;
+    for h in hwnds {
+        unsafe {
+            let _ = PostMessageW(
+                HWND(h as *mut std::ffi::c_void),
+                WM_CLOSE,
+                WPARAM(0),
+                LPARAM(0),
+            );
+        }
+    }
+    n
+}
+
+#[cfg(not(windows))]
+pub fn fermer_projecteurs() -> u32 {
+    0
+}
+
+/// Remonte la fenêtre projecteur au premier plan : SetWindowPos(HWND_TOP)
+/// pour le z-order (pas de topmost permanent), BringWindowToTop +
+/// SetForegroundWindow en best-effort (Windows peut refuser le focus volé
+/// depuis un process tiers — l'appelant est en foreground au clic, ça passe
+/// en général ; sinon HWND_TOP la rend déjà visible).
+#[cfg(windows)]
+fn projecteur_premier_plan(hwnd: isize) {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::WindowsAndMessaging::{
+        BringWindowToTop, SetForegroundWindow, SetWindowPos, HWND_TOP, SWP_NOMOVE, SWP_NOSIZE,
+    };
+    unsafe {
+        let h = HWND(hwnd as *mut std::ffi::c_void);
+        let _ = SetWindowPos(h, HWND_TOP, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
+        let _ = BringWindowToTop(h);
+        let _ = SetForegroundWindow(h);
+    }
+}
+
 // --- Helpers WebSocket (pub(crate) pour obs_trou) ---
 
 pub(crate) async fn send_msg<W>(write: &mut W, msg: &Value) -> Result<(), String>
