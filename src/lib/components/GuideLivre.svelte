@@ -16,7 +16,7 @@
   //
   // Dashboard uniquement — jamais monté en diffusion.
   import { onDestroy } from "svelte";
-  import { PAGES, type PageGuide } from "../guide/contenu";
+  import { PAGES, chapitres, type PageGuide } from "../guide/contenu";
   import { guideLivreOpen } from "../stores/ui";
   import { t, langue } from "../stores/langue";
   // Illustration de la page de garde gauche (visible à l'ouverture du
@@ -31,6 +31,15 @@
   /// être une page de garde décorative si PAGES est impair).
   const N = Math.ceil(PAGES.length / 2);
   const feuilles = Array.from({ length: N }, (_, i) => i);
+  /// Entrées du sommaire (titre de chapitre → folio), calculées une fois.
+  const SOMMAIRE = chapitres();
+  /// Folio de la page sommaire — cible du bouton « retour au sommaire »
+  /// en pied de chaque page de contenu. Calculé depuis PAGES (comme les
+  /// folios du sommaire), jamais saisi à la main.
+  const FOLIO_SOMMAIRE = PAGES.findIndex((p) => p.id === "sommaire") + 1;
+  /// Écart entre deux flips lors d'un saut multi-feuilles (sommaire) :
+  /// assez court pour rester vif, assez long pour lire la cascade.
+  const ECART_CASCADE_MS = 120;
 
   /// Lit la position sauvegardée, bornée à [0, N]. Toute erreur (JSON,
   /// storage inaccessible) → 0 = début du livre.
@@ -57,6 +66,11 @@
   /// Feuilles tournées — 0 = livre ouvert sur la couverture (droite) avec
   /// la page de garde à gauche ; N = 4ᵉ de couverture à droite.
   let tournees = $state(lirePageSauvee());
+  /// Page visible À GAUCHE = verso de la dernière feuille tournée
+  /// (PAGES[2*tournees-1]) ; undefined à t=0 (garde) et sur verso
+  /// orphelin. Pilote l'affichage du bouton « retour au sommaire » :
+  /// caché quand la page de gauche EST le sommaire (ou une garde).
+  let pageGauche = $derived(tournees > 0 ? PAGES[2 * tournees - 1] : undefined);
   /// Verrou anti double-flip pendant l'animation (~680 ms).
   let enTransition = $state(false);
   /// Feuille actuellement en rotation — reçoit will-change uniquement elle.
@@ -68,12 +82,13 @@
   /// sur l'overlay (pas après un drag / une sélection de texte).
   let downSurOverlay = false;
   let timer: ReturnType<typeof setTimeout> | null = null;
+  /// Timers de la cascade d'un saut sommaire — tous annulés à la fermeture.
+  let timersCascade: ReturnType<typeof setTimeout>[] = [];
 
-  function tourner(dir: 1 | -1): void {
-    if (enTransition) return;
+  /// Bascule UNE feuille (sans verrou) et persiste la position.
+  function basculer(dir: 1 | -1): void {
     const nv = tournees + dir;
     if (nv < 0 || nv > N) return;
-    enTransition = true;
     // La feuille qui bouge : en avant = celle qu'on tourne (nv-1), en
     // arrière = celle qu'on détourne (nv).
     feuilleEnMouvement = dir === 1 ? nv - 1 : nv;
@@ -83,11 +98,44 @@
     } catch {
       // Storage inaccessible : la reprise est un confort, jamais fatal.
     }
+  }
+
+  /// Relâche le verrou après la fin de la dernière animation.
+  function armerFinTransition(delaiMs: number): void {
     if (timer) clearTimeout(timer);
     timer = setTimeout(() => {
       enTransition = false;
       feuilleEnMouvement = null;
-    }, DUREE_FLIP_MS);
+    }, delaiMs);
+  }
+
+  function tourner(dir: 1 | -1): void {
+    if (enTransition) return;
+    const nv = tournees + dir;
+    if (nv < 0 || nv > N) return;
+    enTransition = true;
+    basculer(dir);
+    armerFinTransition(DUREE_FLIP_MS);
+  }
+
+  /// Saut vers un folio (1-based) : les feuilles intermédiaires tournent
+  /// en cascade, une toutes les ECART_CASCADE_MS, pour garder l'effet
+  /// livre plutôt qu'un flip simultané. Recto (folio impair) visible à
+  /// droite quand (folio-1)/2 feuilles sont tournées ; verso (pair) à
+  /// gauche quand folio/2 le sont → ceil((folio-1)/2) couvre les deux.
+  function allerA(folio: number): void {
+    if (enTransition) return;
+    const cible = Math.min(Math.max(Math.ceil((folio - 1) / 2), 0), N);
+    const delta = cible - tournees;
+    if (delta === 0) return;
+    const dir: 1 | -1 = delta > 0 ? 1 : -1;
+    const n = Math.abs(delta);
+    enTransition = true;
+    timersCascade = [];
+    for (let k = 0; k < n; k++) {
+      timersCascade.push(setTimeout(() => basculer(dir), k * ECART_CASCADE_MS));
+    }
+    armerFinTransition((n - 1) * ECART_CASCADE_MS + DUREE_FLIP_MS);
   }
 
   function fermer(): void {
@@ -134,6 +182,7 @@
 
   onDestroy(() => {
     if (timer) clearTimeout(timer);
+    for (const t of timersCascade) clearTimeout(t);
   });
 </script>
 
@@ -180,6 +229,18 @@
       <!-- Ombre de reliure : fixe par-dessus les deux demi-pages. -->
       <div class="reliure" aria-hidden="true"></div>
     </div>
+
+    <!-- Retour au sommaire : bouton UNIQUE en haut à gauche de la page
+         de gauche — posé dans .livre-scene (HORS du contexte 3D des
+         feuilles : un clic fiable au même endroit, quelle que soit la
+         feuille affichée). Caché quand la page de gauche est la garde
+         (t=0) ou le sommaire lui-même. -->
+    {#if pageGauche && pageGauche.id !== "sommaire"}
+      <button
+        class="retour-sommaire"
+        onclick={() => allerA(FOLIO_SOMMAIRE)}
+      >{$t("guide.retourSommaire")}</button>
+    {/if}
 
     <!-- Zones « pince la tranche » : flèche au hover, masquées aux
          extrémités (pas de page à tourner). -->
@@ -245,6 +306,9 @@
     <span class="couv-signature">Ryo Shinkawa</span>
   {:else}
     <div class="page-contenu">
+      {#if pg.chapitreCle}
+        <span class="chapitre-label">{$t(pg.chapitreCle)}</span>
+      {/if}
       <h2 class="page-titre">{@render texte(pg.titreCle)}</h2>
       <div class="page-filet" aria-hidden="true">{@render ornement()}</div>
       {#each pg.blocs as bloc}
@@ -260,6 +324,20 @@
           </ol>
         {:else if bloc.type === "note"}
           <aside class="note">{@render texte(bloc.cle)}</aside>
+        {:else if bloc.type === "sommaire"}
+          <!-- Sommaire cliquable : chapitre → saut en cascade jusqu'à sa
+               première page. Folios calculés depuis PAGES (contenu.ts). -->
+          <ol class="sommaire">
+            {#each SOMMAIRE as e (e.cle)}
+              <li>
+                <button class="sommaire-entree" onclick={() => allerA(e.folio)}>
+                  <span class="sommaire-titre">{$t(e.cle)}</span>
+                  <span class="sommaire-points" aria-hidden="true"></span>
+                  <span class="sommaire-folio">{e.folio}</span>
+                </button>
+              </li>
+            {/each}
+          </ol>
         {:else}
           <div class="sep" aria-hidden="true">{@render ornement()}</div>
         {/if}
@@ -613,6 +691,79 @@
     margin: 1.1rem 0;
     opacity: 0.8;
   }
+  /* Étiquette de chapitre au-dessus du titre (première page du chapitre
+     uniquement) — même registre que le hint doré de couverture. */
+  .chapitre-label {
+    display: block;
+    font-size: 0.7rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--livre-dore);
+    margin-bottom: 0.15rem;
+  }
+  /* ===== Sommaire : une ligne par chapitre, numéro de chapitre en
+     Caveat, pointillés de conduite jusqu'au folio. Les entrées sont des
+     <button> → même neutralisation du chrome global que .zone-tourne. */
+  .sommaire {
+    list-style: none;
+    margin: 0.4rem 0 0;
+    padding: 0;
+    counter-reset: chap;
+  }
+  .sommaire li {
+    counter-increment: chap;
+    display: flex;
+    align-items: baseline;
+    gap: 0.6rem;
+    margin-bottom: 0.55rem;
+  }
+  .sommaire li::before {
+    content: counter(chap);
+    font-family: var(--fonte-titre, "Caveat", cursive);
+    font-size: 1.35em;
+    color: var(--livre-dore);
+    min-width: 1.2rem;
+    text-align: right;
+  }
+  .sommaire-entree {
+    flex: 1;
+    display: flex;
+    align-items: baseline;
+    gap: 0.4rem;
+    background: transparent;
+    border: none;
+    padding: 0.15rem 0.2rem;
+    font: inherit;
+    font-size: 0.95rem;
+    color: var(--livre-encre);
+    text-align: left;
+    cursor: pointer;
+    backdrop-filter: none;
+    box-shadow: none;
+    border-radius: 3px;
+    transition: color 0.15s ease, background 0.15s ease;
+  }
+  .sommaire-entree::before,
+  .sommaire-entree::after {
+    content: none;
+  }
+  .sommaire-entree:hover,
+  .sommaire-entree:focus-visible {
+    color: var(--livre-ruban);
+    background: color-mix(in srgb, var(--livre-papier-ombre) 45%, transparent);
+    outline: none;
+  }
+  .sommaire-points {
+    flex: 1;
+    border-bottom: 1px dotted var(--livre-encre-douce);
+    opacity: 0.6;
+    transform: translateY(-0.3em);
+  }
+  .sommaire-folio {
+    font-size: 0.85rem;
+    color: var(--livre-encre-douce);
+    letter-spacing: 0.08em;
+  }
   .folio {
     position: absolute;
     bottom: 1rem;
@@ -624,6 +775,36 @@
   .folio.folio-gauche {
     right: auto;
     left: 1.6rem;
+  }
+  /* Bouton « retour au sommaire » : posé dans .livre-scene (sibling de
+     .livre), aligné sur le coin HAUT-GAUCHE de la page de gauche — hors
+     du contexte 3D des feuilles, toujours au même endroit. Discret —
+     encre douce au repos, ruban au survol. Même neutralisation du
+     chrome global que .sommaire-entree / .zone-tourne. */
+  .retour-sommaire {
+    position: absolute;
+    top: 0.8rem;
+    left: 1rem;
+    z-index: 70;
+    background: transparent;
+    border: none;
+    padding: 0;
+    font-size: 0.72rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--livre-encre-douce);
+    cursor: pointer;
+    backdrop-filter: none;
+    box-shadow: none;
+    transition: color 0.15s ease;
+  }
+  .retour-sommaire::before,
+  .retour-sommaire::after {
+    content: none;
+  }
+  .retour-sommaire:hover,
+  .retour-sommaire:focus-visible {
+    color: var(--livre-ruban);
   }
 
   /* Empreinte de la touche entrée via clavier : mêmes affordances. */
