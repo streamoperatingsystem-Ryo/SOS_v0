@@ -115,6 +115,10 @@ pub struct CadreConfig {
     /// Défaut true : rétro-compat — les scènes existantes gardaient le bord.
     #[serde(default = "default_true")]
     pub bordActif: bool,
+    /// Émet les éléments SMIL animés du cadre (toggle « Animer » de
+    /// CadresModal). Défaut false : vieilles scènes = rendu statique.
+    #[serde(default)]
+    pub animer: bool,
 }
 
 impl Default for CadreConfig {
@@ -128,6 +132,7 @@ impl Default for CadreConfig {
             gradientAngle: default_cadre_gradient_angle(),
             actif: false,
             bordActif: true,
+            animer: false,
         }
     }
 }
@@ -149,6 +154,7 @@ impl CadreConfig {
             gradientAngle: 135.0,
             actif: true,
             bordActif: true,
+            animer: false,
         }
     }
 }
@@ -188,6 +194,15 @@ impl Default for MorphPoint {
             mode: default_morph_mode(),
         }
     }
+}
+
+/// Une slide du carrousel d'images (widget média ou fond de scène).
+/// `rel` = chemin relatif "medias/<uuid>.<ext>" servi par :4321 ;
+/// `nom` = nom original du fichier (affichage liste, même rôle que mediaNom).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MediaSlide {
+    pub rel: String,
+    pub nom: String,
 }
 
 /// NB : champs camelCase VOLONTAIRES — contrat JSON direct avec le frontend
@@ -250,6 +265,14 @@ pub struct Widget {
     pub mediaPaused: bool,
     #[serde(default = "default_zero_f64")]
     pub mediaTime: f64,
+    /// Carrousel d'images : liste non vide = ACTIF et prioritaire sur `media`
+    /// (le média unique reste stocké, il redevient visible si la liste est
+    /// vidée). Images uniquement. Intervalle = mediaSlidesSec (défaut 5 s).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mediaSlides: Option<Vec<MediaSlide>>,
+    /// Intervalle du carrousel en secondes. None → 5 s (défaut diffusion).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mediaSlidesSec: Option<f64>,
     #[serde(default)]
     pub trou: bool,
     /// Opt-out du cadre SVG de scène pour CE widget (widgets créés par drop
@@ -344,6 +367,11 @@ pub struct Widget {
     /// sont ignorés. None = mode manuel (compteurs communaute/viewers).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub goalId: Option<String>,
+    /// Mode d'affichage des widgets type "musique" : "player" (défaut —
+    /// LCD marquee + temps + barre de progression + équalizer) ou "eq"
+    /// (bandes de spectre seules).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musiqueMode: Option<String>,
     /// Chaîne de morphs (bulge/pinch) appliquée au média, dans l'ordre.
     /// None/vide = rendu natif (img/video), zéro coût GL.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -420,6 +448,92 @@ pub struct InputMapping {
     pub dpadInvertX: bool,
 }
 
+/// Ligne d'un module « Objectifs du stream » : soit une métrique mesurée
+/// (`plateforme` + `metrique`, mêmes valeurs que le widget goal — frames
+/// `communaute`/`viewers`), soit un Creator Goal Twitch lié (`goalId`,
+/// frames `goal-twitch`). `cible` = valeur cible du mode manuel (None =
+/// compteur seul). `label` = libellé affiché (None = libellé auto de la
+/// métrique côté rendu).
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct LigneObjectif {
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plateforme: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metrique: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cible: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goalId: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+}
+
+/// Un module HUD de la scène (horloge / musique en cours / objectifs du
+/// stream). Couche d'affichage SÉPARÉE des widgets : pas de cadre de scène
+/// imposé, pas de snap, pas de titres — un rectangle libre en px canvas
+/// + options de mise en forme. Struct UNIQUE pour les trois modules.
+///
+/// Les options spécifiques sont optionnelles et ignorées par les autres
+/// modules → un seul patch générique côté frontend.
+/// NB : champs camelCase VOLONTAIRES — contrat JSON direct avec scene.ts.
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct ModuleHud {
+    /// Module affiché (dashboard + diffusion). false = configuré mais caché.
+    #[serde(default)]
+    pub actif: bool,
+    pub x: f64,
+    pub y: f64,
+    pub largeur: f64,
+    pub hauteur: f64,
+    /// Identifiant de police Google Font (fonts.ts). None = police système.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub police: Option<String>,
+    /// Taille de police de base en px. None = dérivée de la hauteur.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub taille: Option<u32>,
+    /// Cadre SVG de la scène dessiné autour du module. None/false = aucun
+    /// (rendu minimaliste par défaut).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cadre: Option<bool>,
+    /// Opacité du fond translucide (0–1). None = 0.45.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opacite: Option<f64>,
+    /// Horloge : afficher la date à gauche du trait. None = true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub afficherDate: Option<bool>,
+    /// Horloge : afficher les secondes. None = false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub secondes: Option<bool>,
+    /// Horloge : format 12 h (AM/PM). None = false (24 h).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format12h: Option<bool>,
+    /// Musique : afficher la pastille temps/progression. None = true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub afficherTemps: Option<bool>,
+    /// Objectifs : titre du bloc. None = libellé par défaut côté rendu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub titre: Option<String>,
+    /// Objectifs : lignes affichées, dans l'ordre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lignes: Option<Vec<LigneObjectif>>,
+}
+
+/// Modules HUD d'une scène — un emplacement fixe par module (singletons).
+/// None = module jamais configuré sur cette scène.
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+pub struct ScenesModules {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub horloge: Option<ModuleHud>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub musique: Option<ModuleHud>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub objectifs: Option<ModuleHud>,
+}
+
 /// Scène unique (source de vérité). canvasW/canvasH = résolution OBS lue
 /// au connect (fallback 1920×1080 si GetVideoSettings échoue ou config absente).
 /// Les widgets existants ne sont JAMAIS rescalés quand ces dims changent.
@@ -436,6 +550,14 @@ pub struct Scene {
     pub canvasH: u32,
     #[serde(default)]
     pub bgMedia: String,
+    /// Carrousel d'images du fond : liste non vide = ACTIF et prioritaire
+    /// sur bgMedia (qui reste stocké). bgObsSource reste prioritaire sur
+    /// tout (page transparente). Images uniquement.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgSlides: Option<Vec<MediaSlide>>,
+    /// Intervalle du carrousel de fond en secondes. None → 5 s.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgSlidesSec: Option<f64>,
     #[serde(default = "default_bg_kind")]
     pub bgKind: String,
     #[serde(default = "default_bg_fit")]
@@ -577,6 +699,12 @@ pub struct Scene {
     /// ouverture de la modale Cadres ou via la croix (dismiss persistant).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub aideCadres: Option<bool>,
+    /// Modules HUD par scène (horloge / musique en cours / objectifs du
+    /// stream) — couche d'affichage séparée des widgets, transportée par le
+    /// snapshot WS comme le reste de la scène. None = aucun module
+    /// (vieilles scènes : rétro-compat totale).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub modules: Option<ScenesModules>,
 }
 
 impl Default for Scene {
@@ -586,6 +714,8 @@ impl Default for Scene {
             canvasW: DEFAULT_CANVAS_W,
             canvasH: DEFAULT_CANVAS_H,
             bgMedia: String::new(),
+            bgSlides: None,
+            bgSlidesSec: None,
             bgKind: DEFAULT_BG_KIND.to_string(),
             bgFit: DEFAULT_BG_FIT.to_string(),
             bgZoom: DEFAULT_BG_ZOOM,
@@ -630,6 +760,7 @@ impl Default for Scene {
             aideFond: None,
             aideObjectifs: None,
             aideCadres: None,
+            modules: None,
         }
     }
 }

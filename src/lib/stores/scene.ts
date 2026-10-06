@@ -1,7 +1,17 @@
 // Store scène côté dashboard. Source UI live pendant le drag.
 // invoke update_scene (save + snapshot :4321) seulement au create + pointerup.
 import { writable, get } from "svelte/store";
-import { tauri, type Scene, type Widget, type CadreConfig, type MorphPoint } from "../tauri";
+import {
+  tauri,
+  MODULE_IDS,
+  type Scene,
+  type Widget,
+  type CadreConfig,
+  type MorphPoint,
+  type ModuleId,
+  type ModuleHud,
+  type LigneObjectif,
+} from "../tauri";
 import { pointsClipPathCadre } from "../cadres/points";
 import { obsHost, obsPort, obsPassword } from "./obs";
 import { t } from "./langue";
@@ -197,6 +207,30 @@ export async function createGoalWidget(): Promise<void> {
     goalPlateforme: "twitch",
     goalMetrique: "followers",
     goalCible: 10,
+  };
+  sceneStore.update((s) => sceneAvecWidget(s, w));
+  await commitScene();
+}
+
+/// Ajoute un widget musique (340×140, type musique). Mini-lecteur Winamp
+/// rendu dans diffusion.html : LCD marquee (titre — demandeur) + temps +
+/// équalizer spectre réel (audio ombre + AnalyserNode) + barre de
+/// progression. musiqueMode "player" (défaut) = tout, "eq" = bandes seules.
+/// Commit immédiat → save + snapshot WS.
+export async function createMusiqueWidget(): Promise<void> {
+  const current = get(sceneStore);
+  const z = current.widgets.filter((w) => w.type !== "camera").reduce((m, w) => Math.max(m, w.z), -1) + 1;
+  const w: Widget = {
+    id: crypto.randomUUID(),
+    type: "musique",
+    x: 100,
+    y: 100,
+    largeur: 340,
+    hauteur: 140,
+    z,
+    rotateX: 0,
+    rotateY: 0,
+    musiqueMode: "player",
   };
   sceneStore.update((s) => sceneAvecWidget(s, w));
   await commitScene();
@@ -512,6 +546,102 @@ export async function setGoalConfig(
     widgets: s.widgets.map((w) => (w.id === id ? { ...w, ...patch } : w)),
   }));
   await commitScene();
+}
+
+/// Change le mode d'affichage d'un widget musique ("player" | "eq").
+/// Merge partiel + commit → snapshot WS → la diffusion re-render le widget.
+export async function setMusiqueConfig(
+  id: string,
+  musiqueMode: "player" | "eq"
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, musiqueMode } : w)),
+  }));
+  await commitScene();
+}
+
+// ===== Modules HUD (horloge / musique en cours / objectifs du stream) =====
+// Couche d'affichage SÉPARÉE des widgets : `scene.modules.<id>`, un
+// emplacement par module. Transportée par le snapshot WS comme le reste de
+// la scène (commitScene) — zéro state Rust dédié.
+
+/// Défauts à la première activation d'un module — positions reprises de la
+/// maquette de référence (1920×1080 : horloge bas-centre, musique bas-droite,
+/// objectifs bas-gauche), mises à l'échelle du canvas courant.
+export function moduleDefaut(id: ModuleId, canvasW: number, canvasH: number): ModuleHud {
+  const sx = canvasW / 1920;
+  const sy = canvasH / 1080;
+  const base = { actif: true, police: undefined, cadre: false, opacite: 0.45 };
+  if (id === "horloge") {
+    return { ...base, x: 760 * sx, y: 940 * sy, largeur: 400 * sx, hauteur: 60 * sy,
+      afficherDate: true, secondes: false, format12h: false };
+  }
+  if (id === "musique") {
+    return { ...base, x: 1320 * sx, y: 830 * sy, largeur: 540 * sx, hauteur: 90 * sy,
+      afficherTemps: true };
+  }
+  return { ...base, x: 70 * sx, y: 720 * sy, largeur: 300 * sx, hauteur: 170 * sy,
+    titre: "", lignes: [] };
+}
+
+/// Lit un module de la scène courante (undefined = jamais configuré).
+export function moduleCourant(id: ModuleId): ModuleHud | undefined {
+  return get(sceneStore).modules?.[id];
+}
+
+/// Merge partiel d'un module + commit. Le module est créé avec ses défauts
+/// s'il n'existait pas (patch appliqué par-dessus). Utilisé par le drag/
+/// resize (x/y/largeur/hauteur au pointerup) et la modale (options).
+export async function setModule(id: ModuleId, patch: Partial<ModuleHud>): Promise<void> {
+  sceneStore.update((s) => {
+    const existant = s.modules?.[id] ?? moduleDefaut(id, s.canvasW ?? 1920, s.canvasH ?? 1080);
+    return { ...s, modules: { ...(s.modules ?? {}), [id]: { ...existant, ...patch } } };
+  });
+  await commitScene();
+}
+
+/// Active/désactive un module. L'activation d'un module jamais configuré
+/// le crée aux défauts ; la désactivation conserve position et options.
+export async function setModuleActif(id: ModuleId, actif: boolean): Promise<void> {
+  await setModule(id, { actif });
+}
+
+/// Objectifs : ajoute une ligne (métrique mesurée par défaut twitch/followers).
+export async function ajouterLigneObjectif(ligne?: Partial<LigneObjectif>): Promise<void> {
+  const lignes = moduleCourant("objectifs")?.lignes ?? [];
+  const nouvelle: LigneObjectif = {
+    id: crypto.randomUUID(),
+    plateforme: "twitch",
+    metrique: "followers",
+    ...ligne,
+  };
+  await setModule("objectifs", { lignes: [...lignes, nouvelle] });
+}
+
+/// Objectifs : merge partiel d'une ligne. Passer `goalId: undefined` délie
+/// (la clé est omise à la sérialisation) ; `cible: undefined` retire la cible.
+export async function setLigneObjectif(ligneId: string, patch: Partial<LigneObjectif>): Promise<void> {
+  const lignes = moduleCourant("objectifs")?.lignes ?? [];
+  await setModule("objectifs", {
+    lignes: lignes.map((l) => (l.id === ligneId ? { ...l, ...patch } : l)),
+  });
+}
+
+/// Objectifs : retire une ligne.
+export async function retirerLigneObjectif(ligneId: string): Promise<void> {
+  const lignes = moduleCourant("objectifs")?.lignes ?? [];
+  await setModule("objectifs", { lignes: lignes.filter((l) => l.id !== ligneId) });
+}
+
+/// Objectifs : déplace une ligne d'un cran (delta -1 = monter, +1 = descendre).
+export async function deplacerLigneObjectif(ligneId: string, delta: -1 | 1): Promise<void> {
+  const lignes = [...(moduleCourant("objectifs")?.lignes ?? [])];
+  const i = lignes.findIndex((l) => l.id === ligneId);
+  const j = i + delta;
+  if (i < 0 || j < 0 || j >= lignes.length) return;
+  [lignes[i], lignes[j]] = [lignes[j], lignes[i]];
+  await setModule("objectifs", { lignes });
 }
 
 /// Active/désactive le mode trou sur un widget. Maj locale + commit.
@@ -1011,6 +1141,103 @@ export async function importMedia(): Promise<void> {
   }
 }
 
+// ===== Carrousel d'images — mediaSlides (widget média) =====
+// Liste non vide = ACTIF et prioritaire sur `media` (le média unique reste
+// stocké, il redevient visible si la liste est vidée). Images uniquement.
+// Le timer tourne côté diffusion.html — AUCUN commit par slide, seules les
+// mutations de liste/intervalle commitent (pattern un seul écrivain).
+
+/// Importe plusieurs images (dialog multi, filtre Images) et les AJOUTE à la
+/// fin de la liste de slides du widget sélectionné. Erreurs par fichier
+/// concaténées en alerte (comportement bibliothèque). Commit si ≥ 1 slide.
+export async function ajouterSlidesMedia(): Promise<void> {
+  const id = get(selectedIdStore);
+  if (!id) return;
+  try {
+    const res = await tauri.importMediasMulti();
+    if (res.ok.length > 0) {
+      const slides = res.ok.map(([rel, _kind, nom]) => ({ rel, nom }));
+      sceneStore.update((s) => ({
+        ...s,
+        widgets: s.widgets.map((w) =>
+          w.id === id ? { ...w, mediaSlides: [...(w.mediaSlides ?? []), ...slides] } : w
+        ),
+      }));
+      await commitScene();
+    }
+    if (res.erreurs.length > 0) {
+      alert(get(t)("commun.importRefuseListe", { erreurs: res.erreurs.join("\n") }));
+    }
+  } catch (e) {
+    alert(get(t)("commun.importRefuse", { erreur: String(e) }));
+  }
+}
+
+/// Retire la slide d'index i de la liste du widget sélectionné. Liste vidée
+/// → mediaSlides repasse undefined (carrousel off, `media` redevient visible).
+/// Ne supprime PAS le fichier dans medias/ (même règle que clearWidgetMedia).
+export async function retirerSlideMedia(i: number): Promise<void> {
+  const id = get(selectedIdStore);
+  if (!id) return;
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => {
+      if (w.id !== id || !w.mediaSlides) return w;
+      const slides = w.mediaSlides.filter((_, j) => j !== i);
+      return { ...w, mediaSlides: slides.length ? slides : undefined };
+    }),
+  }));
+  await commitScene();
+}
+
+/// Déplace la slide d'index i de dir (-1 = monter, +1 = descendre) dans la
+/// liste du widget sélectionné. Bornes ignorées silencieusement. Commit.
+export async function deplacerSlideMedia(i: number, dir: -1 | 1): Promise<void> {
+  const id = get(selectedIdStore);
+  if (!id) return;
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => {
+      if (w.id !== id || !w.mediaSlides) return w;
+      const j = i + dir;
+      if (j < 0 || j >= w.mediaSlides.length) return w;
+      const slides = [...w.mediaSlides];
+      [slides[i], slides[j]] = [slides[j], slides[i]];
+      return { ...w, mediaSlides: slides };
+    }),
+  }));
+  await commitScene();
+}
+
+/// Intervalle du carrousel du widget sélectionné (secondes, clamp 1–3600).
+/// Maj locale + commit immédiat (changement discret, comme setMediaFit).
+export async function setSlidesSecMedia(sec: number): Promise<void> {
+  const id = get(selectedIdStore);
+  if (!id) return;
+  const v = Math.max(1, Math.min(3600, sec));
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, mediaSlidesSec: v } : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Vide la liste de slides du widget sélectionné (carrousel off → `media`
+/// redevient visible). Ne supprime PAS les fichiers dans medias/. Commit.
+export async function viderSlidesMedia(): Promise<void> {
+  const id = get(selectedIdStore);
+  if (!id) return;
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id ? { ...w, mediaSlides: undefined, mediaSlidesSec: undefined } : w
+    ),
+  }));
+  await commitScene();
+}
+
 // ===== Bibliothèque médias (import par chemins — drop Tauri) =====
 
 /// Entrée de la bibliothèque médias : fichier copié dans medias/ via
@@ -1221,6 +1448,70 @@ export async function importFond(): Promise<void> {
   } catch (e) {
     alert(get(t)("commun.importRefuse", { erreur: String(e) }));
   }
+}
+
+// ===== Carrousel d'images — bgSlides (fond de scène) =====
+// Liste non vide = ACTIF et prioritaire sur bgMedia (reste stocké).
+// bgObsSource reste prioritaire sur tout (règle figée). Timer côté
+// diffusion.html — AUCUN commit par slide.
+
+/// Importe plusieurs images (dialog multi, filtre Images) et les AJOUTE à la
+/// fin de la liste de slides du fond. Erreurs concaténées en alerte. Commit
+/// si ≥ 1 slide.
+export async function ajouterSlidesFond(): Promise<void> {
+  try {
+    const res = await tauri.importMediasMulti();
+    if (res.ok.length > 0) {
+      const slides = res.ok.map(([rel, _kind, nom]) => ({ rel, nom }));
+      sceneStore.update((s) => ({ ...s, bgSlides: [...(s.bgSlides ?? []), ...slides] }));
+      await commitScene();
+    }
+    if (res.erreurs.length > 0) {
+      alert(get(t)("commun.importRefuseListe", { erreurs: res.erreurs.join("\n") }));
+    }
+  } catch (e) {
+    alert(get(t)("commun.importRefuse", { erreur: String(e) }));
+  }
+}
+
+/// Retire la slide d'index i de la liste du fond. Liste vidée → bgSlides
+/// repasse undefined (bgMedia redevient visible). Commit.
+export async function retirerSlideFond(i: number): Promise<void> {
+  sceneStore.update((s) => {
+    const slides = (s.bgSlides ?? []).filter((_, j) => j !== i);
+    return { ...s, bgSlides: slides.length ? slides : undefined };
+  });
+  await commitScene();
+}
+
+/// Déplace la slide d'index i de dir (-1 = monter, +1 = descendre) dans la
+/// liste du fond. Bornes ignorées silencieusement. Commit.
+export async function deplacerSlideFond(i: number, dir: -1 | 1): Promise<void> {
+  sceneStore.update((s) => {
+    const cur = s.bgSlides;
+    if (!cur) return s;
+    const j = i + dir;
+    if (j < 0 || j >= cur.length) return s;
+    const slides = [...cur];
+    [slides[i], slides[j]] = [slides[j], slides[i]];
+    return { ...s, bgSlides: slides };
+  });
+  await commitScene();
+}
+
+/// Intervalle du carrousel de fond (secondes, clamp 1–3600). Maj locale +
+/// commit immédiat.
+export async function setSlidesSecFond(sec: number): Promise<void> {
+  const v = Math.max(1, Math.min(3600, sec));
+  sceneStore.update((s) => ({ ...s, bgSlidesSec: v }));
+  await commitScene();
+}
+
+/// Vide la liste de slides du fond (carrousel off → bgMedia redevient
+/// visible). Ne supprime PAS les fichiers dans medias/. Commit.
+export async function viderSlidesFond(): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgSlides: undefined, bgSlidesSec: undefined }));
+  await commitScene();
 }
 
 /// Change le mode d'affichage du fond. Maj locale + commit immédiat
@@ -1521,16 +1812,38 @@ type SnapSide =
   | "gap";
 export type SnapTarget = { pos: number; side: SnapSide };
 
-/// Snapshot des cibles de snap pour un drag donné.
-/// Construit la liste des bords/centres des autres widgets + bords/centre canvas
-/// + positions MIROIR (symétrie axe central : marge opposée égale à celle d'un
-/// autre widget) + ESPACEMENTS ÉGAUX (le gap créé par le widget déplacé égale
-/// un gap existant entre deux autres widgets).
-/// Appelé UNE FOIS au pointerdown (pas par frame).
-export function buildSnapTargets(scene: Scene, draggedId: string): {
-  xs: SnapTarget[];
-  ys: SnapTarget[];
-} {
+/// Rect générique de cible de snap — widgets et modules HUD partagent les
+/// mêmes champs x/y/largeur/hauteur.
+type SnapRect = { x: number; y: number; largeur: number; hauteur: number };
+
+/// Rects des modules HUD actifs — couche séparée des widgets mais cibles de
+/// snap au même titre. Un module inactif n'est pas rendu → jamais cible.
+/// `sauf` = module en cours de drag (exclu de ses propres cibles).
+function rectsModulesActifs(scene: Scene, sauf?: ModuleId): SnapRect[] {
+  const mods = scene.modules;
+  if (!mods) return [];
+  const out: SnapRect[] = [];
+  for (const id of MODULE_IDS) {
+    const m = mods[id];
+    if (m?.actif && id !== sauf) {
+      out.push({ x: m.x, y: m.y, largeur: m.largeur, hauteur: m.hauteur });
+    }
+  }
+  return out;
+}
+
+/// Corps commun de construction des cibles : bords/centre canvas +
+/// bords/centres des rects « autres » (widgets et/ou modules actifs) +
+/// positions MIROIR (symétrie axe central : marge opposée égale à celle d'un
+/// autre élément) + ESPACEMENTS ÉGAUX (le gap créé par l'élément déplacé
+/// égale un gap existant entre deux autres éléments).
+/// dw/dh = dims de l'élément déplacé (cible « centré entre deux » des gaps).
+function snapTargetsDepuisRects(
+  scene: Scene,
+  autres: SnapRect[],
+  dw: number,
+  dh: number
+): { xs: SnapTarget[]; ys: SnapTarget[] } {
   const cw = scene.canvasW ?? 1920;
   const ch = scene.canvasH ?? 1080;
   const xs: SnapTarget[] = [
@@ -1543,10 +1856,6 @@ export function buildSnapTargets(scene: Scene, draggedId: string): {
     { pos: ch / 2, side: "center" },
     { pos: ch, side: "bottom" },
   ];
-  const autres = scene.widgets.filter((o) => o.id !== draggedId);
-  const dragged = scene.widgets.find((w) => w.id === draggedId);
-  const dw = dragged?.largeur ?? 0;
-  const dh = dragged?.hauteur ?? 0;
   for (const o of autres) {
     xs.push({ pos: o.x, side: "left" });
     xs.push({ pos: o.x + o.largeur / 2, side: "center" });
@@ -1587,6 +1896,48 @@ export function buildSnapTargets(scene: Scene, draggedId: string): {
     }
   }
   return { xs, ys };
+}
+
+/// Snapshot des cibles de snap pour le drag/resize d'un WIDGET.
+/// Autres widgets + modules actifs comme cibles (réciproque : un widget
+/// s'aligne aussi sur les modules HUD visibles).
+/// Appelé UNE FOIS au pointerdown (pas par frame).
+export function buildSnapTargets(scene: Scene, draggedId: string): {
+  xs: SnapTarget[];
+  ys: SnapTarget[];
+} {
+  const dragged = scene.widgets.find((w) => w.id === draggedId);
+  const autres: SnapRect[] = [
+    ...scene.widgets.filter((o) => o.id !== draggedId),
+    ...rectsModulesActifs(scene),
+  ];
+  return snapTargetsDepuisRects(
+    scene,
+    autres,
+    dragged?.largeur ?? 0,
+    dragged?.hauteur ?? 0
+  );
+}
+
+/// Snapshot des cibles de snap pour le drag/resize d'un MODULE HUD :
+/// tous les widgets + les autres modules actifs (le module déplacé est
+/// exclu de ses propres cibles via `sauf`).
+/// Appelé UNE FOIS au pointerdown (pas par frame).
+export function buildSnapTargetsModule(scene: Scene, moduleId: ModuleId): {
+  xs: SnapTarget[];
+  ys: SnapTarget[];
+} {
+  const dragged = scene.modules?.[moduleId];
+  const autres: SnapRect[] = [
+    ...scene.widgets,
+    ...rectsModulesActifs(scene, moduleId),
+  ];
+  return snapTargetsDepuisRects(
+    scene,
+    autres,
+    dragged?.largeur ?? 0,
+    dragged?.hauteur ?? 0
+  );
 }
 
 /// Calcule le snap pour une position brute donnée.

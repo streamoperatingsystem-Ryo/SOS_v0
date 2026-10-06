@@ -445,11 +445,12 @@ pub fn initialiser_depuis_preset(
 /// auto posé à la naissance par Scene::new (cadreWidget ==
 /// CadreConfig::defaut_scene() compte comme « pas de cadre choisi » — sinon
 /// l'onboarding créerait une 2e scène au lieu de remplacer la vierge), pas
-/// de titre de fond (4 positions + legacy), pas de morphs de fond. Les dims
-/// canvas ne comptent pas (miroir de la résolution OBS). Garde de
-/// initialiser_depuis_preset.
+/// de titre de fond (4 positions + legacy), pas de morphs de fond, pas de
+/// modules HUD. Les dims canvas ne comptent pas (miroir de la résolution
+/// OBS). Garde de initialiser_depuis_preset.
 fn scene_vierge(s: &Scene) -> bool {
     s.widgets.is_empty()
+        && s.modules.is_none()
         && s.bgMedia.is_empty()
         && s.cadreWidget
             .as_ref()
@@ -497,6 +498,10 @@ mod tests {
         let mut s = Scene::new();
         s.bgMorphs = Some(vec![crate::scene::MorphPoint::default()]);
         assert!(!scene_vierge(&s), "morph de fond = pas vierge");
+
+        let mut s = Scene::new();
+        s.modules = Some(crate::scene::ScenesModules::default());
+        assert!(!scene_vierge(&s), "modules HUD = pas vierge");
     }
 
     /// Migration titres multi-positions : legacy `titre`+`titrePosition` →

@@ -1,13 +1,14 @@
 // Store UI : section d'accordéon ouverte (une seule à la fois) + carte d'édition.
 import { writable } from "svelte/store";
+import type { ModuleId } from "../tauri";
 
 export type Section =
   | "widgets"
   | "connexions"
   | "communaute"
   | "obs"
+  | "preview"
   | "personnalisation"
-  | "raccourcis"
   | "ergonomie";
 // NB : "Interactions chat" n'est PAS une section d'accordéon — c'est un
 // lanceur direct qui ouvre interactionModalOpen (modale à onglets).
@@ -119,3 +120,9 @@ export const ecranAttenteModalOpen = writable(false);
 /// Overlay plein écran du Guide du streamer (livre feuilletable) :
 /// true = ouvert. Dashboard uniquement — jamais en diffusion.
 export const guideLivreOpen = writable(false);
+
+/// Modale Modules HUD (horloge / musique en cours / objectifs du stream) :
+/// null = fermée, sinon id du module sélectionné dans le master-detail
+/// (lanceur Toolbar → "horloge" par défaut ; clic sur un module du canvas →
+/// ce module). Même pattern que titreModalOpen (cible portée par la valeur).
+export const modulesModalOpen = writable<ModuleId | null>(null);
