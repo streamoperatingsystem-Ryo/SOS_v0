@@ -320,6 +320,23 @@ async fn connect_irc(
                 if let Some(commandes) = app.try_state::<crate::commandes::CommandesState>() {
                     commandes.on_message(&payload.pseudo, &payload.pseudo, &payload.texte);
                 }
+                // Musique : "!rs <titre>" → bibliothèque locale + file côté
+                // diffusion. Retourne un accusé → posté en chat via PRIVMSG.
+                // est_mod : badge moderator/broadcaster ou le streamer lui-même.
+                if let Some(musique) = app.try_state::<crate::musique::MusiqueState>() {
+                    let est_mod = payload
+                        .badges
+                        .as_deref()
+                        .map(|b| b.contains("moderator/") || b.contains("broadcaster/"))
+                        .unwrap_or(false)
+                        || payload.pseudo.to_lowercase() == login_lower;
+                    if let Some(rep) =
+                        musique.on_message("twitch", &payload.pseudo, &payload.texte, est_mod)
+                    {
+                        let irc = format!("PRIVMSG #{} :{}", login_lower, rep);
+                        let _ = write.send(Message::Text(irc.into())).await;
+                    }
+                }
             }
         }
     }

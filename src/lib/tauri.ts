@@ -1,9 +1,18 @@
 // SEUL endroit où invoke/listen Tauri sont utilisés côté dashboard.
 import { invoke } from "@tauri-apps/api/core";
 
+/// Une slide du carrousel d'images (widget média ou fond de scène).
+/// rel = chemin relatif "medias/<uuid>.<ext>" ; nom = nom original du
+/// fichier (affichage liste, même rôle que mediaNom). Miroir de MediaSlide
+/// (scene.rs).
+export interface MediaSlide {
+  rel: string;
+  nom: string;
+}
+
 export interface Widget {
   id: string;
-  type: "media" | "chat" | "camera" | "welcome-clip" | "input-viewer" | "speedrun" | "goal";
+  type: "media" | "chat" | "camera" | "welcome-clip" | "input-viewer" | "speedrun" | "goal" | "musique";
   x: number;
   y: number;
   largeur: number;
@@ -36,6 +45,12 @@ export interface Widget {
   mediaPixel?: number;
   mediaPaused?: boolean;
   mediaTime?: number;
+  /// Carrousel d'images : liste non vide = ACTIF et prioritaire sur `media`
+  /// (le média unique reste stocké, il redevient visible si la liste est
+  /// vidée). Images uniquement.
+  mediaSlides?: MediaSlide[];
+  /// Intervalle du carrousel en secondes. undefined → 5 s (défaut diffusion).
+  mediaSlidesSec?: number;
   trou?: boolean;
   /// Opt-out du cadre SVG de scène pour ce widget (widgets créés par drop
   /// bibliothèque → transformerEnWidget). undefined/false = cadre appliqué.
@@ -100,6 +115,10 @@ export interface Widget {
   /// (EventSub + poll viewers.rs), goalMetrique/goalCible ignorés.
   /// undefined = mode manuel.
   goalId?: string;
+  /// Mode d'affichage des widgets type "musique" : "player" (défaut — LCD
+  /// marquee + temps + barre de progression + équalizer) ou "eq" (bandes
+  /// de spectre seules).
+  musiqueMode?: "player" | "eq";
   /// Chaîne de morphs (bulge/pinch) appliquée au média, dans l'ordre.
   /// undefined/vide = rendu natif (img/video), zéro coût GL.
   morphs?: MorphPoint[];
@@ -211,6 +230,45 @@ export interface TwitchGoal {
   atteint: boolean;
   /// true seulement via channel.goal.end (ou disparition du GET /goals).
   termine: boolean;
+}
+
+// ===== Types planning Twitch (miroir twitch_helix::Schedule*) =====
+
+/// Un segment du planning Twitch. Pour un récurrent, chaque occurrence
+/// hebdo a un id propre (PATCH/DELETE d'une occurrence impacte la série).
+export interface PlanningSegment {
+  id: string;
+  start_time: string;
+  end_time: string;
+  title: string;
+  /// Vide = segment sans jeu déclaré.
+  category_id: string;
+  category_name: string;
+  is_recurring: boolean;
+  /// Non-null = annulé (récurrent : prochaine occurrence annulée).
+  canceled_until: string | null;
+}
+
+/// Réponse GET /schedule : segments + vacances (dates ISO, "" = absent).
+export interface PlanningResp {
+  segments: PlanningSegment[];
+  vacation_start: string;
+  vacation_end: string;
+}
+
+/// Corps partiel de PATCH /schedule/segment — clés snake_case (format Helix,
+/// le struct Rust se désérialise tel quel, sans conversion camelCase).
+/// start_time modifiable sur les ponctuels uniquement.
+export interface PlanningSegmentPatch {
+  start_time?: string;
+  /// Requis par Twitch quand start_time est envoyé (IANA).
+  timezone?: string;
+  /// Minutes 30-1380.
+  duration_min?: number;
+  category_id?: string;
+  title?: string;
+  /// Annuler (true) / rétablir (false) — récurrent : prochaine occurrence.
+  is_canceled?: boolean;
 }
 
 /// Mapping des touches manette pour un widget input-viewer.
@@ -331,6 +389,8 @@ export interface SpeedrunEvent {
 /// `actif` = cadre visible.
 /// `bordActif` = le cadre s'applique aussi au bord du canvas (absent/false
 /// = widgets seuls). undefined = true (rétro-compat vieilles scènes).
+/// `animer` = émet les éléments SMIL animés du cadre (toggle « Animer »).
+/// undefined/false = rendu statique (défaut, rétro-compat).
 export interface CadreConfig {
   style: string;
   variante?: string;
@@ -340,6 +400,63 @@ export interface CadreConfig {
   gradientAngle: number;
   actif: boolean;
   bordActif?: boolean;
+  animer?: boolean;
+}
+
+/// Identifiants des modules HUD (singletons par scène).
+export type ModuleId = "horloge" | "musique" | "objectifs";
+export const MODULE_IDS: ModuleId[] = ["horloge", "musique", "objectifs"];
+
+/// Ligne d'un module « Objectifs du stream » : métrique mesurée
+/// (`plateforme` + `metrique` — mêmes valeurs que le widget goal, frames
+/// communaute/viewers) OU Creator Goal Twitch lié (`goalId`, frames
+/// goal-twitch). `cible` = cible du mode manuel (undefined = compteur
+/// seul). `label` = libellé affiché (undefined = libellé auto).
+export interface LigneObjectif {
+  id: string;
+  plateforme?: GoalPlateforme;
+  metrique?: GoalMetrique;
+  cible?: number;
+  goalId?: string;
+  label?: string;
+}
+
+/// Un module HUD de la scène — couche d'affichage SÉPARÉE des widgets
+/// (rectangle libre en px canvas + options). Struct unique pour les trois
+/// modules : les options spécifiques sont ignorées par les autres.
+/// Miroir de `ModuleHud` (scene.rs) — contrat JSON direct, camelCase.
+export interface ModuleHud {
+  actif: boolean;
+  x: number;
+  y: number;
+  largeur: number;
+  hauteur: number;
+  /// Police Google Font (fonts.ts). undefined = police système.
+  police?: string;
+  /// Taille de police de base (px). undefined = dérivée de la hauteur.
+  taille?: number;
+  /// Cadre SVG de la scène autour du module. undefined/false = aucun.
+  cadre?: boolean;
+  /// Opacité du fond translucide (0–1). undefined = 0.45.
+  opacite?: number;
+  /// Horloge : date à gauche du trait (défaut true), secondes (défaut
+  /// false), format 12 h (défaut false).
+  afficherDate?: boolean;
+  secondes?: boolean;
+  format12h?: boolean;
+  /// Musique : pastille temps/progression (défaut true).
+  afficherTemps?: boolean;
+  /// Objectifs : titre du bloc + lignes dans l'ordre.
+  titre?: string;
+  lignes?: LigneObjectif[];
+}
+
+/// Modules HUD d'une scène — un emplacement par module. undefined =
+/// jamais configuré sur cette scène.
+export interface ScenesModules {
+  horloge?: ModuleHud;
+  musique?: ModuleHud;
+  objectifs?: ModuleHud;
 }
 
 export interface Scene {
@@ -347,6 +464,12 @@ export interface Scene {
   canvasW?: number;
   canvasH?: number;
   bgMedia?: string;
+  /// Carrousel d'images du fond : liste non vide = ACTIF et prioritaire
+  /// sur bgMedia (qui reste stocké). bgObsSource reste prioritaire sur
+  /// tout (page transparente). Images uniquement.
+  bgSlides?: MediaSlide[];
+  /// Intervalle du carrousel de fond en secondes. undefined → 5 s.
+  bgSlidesSec?: number;
   bgKind?: string;
   bgFit?: string;
   bgZoom?: number;
@@ -436,6 +559,10 @@ export interface Scene {
   /// empilé avec aideFond, auto-masquée à la première ouverture de la
   /// modale Cadres ou via la croix (dismiss persistant).
   aideCadres?: boolean;
+  /// Modules HUD par scène (horloge / musique en cours / objectifs du
+  /// stream) — couche séparée des widgets, transportée par le snapshot WS.
+  /// undefined = aucun module (vieilles scènes).
+  modules?: ScenesModules;
 }
 
 /// Entrée de l'index des scènes (id + nom seulement, jamais le contenu).
@@ -521,6 +648,28 @@ export interface RaccourcisEtat {
   monitor_index: number;
 }
 
+/// Moniteur vu par OBS (GetMonitorList, obs-websocket v5) — sélecteur de la
+/// section Prévisualisation. Index OBS, PAS l'index Win32 de
+/// RaccourcisMoniteur.
+export interface ObsMoniteur {
+  monitorIndex: number;
+  monitorName: string;
+  monitorWidth: number;
+  monitorHeight: number;
+  monitorPositionX: number;
+  monitorPositionY: number;
+}
+
+/// Mode d'affichage de la fenêtre principale (section Ergonomie).
+export type ModeFenetre = "fenetre" | "maximise" | "fullscreen";
+
+/// Préférence persistée de la fenêtre principale (fenetre.json) : écran de
+/// démarrage + mode d'affichage.
+export interface FenetreEtat {
+  monitor_index: number;
+  mode: ModeFenetre;
+}
+
 export interface AlertesConfig {
   follow?: AlerteTypeConfig;
   raid?: AlerteTypeConfig;
@@ -551,6 +700,77 @@ export interface CommandeConfig {
   /// inclus). undefined = icône + texte.
   media?: string;
   media_kind?: string;
+}
+
+// ===== Types Musique (!rs → bibliothèque locale → diffusion) =====
+
+/// Config musique (miroir de MusiqueConfig Rust — musique.rs).
+export interface MusiqueConfig {
+  /// false = !rs ignoré silencieusement.
+  actif: boolean;
+  /// Mot de commande SANS le "!" (défaut "rs").
+  commande: string;
+  /// Commande skip — mods/broadcaster (défaut "skip").
+  commande_skip: string;
+  /// Commande "retire ma demande" (défaut "retirer").
+  commande_retirer: string;
+  /// Commande "affiche la file" (défaut "file").
+  commande_file: string;
+  /// Cooldown par viewer entre deux demandes (s, 0 = off).
+  cooldown_viewer_s: number;
+  /// Nb max de pistes d'un viewer dans la file + en cours (0 = illimité).
+  max_par_viewer: number;
+  /// Taille max de la file (défaut 20).
+  file_max: number;
+  /// Volume de lecture côté diffusion (0.0–1.0).
+  volume: number;
+  /// false = aucun accusé chat (Twitch peut répondre).
+  reponses_chat: boolean;
+}
+
+/// Piste demandée (en cours ou en file).
+export interface MusiqueItem {
+  id: string;
+  /// Titre affiché (nom de fichier nettoyé).
+  titre: string;
+  /// Chemin relatif servi par :4321 ("medias/musique/<fichier>").
+  src: string;
+  demandeur: string;
+  plateforme: string;
+}
+
+/// Entrée de bibliothèque = un fichier de medias/musique.
+export interface MusiqueFichier {
+  src: string;
+  titre: string;
+  taille: number;
+}
+
+/// Progression de la piste en cours (snapshot figé à l'emit — le lecteur
+/// l'avance en tick local quand pausee=false). null = rien en cours.
+export interface MusiqueProgression {
+  /// Position de lecture en ms au moment de l'emit.
+  position_ms: number;
+  /// true = en pause côté diffusion.
+  pausee: boolean;
+  /// Durée totale en secondes (remontée par musique-meta, null = inconnue).
+  duree_s: number | null;
+}
+
+/// Cooldown viewer actif (!rs) — restant_s figé à l'emit (décrément local).
+export interface MusiqueCooldown {
+  pseudo: string;
+  restant_s: number;
+}
+
+/// État complet retourné par musique_etat / l'event "musique:update".
+export interface MusiqueEtat {
+  config: MusiqueConfig;
+  en_cours: MusiqueItem | null;
+  file: MusiqueItem[];
+  bibliotheque: MusiqueFichier[];
+  progression: MusiqueProgression | null;
+  cooldowns_actifs: MusiqueCooldown[];
 }
 
 // ===== Types Pad numérique (mirroir des structs Rust pad_numerique.rs) =====
@@ -738,6 +958,14 @@ export const tauri = {
     return invoke("import_media_from_paths", { paths });
   },
 
+  /// Importe PLUSIEURS images en un seul dialog multi-sélection (carrousels
+  /// mediaSlides widget + bgSlides fond — images uniquement). Mêmes règles
+  /// de validation/copie qu'importMedia. Dialog annulé → ok vide. Un échec
+  /// sur un fichier n'annule pas les autres (erreurs concaténées).
+  async importMediasMulti(): Promise<{ ok: [string, string, string][]; erreurs: string[] }> {
+    return invoke("import_medias_multi");
+  },
+
   /// Importe un média (image OU vidéo) comme fond de scène. Retourne le
   /// chemin relatif ("medias/<uuid>.<ext>") ou null si dialog annulé.
   /// Mêmes limites que importMedia (helper commun Rust). Le kind est déduit
@@ -778,6 +1006,43 @@ export const tauri = {
     password: string,
   ): Promise<{ stream: boolean; record: boolean }> {
     return await invoke("obs_outputs_status", { host, port, password });
+  },
+
+  /// Liste les moniteurs vus par OBS (GetMonitorList) — sélecteur de la
+  /// section Prévisualisation. Index OBS, PAS les index Win32.
+  async obsProjecteurMoniteurs(
+    host: string,
+    port: number,
+    password: string,
+  ): Promise<ObsMoniteur[]> {
+    return await invoke<ObsMoniteur[]>("obs_projecteur_moniteurs", {
+      host,
+      port,
+      password,
+    });
+  },
+
+  /// Ouvre le projecteur OBS « prévisualisation » (OpenVideoMixProjector) —
+  /// équivalent du clic droit OBS. monitorIndex : index OBS, -1 = fenêtré.
+  async obsProjecteurPreview(
+    host: string,
+    port: number,
+    password: string,
+    monitorIndex: number,
+  ): Promise<void> {
+    await invoke("obs_projecteur_preview", {
+      host,
+      port,
+      password,
+      monitorIndex,
+    });
+  },
+
+  /// Ferme les fenêtres projecteur OBS (WM_CLOSE local, pas de WebSocket).
+  /// Comportement par défaut au boot : OBS restaure ses projecteurs,
+  /// StreamOS impose « fermé » sauf si l'option auto est activée.
+  async obsProjecteurFermer(): Promise<number> {
+    return await invoke<number>("obs_projecteur_fermer");
   },
 
   /// Toggle fenêtre pop-out chat (always_on_top, 360×520).
@@ -821,6 +1086,25 @@ export const tauri = {
   /// Non-fatal si déjà fermée.
   async raccourcisMasquer(): Promise<void> {
     await invoke("raccourcis_masquer");
+  },
+
+  // ===== Fenêtre principale (écran + mode au démarrage — Ergonomie) =====
+
+  /// Préférence persistée de la fenêtre main (fenetre.json) : écran + mode.
+  async fenetreEtat(): Promise<FenetreEtat> {
+    return await invoke<FenetreEtat>("fenetre_etat");
+  },
+
+  /// Applique écran + mode IMMÉDIATEMENT à la fenêtre main et persiste
+  /// fenetre.json. La géométrie fenêtrée est recapturée au passage.
+  async fenetreAppliquer(
+    monitorIndex: number,
+    mode: ModeFenetre
+  ): Promise<FenetreEtat> {
+    return await invoke<FenetreEtat>("fenetre_appliquer", {
+      monitorIndex,
+      mode,
+    });
   },
 
   /// Arrête l'application (quitte proprement).
@@ -1177,6 +1461,68 @@ export const tauri = {
   /// Test manuel : déclenche une commande côté diffusion (bypass cooldowns).
   async commandeTester(id: string): Promise<void> {
     await invoke("commande_tester", { id });
+  },
+
+  // ===== Musique (!rs → bibliothèque locale → diffusion) =====
+
+  /// État complet : config + en_cours + file + bibliothèque.
+  async musiqueEtat(): Promise<MusiqueEtat> {
+    return invoke<MusiqueEtat>("musique_etat");
+  },
+
+  /// Sauvegarde la config musique (noms normalisés + distincts côté Rust).
+  async musiqueSetConfig(config: MusiqueConfig): Promise<MusiqueConfig> {
+    return invoke<MusiqueConfig>("musique_set_config", { config });
+  },
+
+  /// Importe des fichiers audio (multi-sélection) dans medias/musique/.
+  async musiqueImporter(): Promise<MusiqueFichier[]> {
+    return invoke<MusiqueFichier[]>("musique_importer");
+  },
+
+  /// Supprime un fichier de la bibliothèque (par nom de fichier).
+  async musiqueSupprimerFichier(nom: string): Promise<void> {
+    await invoke("musique_supprimer_fichier", { nom });
+  },
+
+  /// Skip la piste courante → la suivante démarre.
+  async musiqueSkip(): Promise<void> {
+    await invoke("musique_skip");
+  },
+
+  /// Pause ou reprend la piste courante côté diffusion.
+  async musiquePause(pause: boolean): Promise<void> {
+    await invoke("musique_pause", { pause });
+  },
+
+  /// Stoppe la lecture ET vide la file (arrêt complet).
+  async musiqueStop(): Promise<void> {
+    await invoke("musique_stop");
+  },
+
+  /// Vide la file d'attente (la piste courante continue).
+  async musiqueVider(): Promise<void> {
+    await invoke("musique_vider");
+  },
+
+  /// Retire une entrée de la file par id.
+  async musiqueRetirer(id: string): Promise<void> {
+    await invoke("musique_retirer", { id });
+  },
+
+  /// Déplace une entrée dans la file (delta = -1 monter, +1 descendre).
+  async musiqueDeplacer(id: string, delta: number): Promise<void> {
+    await invoke("musique_deplacer", { id, delta });
+  },
+
+  /// Test manuel : joue un fichier de la bibliothèque côté diffusion.
+  async musiqueTester(src: string): Promise<void> {
+    await invoke("musique_tester", { src });
+  },
+
+  /// Change le volume de lecture côté diffusion (persisté).
+  async musiqueVolume(volume: number): Promise<void> {
+    await invoke("musique_volume", { volume });
   },
 
   // ===== Input Viewer (capture globale clavier + souris → overlay diffusion) =====
@@ -1786,6 +2132,64 @@ export const tauri = {
     return invoke<TwitchGoal[]>("twitch_goals_lister");
   },
 
+  // ===== Planning Twitch (schedule Helix — onglet Planning) =====
+  // Erreur "need_reauth" si 403 (vieux token sans channel:manage:schedule).
+
+  /// Lire le planning : segments + vacances. startTime = borne basse
+  /// RFC3339 optionnelle (début de la vue courante). Relu à chaque appel.
+  async twitchPlanningSchedule(startTime?: string): Promise<PlanningResp> {
+    return invoke("twitch_planning_schedule", { startTime });
+  },
+
+  /// Créer un segment. isRecurring=false tente un ponctuel ; le backend
+  /// retombe sur récurrent si Twitch refuse (chaîne non affiliée).
+  /// durationMin : 30-1380. Retourne le segment créé.
+  /// Le corps interne reste snake_case (format Helix — même convention que
+  /// PlanningSegmentPatch).
+  async twitchPlanningSegmentCreer(opts: {
+    startTime: string;
+    timezone: string;
+    isRecurring: boolean;
+    durationMin: number;
+    categoryId?: string;
+    title?: string;
+  }): Promise<PlanningSegment> {
+    return invoke("twitch_planning_segment_creer", {
+      params: {
+        start_time: opts.startTime,
+        timezone: opts.timezone,
+        is_recurring: opts.isRecurring,
+        duration_min: opts.durationMin,
+        category_id: opts.categoryId,
+        title: opts.title,
+      },
+    });
+  },
+
+  /// Modifier un segment — PATCH partiel (clés snake_case, voir type).
+  /// ⚠️ Récurrent : s'applique à toute la série.
+  async twitchPlanningSegmentMaj(
+    id: string,
+    patch: PlanningSegmentPatch
+  ): Promise<void> {
+    await invoke("twitch_planning_segment_maj", { id, patch });
+  },
+
+  /// Supprimer un segment. ⚠️ Récurrent : supprime toute la série.
+  async twitchPlanningSegmentSupprimer(id: string): Promise<void> {
+    await invoke("twitch_planning_segment_supprimer", { id });
+  },
+
+  /// Définir/désactiver les vacances (dates RFC3339 quand actif).
+  async twitchPlanningVacances(opts: {
+    actif: boolean;
+    debut?: string;
+    fin?: string;
+    timezone: string;
+  }): Promise<void> {
+    await invoke("twitch_planning_vacances", opts);
+  },
+
   // ===== Clips de bienvenue (welcome) =====
 
   /// État courant de la file d'attente (clip en cours + queue + config globale).
@@ -1840,6 +2244,12 @@ export const tauri = {
   /// Définit la durée d'affichage globale des clips (0 = durée naturelle).
   async welcomeSetDureeAffichage(ms: number): Promise<void> {
     await invoke("welcome_set_duree_affichage", { ms });
+  },
+
+  /// Bascule le mode d'affichage : true = squelette de position (défaut),
+  /// false = spotlight plein écran (voile noir + carte 85 % + intro 3 s).
+  async welcomeSetUtiliserSquelette(actif: boolean): Promise<void> {
+    await invoke("welcome_set_utiliser_squelette", { actif });
   },
 
   /// Stop le clip courant + vide la queue.
@@ -1900,6 +2310,95 @@ export const tauri = {
     followers: { login: string; user_id: string; display_name?: string }[]
   ): Promise<{ succes: number; echecs: number }> {
     return invoke("welcome_attribuer_auto", { followers });
+  },
+
+  // ===== Présentation streamer (portage « streamers favoris ») =====
+
+  /// État courant : favoris persistés + présentation en cours.
+  async presentationEtat(): Promise<PresentationEtat> {
+    return invoke<PresentationEtat>("presentation_etat");
+  },
+
+  /// Ajoute/remplace un favori (upsert par login) + persiste.
+  async presentationFavoriSauver(
+    favori: PresentationFavoriConfig
+  ): Promise<void> {
+    await invoke("presentation_favori_sauver", { favori });
+  },
+
+  /// Retire un favori + persiste.
+  async presentationFavoriSupprimer(login: string): Promise<void> {
+    await invoke("presentation_favori_supprimer", { login });
+  },
+
+  /// Affecte/retire une piste audio d'un favori
+  /// ("voix"|"musique", src = "medias/<uuid>.<ext>" ou null).
+  async presentationFavoriSetSon(
+    login: string,
+    piste: string,
+    src: string | null
+  ): Promise<void> {
+    await invoke("presentation_favori_set_son", { login, piste, src });
+  },
+
+  /// Change le mode d'un favori ("theatrical"|"card") — bascule à chaud côté
+  /// diffusion si c'est le streamer actuellement présenté.
+  async presentationFavoriSetMode(
+    login: string,
+    mode: string
+  ): Promise<void> {
+    await invoke("presentation_favori_set_mode", { login, mode });
+  },
+
+  /// Recherche de chaînes Twitch (GET /search/channels).
+  async presentationRechercher(
+    query: string
+  ): Promise<PresentationSearchResult[]> {
+    return invoke<PresentationSearchResult[]>("presentation_rechercher", {
+      query,
+    });
+  },
+
+  /// Lance la présentation d'un streamer : fetch Helix complet + frame
+  /// presentation-show. mode = "theatrical"|"card" pour un non-favori
+  /// (le mode persisté d'un favori gagne toujours).
+  async presentationLancer(
+    userId: string,
+    mode?: string
+  ): Promise<PresentationDonnees> {
+    return invoke<PresentationDonnees>("presentation_lancer", {
+      userId,
+      mode,
+    });
+  },
+
+  /// Ferme la présentation côté diffusion.
+  async presentationFermer(): Promise<void> {
+    await invoke("presentation_fermer");
+  },
+
+  /// Joue un clip sur la diffusion (résolution MP4 signée côté Rust).
+  async presentationClipJouer(slug: string): Promise<void> {
+    await invoke("presentation_clip_jouer", { slug });
+  },
+
+  /// Arrête le clip en cours côté diffusion (retour à la carte).
+  async presentationClipStopper(): Promise<void> {
+    await invoke("presentation_clip_stopper");
+  },
+
+  /// Joue une piste audio ("voix"|"musique") sur la diffusion.
+  /// src = "medias/<uuid>.<ext>" (issu d'importSon).
+  async presentationAudioJouer(
+    piste: string,
+    src: string
+  ): Promise<void> {
+    await invoke("presentation_audio_jouer", { piste, src });
+  },
+
+  /// Stoppe une piste audio ("voix"|"musique"|"toutes") sur la diffusion.
+  async presentationAudioStopper(piste: string): Promise<void> {
+    await invoke("presentation_audio_stopper", { piste });
   },
 
   // ===== Bandeau premier message =====
@@ -2058,6 +2557,8 @@ export interface WelcomeQueueEtat {
   config_globale_actif: boolean;
   overlay: WelcomeOverlayConfig;
   duree_affichage_ms: number;
+  /// true = squelette de position (défaut), false = spotlight plein écran.
+  utiliser_squelette: boolean;
 }
 
 export interface WelcomeClipInfo {
@@ -2070,6 +2571,71 @@ export interface WelcomeClipInfo {
   broadcaster_id: string;
   broadcaster_login: string;
   broadcaster_name: string;
+  /// Catégorie du jeu au moment du clip (Helix game_id, "" si absent).
+  game_id: string;
+}
+
+// ===== Types présentation streamer (mirroir des structs Rust) =====
+
+/// Favori persisté (presentation_favoris.json) : streamer présentable +
+/// ses réglages (2 pistes audio medias/… + mode d'affichage).
+export interface PresentationFavoriConfig {
+  user_id: string;
+  /// Login lowercase (clé de la map côté Rust).
+  login: string;
+  display_name: string;
+  /// Avatar Twitch (rafraîchi à chaque lancer — cache).
+  avatar: string;
+  son_voix?: string | null;
+  son_musique?: string | null;
+  /// "theatrical" (défaut) | "card".
+  mode: string;
+}
+
+/// Jeu récent (déduit des game_id des clips — mirroir CategoryEntry Helix).
+export interface PresentationJeuRecent {
+  id: string;
+  name: string;
+  box_art_url: string;
+}
+
+/// Données complètes d'une présentation : payload de la frame WS
+/// presentation-show ET retour de presentation_lancer (contrôles live).
+export interface PresentationDonnees {
+  user_id: string;
+  login: string;
+  display_name: string;
+  avatar: string;
+  bio: string;
+  /// Bannière/entête de chaîne (offline_image_url Helix, "" si absente).
+  banniere: string;
+  /// "partner" | "affiliate" | "".
+  broadcaster_type: string;
+  en_live: boolean;
+  viewers_live?: number | null;
+  titre_live: string;
+  jeu_courant: string;
+  tags: string[];
+  jeux_recents: PresentationJeuRecent[];
+  clips: WelcomeClipInfo[];
+  /// Mode d'affichage effectif : "theatrical" | "card".
+  mode: string;
+}
+
+/// État exposé (commande presentation_etat + event "presentation:etat").
+export interface PresentationEtat {
+  favoris: PresentationFavoriConfig[];
+  visible: boolean;
+  courant: PresentationDonnees | null;
+}
+
+/// Résultat de recherche de chaîne (mirroir ChannelSearchEntry Helix).
+export interface PresentationSearchResult {
+  id: string;
+  login: string;
+  display_name: string;
+  is_live: boolean;
+  thumbnail_url: string;
 }
 
 // ===== Types bandeau premier message (mirroir des structs Rust) =====

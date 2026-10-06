@@ -3,11 +3,13 @@ mod alertes;
 mod commandes;
 mod config;
 mod ecran_attente;
+mod fenetre;
 mod just_chatting;
 mod pad_numerique;
 mod input_viewer;
 mod kick;
 mod mask_png;
+mod musique;
 mod obs;
 mod obs_trou;
 mod pc_enum;
@@ -29,6 +31,7 @@ mod twitch_clips;
 mod welcome;
 mod bandeau;
 mod position_overlay;
+mod presentation;
 mod raccourcis;
 mod speedrun;
 mod telemetrie;
@@ -37,6 +40,7 @@ mod conso;
 // Windows, stubs sur les autres plateformes). Importées dans le scope pour
 // generate_handler!.
 use conso::conso_etat;
+use fenetre::{fenetre_appliquer, fenetre_etat};
 use raccourcis::{
     raccourcis_appliquer, raccourcis_etat, raccourcis_masquer, raccourcis_moniteurs,
 };
@@ -463,6 +467,63 @@ async fn import_media_from_paths(
     .map_err(|e| format!("import_media_from_paths: {}", e))?
 }
 
+/// Importe PLUSIEURS images en un seul dialog multi-sélection (carrousels :
+/// mediaSlides widget + bgSlides fond — images uniquement, pas de vidéos).
+/// Mêmes règles que validate_and_copy_media (extension + taille + magic
+/// bytes) → copie vers medias/. AUCUNE mutation de scène — le frontend range
+/// les résultats dans les listes de slides puis commit via update_scene.
+/// Un échec sur UN fichier n'annule pas les autres (erreurs concaténées).
+/// Image : png/jpg/jpeg/gif/webp ≤ 10 Mo.
+#[tauri::command]
+async fn import_medias_multi(app: AppHandle) -> Result<ImportCheminsResult, String> {
+    // Dialog natif + copie sur le pool bloquant Tokio — jamais sur le
+    // thread UI.
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+
+        // 1. Dialog multi-fichiers (filtre « Images » uniquement — les
+        //    carrousels n'acceptent pas de vidéos en v1).
+        let files = app
+            .dialog()
+            .file()
+            .add_filter("Images", IMG_EXT)
+            .blocking_pick_files();
+        let Some(files) = files else {
+            // Dialog annulé → résultat vide (ok=[], erreurs=[]).
+            return Ok(ImportCheminsResult {
+                ok: Vec::new(),
+                erreurs: Vec::new(),
+            });
+        };
+
+        // 2. Validation + copie par fichier (helper commun), erreurs par
+        //    fichier concaténées — comportement import_media_from_paths.
+        let mut ok = Vec::new();
+        let mut erreurs = Vec::new();
+        for f in &files {
+            let src: std::path::PathBuf = match f.clone().into_path() {
+                Ok(p) => p,
+                Err(e) => {
+                    erreurs.push(format!("chemin invalide : {}", e));
+                    continue;
+                }
+            };
+            let nom = src
+                .file_name()
+                .and_then(|s| s.to_str())
+                .unwrap_or("média")
+                .to_string();
+            match validate_and_copy_media(&app, &src) {
+                Ok(t) => ok.push(t),
+                Err(e) => erreurs.push(format!("{} : {}", nom, e)),
+            }
+        }
+        Ok(ImportCheminsResult { ok, erreurs })
+    })
+    .await
+    .map_err(|e| format!("import_medias_multi: {}", e))?
+}
+
 /// Importe un média (image OU vidéo) comme fond de scène : dialog → validation
 /// → copie vers medias/. Retourne `Some(media_rel_path)` si importé, `None` si
 /// dialog annulé. AUCUNE mutation de scène : le frontend pose bgMedia dans son
@@ -688,6 +749,40 @@ async fn obs_outputs_status(
     Ok(serde_json::json!({ "stream": stream, "record": record }))
 }
 
+/// Liste les moniteurs vus par OBS (GetMonitorList) — sélecteur de la section
+/// Prévisualisation. One-shot, non-fatal côté frontend ([] en cas d'échec).
+#[tauri::command]
+async fn obs_projecteur_moniteurs(
+    host: String,
+    port: u16,
+    password: String,
+) -> Result<Vec<serde_json::Value>, String> {
+    obs::moniteurs_liste(&host, port, &password).await
+}
+
+/// Ouvre le projecteur OBS « prévisualisation » (OpenVideoMixProjector) —
+/// équivalent du clic droit OBS. monitor_index : index OBS, -1 = fenêtré.
+/// La nouvelle fenêtre OBSProjector est remontée au premier plan (Windows).
+#[tauri::command]
+async fn obs_projecteur_preview(
+    host: String,
+    port: u16,
+    password: String,
+    monitor_index: i32,
+) -> Result<(), String> {
+    obs::ouvrir_projecteur_preview(&host, port, &password, monitor_index).await
+}
+
+/// Ferme les fenêtres projecteur OBS (WM_CLOSE, Win32 local — aucune
+/// connexion WebSocket nécessaire). Appelée à la connexion OBS quand
+/// l'option « projecteur au démarrage » est OFF : OBS restaure ses
+/// projecteurs d'une session à l'autre, StreamOS impose « fermé » par
+/// défaut. Retourne le nombre de fenêtres fermées.
+#[tauri::command]
+async fn obs_projecteur_fermer() -> u32 {
+    obs::fermer_projecteurs()
+}
+
 // ===== Pop-out chat (Lot B) =====
 
 /// HTML embarqué du pop-out chat (include_str! — recompile si le fichier change).
@@ -761,6 +856,9 @@ fn chat_popout_fermer(app: AppHandle) -> Result<(), String> {
 /// Arrête l'application (quitte proprement).
 #[tauri::command]
 fn app_arreter(app: AppHandle) -> Result<(), String> {
+    // Sauver la géométrie fenêtrée : app.exit() ne déclenche pas forcément
+    // le hook CloseRequested de la fenêtre main.
+    fenetre::sauver_geo(&app);
     app.exit(0);
     Ok(())
 }
@@ -769,6 +867,7 @@ fn app_arreter(app: AppHandle) -> Result<(), String> {
 /// NB : `app.restart()` ne retourne jamais (`!`) — coercé en Result.
 #[tauri::command]
 fn app_redemarrer(app: AppHandle) -> Result<(), String> {
+    fenetre::sauver_geo(&app);
     app.restart()
 }
 
@@ -1088,10 +1187,9 @@ impl KickState {
     fn set_slug(&self, v: Option<String>) {
         *self.slug.lock().unwrap() = v;
     }
-    /// Slug du canal Kick connecté (ex: "xqc"). Non utilisé —
-    /// réservé pour l'affichage futur.
-    #[allow(dead_code)]
-    fn slug_courant(&self) -> Option<String> {
+    /// Slug du canal Kick connecté (ex: "xqc"). Utilisé par le hook musique
+    /// dans kick.rs pour détecter si l'expéditeur est le streamer.
+    pub(crate) fn slug_courant(&self) -> Option<String> {
         self.slug.lock().unwrap().clone()
     }
     /// Arrête le WS en cours (si actif) : flag cancel + abort handle.
@@ -1497,7 +1595,8 @@ async fn twitch_reconnecter(
 
 /// Mappe HelixError → String pour le frontend. "need_reauth" est distinct
 /// pour que le frontend affiche le banner de reconnexion.
-fn helix_err_to_string(e: twitch_helix::HelixError) -> String {
+/// pub(crate) : réutilisée par presentation.rs (fetch Helix profil/chaîne).
+pub(crate) fn helix_err_to_string(e: twitch_helix::HelixError) -> String {
     match e {
         twitch_helix::HelixError::NeedReauth => "need_reauth".to_string(),
         twitch_helix::HelixError::Deconnecte => "Pas connecté".to_string(),
@@ -2124,6 +2223,104 @@ async fn twitch_goals_lister(
         .map_err(helix_err_to_string)
 }
 
+// ===== Planning Twitch (schedule Helix — onglet Planning, Interactions Live) =====
+
+/// Lire le planning Twitch : GET /schedule (segments + vacances).
+/// `start_time` = borne basse RFC3339 optionnelle (début de la vue courante).
+/// Zéro persistance : Helix est relu à chaque ouverture/navigation de l'onglet.
+#[tauri::command]
+async fn twitch_planning_schedule(
+    state: tauri::State<'_, TwitchState>,
+    start_time: Option<String>,
+) -> Result<twitch_helix::ScheduleResp, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::schedule_get(&uid, start_time.as_deref(), &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Créer un segment : POST /schedule/segment. `params.is_recurring`=false
+/// tente un ponctuel ; si Twitch refuse (chaîne non affiliée → 403
+/// "non-recurring", distingué de NeedReauth dans helix_write) on retombe
+/// sur récurrent — le choix produit est « ponctuel avec repli récurrent ».
+#[tauri::command]
+async fn twitch_planning_segment_creer(
+    state: tauri::State<'_, TwitchState>,
+    params: twitch_helix::ScheduleSegmentNew,
+) -> Result<twitch_helix::ScheduleSegment, String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    match twitch_helix::schedule_segment_create(&uid, &access, &params).await {
+        Err(twitch_helix::HelixError::Autre(m))
+            if !params.is_recurring && m.contains("non-recurring") =>
+        {
+            // Chaîne non affiliée : Twitch n'accepte que les récurrents → repli.
+            let repli = twitch_helix::ScheduleSegmentNew {
+                is_recurring: true,
+                ..params
+            };
+            twitch_helix::schedule_segment_create(&uid, &access, &repli)
+                .await
+                .map_err(helix_err_to_string)
+        }
+        r => r.map_err(helix_err_to_string),
+    }
+}
+
+/// Modifier un segment : PATCH /schedule/segment (corps partiel — les champs
+/// None ne sont pas envoyés). ⚠️ Sur un récurrent, les changements
+/// s'appliquent à toute la série (confirmé côté UI).
+#[tauri::command]
+async fn twitch_planning_segment_maj(
+    state: tauri::State<'_, TwitchState>,
+    id: String,
+    patch: twitch_helix::ScheduleSegmentPatch,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::schedule_segment_update(&uid, &access, &id, &patch)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Supprimer un segment : DELETE /schedule/segment. ⚠️ Sur un récurrent,
+/// TOUTE la série est supprimée (confirmé côté UI).
+#[tauri::command]
+async fn twitch_planning_segment_supprimer(
+    state: tauri::State<'_, TwitchState>,
+    id: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::schedule_segment_delete(&uid, &access, &id)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Définir/désactiver les vacances du planning : PATCH /schedule/settings.
+#[tauri::command]
+async fn twitch_planning_vacances(
+    state: tauri::State<'_, TwitchState>,
+    actif: bool,
+    debut: Option<String>,
+    fin: Option<String>,
+    timezone: String,
+) -> Result<(), String> {
+    let uid = state.user_id_courant().ok_or("Pas connecté")?;
+    let access = state.access_courant().ok_or("Pas connecté")?;
+    twitch_helix::schedule_settings_vacances(
+        &uid,
+        &access,
+        actif,
+        debut.as_deref(),
+        fin.as_deref(),
+        &timezone,
+    )
+    .await
+    .map_err(helix_err_to_string)
+}
+
 // ===== Kick (lecture seule, WS côté Rust) =====
 
 /// Connecte au chat Kick : résout le slug → chatroom ID, fetch un viewer token,
@@ -2636,6 +2833,17 @@ fn welcome_set_duree_affichage(
     state.set_duree_affichage(ms)
 }
 
+/// Bascule le mode d'affichage welcome : true = squelette de position unifié
+/// (défaut), false = spotlight plein écran (voile noir + carte 85 % + intro
+/// avatar 3 s).
+#[tauri::command]
+fn welcome_set_utiliser_squelette(
+    state: tauri::State<'_, welcome::WelcomeState>,
+    actif: bool,
+) -> Result<(), String> {
+    state.set_utiliser_squelette(actif)
+}
+
 /// Stop le clip courant + vide la queue.
 #[tauri::command]
 fn welcome_stop(state: tauri::State<'_, welcome::WelcomeState>) {
@@ -2781,6 +2989,126 @@ async fn welcome_attribuer_auto(
     Ok(serde_json::json!({ "succes": succes, "echecs": echecs }))
 }
 
+// ===== Présentation streamer (portage « streamers favoris » ancienne app) =====
+
+/// État courant : favoris persistés + présentation en cours (contrôles dashboard).
+#[tauri::command]
+fn presentation_etat(
+    state: tauri::State<'_, presentation::PresentationState>,
+) -> presentation::PresentationEtat {
+    state.etat()
+}
+
+/// Ajoute/remplace un favori (upsert par login) + persiste + émet état.
+#[tauri::command]
+fn presentation_favori_sauver(
+    state: tauri::State<'_, presentation::PresentationState>,
+    favori: presentation::FavoriConfig,
+) -> Result<(), String> {
+    state.sauver_favori(favori)
+}
+
+/// Retire un favori + persiste + émet état.
+#[tauri::command]
+fn presentation_favori_supprimer(
+    state: tauri::State<'_, presentation::PresentationState>,
+    login: String,
+) -> Result<(), String> {
+    state.supprimer_favori(&login)
+}
+
+/// Affecte une piste audio à un favori ("voix"|"musique", src = medias/… ou
+/// null pour retirer). Persiste + émet état.
+#[tauri::command]
+fn presentation_favori_set_son(
+    state: tauri::State<'_, presentation::PresentationState>,
+    login: String,
+    piste: String,
+    src: Option<String>,
+) -> Result<(), String> {
+    state.favori_set_son(&login, &piste, src)
+}
+
+/// Change le mode d'un favori ("theatrical"|"card") — bascule à chaud côté
+/// diffusion si c'est le streamer actuellement présenté.
+#[tauri::command]
+fn presentation_favori_set_mode(
+    state: tauri::State<'_, presentation::PresentationState>,
+    login: String,
+    mode: String,
+) -> Result<(), String> {
+    state.favori_set_mode(&login, &mode)
+}
+
+/// Recherche de chaînes Twitch (GET /search/channels — même endpoint que la
+/// recherche de raid). Pour ajouter un favori ou présenter sans l'enregistrer.
+#[tauri::command]
+async fn presentation_rechercher(
+    state: tauri::State<'_, TwitchState>,
+    query: String,
+) -> Result<Vec<twitch_helix::ChannelSearchEntry>, String> {
+    let access = state.access_courant().ok_or("Twitch non connecté")?;
+    twitch_helix::search_channels(&query, &access)
+        .await
+        .map_err(helix_err_to_string)
+}
+
+/// Lance la présentation d'un streamer : fetch Helix complet (profil, chaîne,
+/// live, clips, jeux) → émet presentation-show → retourne les données pour
+/// les contrôles live du dashboard.
+#[tauri::command]
+async fn presentation_lancer(
+    state: tauri::State<'_, presentation::PresentationState>,
+    twitch: tauri::State<'_, TwitchState>,
+    user_id: String,
+    mode: Option<String>,
+) -> Result<presentation::PresentationDonnees, String> {
+    let access = twitch.access_courant().ok_or("Twitch non connecté")?;
+    state.lancer(&user_id, mode, &access).await
+}
+
+/// Ferme la présentation côté diffusion (rideaux se referment). Idempotent.
+#[tauri::command]
+fn presentation_fermer(state: tauri::State<'_, presentation::PresentationState>) {
+    state.fermer();
+}
+
+/// Joue un clip sur la diffusion : résout l'URL MP4 signée au clic (les URL
+/// Twitch expirent — jamais d'URL persistée) → émet presentation-clip-play.
+#[tauri::command]
+async fn presentation_clip_jouer(
+    state: tauri::State<'_, presentation::PresentationState>,
+    slug: String,
+) -> Result<(), String> {
+    state.clip_jouer(&slug).await
+}
+
+/// Arrête le clip en cours côté diffusion (retour à la carte présentation).
+#[tauri::command]
+fn presentation_clip_stopper(state: tauri::State<'_, presentation::PresentationState>) {
+    state.clip_stopper();
+}
+
+/// Joue une piste audio ("voix"|"musique") sur la diffusion.
+/// `src` = chemin relatif medias/<uuid>.<ext> (issu d'import_son).
+#[tauri::command]
+fn presentation_audio_jouer(
+    state: tauri::State<'_, presentation::PresentationState>,
+    piste: String,
+    src: String,
+) -> Result<(), String> {
+    state.audio_jouer(&piste, &src)
+}
+
+/// Stoppe une piste audio ("voix"|"musique"|"toutes") sur la diffusion.
+#[tauri::command]
+fn presentation_audio_stopper(
+    state: tauri::State<'_, presentation::PresentationState>,
+    piste: String,
+) -> Result<(), String> {
+    state.audio_stopper(&piste)
+}
+
 // ===== Bandeau premier message =====
 
 /// Retourne l'état courant du bandeau (config : actif, duree, position).
@@ -2860,6 +3188,134 @@ fn commande_tester(
     id: String,
 ) -> Result<(), String> {
     state.tester(&id)
+}
+
+// ===== Musique (!rs → file de lecture bibliothèque locale → diffusion) =====
+
+/// État complet musique : config + piste en cours + file + bibliothèque.
+#[tauri::command]
+fn musique_etat(state: tauri::State<'_, musique::MusiqueState>) -> serde_json::Value {
+    state.etat()
+}
+
+/// Sauvegarde la config musique (noms de commandes normalisés + distincts).
+#[tauri::command]
+fn musique_set_config(
+    state: tauri::State<'_, musique::MusiqueState>,
+    config: musique::MusiqueConfig,
+) -> Result<musique::MusiqueConfig, String> {
+    state.set_config(config)
+}
+
+/// Importe des fichiers audio (multi-sélection) dans medias/musique/ — le
+/// nom lisible est conservé (c'est le titre demandé par les viewers).
+/// Retourne les entrées créées (les erreurs par fichier sont ignorées —
+/// un fichier invalide n'invalide pas le lot).
+#[tauri::command]
+async fn musique_importer(
+    app: AppHandle,
+    state: tauri::State<'_, musique::MusiqueState>,
+) -> Result<Vec<musique::MusiqueFichier>, String> {
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+
+        let files = app
+            .dialog()
+            .file()
+            .add_filter("Musiques", &["mp3", "ogg", "wav", "m4a", "flac"])
+            .blocking_pick_files();
+        let Some(files) = files else {
+            return Ok(Vec::new()); // dialog annulé
+        };
+
+        let mut importes = Vec::new();
+        for file in files {
+            let Ok(src) = file.into_path() else {
+                continue;
+            };
+            if let Ok(f) = musique::valider_et_copier(&app, &src) {
+                importes.push(f);
+            }
+        }
+        st.emit_update();
+        Ok(importes)
+    })
+    .await
+    .map_err(|e| format!("musique_importer: {}", e))?
+}
+
+/// Supprime un fichier de la bibliothèque (par nom de fichier uniquement).
+#[tauri::command]
+fn musique_supprimer_fichier(
+    app: AppHandle,
+    state: tauri::State<'_, musique::MusiqueState>,
+    nom: String,
+) -> Result<(), String> {
+    musique::supprimer_fichier(&app, &nom)?;
+    state.emit_update();
+    Ok(())
+}
+
+/// Skip la piste courante → la suivante démarre (contrôle dashboard).
+#[tauri::command]
+fn musique_skip(state: tauri::State<'_, musique::MusiqueState>) {
+    state.skip();
+}
+
+/// Pause ou reprend la piste courante côté diffusion.
+#[tauri::command]
+fn musique_pause(state: tauri::State<'_, musique::MusiqueState>, pause: bool) {
+    state.pause(pause);
+}
+
+/// Stoppe la lecture ET vide la file (arrêt complet).
+#[tauri::command]
+fn musique_stop(state: tauri::State<'_, musique::MusiqueState>) {
+    state.stop_tout();
+}
+
+/// Vide la file d'attente (la piste courante continue).
+#[tauri::command]
+fn musique_vider(state: tauri::State<'_, musique::MusiqueState>) {
+    state.vider_file();
+}
+
+/// Retire une entrée de la file par id.
+#[tauri::command]
+fn musique_retirer(
+    state: tauri::State<'_, musique::MusiqueState>,
+    id: String,
+) -> Result<(), String> {
+    state.retirer_file(&id)
+}
+
+/// Déplace une entrée dans la file (delta = -1 monter, +1 descendre).
+#[tauri::command]
+fn musique_deplacer(
+    state: tauri::State<'_, musique::MusiqueState>,
+    id: String,
+    delta: i32,
+) -> Result<(), String> {
+    state.deplacer_file(&id, delta as isize)
+}
+
+/// Test manuel : joue un fichier de la bibliothèque côté diffusion.
+#[tauri::command]
+fn musique_tester(
+    state: tauri::State<'_, musique::MusiqueState>,
+    src: String,
+) -> Result<(), String> {
+    state.tester(&src)
+}
+
+/// Change le volume de lecture côté diffusion (persisté en config).
+#[tauri::command]
+fn musique_volume(
+    state: tauri::State<'_, musique::MusiqueState>,
+    volume: f64,
+) -> Result<(), String> {
+    state.set_volume(volume as f32)
 }
 
 // ===== Input Viewer (capture globale clavier + souris → overlay diffusion) =====
@@ -3290,6 +3746,13 @@ pub fn run() {
             let welcome_state = welcome::WelcomeState::new(handle.clone(), chat_tx.clone());
             app.manage(welcome_state.clone());
 
+            // État Présentation streamer (favoris persistés + présentation
+            // courante). Frames WS presentation-* sur chat_tx → diffusion
+            // :4321. Déclenchement manuel uniquement (onglet Interactions).
+            let presentation_state =
+                presentation::PresentationState::new(handle.clone(), chat_tx.clone());
+            app.manage(presentation_state.clone());
+
             // État Bandeau premier message (détection 1er message tous viewers).
             // Récupère chat_tx pour émettre vers diffusion :4321.
             let bandeau_state = bandeau::BandeauState::new(handle.clone(), chat_tx.clone());
@@ -3299,6 +3762,12 @@ pub fn run() {
             // diffusion, même moteur que les alertes : file + cooldowns + timer).
             let commandes_state = commandes::CommandesState::new(handle.clone(), chat_tx.clone());
             app.manage(commandes_state.clone());
+
+            // État Musique ("!rs <titre>" → file de lecture côté diffusion,
+            // bibliothèque locale medias/musique/). Hooks on_message dans les
+            // 4 modules chat + remontée "musique-ended" via server.rs.
+            let musique_state = musique::MusiqueState::new(handle.clone(), chat_tx.clone());
+            app.manage(musique_state.clone());
 
             // État Input Viewer (capture globale clavier + souris → overlay
             // diffusion). Inactif au boot — démarré par le bouton ON/OFF des
@@ -3376,6 +3845,12 @@ pub fn run() {
             // OBS, jeu), compteurs d'activité. Tap passif sur chat_tx +
             // échantillonneur dédié — non énergivore, historique en mémoire.
             conso::demarrer(chat_tx.clone());
+
+            // Fenêtre principale : applique écran + mode persistés
+            // (fenetre.json — section Ergonomie) puis montre la fenêtre
+            // (visible:false dans tauri.conf.json — anti-flash). Enregistre
+            // le hook de sauvegarde de la géométrie fenêtrée à la fermeture.
+            fenetre::appliquer_au_boot(&handle);
 
             // Auto-resume : si token valide en coffre → IRC + point vert.
             // Pas de modal. Si token absent/invalide → reste déconnecté.
@@ -3532,6 +4007,7 @@ pub fn run() {
             update_scene,
             import_media,
             import_media_from_paths,
+            import_medias_multi,
             import_fond,
             import_son,
             import_alerte_media,
@@ -3540,12 +4016,17 @@ pub fn run() {
             obs_toggle_stream,
             obs_toggle_record,
             obs_outputs_status,
+            obs_projecteur_moniteurs,
+            obs_projecteur_preview,
+            obs_projecteur_fermer,
             chat_popout_toggle,
             chat_popout_fermer,
             raccourcis_moniteurs,
             raccourcis_etat,
             raccourcis_appliquer,
             raccourcis_masquer,
+            fenetre_etat,
+            fenetre_appliquer,
             app_arreter,
             app_redemarrer,
             scene_sync_captures,
@@ -3621,6 +4102,11 @@ pub fn run() {
             twitch_live_unban_resoudre,
             twitch_live_automod_resoudre,
             twitch_live_poser_jacquette,
+            twitch_planning_schedule,
+            twitch_planning_segment_creer,
+            twitch_planning_segment_maj,
+            twitch_planning_segment_supprimer,
+            twitch_planning_vacances,
             twitch_goals_lister,
             kick_connecter,
             kick_deconnecter,
@@ -3648,6 +4134,7 @@ pub fn run() {
             welcome_set_overlay_config,
             welcome_tester_clip,
             welcome_set_duree_affichage,
+            welcome_set_utiliser_squelette,
             welcome_stop,
             welcome_skip,
             welcome_retirer,
@@ -3658,6 +4145,18 @@ pub fn run() {
             welcome_lister_clips_streamer,
             welcome_resoudre_mp4,
             welcome_attribuer_auto,
+            presentation_etat,
+            presentation_favori_sauver,
+            presentation_favori_supprimer,
+            presentation_favori_set_son,
+            presentation_favori_set_mode,
+            presentation_rechercher,
+            presentation_lancer,
+            presentation_fermer,
+            presentation_clip_jouer,
+            presentation_clip_stopper,
+            presentation_audio_jouer,
+            presentation_audio_stopper,
             bandeau_etat,
             bandeau_set_config,
             bandeau_stop,
@@ -3667,6 +4166,18 @@ pub fn run() {
             commande_set_config,
             commande_supprimer,
             commande_tester,
+            musique_etat,
+            musique_set_config,
+            musique_importer,
+            musique_supprimer_fichier,
+            musique_skip,
+            musique_pause,
+            musique_stop,
+            musique_vider,
+            musique_retirer,
+            musique_deplacer,
+            musique_tester,
+            musique_volume,
             input_viewer_set_actif,
             input_viewer_etat_actif,
             pad_etat,

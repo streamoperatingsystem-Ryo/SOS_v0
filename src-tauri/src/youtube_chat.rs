@@ -118,6 +118,16 @@ async fn run_polling(
             if let Some(commandes) = app.try_state::<crate::commandes::CommandesState>() {
                 commandes.on_message(&msg.pseudo, &msg.pseudo, &msg.texte);
             }
+            // Musique : "!rs <titre>" → bibliothèque locale. est_mod : badges
+            // déjà normalisés à la source ("moderator"/"broadcaster").
+            if let Some(musique) = app.try_state::<crate::musique::MusiqueState>() {
+                let est_mod = msg
+                    .badges
+                    .as_deref()
+                    .map(|b| b.contains("moderator") || b.contains("broadcaster"))
+                    .unwrap_or(false);
+                musique.on_message("youtube", &msg.pseudo, &msg.texte, est_mod);
+            }
         }
 
         page_token = next_token;

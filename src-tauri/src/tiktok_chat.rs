@@ -116,6 +116,17 @@ pub fn demarrer(
                     if let Some(commandes) = app.try_state::<crate::commandes::CommandesState>() {
                         commandes.on_message(&pseudo, &pseudo, &texte);
                     }
+                    // Musique : "!rs <titre>" → bibliothèque locale. TikTok
+                    // n'expose pas de badge mod via PirateTok → est_mod =
+                    // streamer uniquement (unique_id == username suivi).
+                    if let Some(musique) = app.try_state::<crate::musique::MusiqueState>() {
+                        let est_mod = msg
+                            .user
+                            .as_ref()
+                            .map(|u| u.unique_id.eq_ignore_ascii_case(&username))
+                            .unwrap_or(false);
+                        musique.on_message("tiktok", &pseudo, &texte, est_mod);
+                    }
                 }
 
                 TikTokLiveEvent::RoomUserSeq(msg) => {

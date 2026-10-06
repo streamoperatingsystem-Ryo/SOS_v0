@@ -27,7 +27,7 @@ use std::fs;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::AppHandle;
+use tauri::{AppHandle, Manager};
 use tokio::sync::broadcast;
 
 /// Jeton d'annulation du timer courant.
@@ -325,6 +325,17 @@ impl CommandesState {
         cfg.commande = cfg.commande.trim().trim_start_matches('!').to_lowercase();
         if cfg.commande.is_empty() {
             return Err("Nom de commande vide".into());
+        }
+        // Collision avec les commandes musique (!rs, !skip, !retirer, !file) :
+        // les deux hooks on_message déclencheraient en double → refusé.
+        if let Some(m) = self.app.try_state::<crate::musique::MusiqueState>() {
+            let reserves = m.noms_reserves();
+            if reserves.contains(&cfg.commande) {
+                return Err(format!(
+                    "« !{} » est réservé à la musique — choisissez un autre nom",
+                    cfg.commande
+                ));
+            }
         }
         cfg.duree_ms = cfg.duree_ms.max(1000);
         {

@@ -9,7 +9,7 @@ use axum::{
 use futures_util::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
 
@@ -247,6 +247,55 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
                         // (actif:false reconstruit si jamais togglé).
                         Some("just-chatting-resync") => {
                             crate::just_chatting::reemit(&state.app);
+                        }
+                        // Fin de piste musique (ended/error de l'<audio> de la
+                        // diffusion) → avancer la file. id vérifié côté
+                        // musique (dedup multi-clients WS).
+                        Some("musique-ended") => {
+                            let id = parsed
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            if let Some(m) =
+                                state.app.try_state::<crate::musique::MusiqueState>()
+                            {
+                                m.on_ended(&id);
+                            }
+                        }
+                        // Resync musique : la diffusion (re)connectée rejoue
+                        // la frame play courante (reload OBS en cours de piste).
+                        Some("musique-resync") => {
+                            if let Some(m) =
+                                state.app.try_state::<crate::musique::MusiqueState>()
+                            {
+                                m.reemit();
+                            }
+                        }
+                        // Durée de la piste courante (loadedmetadata de
+                        // l'<audio> diffusion — seule source fiable) → posée
+                        // sur LectureEnCours.duree_s pour la progression.
+                        Some("musique-meta") => {
+                            let id = parsed
+                                .get("id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let duree_s = parsed
+                                .get("duree_s")
+                                .and_then(|v| v.as_f64())
+                                .unwrap_or(0.0);
+                            if let Some(m) =
+                                state.app.try_state::<crate::musique::MusiqueState>()
+                            {
+                                m.on_meta(&id, duree_s);
+                            }
+                        }
+                        // Bandes de l'équalizer (AnalyserNode sur l'audio
+                        // « ombre » de la diffusion, ~8 Hz) → relayées aux
+                        // webviews (lecteur Winamp dans l'onglet Musique).
+                        Some("musique-spectrum") => {
+                            let _ = state.app.emit("musique:spectrum", &parsed);
                         }
                         _ => {}
                     }

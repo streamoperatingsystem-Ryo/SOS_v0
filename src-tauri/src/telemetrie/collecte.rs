@@ -22,6 +22,7 @@ pub fn kind_depuis_frame(t: &str) -> Option<&'static str> {
         "welcome-clip-play" => Some("welcome"),
         "bandeau-premier-message-play" => Some("bandeau"),
         "pad-play" => Some("pad"),
+        "musique-play" => Some("musique"),
         _ => None,
     }
 }
@@ -42,7 +43,7 @@ pub fn plateforme_frame(kind: &str, frame: &Value) -> String {
     match kind {
         "alerte" => "twitch",
         "pad" => "local",
-        "commande" | "welcome" => "multi",
+        "commande" | "welcome" | "musique" => "multi",
         _ => "systeme",
     }
     .to_string()
@@ -74,6 +75,10 @@ pub fn extraire(kind: &str, frame: &Value) -> (Option<String>, Value) {
             json!({ "message": frame.get("message") }),
         ),
         "pad" => (None, json!({ "media_type": frame.pointer("/pad/media_type") })),
+        "musique" => (
+            champ("/piste/demandeur"),
+            json!({ "titre": frame.pointer("/piste/titre") }),
+        ),
         _ => (None, Value::Null),
     }
 }
