@@ -1,6 +1,11 @@
-// Cadre SVG Story — bordure dégradée avec coins en coeur, coeurs décoratifs.
-// Tons dérivés des couleurs utilisateur : couleur = vif, couleurFin =
-// profond ; clair/pale = couleur éclaircie (aucune palette figée).
+// Cadre SVG Story — bordure romantique poussée : coins en cœur, volutes
+// filigrane qui s'échappent dans la marge, étincelles 4-pointes, petits
+// cœurs le long du bord. Tons dérivés des couleurs utilisateur :
+// couleur = vif, couleurFin = profond ; clair/pale = couleur éclaircie
+// (aucune palette figée).
+// opts.animer → étincelle voyageuse parcourant le tracé du bord
+// (animateMotion path= — recette runner cyberpunk) + 3 étincelles
+// scintillantes en marge (décor).
 
 import type { CadreOpts } from "./cadre-cyberpunk";
 import { angleVersCoords, assombrir, couleurOu, eclaircir } from "./couleurs";
@@ -47,6 +52,18 @@ function heartShape(cx: number, cy: number, s: number): string {
   );
 }
 
+/// Étincelle 4-pointes (losange étoilé) centrée en cx,cy, rayon r.
+function sparkleShape(cx: number, cy: number, r: number): string {
+  const k = r * 0.16;
+  return (
+    `M ${cx} ${cy - r} ` +
+    `Q ${cx + k} ${cy - k} ${cx + r} ${cy} ` +
+    `Q ${cx + k} ${cy + k} ${cx} ${cy + r} ` +
+    `Q ${cx - k} ${cy + k} ${cx - r} ${cy} ` +
+    `Q ${cx - k} ${cy - k} ${cx} ${cy - r} Z`
+  );
+}
+
 export default function renderStory(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
   const vif = couleurOu(opts.couleur, "#ffffff");
@@ -63,9 +80,7 @@ export default function renderStory(opts: CadreOpts): string {
   const ep = clampStrokeWidth(opts.strokeWidth ?? 4);
   const s = Math.min(getStoryClipSize(ep), largeur / 4, hauteur / 4);
 
-  const heartMargin = Math.max(10, ep * 2.5);
-  const margin = heartMargin;
-
+  const margin = Math.max(12, ep * 3);
   const svgW = largeur + margin * 2;
   const svgH = hauteur + margin * 2;
   const vx = -margin;
@@ -94,6 +109,30 @@ export default function renderStory(opts: CadreOpts): string {
     `C ${x0 + s * 0.12} ${y0 - s * 0.12} ${x0 + s * 0.65} ${y0 - s * 0.12} ${x0 + s} ${y0}`,
     `Z`,
   ].join(" ");
+
+  // ── Volutes filigrane aux 4 coins : double courbe qui s'échappe dans la
+  // marge + point final. (sx, sy) = direction extérieure du coin. ──
+  const traitFin = Math.max(0.9, ep * 0.3);
+  function voluteCoin(cx: number, cy: number, sx: number, sy: number): string {
+    const X = (v: number) => cx + v * sx;
+    const Y = (v: number) => cy + v * sy;
+    const curl = [
+      `M ${X(-margin * 0.05)} ${Y(-margin * 0.1)}`,
+      `C ${X(-margin * 0.6)} ${Y(-margin * 0.15)} ${X(-margin * 0.85)} ${Y(-margin * 0.7)} ${X(-margin * 0.45)} ${Y(-margin * 0.9)}`,
+      `C ${X(-margin * 0.15)} ${Y(-margin * 1.05)} ${X(0)} ${Y(-margin * 0.75)} ${X(-margin * 0.12)} ${Y(-margin * 0.5)}`,
+    ].join(" ");
+    const tipX = X(-margin * 0.12);
+    const tipY = Y(-margin * 0.5);
+    return (
+      `<path d="${curl}" fill="none" stroke="${palette.clair}" stroke-width="${traitFin}" stroke-linecap="round" opacity="0.9"/>` +
+      `<circle cx="${tipX}" cy="${tipY}" r="${Math.max(1, ep * 0.28)}" fill="${blanc}" opacity="0.9"/>`
+    );
+  }
+  const volutes =
+    voluteCoin(x0, y0, 1, 1) +
+    voluteCoin(x1, y0, -1, 1) +
+    voluteCoin(x1, y1, -1, -1) +
+    voluteCoin(x0, y1, 1, -1);
 
   const cornerHeartSize = Math.max(6, ep * 1.5);
   const smallHeartSize = Math.max(3, ep * 0.7);
@@ -139,6 +178,35 @@ export default function renderStory(opts: CadreOpts): string {
     ...rightHearts.map((h) => `<path d="${heartShape(h.x, h.y, smallHeartSize)}" fill="${blanc}"/>`),
   ].join("");
 
+  // ── Étincelles 4-pointes dans la marge (milieu des arêtes, hors widget).
+  // animer → scintillement en cascade (opacity déphasée), sinon fixes. ──
+  const sparkR = Math.max(3.5, ep * 0.9);
+  const sparkles = [
+    { cx: largeur / 2, cy: -margin * 0.5 },
+    { cx: largeur + margin * 0.5, cy: hauteur / 2 },
+    { cx: largeur / 2, cy: hauteur + margin * 0.5 },
+  ];
+  const sparklesSvg = sparkles
+    .map((sp, i) => {
+      const anim = opts.animer
+        ? `<animate attributeName="opacity" values="0.15;0.95;0.15" dur="2.4s" begin="${(i * 0.8).toFixed(1)}s" repeatCount="indefinite"/>`
+        : "";
+      return `<path d="${sparkleShape(sp.cx, sp.cy, sparkR)}" fill="${blanc}" opacity="0.85">${anim}</path>`;
+    })
+    .join("");
+
+  // ── Étincelle voyageuse (animer) : UN groupe, UN animateMotion sur le
+  // tracé du bord (path= direct — recette runner cyberpunk, support
+  // universel vieux CEF). SUR le bord, pas dans la marge : la marge
+  // extérieure est rognée par le overflow:hidden + clip-path du parent
+  // → visible sur les widgets ET le bord du canvas.
+  const traveler = opts.animer
+    ? `<g opacity="0.95">` +
+      `<animateMotion dur="7s" repeatCount="indefinite" path="${borderPath}"/>` +
+      `<path d="${sparkleShape(0, 0, sparkR)}" fill="${blanc}"/>` +
+      `</g>`
+    : "";
+
   return `<svg width="${svgW}" height="${svgH}" viewBox="${vx} ${vy} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${margin}px; left:-${margin}px; pointer-events:none; z-index:5;">
   <defs>
     <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
@@ -160,11 +228,14 @@ export default function renderStory(opts: CadreOpts): string {
     <path d="${borderPath}" fill="none" stroke="url(#${gradId})" stroke-width="${ep}" stroke-linejoin="round" />
     <path d="${borderPath}" fill="none" stroke="url(#${innerGradId})" stroke-width="${Math.max(1, ep * 0.3)}" stroke-linejoin="round" opacity="0.7" />
   </g>
+  ${volutes}
   <g>
     ${cornerHeartsSvg}
   </g>
   <g opacity="0.75">
     ${smallHeartsSvg}
   </g>
+  ${sparklesSvg}
+  ${traveler}
 </svg>`;
 }

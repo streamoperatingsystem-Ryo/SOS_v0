@@ -23,6 +23,8 @@
   let actifCourant = $derived(cadreCourant?.actif ?? false);
   // Portée : le cadre s'applique aussi au bord du canvas (défaut true).
   let bordActifCourant = $derived(cadreCourant?.bordActif ?? true);
+  // Animation SMIL des éléments de bordure (défaut false — opt-in).
+  let animerCourant = $derived(cadreCourant?.animer ?? false);
 
   // Cadre sélectionné dans le registre.
   let cadreRegistre = $derived(trouverCadre(styleCourant));
@@ -66,6 +68,10 @@
     mettreAJourCadre({ bordActif: !bordActifCourant });
   }
 
+  function toggleAnimer() {
+    mettreAJourCadre({ animer: !animerCourant });
+  }
+
   function fermer() {
     cadreModalOpen.set(false);
   }
@@ -75,6 +81,7 @@
   <Modal
     title={$t("cadresModal.titre")}
     onClose={fermer}
+    crochet="var(--crochet-violet)"
     maxWidth="720px"
     hint={$t("cadresModal.hint")}
   >
@@ -118,6 +125,10 @@
 
         <button class="toggle {bordActifCourant ? 'actif' : 'inactif'}" onclick={toggleBord} disabled={!actifCourant}>
           {bordActifCourant ? $t("cadresModal.bordActive") : $t("cadresModal.bordDesactive")}
+        </button>
+
+        <button class="toggle {animerCourant ? 'actif' : 'inactif'}" onclick={toggleAnimer} disabled={!actifCourant}>
+          {animerCourant ? $t("cadresModal.animerActive") : $t("cadresModal.animerDesactive")}
         </button>
 
         <!-- Épaisseur -->
@@ -186,6 +197,7 @@
               couleur={couleurCourante}
               couleurFin={couleurFinCourante}
               gradientAngle={gradientAngleCourant}
+              animer={animerCourant}
               idCadre="apercu"
             />
           </div>

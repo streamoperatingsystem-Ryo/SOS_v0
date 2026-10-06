@@ -10,6 +10,8 @@ import renderStory, { getStoryClipPath } from "./cadre-story";
 import renderThinLine, { getThinLineClipPath } from "./cadre-thin-line";
 import renderHexagon, { getHexagonClipPath } from "./cadre-hexagon";
 import renderMGStyle, { getMGStyleClipPath } from "./cadre-mgstyle";
+import renderArena, { getArenaClipPath } from "./cadre-arena";
+import renderTribal, { getTribalClipPath } from "./cadre-tribal";
 import { angleVersCoords } from "./couleurs";
 
 export interface CadreRegistre {
@@ -26,6 +28,8 @@ export const REGISTRE_CADRES: CadreRegistre[] = [
   { id: "story", nom: "Story", categorie: "romantique" },
   { id: "thin-line", nom: "Thin Line", categorie: "minimaliste" },
   { id: "hexagon", nom: "Hexagone", categorie: "geometrique" },
+  { id: "arena", nom: "Arena", categorie: "gaming" },
+  { id: "tribal", nom: "Tribal", categorie: "sombre" },
 ];
 
 type RendererFn = (opts: CadreOpts) => string;
@@ -37,6 +41,8 @@ const CADRES_MAP: Record<string, RendererFn> = {
   "thin-line": renderThinLine,
   hexagon: renderHexagon,
   mgstyle: renderMGStyle,
+  arena: renderArena,
+  tribal: renderTribal,
 };
 
 const MAP_CLIP_PATHS: Record<string, ClipPathFn> = {
@@ -45,6 +51,8 @@ const MAP_CLIP_PATHS: Record<string, ClipPathFn> = {
   "thin-line": getThinLineClipPath,
   hexagon: getHexagonClipPath,
   mgstyle: getMGStyleClipPath,
+  arena: getArenaClipPath,
+  tribal: getTribalClipPath,
 };
 
 /// Génère le SVG d'un cadre selon son style. Tous les cadres sont rendus
@@ -58,7 +66,8 @@ export function genererSVG(
   couleurFin: string,
   strokeWidth: number,
   idCadre: string | undefined,
-  gradientAngle: number | undefined
+  gradientAngle: number | undefined,
+  animer?: boolean
 ): string {
   const c = /^#[0-9a-f]{6}$/i.test(couleur || "") ? couleur : "#ffffff";
   const cFin = /^#[0-9a-f]{6}$/i.test(couleurFin || "") ? couleurFin : c;
@@ -71,6 +80,18 @@ export function genererSVG(
   if (style === "arrondis" || style === "carre") {
     const rx = style === "arrondis" ? 8 : 0;
     const gradId = `grad-cadre-${(idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-")}-${style}`;
+    // Comète (animer) : segment balayant le tracé du bord — recette
+    // thin-line (pathLength=100 + dashoffset SMIL). SUR le bord : la
+    // marge est rognée par overflow:hidden/clip-path du parent → visible
+    // sur widgets ET bord du canvas.
+    const rectPath = rx > 0
+      ? `M ${rx} 0 L ${largeur - rx} 0 Q ${largeur} 0 ${largeur} ${rx} L ${largeur} ${hauteur - rx} Q ${largeur} ${hauteur} ${largeur - rx} ${hauteur} L ${rx} ${hauteur} Q 0 ${hauteur} 0 ${hauteur - rx} L 0 ${rx} Q 0 0 ${rx} 0 Z`
+      : `M 0 0 L ${largeur} 0 L ${largeur} ${hauteur} L 0 ${hauteur} Z`;
+    const comet = animer === true
+      ? `<path d="${rectPath}" fill="none" stroke="${cFin}" stroke-width="${Math.max(1.2, ep * 0.7)}" stroke-linecap="round" pathLength="100" stroke-dasharray="7 93" stroke-dashoffset="0">` +
+        `<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4s" repeatCount="indefinite"/>` +
+        `</path>`
+      : "";
     return `<svg width="${largeur + offset * 2}" height="${hauteur + offset * 2}" viewBox="-${offset} -${offset} ${largeur + offset * 2} ${hauteur + offset * 2}" preserveAspectRatio="none" style="position:absolute;top:-${offset}px;left:-${offset}px;pointer-events:none;z-index:5;">
         <defs>
           <linearGradient id="${gradId}" x1="${x1}%" y1="${y1}%" x2="${x2}%" y2="${y2}%">
@@ -79,13 +100,14 @@ export function genererSVG(
           </linearGradient>
         </defs>
         <rect x="0" y="0" width="${largeur}" height="${hauteur}" rx="${rx}" ry="${rx}" fill="none" stroke="url(#${gradId})" stroke-width="${ep}"/>
+        ${comet}
       </svg>`;
   }
 
   // ── Cadres avancés : dispatch ───────────────────────────────────────────
   const renderer = CADRES_MAP[style];
   if (renderer) {
-    return renderer({ largeur, hauteur, idCadre, strokeWidth: ep, couleur: c, couleurFin: cFin, gradientAngle: angle });
+    return renderer({ largeur, hauteur, idCadre, strokeWidth: ep, couleur: c, couleurFin: cFin, gradientAngle: angle, animer: animer === true });
   }
 
   return "";

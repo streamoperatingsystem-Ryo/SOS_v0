@@ -282,7 +282,7 @@
         };
       }
 
-      function renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle) {
+      function renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle, animer) {
         var c = /^#[0-9a-f]{6}$/i.test(couleur || "") ? couleur : "#ffffff";
         var cFin = /^#[0-9a-f]{6}$/i.test(couleurFin || "") ? couleurFin : c;
         var ep = clampStrokeWidth(strokeWidth);
@@ -295,12 +295,23 @@
         var gx1 = Math.round(50 - dx * scale), gy1 = Math.round(50 - dy * scale);
         var gx2 = Math.round(50 + dx * scale), gy2 = Math.round(50 + dy * scale);
         var gradId = "grad-cadre-" + (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-") + "-" + style;
+        // Comète (animer) : segment balayant le tracé du bord — recette
+        // thin-line (pathLength=100 + dashoffset SMIL). SUR le bord : la
+        // marge est rognée par overflow:hidden/clip-path du parent.
+        var rectPath = rx > 0
+          ? "M " + rx + " 0 L " + (W - rx) + " 0 Q " + W + " 0 " + W + " " + rx + " L " + W + " " + (H - rx) + " Q " + W + " " + H + " " + (W - rx) + " " + H + " L " + rx + " " + H + " Q 0 " + H + " 0 " + (H - rx) + " L 0 " + rx + " Q 0 0 " + rx + " 0 Z"
+          : "M 0 0 L " + W + " 0 L " + W + " " + H + " L 0 " + H + " Z";
+        var comet = animer
+          ? '<path d="' + rectPath + '" fill="none" stroke="' + cFin + '" stroke-width="' + Math.max(1.2, ep * 0.7) + '" stroke-linecap="round" pathLength="100" stroke-dasharray="7 93" stroke-dashoffset="0">'
+            + '<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4s" repeatCount="indefinite"/></path>'
+          : "";
         return '<svg width="' + (W + offset * 2) + '" height="' + (H + offset * 2) + '" viewBox="-' + offset + ' -' + offset + ' ' + (W + offset * 2) + ' ' + (H + offset * 2) + '" preserveAspectRatio="none" style="position:absolute;top:-' + offset + 'px;left:-' + offset + 'px;pointer-events:none;z-index:5;">'
           + '<defs><linearGradient id="' + gradId + '" x1="' + gx1 + '%" y1="' + gy1 + '%" x2="' + gx2 + '%" y2="' + gy2 + '%">'
           + '<stop offset="0%" stop-color="' + c + '" stop-opacity="1"/>'
           + '<stop offset="100%" stop-color="' + cFin + '" stop-opacity="1"/>'
           + '</linearGradient></defs>'
           + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + rx + '" ry="' + rx + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '"/>'
+          + comet
           + '</svg>';
       }
 
@@ -311,7 +322,7 @@
         var s = Math.min(getCyberpunkBevelSize(sw), W / 4, H / 4);
         return "path('M " + s + " 0 L " + (W - s) + " 0 L " + W + " " + s + " L " + W + " " + (H - s) + " L " + (W - s) + " " + H + " L " + s + " " + H + " L 0 " + (H - s) + " L 0 " + s + " Z')";
       }
-      function renderCyberpunk(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+      function renderCyberpunk(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
         var c2 = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.35);
         var c3 = "#ffffff";
@@ -319,7 +330,7 @@
         var ep = clampStrokeWidth(strokeWidth);
         var offset = ep / 2;
         var bevel = getCyberpunkBevelSize(ep);
-        var margin = Math.max(4, ep);
+        var margin = Math.max(6, ep * 1.4);
         var svgW = W + offset * 2 + margin * 2;
         var svgH = H + offset * 2 + margin * 2;
         var viewX = -(offset + margin);
@@ -337,11 +348,13 @@
           var Y = function (y) { return cy + y * sy; };
           var plaque = "M " + X(b + d) + " " + Y(-d) + " L " + X(bevel * 0.55) + " " + Y(-d) + " L " + X(-d) + " " + Y(bevel * 0.55) + " L " + X(-d) + " " + Y(b + d) + " L " + X(-d * 2.2) + " " + Y(b + d) + " L " + X(-d * 2.2) + " " + Y(bevel * 0.35) + " L " + X(bevel * 0.35) + " " + Y(-d * 2.2) + " L " + X(b + d) + " " + Y(-d * 2.2) + " Z";
           var chevron = "M " + X(bevel * 0.9) + " " + Y(-d * 3.4) + " L " + X(bevel * 0.28) + " " + Y(-d * 3.4) + " L " + X(-d * 3.4) + " " + Y(bevel * 0.28) + " L " + X(-d * 3.4) + " " + Y(bevel * 0.9);
+          var chevron2 = "M " + X(bevel * 0.62) + " " + Y(-d * 4.6) + " L " + X(bevel * 0.34) + " " + Y(-d * 4.6) + " L " + X(-d * 4.6) + " " + Y(bevel * 0.34) + " L " + X(-d * 4.6) + " " + Y(bevel * 0.62);
           var dx = X(bevel * 0.62), dy = Y(bevel * 0.62);
           var dr = Math.max(1.4, ep * 0.4);
           return "<g>" +
             '<path d="' + plaque + '" fill="' + c2 + '" fill-opacity="0.28" stroke="' + c1 + '" stroke-width="' + traitFin + '" stroke-linejoin="miter"/>' +
             '<path d="' + chevron + '" fill="none" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.85"/>' +
+            '<path d="' + chevron2 + '" fill="none" stroke="' + c2 + '" stroke-width="' + traitFin + '" opacity="0.4"/>' +
             '<circle cx="' + dx + '" cy="' + dy + '" r="' + dr + '" fill="' + c3 + '" stroke="' + c1 + '" stroke-width="' + Math.max(0.6, ep * 0.12) + '"/>' +
             "</g>";
         }
@@ -365,6 +378,26 @@
           '<path d="M ' + (W + co) + " " + (midY - segV) + " L " + (W + co) + " " + (midY + segV) + '" stroke="' + c1 + '" stroke-width="' + traitFin + '" opacity="0.8"/>',
           '<circle cx="' + (W + co) + '" cy="' + (midY - segV) + '" r="' + pr + '" fill="' + c1 + '"/>'
         ].join("\n    ");
+        // Code-barres (marge haut-droite) : micro-data signature cyberpunk.
+        var barH = Math.max(4, ep * 1.1);
+        var barY = -margin * 0.55 - barH / 2;
+        var barUnit = Math.max(0.8, ep * 0.28);
+        var barX0 = W - bevel * 0.2 - barUnit * 26;
+        var barPattern = [1, 1, 0.5, 2, 0.5, 1, 3, 1, 0.5, 0.5, 2, 1];
+        var bx = barX0;
+        var barcode = "";
+        for (var bi = 0; bi < barPattern.length; bi++) {
+          var bw = barPattern[bi] * barUnit;
+          barcode += '<rect x="' + bx + '" y="' + barY + '" width="' + bw + '" height="' + barH + '" fill="' + (bi % 3 === 0 ? c1 : c2) + '" opacity="0.85"/>';
+          bx += bw + barUnit;
+        }
+        // Runner lumineux (UN groupe, UN animateMotion le long du bord) —
+        // émis seulement si animer (toggle « Animer » de la modale).
+        var dotR = Math.max(1.8, ep * 0.55);
+        var runner = animer
+          ? '<g opacity="0.95"><animateMotion dur="5s" repeatCount="indefinite" path="' + pathBorder + '"/>'
+            + '<circle r="' + (dotR * 2.6) + '" fill="' + c1 + '" opacity="0.35"/><circle r="' + dotR + '" fill="' + c3 + '"/></g>'
+          : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<clipPath id="' + clipPathId + '"><path d="' + pathBorder + '"/></clipPath>'
@@ -372,11 +405,11 @@
           + '<linearGradient id="' + gradInnerId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c3 + '" stop-opacity="0.9"/><stop offset="50%" stop-color="' + c1 + '" stop-opacity="0.6"/><stop offset="100%" stop-color="' + c3 + '" stop-opacity="0.9"/></linearGradient>'
           + "</defs>"
           + '<g clip-path="url(#' + clipPathId + ')">'
-          + '<path d="' + pathBorder + '" fill="none" stroke="' + c1 + '" stroke-width="' + (ep * 2.2) + '" stroke-linejoin="miter" opacity="0.25"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="' + c1 + '" stroke-width="' + (ep * 2.6) + '" stroke-linejoin="miter" opacity="0.22"/>'
           + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
-          + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradInnerId + ')" stroke-width="' + Math.max(1, ep * 0.35) + '" stroke-linejoin="miter" opacity="0.8"/>'
+          + '<path d="' + pathBorder + '" fill="none" stroke="url(#' + gradInnerId + ')" stroke-width="' + Math.max(1, ep * 0.35) + '" stroke-linejoin="miter" opacity="0.85"/>'
           + '<path d="' + pathBorder + '" fill="none" stroke="' + c3 + '" stroke-width="' + Math.max(0.8, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.4"/>'
-          + "</g><g>" + circuits + "</g>" + brackets
+          + "</g><g>" + circuits + "</g>" + brackets + barcode + runner
           + "</svg>";
       }
 
@@ -404,7 +437,15 @@
       function heartShape(cx, cy, s) {
         return "M " + cx + " " + (cy + s * 0.25) + " C " + (cx - s * 0.42) + " " + (cy - s * 0.08) + " " + (cx - s * 0.42) + " " + (cy - s * 0.42) + " " + cx + " " + (cy - s * 0.18) + " C " + (cx + s * 0.42) + " " + (cy - s * 0.42) + " " + (cx + s * 0.42) + " " + (cy - s * 0.08) + " " + cx + " " + (cy + s * 0.25) + " Z";
       }
-      function renderStory(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+      // Étincelle 4-pointes (losange étoilé) centrée en cx,cy, rayon r.
+      function sparkleShape(cx, cy, r) {
+        var k = r * 0.16;
+        return "M " + cx + " " + (cy - r) + " Q " + (cx + k) + " " + (cy - k) + " " + (cx + r) + " " + cy
+          + " Q " + (cx + k) + " " + (cy + k) + " " + cx + " " + (cy + r)
+          + " Q " + (cx - k) + " " + (cy + k) + " " + (cx - r) + " " + cy
+          + " Q " + (cx - k) + " " + (cy - k) + " " + cx + " " + (cy - r) + " Z";
+      }
+      function renderStory(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var vif = bpmHexValide(couleur) ? couleur : "#ffffff";
         var palette = {
           vif: vif,
@@ -416,7 +457,7 @@
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
         var s = Math.min(getStoryClipSize(ep), W / 4, H / 4);
-        var margin = Math.max(10, ep * 2.5);
+        var margin = Math.max(12, ep * 3);
         var svgW = W + margin * 2, svgH = H + margin * 2;
         var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
         var gradId = "grad-story-" + uid, innerGradId = "grad-inner-story-" + uid, clipId = "clip-story-" + uid;
@@ -459,6 +500,42 @@
           smallHeartsSvg += '<path d="' + heartShape(0, y, smallHeartSize) + '" fill="' + blanc + '"/>';
           smallHeartsSvg += '<path d="' + heartShape(W, y, smallHeartSize) + '" fill="' + blanc + '"/>';
         }
+        // Volutes filigrane aux 4 coins : double courbe qui s'échappe dans
+        // la marge + point final. (sx, sy) = direction extérieure du coin.
+        var traitFinStory = Math.max(0.9, ep * 0.3);
+        function voluteCoin(cx, cy, sx, sy) {
+          var X = function (v) { return cx + v * sx; };
+          var Y = function (v) { return cy + v * sy; };
+          var curl = "M " + X(-margin * 0.05) + " " + Y(-margin * 0.1)
+            + " C " + X(-margin * 0.6) + " " + Y(-margin * 0.15) + " " + X(-margin * 0.85) + " " + Y(-margin * 0.7) + " " + X(-margin * 0.45) + " " + Y(-margin * 0.9)
+            + " C " + X(-margin * 0.15) + " " + Y(-margin * 1.05) + " " + X(0) + " " + Y(-margin * 0.75) + " " + X(-margin * 0.12) + " " + Y(-margin * 0.5);
+          return '<path d="' + curl + '" fill="none" stroke="' + palette.clair + '" stroke-width="' + traitFinStory + '" stroke-linecap="round" opacity="0.9"/>'
+            + '<circle cx="' + X(-margin * 0.12) + '" cy="' + Y(-margin * 0.5) + '" r="' + Math.max(1, ep * 0.28) + '" fill="' + blanc + '" opacity="0.9"/>';
+        }
+        var volutes = voluteCoin(0, 0, 1, 1) + voluteCoin(W, 0, -1, 1) + voluteCoin(W, H, -1, -1) + voluteCoin(0, H, 1, -1);
+        // Étincelles 4-pointes dans la marge (milieu des arêtes). animer →
+        // scintillement en cascade (opacity SMIL déphasée), sinon fixes.
+        var sparkR = Math.max(3.5, ep * 0.9);
+        var sparkPos = [
+          [W / 2, -margin * 0.5],
+          [W + margin * 0.5, H / 2],
+          [W / 2, H + margin * 0.5]
+        ];
+        var sparklesSvg = "";
+        for (var si = 0; si < sparkPos.length; si++) {
+          var sAnim = animer
+            ? '<animate attributeName="opacity" values="0.15;0.95;0.15" dur="2.4s" begin="' + (si * 0.8).toFixed(1) + 's" repeatCount="indefinite"/>'
+            : "";
+          sparklesSvg += '<path d="' + sparkleShape(sparkPos[si][0], sparkPos[si][1], sparkR) + '" fill="' + blanc + '" opacity="0.85">' + sAnim + "</path>";
+        }
+        // Étincelle voyageuse (animer) : UN animateMotion sur le tracé du
+        // bord (path= direct — recette runner cyberpunk). SUR le bord :
+        // la marge est rognée par overflow:hidden/clip-path du parent →
+        // visible sur widgets ET bord du canvas.
+        var traveler = animer
+          ? '<g opacity="0.95"><animateMotion dur="7s" repeatCount="indefinite" path="' + borderPath + '"/>'
+            + '<path d="' + sparkleShape(0, 0, sparkR) + '" fill="' + blanc + '"/></g>'
+          : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + palette.vif + '"/><stop offset="50%" stop-color="' + palette.clair + '"/><stop offset="100%" stop-color="' + palette.profond + '"/></linearGradient>'
@@ -470,8 +547,11 @@
           + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="round"/>'
           + '<path d="' + borderPath + '" fill="none" stroke="url(#' + innerGradId + ')" stroke-width="' + Math.max(1, ep * 0.3) + '" stroke-linejoin="round" opacity="0.7"/>'
           + "</g>"
+          + volutes
           + "<g>" + cornerHeartsSvg + "</g>"
           + '<g opacity="0.75">' + smallHeartsSvg + "</g>"
+          + sparklesSvg
+          + traveler
           + "</svg>";
       }
 
@@ -483,7 +563,11 @@
         var rEff = Math.min(r, W / 4, H / 4);
         return "path('M " + rEff + " 0 L " + (W - rEff) + " 0 Q " + W + " 0 " + W + " " + rEff + " L " + W + " " + (H - rEff) + " Q " + W + " " + H + " " + (W - rEff) + " " + H + " L " + rEff + " " + H + " Q 0 " + H + " 0 " + (H - rEff) + " L 0 " + rEff + " Q 0 0 " + rEff + " 0 Z')";
       }
-      function renderThinLine(W, H, idCadre, strokeWidth, couleur, couleurFin) {
+      // Double filet (trait principal + filet externe décalé), accents L
+      // aux coins, point de « fermoir » signature milieu-haut.
+      // animer → segment comète balayant le bord (stroke-dashoffset SMIL
+      // sur pathLength=100 — un seul attribut animé).
+      function renderThinLine(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
         var p = {
           principal: c1,
@@ -491,24 +575,29 @@
         };
         var ep = clampStrokeWidth(strokeWidth);
         var r = Math.min(getThinLineClipSize(ep), W / 4, H / 4);
-        var margin = Math.max(4, ep);
+        var filetGap = Math.max(3, ep * 1.1);
+        var margin = Math.max(6, ep * 1.5);
         var svgW = W + margin * 2, svgH = H + margin * 2;
         var cornerLen = Math.max(10, ep * 3);
-        var cornerGap = Math.max(3, ep * 0.8);
+        var cornerGap = filetGap + Math.max(2, ep * 0.5);
+        var borderPath = "M " + r + " 0 L " + (W - r) + " 0 Q " + W + " 0 " + W + " " + r + " L " + W + " " + (H - r) + " Q " + W + " " + H + " " + (W - r) + " " + H + " L " + r + " " + H + " Q 0 " + H + " 0 " + (H - r) + " L 0 " + r + " Q 0 0 " + r + " 0 Z";
+        var comet = animer
+          ? '<path d="' + borderPath + '" fill="none" stroke="' + p.accent + '" stroke-width="' + Math.max(1.2, ep * 0.7) + '" stroke-linecap="round" pathLength="100" stroke-dasharray="7 93" stroke-dashoffset="0">'
+            + '<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4s" repeatCount="indefinite"/></path>'
+          : "";
+        var fermoirR = Math.max(1.6, ep * 0.45);
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + r + '" ry="' + r + '" fill="none" stroke="' + p.principal + '" stroke-width="' + ep + '"/>'
+          + '<rect x="' + (-filetGap) + '" y="' + (-filetGap) + '" width="' + (W + filetGap * 2) + '" height="' + (H + filetGap * 2) + '" rx="' + (r + filetGap) + '" ry="' + (r + filetGap) + '" fill="none" stroke="' + p.accent + '" stroke-width="' + Math.max(0.6, ep * 0.28) + '" opacity="0.55"/>'
           + '<g stroke="' + p.accent + '" stroke-width="' + Math.max(1, ep * 0.6) + '" fill="none" stroke-linecap="square">'
           + '<path d="M ' + (-cornerGap) + " " + (cornerLen + cornerGap) + " L " + (-cornerGap) + " " + (-cornerGap) + " L " + (cornerLen + cornerGap) + " " + (-cornerGap) + '"/>'
           + '<path d="M ' + (W - cornerLen - cornerGap) + " " + (-cornerGap) + " L " + (W + cornerGap) + " " + (-cornerGap) + " L " + (W + cornerGap) + " " + (cornerLen + cornerGap) + '"/>'
           + '<path d="M ' + (-cornerGap) + " " + (H - cornerLen - cornerGap) + " L " + (-cornerGap) + " " + (H + cornerGap) + " L " + (cornerLen + cornerGap) + " " + (H + cornerGap) + '"/>'
           + '<path d="M ' + (W - cornerLen - cornerGap) + " " + (H + cornerGap) + " L " + (W + cornerGap) + " " + (H + cornerGap) + " L " + (W + cornerGap) + " " + (H - cornerLen - cornerGap) + '"/>'
           + "</g>"
-          + '<g fill="' + p.accent + '">'
-          + '<circle cx="' + (W / 2) + '" cy="0" r="' + Math.max(2, ep * 0.5) + '"/>'
-          + '<circle cx="' + (W / 2) + '" cy="' + H + '" r="' + Math.max(2, ep * 0.5) + '"/>'
-          + '<circle cx="0" cy="' + (H / 2) + '" r="' + Math.max(2, ep * 0.5) + '"/>'
-          + '<circle cx="' + W + '" cy="' + (H / 2) + '" r="' + Math.max(2, ep * 0.5) + '"/>'
-          + "</g></svg>";
+          + '<circle cx="' + (W / 2) + '" cy="0" r="' + fermoirR + '" fill="' + p.accent + '" stroke="' + p.principal + '" stroke-width="' + Math.max(0.5, ep * 0.15) + '"/>'
+          + comet
+          + "</svg>";
       }
 
       function getHexagonClipSize(sw) {
@@ -527,7 +616,7 @@
         }
         return "M " + pts.join(" L ") + " Z";
       }
-      function renderHexagon(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+      function renderHexagon(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
         var p = {
           principal: c1,
@@ -537,32 +626,73 @@
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
         var s = Math.min(getHexagonClipSize(ep), W / 4, H / 4);
-        var margin = Math.max(10, ep * 2.5);
+        var margin = Math.max(10, ep * 2.6);
         var svgW = W + margin * 2, svgH = H + margin * 2;
         var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
         var gradId = "grad-hex-" + uid, clipId = "clip-hex-" + uid;
         var borderPath = ["M " + s + " 0", "L " + (W - s) + " 0", "L " + W + " " + (s * 0.5), "L " + W + " " + (H - s * 0.5), "L " + (W - s) + " " + H, "L " + s + " " + H, "L 0 " + (H - s * 0.5), "L 0 " + (s * 0.5), "Z"].join(" ");
         var hexR = Math.max(5, ep * 1.4);
-        var corners = [
-          { cx: s * 0.5, cy: s * 0.35 }, { cx: W - s * 0.5, cy: s * 0.35 },
-          { cx: s * 0.5, cy: H - s * 0.35 }, { cx: W - s * 0.5, cy: H - s * 0.35 }
+        var traitFin = Math.max(1, ep * 0.35);
+        // Grappes d'alvéoles dans la marge des 4 coins (un hexagone
+        // principal + 2 satellites). animer → rotation lente (UN
+        // animateTransform par grappe).
+        var clusterD = s * 0.9 + hexR * 0.9;
+        var clusters = [
+          { cx: -clusterD * 0.4, cy: -clusterD * 0.4 },
+          { cx: W + clusterD * 0.4, cy: -clusterD * 0.4 },
+          { cx: W + clusterD * 0.4, cy: H + clusterD * 0.4 },
+          { cx: -clusterD * 0.4, cy: H + clusterD * 0.4 }
         ];
-        var cornerHexes = corners.map(function (c) {
-          return '<path d="' + hexPath(c.cx, c.cy, hexR) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.35) + '"/>';
+        var cornerHexes = clusters.map(function (c, i) {
+          var inner = '<path d="' + hexPath(c.cx, c.cy, hexR) + '" fill="' + p.profond + '" fill-opacity="0.25" stroke="' + p.clair + '" stroke-width="' + traitFin + '"/>'
+            + '<path d="' + hexPath(c.cx + hexR * 1.9, c.cy, hexR * 0.55) + '" fill="none" stroke="' + p.principal + '" stroke-width="' + traitFin * 0.7 + '" opacity="0.8"/>'
+            + '<path d="' + hexPath(c.cx - hexR * 0.95, c.cy + hexR * 1.65, hexR * 0.55) + '" fill="none" stroke="' + p.principal + '" stroke-width="' + traitFin * 0.7 + '" opacity="0.8"/>';
+          var anim = animer
+            ? '<animateTransform attributeName="transform" type="rotate" from="0 ' + c.cx + " " + c.cy + '" to="' + (i % 2 === 0 ? 360 : -360) + " " + c.cx + " " + c.cy + '" dur="10s" repeatCount="indefinite"/>'
+            : "";
+          return "<g>" + anim + inner + "</g>";
         }).join("");
+        // Nœuds aux 8 sommets du bord + glyphes hexagonaux aux milieux
+        // des 4 arêtes (marge extérieure).
+        var sommets = [
+          [s, 0], [W - s, 0],
+          [W, s * 0.5], [W, H - s * 0.5],
+          [W - s, H], [s, H],
+          [0, H - s * 0.5], [0, s * 0.5]
+        ];
+        var noeudR = Math.max(1.2, ep * 0.3);
+        var noeuds = sommets.map(function (n) {
+          return '<circle cx="' + n[0] + '" cy="' + n[1] + '" r="' + noeudR + '" fill="' + p.clair + '"/>';
+        }).join("");
+        var glypheR = hexR * 0.65;
+        var glyphes = [
+          hexPath(W / 2, -margin * 0.45, glypheR),
+          hexPath(W / 2, H + margin * 0.45, glypheR),
+          hexPath(-margin * 0.45, H / 2, glypheR),
+          hexPath(W + margin * 0.45, H / 2, glypheR)
+        ].map(function (d) {
+          return '<path d="' + d + '" fill="none" stroke="' + p.clair + '" stroke-width="' + traitFin * 0.8 + '" opacity="0.5"/>';
+        }).join("");
+        // Nœud voyageur : UN groupe animé le long du bord (path= direct,
+        // pas de mpath — support universel).
+        var voyageur = animer
+          ? "<g><animateMotion dur=\"6s\" repeatCount=\"indefinite\" path=\"" + borderPath + "\"/>"
+            + '<circle r="' + Math.max(2.2, ep * 0.5) + '" fill="' + p.clair + '" opacity="0.4"/>'
+            + '<circle r="' + Math.max(1.4, ep * 0.32) + '" fill="#ffffff"/></g>'
+          : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + p.principal + '"/><stop offset="100%" stop-color="' + p.profond + '"/></linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
           + '<g clip-path="url(#' + clipId + ')">'
-          + '<path d="' + borderPath + '" fill="none" stroke="' + p.principal + '" stroke-width="' + (ep * 2) + '" stroke-linejoin="miter" opacity="0.2"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + p.principal + '" stroke-width="' + (ep * 2.2) + '" stroke-linejoin="miter" opacity="0.2"/>'
           + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
           + '<path d="' + borderPath + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" stroke-linejoin="miter" opacity="0.6"/>'
           + "</g>"
-          + '<g opacity="0.7">' + cornerHexes
-          + '<path d="' + hexPath(W / 2, 0, hexR * 0.7) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" opacity="0.5"/>'
-          + '<path d="' + hexPath(W / 2, H, hexR * 0.7) + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.3) + '" opacity="0.5"/></g>'
+          + cornerHexes + glyphes
+          + '<g opacity="0.85">' + noeuds + "</g>"
+          + voyageur
           + '<path d="' + borderPath + '" fill="none" stroke="' + p.clair + '" stroke-width="' + Math.max(1, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.4" transform="translate(' + (ep * 0.6) + " " + (ep * 0.6) + ") scale(" + Math.max(0.01, 1 - (ep * 1.2) / W) + " " + Math.max(0.01, 1 - (ep * 1.2) / H) + ')"/>'
           + "</svg>";
       }
@@ -575,7 +705,7 @@
         var sx = s, sy = s * 0.7;
         return "path('M " + sx + " 0 L " + (W - sx) + " 0 L " + W + " " + sy + " L " + W + " " + (H - sy) + " L " + (W - sx) + " " + H + " L " + sx + " " + H + " L 0 " + (H - sy) + " L 0 " + sy + " Z')";
       }
-      function renderMGStyle(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle) {
+      function renderMGStyle(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
         var cPrincipal = (couleur && /^#[0-9a-f]{6}$/i.test(couleur)) ? couleur : "#ffffff";
         var cAccent = (couleurFin && /^#[0-9a-f]{6}$/i.test(couleurFin)) ? couleurFin : "#000000";
         var angle = isFinite(gradientAngle) ? gradientAngle : 135;
@@ -627,6 +757,14 @@
           { x: W + circuitPad - 8, y: midY - 22 }, { x: W + circuitPad - 8, y: midY + 22 }
         ].map(function (n) { return '<circle cx="' + n.x + '" cy="' + n.y + '" r="' + Math.max(1.5, ep * 0.35) + '" fill="' + cAccent + '" opacity="0.5"/>'; }).join("");
         var diodeR = Math.max(2.5, ep * 0.6), diodeX = midX, diodeY = -margin * 0.4;
+        // animer → balayage radar : segment accentué sur le tracé du bord
+        // (dashoffset SMIL sur pathLength=100 — recette thin-line). SUR le
+        // bord : la marge est rognée par overflow:hidden/clip-path du
+        // parent → visible sur widgets ET bord du canvas.
+        var sweep = animer
+          ? '<path d="' + borderPath + '" fill="none" stroke="' + cAccent + '" stroke-width="' + Math.max(1.2, ep * 0.55) + '" stroke-linecap="round" pathLength="100" stroke-dasharray="8 92" stroke-dashoffset="0">'
+            + '<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4.5s" repeatCount="indefinite"/></path>'
+          : "";
         var bangW = Math.max(2, ep * 0.55), bangH = Math.max(12, ep * 3.5), bangX = W + margin * 0.3, bangY = -margin * 0.25;
         var tickCount = 9, tickW = Math.max(1, ep * 0.25), tickH = Math.max(3, ep * 0.8), tickStart = sx + 4, tickEnd = W - sx - 4;
         var ticks = [];
@@ -658,6 +796,264 @@
           + '<circle cx="' + diodeX + '" cy="' + diodeY + '" r="' + diodeR + '" fill="' + cAccent + '" stroke="' + cPrincipal + '" stroke-width="' + Math.max(0.5, ep * 0.15) + '"/>'
           + '<g><rect x="' + (bangX - bangW / 2) + '" y="' + (bangY - bangH) + '" width="' + bangW + '" height="' + (bangH * 0.72) + '" fill="' + cAccent + '"/><rect x="' + (bangX - bangW / 2) + '" y="' + (bangY - bangH * 0.12) + '" width="' + bangW + '" height="' + bangW + '" fill="' + cAccent + '"/></g>'
           + ticks.join("")
+          + sweep
+          + "</svg>";
+      }
+
+      // --- Arena ---
+      // Bordure néon « console rétro » (réf. Xbox 360) : octogone allongé,
+      // canal sombre sous un tube lumineux double filet, médaillons « orb »
+      // (anneau + croix X incurvée) sertis sur les 4 biseaux, cartouches
+      // sombres à cheval (haut décalé droite, bas centré), ailerons
+      // triangulaires latéraux, nœuds aux 8 sommets. Tout sur le tracé ou
+      // clippé dans la forme — marge rognée, intérieur libre.
+      function getArenaBevels(sw) {
+        var ep = clampStrokeWidth(sw);
+        return { bx: Math.max(16, Math.round(ep * 4.2)), by: Math.max(10, Math.round(ep * 2.4)) };
+      }
+      function getArenaClipPath(W, H, sw) {
+        var b = getArenaBevels(sw);
+        var bx = Math.min(b.bx, W / 4), by = Math.min(b.by, H / 4);
+        return "path('M " + bx + " 0 L " + (W - bx) + " 0 L " + W + " " + by + " L " + W + " " + (H - by) + " L " + (W - bx) + " " + H + " L " + bx + " " + H + " L 0 " + (H - by) + " L 0 " + by + " Z')";
+      }
+      function renderArena(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
+        var principal = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var profond = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(principal, 0.35);
+        var clair = bpmEclaircir(principal, 0.5);
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var b = getArenaBevels(ep);
+        var bx = Math.min(b.bx, W / 4), by = Math.min(b.by, H / 4);
+        var margin = Math.max(4, ep);
+        var svgW = W + offset * 2 + margin * 2, svgH = H + offset * 2 + margin * 2;
+        var viewX = -(offset + margin), viewY = -(offset + margin);
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-arena-" + uid, orbGradId = "orb-grad-arena-" + uid, clipId = "clip-arena-" + uid;
+        var borderPath = "M " + bx + " 0 L " + (W - bx) + " 0 L " + W + " " + by + " L " + W + " " + (H - by) + " L " + (W - bx) + " " + H + " L " + bx + " " + H + " L 0 " + (H - by) + " L 0 " + by + " Z";
+        var d = Math.max(2.5, ep * 1.1), di = d * 1.4;
+        var echoPath = "M " + (bx + di) + " " + d + " L " + (W - bx - di) + " " + d + " L " + (W - d) + " " + (by + di) + " L " + (W - d) + " " + (H - by - di) + " L " + (W - bx - di) + " " + (H - d) + " L " + (bx + di) + " " + (H - d) + " L " + d + " " + (H - by - di) + " L " + d + " " + (by + di) + " Z";
+        var orbR = Math.max(6, Math.min(bx, by) * 1.25, ep * 2);
+        var orbW = Math.max(1.6, ep * 0.55);
+        var bevelLen = Math.hypot(bx, by) || 1;
+        var orbCentres = [
+          [bx / 2 + (by / bevelLen) * orbR * 0.22, by / 2 + (bx / bevelLen) * orbR * 0.22],
+          [W - bx / 2 - (by / bevelLen) * orbR * 0.22, by / 2 + (bx / bevelLen) * orbR * 0.22],
+          [W - bx / 2 - (by / bevelLen) * orbR * 0.22, H - by / 2 - (bx / bevelLen) * orbR * 0.22],
+          [bx / 2 + (by / bevelLen) * orbR * 0.22, H - by / 2 - (bx / bevelLen) * orbR * 0.22]
+        ];
+        var orbs = orbCentres.map(function (c) {
+          var xr = orbR * 0.6;
+          return "<g>"
+            + '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="' + orbR + '" fill="rgba(6,10,4,0.65)" stroke="' + clair + '" stroke-width="' + orbW + '"/>'
+            + '<circle cx="' + c[0] + '" cy="' + c[1] + '" r="' + (orbR - orbW * 0.9) + '" fill="url(#' + orbGradId + ')" opacity="0.9"/>'
+            + '<path d="M ' + (c[0] - xr) + " " + (c[1] - xr) + " Q " + c[0] + " " + c[1] + " " + (c[0] + xr) + " " + (c[1] + xr) + " M " + (c[0] + xr) + " " + (c[1] - xr) + " Q " + c[0] + " " + c[1] + " " + (c[0] - xr) + " " + (c[1] + xr) + '" fill="none" stroke="#ffffff" stroke-width="' + Math.max(1.4, ep * 0.5) + '" stroke-linecap="round" opacity="0.95"/>'
+            + "</g>";
+        }).join("");
+        var orbsGroupe = animer
+          ? '<g>' + orbs + '<animate attributeName="opacity" values="1;0.55;1" dur="3.5s" repeatCount="indefinite"/></g>'
+          : "<g>" + orbs + "</g>";
+        var traitFin = Math.max(1.2, ep * 0.35);
+        var cw = Math.max(18, bx * 1.15), ch = Math.max(4.5, ep * 1.7), cd = cw * 0.3;
+        var dotPt = Math.max(1.4, ep * 0.45);
+        function cartouche(cx, cy, tx, ty) {
+          var nx = -ty, ny = tx;
+          var P = function (t, n) { return (cx + tx * t + nx * n) + " " + (cy + ty * t + ny * n); };
+          var hexa = "M " + P(-cw + cd, -ch) + " L " + P(cw - cd, -ch) + " L " + P(cw, 0) + " L " + P(cw - cd, ch) + " L " + P(-cw + cd, ch) + " L " + P(-cw, 0) + " Z";
+          var barre = "M " + P(-cw * 0.5, ch * 0.35) + " L " + P(cw * 0.5, ch * 0.35);
+          var ptG = P(-cw + cd * 1.2, ch * 0.35).split(" ");
+          var ptD = P(cw - cd * 1.2, ch * 0.35).split(" ");
+          return '<path d="' + hexa + '" fill="rgba(6,10,4,0.75)" stroke="' + clair + '" stroke-width="' + traitFin + '"/>'
+            + '<path d="' + barre + '" fill="none" stroke="' + clair + '" stroke-width="' + Math.max(1, traitFin * 0.7) + '" opacity="0.6"/>'
+            + '<circle cx="' + ptG[0] + '" cy="' + ptG[1] + '" r="' + dotPt + '" fill="' + clair + '"/>'
+            + '<circle cx="' + ptD[0] + '" cy="' + ptD[1] + '" r="' + dotPt + '" fill="' + clair + '"/>';
+        }
+        var wingL = Math.max(5, ep * 2.2), wingT = Math.max(7, ep * 3);
+        function aileron(cx, cy, nx, ny) {
+          var tx = -ny, ty = nx;
+          var P = function (t, n) { return (cx + tx * t + nx * n) + " " + (cy + ty * t + ny * n); };
+          var kite = "M " + P(-wingT, -wingL * 0.35) + " L " + P(0, wingL) + " L " + P(wingT, -wingL * 0.35) + " L " + P(0, -wingL) + " Z";
+          return '<path d="' + kite + '" fill="rgba(6,10,4,0.7)" stroke="' + clair + '" stroke-width="' + traitFin + '"/>';
+        }
+        var decors = (W > cw * 4 && H > wingT * 4)
+          ? cartouche(W * 0.72, 0, 1, 0) + cartouche(W / 2, H, 1, 0)
+            + aileron(0, H / 2, 1, 0) + aileron(W, H / 2, -1, 0)
+          : "";
+        var sommets = [
+          [bx, 0], [W - bx, 0], [W, by], [W, H - by],
+          [W - bx, H], [bx, H], [0, H - by], [0, by]
+        ];
+        var noeudR = Math.max(1.3, ep * 0.35);
+        var noeuds = sommets.map(function (n) {
+          return '<circle cx="' + n[0] + '" cy="' + n[1] + '" r="' + noeudR + '" fill="' + clair + '"/>';
+        }).join("");
+        var dotR = Math.max(1.8, ep * 0.5);
+        var voyageur = animer
+          ? "<g>" + '<animateMotion dur="5s" repeatCount="indefinite" path="' + borderPath + '"/>'
+            + '<circle r="' + (dotR * 2.4) + '" fill="' + clair + '" opacity="0.35"/>'
+            + '<circle r="' + dotR + '" fill="#ffffff"/>' + "</g>"
+          : "";
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + principal + '"/><stop offset="100%" stop-color="' + profond + '"/></linearGradient>'
+          + '<radialGradient id="' + orbGradId + '" cx="35%" cy="30%" r="75%"><stop offset="0%" stop-color="' + clair + '"/><stop offset="100%" stop-color="' + profond + '"/></radialGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="rgba(6,10,4,0.55)" stroke-width="' + (ep * 3.4) + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + principal + '" stroke-width="' + (ep * 2.6) + '" stroke-linejoin="miter" opacity="0.28"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + clair + '" stroke-width="' + Math.max(0.8, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.5"/>'
+          + '<path d="' + echoPath + '" fill="none" stroke="' + clair + '" stroke-width="' + Math.max(1, ep * 0.28) + '" stroke-linejoin="miter" opacity="0.75"/>'
+          + noeuds
+          + decors
+          + orbsGroupe
+          + "</g>"
+          + voyageur
+          + "</svg>";
+      }
+
+      // --- Tribal ---
+      // Encre « tatouage tribal » classique : QUE des courbes pleines.
+      // Silhouette aux coins balayés en courbes concaves ; sur chaque arête
+      // un motif symétrique (pointe-étoile centrale rentrante, griffes-crocs
+      // pleines en éventail, fines balayures vers les coins) ; équerres de
+      // visée arrondies en retrait des coins. Marge rognée, centre libre.
+      function getTribalCorner(sw) {
+        var ep = clampStrokeWidth(sw);
+        return { cx: Math.max(12, Math.round(ep * 3)), cy: Math.max(9, Math.round(ep * 2.4)) };
+      }
+      function tribalPath(W, H, sw) {
+        var c = getTribalCorner(sw);
+        var cx = Math.min(c.cx, W / 4), cy = Math.min(c.cy, H / 4);
+        return "M " + cx + " 0 L " + (W - cx) + " 0 "
+          + "Q " + (W - cx * 0.15) + " " + (cy * 0.15) + " " + W + " " + cy + " "
+          + "L " + W + " " + (H - cy) + " "
+          + "Q " + (W - cx * 0.15) + " " + (H - cy * 0.15) + " " + (W - cx) + " " + H + " "
+          + "L " + cx + " " + H + " "
+          + "Q " + (cx * 0.15) + " " + (H - cy * 0.15) + " 0 " + (H - cy) + " "
+          + "L 0 " + cy + " "
+          + "Q " + (cx * 0.15) + " " + (cy * 0.15) + " " + cx + " 0 Z";
+      }
+      function getTribalClipPath(W, H, sw) {
+        return "path('" + tribalPath(W, H, sw) + "')";
+      }
+      function pointeCentrale(P, c, w, h) {
+        return "M " + P(c, -h * 0.2)
+          + " Q " + P(c + w * 0.22, h * 0.3) + " " + P(c + w, h * 0.4)
+          + " Q " + P(c + w * 0.26, h * 0.5) + " " + P(c, h)
+          + " Q " + P(c - w * 0.26, h * 0.5) + " " + P(c - w, h * 0.4)
+          + " Q " + P(c - w * 0.22, h * 0.3) + " " + P(c, -h * 0.2) + " Z";
+      }
+      function griffe(P, t0, s, w, h, L) {
+        return "M " + P(t0, h * 0.06)
+          + " Q " + P(t0 + s * L * 0.3, h * 1.05) + " " + P(t0 + s * L, h * 0.12)
+          + " Q " + P(t0 + s * L * 0.55, h * 0.4) + " " + P(t0 + s * w, h * 0.02)
+          + " Z";
+      }
+      function balayure(P, t0, t1, peak, ep) {
+        var mid = (t0 + t1) / 2;
+        var th = Math.max(0.9, ep * 0.3);
+        return "M " + P(t0, ep * 0.35)
+          + " Q " + P(mid, peak) + " " + P(t1, ep * 0.3)
+          + " Q " + P(mid, peak + th) + " " + P(t0, ep * 0.35 + th * 0.6)
+          + " Z";
+      }
+      function motifBord(x1, y1, x2, y2, nx, ny, ep) {
+        var len = Math.hypot(x2 - x1, y2 - y1) || 1;
+        var dx = (x2 - x1) / len, dy = (y2 - y1) / len;
+        var P = function (t, prof) { return (x1 + dx * t + nx * prof) + " " + (y1 + dy * t + ny * prof); };
+        var hMax = Math.max(9, ep * 2.4);
+        var pad = hMax * 1.9;
+        var demi = len / 2 - pad;
+        if (demi < hMax * 1.5) return { corps: "", balayures: "" };
+        var c = len / 2;
+        var corps = [], balayures = [];
+        var sw = hMax * 0.38;
+        corps.push(pointeCentrale(P, c, sw, hMax * 1.1));
+        var nGriffe = demi > hMax * 3.6 ? 2 : 1;
+        for (var si = 0; si < 2; si++) {
+          var s = si === 0 ? 1 : -1;
+          var cur = c + s * (sw + hMax * 0.55);
+          for (var i = 0; i < nGriffe; i++) {
+            var k = 1 - i * 0.3;
+            corps.push(griffe(P, cur, s, hMax * 0.42 * k, hMax * k, hMax * 1.45 * k + hMax * 0.4));
+            cur += s * (hMax * 1.85 * k + hMax * 0.45);
+          }
+          var b0 = cur + s * hMax * 0.2;
+          var b1 = s > 0 ? len - pad * 0.25 : pad * 0.25;
+          if (Math.abs(b1 - b0) > hMax * 1.6) {
+            balayures.push(balayure(P, b0, b1, -ep * 0.15, ep));
+            balayures.push(balayure(P, b0 + s * hMax * 0.15, b1, hMax * 0.55, ep));
+          }
+        }
+        return { corps: corps.join(" "), balayures: balayures.join(" ") };
+      }
+      function equerre(cx0, cy0, sx, sy, ix, iy, ax, ay, r) {
+        var X = function (v) { return cx0 + v * sx; };
+        var Y = function (v) { return cy0 + v * sy; };
+        return "M " + X(ix + ax) + " " + Y(iy)
+          + " L " + X(ix + r) + " " + Y(iy)
+          + " Q " + X(ix) + " " + Y(iy) + " " + X(ix) + " " + Y(iy + r)
+          + " L " + X(ix) + " " + Y(iy + ay);
+      }
+      function renderTribal(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
+        var principal = bpmHexValide(couleur) ? couleur : "#111111";
+        var profond = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(principal, 0.4);
+        var clair = bpmEclaircir(principal, 0.4);
+        var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
+        var ep = clampStrokeWidth(strokeWidth);
+        var offset = ep / 2;
+        var c = getTribalCorner(ep);
+        var cx = Math.min(c.cx, W / 4), cy = Math.min(c.cy, H / 4);
+        var margin = Math.max(4, ep);
+        var svgW = W + offset * 2 + margin * 2, svgH = H + offset * 2 + margin * 2;
+        var viewX = -(offset + margin), viewY = -(offset + margin);
+        var uid = (idCadre || "d").replace(/[^a-zA-Z0-9_-]/g, "-");
+        var gradId = "grad-tribal-" + uid, clipId = "clip-tribal-" + uid;
+        var borderPath = tribalPath(W, H, ep);
+        var mHaut = motifBord(cx * 1.15, 0, W - cx * 1.15, 0, 0, 1, ep);
+        var mDroite = motifBord(W, cy * 1.15, W, H - cy * 1.15, -1, 0, ep);
+        var mBas = motifBord(W - cx * 1.15, H, cx * 1.15, H, 0, -1, ep);
+        var mGauche = motifBord(0, H - cy * 1.15, 0, cy * 1.15, 1, 0, ep);
+        var corps = mHaut.corps + " " + mDroite.corps + " " + mBas.corps + " " + mGauche.corps;
+        var sweeps = mHaut.balayures + " " + mDroite.balayures + " " + mBas.balayures + " " + mGauche.balayures;
+        var motif = "<g>"
+          + (animer ? '<animate attributeName="opacity" values="0.85;1;0.85" dur="4s" repeatCount="indefinite"/>' : "")
+          + '<path d="' + sweeps + '" fill="url(#' + gradId + ')" opacity="0.85"/>'
+          + '<path d="' + corps + '" fill="url(#' + gradId + ')"/></g>';
+        var ix = Math.min(W * 0.09, Math.max(cx * 1.6, ep * 2.6));
+        var iy = Math.min(H * 0.11, Math.max(cy * 1.6, ep * 2.6));
+        var ax = Math.max(12, W * 0.045);
+        var ay = Math.max(9, H * 0.05);
+        var eqW = Math.max(1.3, ep * 0.45);
+        var equerres = W > 130 && H > 90
+          ? '<path d="' + equerre(0, 0, 1, 1, ix, iy, ax, ay, 2.5) + " "
+            + equerre(W, 0, -1, 1, ix, iy, ax, ay, 2.5) + " "
+            + equerre(W, H, -1, -1, ix, iy, ax, ay, 2.5) + " "
+            + equerre(0, H, 1, -1, ix, iy, ax, ay, 2.5)
+            + '" fill="none" stroke="' + clair + '" stroke-width="' + eqW + '" stroke-linecap="round" opacity="0.85"/>'
+          : "";
+        var dotR = Math.max(1.8, ep * 0.5);
+        var voyageur = animer
+          ? "<g>" + '<animateMotion dur="5.5s" repeatCount="indefinite" path="' + borderPath + '"/>'
+            + '<circle r="' + (dotR * 2.4) + '" fill="' + clair + '" opacity="0.35"/>'
+            + '<circle r="' + dotR + '" fill="#ffffff"/>' + "</g>"
+          : "";
+        return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
+          + "<defs>"
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + principal + '"/><stop offset="100%" stop-color="' + profond + '"/></linearGradient>'
+          + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
+          + "</defs>"
+          + '<g clip-path="url(#' + clipId + ')">'
+          + '<path d="' + borderPath + '" fill="none" stroke="rgba(6,6,6,0.5)" stroke-width="' + (ep * 3.2) + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + principal + '" stroke-width="' + (ep * 2.4) + '" stroke-linejoin="miter" opacity="0.22"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '" stroke-linejoin="miter"/>'
+          + '<path d="' + borderPath + '" fill="none" stroke="' + clair + '" stroke-width="' + Math.max(0.8, ep * 0.2) + '" stroke-linejoin="miter" opacity="0.45"/>'
+          + motif
+          + equerres
+          + "</g>"
+          + voyageur
           + "</svg>";
       }
 
@@ -666,14 +1062,18 @@
         story: renderStory,
         "thin-line": renderThinLine,
         hexagon: renderHexagon,
-        mgstyle: renderMGStyle
+        mgstyle: renderMGStyle,
+        arena: renderArena,
+        tribal: renderTribal
       };
       var CADRES_CLIP_PATHS = {
         cyberpunk: getCyberpunkClipPath,
         story: getStoryClipPath,
         "thin-line": getThinLineClipPath,
         hexagon: getHexagonClipPath,
-        mgstyle: getMGStyleClipPath
+        mgstyle: getMGStyleClipPath,
+        arena: getArenaClipPath,
+        tribal: getTribalClipPath
       };
 
       function genererCadreSVG(cadre, W, H, idCadre) {
@@ -684,11 +1084,11 @@
         var couleurFin = cadre.couleurFin || "";
         var gradientAngle = isFinite(cadre.gradientAngle) ? cadre.gradientAngle : 135;
         if (style === "arrondis" || style === "carre") {
-          return renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle);
+          return renderCadreInline(style, W, H, couleur, couleurFin, strokeWidth, idCadre, gradientAngle, cadre.animer === true);
         }
         var fn = CADRES_RENDERERS[style];
         if (fn) {
-          return fn(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle);
+          return fn(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, cadre.animer === true);
         }
         return "";
       }
@@ -726,7 +1126,7 @@
           return (w.type || "media") === "chat" && w.chatStyle === "bulles";
         });
         var key = (bulles ? "b" : "c") + "|" + (c
-          ? [c.style, c.strokeWidth, c.couleur, c.couleurFin, c.gradientAngle].join("|")
+          ? [c.style, c.strokeWidth, c.couleur, c.couleurFin, c.gradientAngle, c.animer === true ? "a1" : "a0"].join("|")
           : "");
         if (key === dernierCadreKey) return;
         dernierCadreKey = key;
@@ -754,6 +1154,14 @@
       function decorerCadreMsg(div, cadre, W, H) {
         if (W <= 0 || H <= 0) return;
         cadre = cadreMsgScale(cadre);
+        // Jamais d'anim sur les bulles : jusqu'à ~200 SVG par widget —
+        // un animateMotion par message violerait le budget perf.
+        if (cadre.animer === true) {
+          var cs = {};
+          for (var k in cadre) cs[k] = cadre[k];
+          cs.animer = false;
+          cadre = cs;
+        }
         var clip = genererCadreClipPath(cadre, W, H);
         if (clip) {
           div.style.clipPath = clip;

@@ -1,6 +1,8 @@
 // Cadre SVG Cyberpunk — bordure néon avec coins biseautés, plaques HUD,
-// circuits et diodes. Tons dérivés des couleurs utilisateur :
+// circuits, code-barres et diodes. Tons dérivés des couleurs utilisateur :
 // couleur = néon principal, couleurFin = néon secondaire, highlight blanc.
+// opts.animer → un runner lumineux (UN groupe, UN animateMotion) parcourt
+// le path du bord — rien dans la zone du widget, marge extérieure seulement.
 
 import { angleVersCoords, assombrir, couleurOu } from "./couleurs";
 
@@ -12,6 +14,9 @@ export interface CadreOpts {
   couleur?: string;
   couleurFin?: string;
   gradientAngle?: number;
+  /// Émet les éléments SMIL animés du cadre (toggle « Animer » de la modale).
+  /// Absent/false = SVG 100% statique, zéro nœud animé.
+  animer?: boolean;
 }
 
 function clampStrokeWidth(sw: number): number {
@@ -43,7 +48,7 @@ export default function renderCyberpunk(opts: CadreOpts): string {
   const offset = ep / 2;
   const bevel = Math.max(8, Math.round(ep * 3.5));
 
-  const margin = Math.max(4, ep);
+  const margin = Math.max(6, ep * 1.4);
   const svgW = largeur + offset * 2 + margin * 2;
   const svgH = hauteur + offset * 2 + margin * 2;
   const viewX = -(offset + margin);
@@ -72,6 +77,8 @@ export default function renderCyberpunk(opts: CadreOpts): string {
   const b = Math.min(bevel * 1.6, largeur / 5, hauteur / 5);
   const traitFin = Math.max(0.8, ep * 0.22);
 
+  // ── Plaques HUD aux 4 coins (marge extérieure) : plaque biseautée +
+  // chevron + diode. ──
   function bracketCoin(cx: number, cy: number, sx: number, sy: number): string {
     const X = (x: number) => cx + x * sx;
     const Y = (y: number) => cy + y * sy;
@@ -92,12 +99,19 @@ export default function renderCyberpunk(opts: CadreOpts): string {
       `L ${X(-d * 3.4)} ${Y(bevel * 0.28)}`,
       `L ${X(-d * 3.4)} ${Y(bevel * 0.9)}`,
     ].join(" ");
+    const chevron2 = [
+      `M ${X(bevel * 0.62)} ${Y(-d * 4.6)}`,
+      `L ${X(bevel * 0.34)} ${Y(-d * 4.6)}`,
+      `L ${X(-d * 4.6)} ${Y(bevel * 0.34)}`,
+      `L ${X(-d * 4.6)} ${Y(bevel * 0.62)}`,
+    ].join(" ");
     const dx = X(bevel * 0.62), dy = Y(bevel * 0.62);
     const dr = Math.max(1.4, ep * 0.4);
     return (
       `<g>` +
       `<path d="${plaque}" fill="${c2}" fill-opacity="0.28" stroke="${c1}" stroke-width="${traitFin}" stroke-linejoin="miter"/>` +
       `<path d="${chevron}" fill="none" stroke="${c2}" stroke-width="${traitFin}" opacity="0.85"/>` +
+      `<path d="${chevron2}" fill="none" stroke="${c2}" stroke-width="${traitFin}" opacity="0.4"/>` +
       `<circle cx="${dx}" cy="${dy}" r="${dr}" fill="${c3}" stroke="${c1}" stroke-width="${Math.max(0.6, ep * 0.12)}"/>` +
       `</g>`
     );
@@ -109,6 +123,7 @@ export default function renderCyberpunk(opts: CadreOpts): string {
     bracketCoin(x1, y1, -1, -1) +
     bracketCoin(x0, y1, 1, -1);
 
+  // ── Traces circuit sur les 4 bords (marge) ──
   const co = Math.max(2, ep);
   const pr = Math.max(1, ep * 0.28);
   const midX = largeur / 2;
@@ -130,6 +145,33 @@ export default function renderCyberpunk(opts: CadreOpts): string {
     `<circle cx="${largeur + co}" cy="${midY - segV}" r="${pr}" fill="${c1}"/>`,
   ].join("\n    ");
 
+  // ── Code-barres (marge haut-droite) : micro-data signature cyberpunk ──
+  const barH = Math.max(4, ep * 1.1);
+  const barY = -margin * 0.55 - barH / 2;
+  const barUnit = Math.max(0.8, ep * 0.28);
+  const barX0 = x1 - bevel * 0.2 - barUnit * 26;
+  const barPattern = [1, 1, 0.5, 2, 0.5, 1, 3, 1, 0.5, 0.5, 2, 1];
+  let bx = barX0;
+  const barcode = barPattern
+    .map((w, i) => {
+      const bw = w * barUnit;
+      const rect = `<rect x="${bx}" y="${barY}" width="${bw}" height="${barH}" fill="${i % 3 === 0 ? c1 : c2}" opacity="0.85"/>`;
+      bx += bw + barUnit;
+      return rect;
+    })
+    .join("");
+
+  // ── Runner lumineux (UN groupe, UN animateMotion le long du bord) ──
+  // Émis seulement si animer : halo + cœur dans un <g> animé via mpath.
+  const dotR = Math.max(1.8, ep * 0.55);
+  const runner = opts.animer
+    ? `<g opacity="0.95">` +
+      `<animateMotion dur="5s" repeatCount="indefinite" path="${pathBorder}"/>` +
+      `<circle r="${dotR * 2.6}" fill="${c1}" opacity="0.35"/>` +
+      `<circle r="${dotR}" fill="${c3}"/>` +
+      `</g>`
+    : "";
+
   return `<svg width="${svgW}" height="${svgH}" viewBox="${viewX} ${viewY} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${offset + margin}px; left:-${offset + margin}px; pointer-events:none; z-index:5;">
   <defs>
     <clipPath id="${clipPathId}">
@@ -147,14 +189,16 @@ export default function renderCyberpunk(opts: CadreOpts): string {
     </linearGradient>
   </defs>
   <g clip-path="url(#${clipPathId})">
-    <path d="${pathBorder}" fill="none" stroke="${c1}" stroke-width="${ep * 2.2}" stroke-linejoin="miter" opacity="0.25" />
+    <path d="${pathBorder}" fill="none" stroke="${c1}" stroke-width="${ep * 2.6}" stroke-linejoin="miter" opacity="0.22" />
     <path d="${pathBorder}" fill="none" stroke="url(#${gradId})" stroke-width="${ep}" stroke-linejoin="miter" />
-    <path d="${pathBorder}" fill="none" stroke="url(#${gradInnerId})" stroke-width="${Math.max(1, ep * 0.35)}" stroke-linejoin="miter" opacity="0.8" />
+    <path d="${pathBorder}" fill="none" stroke="url(#${gradInnerId})" stroke-width="${Math.max(1, ep * 0.35)}" stroke-linejoin="miter" opacity="0.85" />
     <path d="${pathBorder}" fill="none" stroke="${c3}" stroke-width="${Math.max(0.8, ep * 0.2)}" stroke-linejoin="miter" opacity="0.4" />
   </g>
   <g>
     ${circuits}
   </g>
   ${brackets}
+  ${barcode}
+  ${runner}
 </svg>`;
 }

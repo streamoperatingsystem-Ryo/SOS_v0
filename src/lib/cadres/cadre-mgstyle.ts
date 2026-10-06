@@ -134,6 +134,18 @@ export default function renderMGStyle(opts: CadreOpts): string {
   const diodeX = largeur / 2;
   const diodeY = -margin * 0.4;
 
+  // ── Balayage radar (animer) : segment accentué balayant le tracé du
+  // bord (stroke-dashoffset SMIL sur pathLength=100 — recette thin-line).
+  // SUR le bord, pas dans la marge : la marge extérieure est rognée par
+  // le overflow:hidden + clip-path du widget parent → une anim en marge
+  // serait invisible ; sur le tracé elle reste visible sur les widgets
+  // ET sur le bord du canvas.
+  const sweep = opts.animer
+    ? `<path d="${borderPath}" fill="none" stroke="${cAccent}" stroke-width="${Math.max(1.2, ep * 0.55)}" stroke-linecap="round" pathLength="100" stroke-dasharray="8 92" stroke-dashoffset="0">` +
+      `<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4.5s" repeatCount="indefinite"/>` +
+      `</path>`
+    : "";
+
   // ── Symbole d'alerte "!" (haut droit, à l'extérieur) ──
   const bangW = Math.max(2, ep * 0.55);
   const bangH = Math.max(12, ep * 3.5);
@@ -186,5 +198,6 @@ export default function renderMGStyle(opts: CadreOpts): string {
     <rect x="${bangX - bangW / 2}" y="${bangY - bangH * 0.12}" width="${bangW}" height="${bangW}" fill="${cAccent}"/>
   </g>
   ${ticks}
+  ${sweep}
 </svg>`;
 }
