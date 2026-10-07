@@ -19,10 +19,12 @@
 //!
 //! Ping serveur = frame "{}" → répondre "{}". Jeton expirant → frame refresh.
 
+use crate::alertes::{AlertesState, EventTwitch};
 use crate::scenes::ScenesState;
 use crate::twitch_chat::ChatMessage;
 use crate::KickState;
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tauri::{AppHandle, Emitter, Manager};
@@ -315,6 +317,8 @@ pub fn run_ws(
             let mut next_id: u64 = 1;
             let mut subscribed = false;
             let mut refresh_deadline: Option<tokio::time::Instant> = None;
+            // Events non-chat déjà loggés (1re occurrence par session WS).
+            let mut events_vus: HashSet<String> = HashSet::new();
 
             // Frame connect (protocole Centrifuge JSON) — jeton obligatoire.
             let connect_frame =
@@ -464,6 +468,8 @@ pub fn run_ws(
                         if let Some(push) = msg.get("push") {
                             let data = &push["pub"]["data"];
                             if data["event"].as_str() != Some("App\\Events\\ChatMessageEvent") {
+                                // Non-chat (subs, gifts, hosts…) → alertes.
+                                pousser_alerte(&app, &mut events_vus, data);
                                 continue;
                             }
                             // data.data est double-encodée (string JSON dans string JSON)
@@ -577,4 +583,113 @@ pub fn run_ws(
         }
         let _ = app.emit("kick:deconnecte", ());
     })
+}
+
+/// Route un push non-chat vers le moteur d'alertes.
+///
+/// Mapping Kick → types existants :
+/// - App\Events\SubscriptionEvent        → "sub"    (username, months)
+/// - App\Events\GiftedSubscriptionsEvent → "subgift" (gifter + usernames[])
+/// - App\Events\StreamHostEvent          → "raid"   (host_username, viewers)
+/// - App\Events\KicksGifted(Event)       → "gift"   (sender, gift, quantity)
+///
+/// Les formes exactes de ces payloads ne sont pas documentées par Kick :
+/// chaque event non-chat est loggé à sa 1re occurrence (payload inclus)
+/// pour permettre d'ajuster les champs si la réalité diffère.
+fn pousser_alerte(app: &AppHandle, vus: &mut HashSet<String>, data: &serde_json::Value) {
+    let event = data["event"].as_str().unwrap_or("");
+    let type_alerte = match event {
+        "App\\Events\\SubscriptionEvent" => "sub",
+        "App\\Events\\GiftedSubscriptionsEvent" => "subgift",
+        "App\\Events\\StreamHostEvent" => "raid",
+        "App\\Events\\KicksGifted" | "App\\Events\\KicksGiftedEvent" => "gift",
+        _ => {
+            if vus.insert(event.to_string()) {
+                eprintln!("[Kick] event ignoré (1re occurrence) : {}", event);
+            }
+            return;
+        }
+    };
+    let Some(alertes) = app.try_state::<AlertesState>() else {
+        return;
+    };
+    // data.data est double-encodée (string JSON dans string JSON).
+    let payload: serde_json::Value =
+        match serde_json::from_str(data["data"].as_str().unwrap_or("{}")) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+    if vus.insert(event.to_string()) {
+        eprintln!("[Kick] alerte {} ← {} : {}", type_alerte, event, payload);
+    }
+
+    let str_of = |v: &serde_json::Value, keys: &[&str]| -> String {
+        keys.iter()
+            .find_map(|k| v[*k].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    let mut evt = EventTwitch {
+        type_alerte: type_alerte.into(),
+        plateforme: "kick".into(),
+        login: String::new(),
+        pseudo: String::new(),
+        user_id: String::new(),
+        nb_viewers: 0,
+        nb_bits: 0,
+        niveau_sub: String::new(),
+        nb_mois: 0,
+        destinataire: String::new(),
+        system_msg: String::new(),
+        montant: String::new(),
+        objet: String::new(),
+        nb_objet: 0,
+    };
+    match event {
+        "App\\Events\\SubscriptionEvent" => {
+            evt.pseudo = str_of(&payload, &["username", "sender_username"]);
+            evt.nb_mois = payload["months"].as_i64().unwrap_or(0);
+        }
+        "App\\Events\\GiftedSubscriptionsEvent" => {
+            evt.pseudo = str_of(&payload, &["gifter_username", "username"]);
+            evt.nb_objet = payload["usernames"]
+                .as_array()
+                .map(|a| a.len() as i64)
+                .or_else(|| payload["quantity"].as_i64())
+                .unwrap_or(1);
+        }
+        "App\\Events\\StreamHostEvent" => {
+            evt.pseudo = str_of(&payload, &["host_username", "username"]);
+            evt.nb_viewers = payload["number_viewers"].as_i64().unwrap_or(0);
+        }
+        _ => {
+            // KicksGifted : forme incertaine → champs usuels + fallbacks.
+            evt.pseudo = payload["sender"]["username"]
+                .as_str()
+                .or_else(|| payload["sender_username"].as_str())
+                .unwrap_or("")
+                .to_string();
+            evt.objet = payload["gift"]["name"]
+                .as_str()
+                .or_else(|| payload["gift_type"].as_str())
+                .unwrap_or("gift")
+                .to_string();
+            evt.nb_objet = payload["quantity"]
+                .as_i64()
+                .or_else(|| payload["amount"].as_i64())
+                .unwrap_or(1);
+            // Montant en Kicks si la valeur par gift est exposée.
+            if let Some(k) = payload["gift"]["amount"]
+                .as_i64()
+                .or_else(|| payload["kicks"].as_i64())
+            {
+                evt.montant = format!("{} Kicks", k * evt.nb_objet.max(1));
+            }
+        }
+    }
+    if evt.pseudo.is_empty() {
+        evt.pseudo = "unknown".to_string();
+    }
+    evt.login = evt.pseudo.clone();
+    alertes.on_event(evt);
 }

@@ -1141,12 +1141,15 @@
         0%, 100% { filter: none; }
         50% { filter: brightness(1.35) drop-shadow(0 0 calc(var(--goal-h, 90px) * 0.04) var(--sr-grad-from, #fff)); }
       }
-      /* ===== Widget musique — mini-lecteur Winamp (LCD + EQ + barre) =====
-         --mu-w/--mu-h posées inline à chaque snapshot (même technique que
-         --goal-w/h — pas de cqw, absent du CEF de plusieurs versions
-         d'OBS). musiqueMode "eq" (.mu-eq-only) = bandes seules.
-         Signature skin classic : barre de titre dégradée "WINAMP" +
-         peak dots orange sur l'EQ. */
+      /* ===== Widget musique — mini-lecteur Winamp (LED + LCD + EQ + barre) =====
+         CONTRAT VISUEL « skin classic » partagé : ce bloc est la référence,
+         WidgetMusique.svelte (vignette dashboard) en est le miroir 1:1 et
+         LecteurMusique.svelte (deck onglet Musique) réutilise la même
+         palette. --mu-w/--mu-h posées inline à chaque snapshot (même
+         technique que --goal-w/h — pas de cqw, absent du CEF de plusieurs
+         versions d'OBS). musiqueMode "eq" (.mu-eq-only) = bandes seules. */
+
+      /* ── Châssis métal sombre + bevel ── */
       .widget.musique {
         display: flex;
         flex-direction: column;
@@ -1154,12 +1157,21 @@
         gap: calc(var(--mu-h, 120px) * 0.06);
         padding: calc(var(--mu-h, 120px) * 0.07) calc(var(--mu-w, 340px) * 0.04);
         box-sizing: border-box;
-        /* Châssis métal sombre façon Winamp — couvre le fond verre clair
-           .widget pour garder le LCD lisible sur un jeu lumineux. */
-        background: linear-gradient(180deg, #1c1c1c, #2a2a2a);
+        /* Couvre le fond verre clair .widget pour garder le LCD lisible
+           sur un jeu lumineux. */
+        border: 2px outset #555;
+        border-radius: 3px;
+        background: linear-gradient(180deg, #2e2e2e 0%, #1c1c1c 100%);
+        box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.08);
         color: #4aff4a;
-        font-family: "Courier New", ui-monospace, monospace;
+        font-family: "Lucida Console", Consolas, ui-monospace, monospace;
       }
+      .widget.musique > *:not(.media-fond):not(.cadre-overlay) {
+        position: relative;
+        z-index: 1;
+      }
+
+      /* ── Barre de titre : dégradé bleu nuit + logo italique ── */
       .mu-titre {
         display: flex;
         align-items: center;
@@ -1184,29 +1196,42 @@
         overflow: hidden;
         white-space: nowrap;
       }
-      .widget.musique > *:not(.media-fond):not(.cadre-overlay) {
-        position: relative;
-        z-index: 1;
-      }
+
+      /* ── Rangée écrans : boîte LED temps (gauche) + LCD marquee
+         (droite). Deux panneaux inset séparés — le compteur ne flotte
+         plus dans une bande vide quand le titre est absent. ── */
       .mu-lcd {
         display: flex;
-        align-items: center;
-        gap: 0.6em;
-        background: #050805;
-        border-radius: 3px;
-        box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.9);
-        padding: calc(var(--mu-h, 120px) * 0.08) 0.6em;
-        overflow: hidden;
+        align-items: stretch;
+        gap: calc(var(--mu-w, 340px) * 0.02);
+        min-width: 0;
         font-size: calc(var(--mu-h, 120px) * 0.14);
         font-weight: 700;
         letter-spacing: 0.04em;
         text-shadow: 0 0 6px rgba(74, 255, 74, 0.55);
       }
+      .mu-temps {
+        display: flex;
+        align-items: center;
+        padding: calc(var(--mu-h, 120px) * 0.05) 0.45em;
+        border: 2px inset #444;
+        border-radius: 2px;
+        background: #050805;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+      }
+      .mu-rest { color: #2ea02e; font-size: 0.62em; }
       /* Marquee : deux copies du texte + translateX -50% (même technique
          que .musique-defile — boucle sans saut). */
       .mu-defile-wrap {
         flex: 1;
         min-width: 0;
+        display: flex;
+        align-items: center;
+        padding: calc(var(--mu-h, 120px) * 0.05) 0.5em;
+        border: 2px inset #444;
+        border-radius: 2px;
+        background: #0a140a;
         overflow: hidden;
         white-space: nowrap;
       }
@@ -1215,20 +1240,17 @@
         animation: musiqueDefil 12s linear infinite;
       }
       .mu-defile > span { padding-right: 3em; }
-      .mu-temps {
-        font-variant-numeric: tabular-nums;
-        white-space: nowrap;
-      }
-      .mu-rest { color: #2ea02e; }
+
+      /* ── Équalizer : 16 colonnes, barres montant du bas + peak dots ── */
       .mu-eq {
         display: flex;
         align-items: flex-end;
         gap: 3px;
         height: calc(var(--mu-h, 120px) * 0.3);
         min-height: 14px;
-        background: #050805;
-        border-radius: 3px;
-        box-shadow: inset 0 0 6px rgba(0, 0, 0, 0.9);
+        border: 2px inset #444;
+        border-radius: 2px;
+        background: #0a140a;
         padding: 3px 4px;
         box-sizing: border-box;
       }
@@ -1252,26 +1274,37 @@
         height: 4%;
         min-height: 2px;
         background: linear-gradient(180deg,
-          #ff5b5b 0%, #ffe14a 30%, #4aff4a 55%);
-        box-shadow: 0 0 4px rgba(74, 255, 74, 0.4);
+          #ff4040 0%, #ffb040 30%, #4aff4a 65%);
+        box-shadow: 0 0 3px rgba(74, 255, 74, 0.35);
         transition: height 80ms linear;
       }
+
+      /* ── Barre de progression crantée ── */
       .mu-posbar {
         height: calc(var(--mu-h, 120px) * 0.07);
-        min-height: 4px;
-        border-radius: 999px;
-        background: #0a0f0a;
-        box-shadow: inset 0 0 4px rgba(0, 0, 0, 0.8);
+        min-height: 5px;
+        border: 1px inset #444;
+        border-radius: 2px;
+        background:
+          repeating-linear-gradient(
+            90deg,
+            transparent 0,
+            transparent 9px,
+            rgba(0, 0, 0, 0.55) 9px,
+            rgba(0, 0, 0, 0.55) 10px
+          ),
+          #101410;
         overflow: hidden;
       }
       .mu-posfill {
         height: 100%;
         width: 0%;
-        border-radius: 999px;
-        background: linear-gradient(90deg, #2ea02e, #4aff4a);
+        background: linear-gradient(180deg, #7dff7d 0%, #2fd32f 100%);
+        box-shadow: 0 0 5px rgba(74, 255, 74, 0.5);
         transition: width 250ms linear;
       }
-      /* Mode "eq" : bandes seules occupant tout le widget. */
+
+      /* ── Mode "eq" : bandes seules occupant tout le widget. ── */
       .widget.musique.mu-eq-only .mu-titre,
       .widget.musique.mu-eq-only .mu-lcd,
       .widget.musique.mu-eq-only .mu-posbar { display: none; }
@@ -3801,16 +3834,44 @@
       // vidéo de fond dans entry.mediaEl.
       function applyMediaState(entry, w) {
         if (!entry.mediaEl || entry.mediaEl.tagName !== "VIDEO") return;
+        const v = entry.mediaEl;
         const paused = w.mediaPaused !== false; // défaut true
-        entry.mediaEl.loop = !paused;
+        // Boucle A–B : les deux bornes définies et B > A = boucle sur le
+        // segment [A, B[ (loop natif OFF — il ne boucle que la vidéo entière).
+        // Les bornes vivent sur entry (réécrites à chaque snapshot) : le
+        // listener posé UNE fois par élément lit toujours la valeur à jour.
+        const a = (typeof w.mediaLoopA === "number") ? w.mediaLoopA : null;
+        const b = (typeof w.mediaLoopB === "number") ? w.mediaLoopB : null;
+        const ab = a !== null && b !== null && b > a;
+        entry.loopA = ab ? a : null;
+        entry.loopB = ab ? b : null;
+        v.loop = !paused && !ab;
+        if (!v.__abBound) {
+          v.__abBound = true;
+          v.addEventListener("timeupdate", function () {
+            if (entry.loopB == null) return;
+            // Confine la lecture au segment : ≥ B ou < A (seek hors bornes)
+            // → retour à A. Epsilon sous A : le clamp keyframe du seek ne
+            // doit pas re-déclencher en boucle.
+            if (v.currentTime >= entry.loopB || v.currentTime < entry.loopA - 0.05) {
+              try { v.currentTime = entry.loopA; } catch (e) {}
+            }
+          });
+          // B au-delà de la durée → la vidéo se termine : reseek A + play.
+          v.addEventListener("ended", function () {
+            if (entry.loopB == null) return;
+            try { v.currentTime = entry.loopA; } catch (e) {}
+            v.play().catch(function () {});
+          });
+        }
         if (paused || PREVIEW) {
-          if (!entry.mediaEl.paused) entry.mediaEl.pause();
+          if (!v.paused) v.pause();
         } else {
-          if (entry.mediaEl.paused) entry.mediaEl.play().catch(function () {});
+          if (v.paused) v.play().catch(function () {});
         }
         const t = w.mediaTime || 0;
         if (entry.mediaTime !== t) {
-          try { entry.mediaEl.currentTime = t; } catch (e) {}
+          try { v.currentTime = t; } catch (e) {}
           entry.mediaTime = t;
         }
       }
@@ -4307,16 +4368,38 @@
       // que sur changement.
       function applyBgState(state, scene) {
         if (!state.mediaEl || state.kind !== "video") return;
+        const v = state.mediaEl;
         const paused = scene.bgPaused !== false; // défaut true
-        state.mediaEl.loop = !paused;
+        // Boucle A–B du fond — même règle que applyMediaState (bornes sur
+        // state, listener timeupdate/ended posé une fois par élément).
+        const a = (typeof scene.bgLoopA === "number") ? scene.bgLoopA : null;
+        const b = (typeof scene.bgLoopB === "number") ? scene.bgLoopB : null;
+        const ab = a !== null && b !== null && b > a;
+        state.loopA = ab ? a : null;
+        state.loopB = ab ? b : null;
+        v.loop = !paused && !ab;
+        if (!v.__abBound) {
+          v.__abBound = true;
+          v.addEventListener("timeupdate", function () {
+            if (state.loopB == null) return;
+            if (v.currentTime >= state.loopB || v.currentTime < state.loopA - 0.05) {
+              try { v.currentTime = state.loopA; } catch (e) {}
+            }
+          });
+          v.addEventListener("ended", function () {
+            if (state.loopB == null) return;
+            try { v.currentTime = state.loopA; } catch (e) {}
+            v.play().catch(function () {});
+          });
+        }
         if (paused || PREVIEW) {
-          if (!state.mediaEl.paused) state.mediaEl.pause();
+          if (!v.paused) v.pause();
         } else {
-          if (state.mediaEl.paused) state.mediaEl.play().catch(function () {});
+          if (v.paused) v.play().catch(function () {});
         }
         const t = scene.bgTime || 0;
         if (state.mediaTime !== t) {
-          try { state.mediaEl.currentTime = t; } catch (e) {}
+          try { v.currentTime = t; } catch (e) {}
           state.mediaTime = t;
         }
       }
@@ -6231,11 +6314,11 @@
               muEl.innerHTML =
                 '<div class="mu-titre">WINAMP</div>' +
                 '<div class="mu-lcd">' +
+                  '<span class="mu-temps"><span class="mu-pos">--:--</span>' +
+                    '<span class="mu-rest"></span></span>' +
                   '<div class="mu-defile-wrap"><span class="mu-defile">' +
                     '<span class="mu-txt"></span><span class="mu-txt"></span>' +
                   '</span></div>' +
-                  '<span class="mu-temps"><span class="mu-pos">--:--</span>' +
-                    '<span class="mu-rest"></span></span>' +
                 '</div>' +
                 '<div class="mu-eq"></div>' +
                 '<div class="mu-posbar"><div class="mu-posfill"></div></div>';
@@ -10040,7 +10123,7 @@
       function majMusiqueWidget(entry) {
         var titre = musiqueCourant
           ? "♪ " + musiqueCourant.titre + " — " + musiqueCourant.demandeur
-          : "";
+          : "♪ —"; // placeholder : la marquee n'est jamais blanche
         if (entry.muKey !== titre) {
           entry.muKey = titre;
           entry.muTxtEls[0].textContent = titre;

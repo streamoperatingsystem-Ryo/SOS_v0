@@ -45,6 +45,12 @@ export interface Widget {
   mediaPixel?: number;
   mediaPaused?: boolean;
   mediaTime?: number;
+  /// Boucle A–B (secondes) sur la vidéo : les deux définis avec mediaLoopB >
+  /// mediaLoopA = en diffusion la vidéo boucle sur le segment [A, B[ (reseek
+  /// à A dès que currentTime ≥ B) au lieu de boucler sur toute la vidéo.
+  /// undefined = boucle native complète (comportement historique).
+  mediaLoopA?: number;
+  mediaLoopB?: number;
   /// Carrousel d'images : liste non vide = ACTIF et prioritaire sur `media`
   /// (le média unique reste stocké, il redevient visible si la liste est
   /// vidée). Images uniquement.
@@ -164,6 +170,19 @@ export interface Widget {
   /// Épaisseur du contour des lettres en px (0-6 ; 0 = aucun contour).
   /// Défaut 2.
   titreContourEpaisseur?: number;
+  /// Rect de restauration du mode « plein écran » (clic droit widget →
+  /// « Mettre/Enlever le plein écran »). Défini = plein écran actif, le rect
+  /// est restauré à la désactivation ; undefined = état normal.
+  pleinEcran?: PleinEcranRect;
+}
+
+/// Rect sauvegardé d'un widget avant sa mise « en plein écran » — position
+/// et taille de restauration (miroir Rust scene.rs).
+export interface PleinEcranRect {
+  x: number;
+  y: number;
+  largeur: number;
+  hauteur: number;
 }
 
 /// Plateformes supportées par les widgets type "goal" (miroir Rust scene.rs).
@@ -494,6 +513,10 @@ export interface Scene {
   bgPixel?: number;
   bgPaused?: boolean;
   bgTime?: number;
+  /// Boucle A–B (secondes) sur la vidéo de fond — même règle que
+  /// mediaLoopA/mediaLoopB des widgets. undefined = boucle native complète.
+  bgLoopA?: number;
+  bgLoopB?: number;
   /// Nom de la source OBS de capture du FOND ("SOS-Fond-<sceneId8>").
   /// Présence = fond capture (prioritaire sur bgMedia — le média n'est pas
   /// peint tant que la capture est active).
@@ -677,6 +700,10 @@ export interface AlertesConfig {
   resub?: AlerteTypeConfig;
   subgift?: AlerteTypeConfig;
   bits?: AlerteTypeConfig;
+  /// Gift nommé (TikTok Gift, Kick KicksGifted) : {objet} {nbObjet} {montant}.
+  gift?: AlerteTypeConfig;
+  /// Don monétaire YouTube (SuperChat + SuperSticker) : {montant} {objet}.
+  superchat?: AlerteTypeConfig;
   overlay?: AlertesOverlayConfig;
 }
 
@@ -929,6 +956,130 @@ export interface ConsoEchantillon {
 export interface ConsoEtat {
   nb_coeurs: number;
   historique: ConsoEchantillon[];
+}
+
+// ===== Onglet Audience (modale Diagnostic) — mirroir telemetrie/analyse.rs =====
+
+/// Point de la série viewers rééchantillonnée (1 pt/min, epoch ms).
+export interface AudiencePoint {
+  ts: number;
+  count: number;
+}
+
+/// Plage de la série à jeu constant (jeu_id).
+export interface AudienceSegment {
+  debut: number;
+  fin: number;
+  jeu: string;
+  jeu_id: string;
+  titre: string;
+  moyenne: number;
+  pic: number;
+}
+
+/// Pic détecté. cause ∈ "raid"|"contenu"|"communaute"|"debut_live"|"organique" ;
+/// confiance ∈ "certaine"|"probable"|"faible".
+export interface AudiencePic {
+  session_id: string;
+  t_debut: number;
+  t_pic: number;
+  t_fin: number;
+  v_avant: number;
+  v_pic: number;
+  delta: number;
+  delta_pct: number;
+  jeu: string;
+  jeu_id: string;
+  titre: string;
+  cause: string;
+  cause_pseudo: string;
+  cause_nb: number;
+  confiance: string;
+  chat_par_min: number;
+}
+
+/// Marqueur timeline d'une session (type_alerte ou "stream-info").
+export interface AudienceEvt {
+  ts: number;
+  genre: string;
+  detail: string;
+  nb: number;
+}
+
+export interface AudienceSessionResume {
+  /// Id d'intervalle : session_id, ou "session_id#n" si plusieurs lives dans
+  /// la même connexion.
+  session_id: string;
+  debut: number;
+  fin: number;
+  duree_s: number;
+  pic: number;
+  moyenne: number;
+  jeu_principal: string;
+  nb_msgs_chat: number;
+  nb_events_par_type: Record<string, number>;
+}
+
+export interface AudienceStatJeu {
+  jeu: string;
+  jeu_id: string;
+  temps_s: number;
+  moyenne: number;
+  pic_max: number;
+  viewer_minutes: number;
+  nb_segments: number;
+  nb_pics: number;
+}
+
+export interface AudienceStatTitre {
+  titre: string;
+  temps_s: number;
+  moyenne: number;
+  pic_max: number;
+}
+
+export interface AudienceStatCreneau {
+  /// Jour local : 0 = lundi … 6 = dimanche.
+  jour: number;
+  heure: number;
+  moyenne: number;
+  echantillons: number;
+}
+
+export interface AudienceTotaux {
+  raids: number;
+  raid_viewers: number;
+  subs: number;
+  resubs: number;
+  subgifts: number;
+  bits_total: number;
+  follows: number;
+  supers: number;
+  gifts: number;
+}
+
+export interface AudienceAgregats {
+  top_jeux: AudienceStatJeu[];
+  top_titres: AudienceStatTitre[];
+  top_creneaux: AudienceStatCreneau[];
+  top_pics: AudiencePic[];
+  totaux: AudienceTotaux;
+}
+
+/// Réponse de `audience_sessions`.
+export interface AudienceSessions {
+  periode_jours: number;
+  sessions: AudienceSessionResume[];
+  agregats: AudienceAgregats;
+}
+
+/// Réponse de `audience_session`.
+export interface AudienceSessionDetail {
+  meta: AudienceSessionResume;
+  serie: AudiencePoint[];
+  segments: AudienceSegment[];
+  pics: AudiencePic[];
+  timeline: AudienceEvt[];
 }
 
 export const tauri = {
@@ -2512,6 +2663,19 @@ export const tauri = {
   /// nb cœurs. À poller UNIQUEMENT quand la modale Diagnostic est ouverte.
   async consoEtat(): Promise<ConsoEtat> {
     return invoke<ConsoEtat>("conso_etat");
+  },
+
+  // ===== Diagnostic — onglet Audience (analyse telemetrie/events.jsonl) =====
+
+  /// Sessions live reconstruites + agrégats sur N jours. Pas de polling —
+  /// données historiques, re-fetch au changement de période.
+  async audienceSessions(depuisJours: number): Promise<AudienceSessions> {
+    return invoke<AudienceSessions>("audience_sessions", { depuisJours });
+  },
+
+  /// Détail d'une session : série 1 pt/min, segments jeu, pics, timeline.
+  async audienceSession(sessionId: string): Promise<AudienceSessionDetail> {
+    return invoke<AudienceSessionDetail>("audience_session", { sessionId });
   },
 };
 

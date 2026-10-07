@@ -66,6 +66,10 @@ pub fn demarrer(app: AppHandle, chat_tx: broadcast::Sender<String>) -> tauri::as
         let mut plats: HashMap<&'static str, Plat> = HashMap::new();
         // Dernières communautés publiées par plateforme (dedup par tuple).
         let mut commus: HashMap<&'static str, Communaute> = HashMap::new();
+        // Dernier contexte stream publié par plateforme (dedup par tuple
+        // (en_live, jeu_id, titre)) — la frame stream-info ne part qu'au
+        // changement, jamais à chaque count.
+        let mut contextes: HashMap<&'static str, (bool, String, String)> = HashMap::new();
         let mut interval = tokio::time::interval(TICK);
         loop {
             interval.tick().await;
@@ -78,9 +82,21 @@ pub fn demarrer(app: AppHandle, chat_tx: broadcast::Sender<String>) -> tauri::as
                     match crate::twitch_helix::stream_viewers(&uid, &access).await {
                         Ok(v) => {
                             p.prochain = now + if v.is_some() { LIVE_EVERY } else { OFFLINE_EVERY };
-                            publier(&app, &chat_tx, "twitch", v, &mut p.dernier);
-                            if let Some(n) = v {
-                                verifier_objectifs(&app, &chat_tx, "twitch", &[("viewers", n as u64)]);
+                            publier_stream_info(&chat_tx, "twitch", v.as_ref(), &mut contextes);
+                            publier(
+                                &app,
+                                &chat_tx,
+                                "twitch",
+                                v.as_ref().map(|s| s.viewers),
+                                &mut p.dernier,
+                            );
+                            if let Some(s) = &v {
+                                verifier_objectifs(
+                                    &app,
+                                    &chat_tx,
+                                    "twitch",
+                                    &[("viewers", s.viewers as u64)],
+                                );
                             }
                         }
                         Err(e) => {
@@ -118,7 +134,7 @@ pub fn demarrer(app: AppHandle, chat_tx: broadcast::Sender<String>) -> tauri::as
                     }
                 }
             } else {
-                deconnecte(&app, &chat_tx, &mut plats, "twitch");
+                deconnecte(&app, &chat_tx, &mut plats, &mut contextes, "twitch");
             }
 
             // --- YouTube (liveStreamingDetails + channel.subscriberCount) ---
@@ -150,7 +166,7 @@ pub fn demarrer(app: AppHandle, chat_tx: broadcast::Sender<String>) -> tauri::as
                     }
                 }
             } else {
-                deconnecte(&app, &chat_tx, &mut plats, "youtube");
+                deconnecte(&app, &chat_tx, &mut plats, &mut contextes, "youtube");
             }
 
             // --- Kick (api/v2/channels → viewers + followers, UN SEUL GET) ---
@@ -175,7 +191,7 @@ pub fn demarrer(app: AppHandle, chat_tx: broadcast::Sender<String>) -> tauri::as
                     }
                 }
             } else {
-                deconnecte(&app, &chat_tx, &mut plats, "kick");
+                deconnecte(&app, &chat_tx, &mut plats, &mut contextes, "kick");
             }
         }
     })
@@ -199,12 +215,64 @@ fn publier(
     let _ = app.emit("viewers:update", json!({"plateforme": plat, "count": count}));
 }
 
+/// Frame `stream-info` (titre/jeu/tags du live) — émise UNIQUEMENT au
+/// changement du tuple (en_live, jeu_id, titre), jamais à chaque count.
+/// Inerte pour la diffusion :4321 (le dispatch if/else ignore les types
+/// inconnus) ; consommée par la télémétrie qui s'en sert de contexte live
+/// pour estampiller jeu/titre sur les events JSONL.
+fn publier_stream_info(
+    chat_tx: &broadcast::Sender<String>,
+    plat: &'static str,
+    info: Option<&crate::twitch_helix::StreamInfo>,
+    contextes: &mut HashMap<&'static str, (bool, String, String)>,
+) {
+    let cle = match info {
+        Some(s) => (true, s.jeu_id.clone(), s.titre.clone()),
+        None => (false, String::new(), String::new()),
+    };
+    if contextes.get(plat) == Some(&cle) {
+        return;
+    }
+    let avait_contexte = contextes.insert(plat, cle.clone());
+    // Jamais de contexte connu et toujours pas de live → rien à signaler
+    // (évite un en_live:false parasite au boot).
+    if !cle.0 && avait_contexte.is_none() {
+        return;
+    }
+    let msg = match info {
+        Some(s) => json!({
+            "type": "stream-info",
+            "plateforme": plat,
+            "en_live": true,
+            "titre": s.titre,
+            "jeu": s.jeu,
+            "jeu_id": s.jeu_id,
+            "debut": s.debut,
+            "tags": s.tags,
+        }),
+        None => json!({
+            "type": "stream-info",
+            "plateforme": plat,
+            "en_live": false,
+            "titre": "",
+            "jeu": "",
+            "jeu_id": "",
+            "debut": "",
+            "tags": [],
+        }),
+    };
+    let _ = chat_tx.send(msg.to_string());
+}
+
 /// Plateforme déconnectée : publie None une fois (efface la pastille) puis
 /// retire l'entrée — le prochain `Plat::new` au retour fera un fetch immédiat.
+/// Coupe aussi le contexte live éventuel (en_live:false si un live était
+/// connu — la déconnexion invalide le contexte stream).
 fn deconnecte(
     app: &AppHandle,
     chat_tx: &broadcast::Sender<String>,
     plats: &mut HashMap<&'static str, Plat>,
+    contextes: &mut HashMap<&'static str, (bool, String, String)>,
     nom: &'static str,
 ) {
     if let Some(p) = plats.remove(nom) {
@@ -213,6 +281,11 @@ fn deconnecte(
             let _ = chat_tx.send(msg);
             let _ = app.emit("viewers:update", json!({"plateforme": nom, "count": null}));
         }
+    }
+    if contextes.remove(nom).map(|c| c.0).unwrap_or(false) {
+        let msg = json!({"type": "stream-info", "plateforme": nom, "en_live": false,
+            "titre": "", "jeu": "", "jeu_id": "", "debut": "", "tags": []});
+        let _ = chat_tx.send(msg.to_string());
     }
 }
 

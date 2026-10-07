@@ -657,9 +657,31 @@ pub async fn creator_goals(
         .collect())
 }
 
-/// Viewers live : GET /streams?user_id=... — si data vide → None (hors-ligne),
-/// sinon Some(viewer_count).
-pub async fn stream_viewers(broadcaster_id: &str, access: &str) -> Result<Option<u32>, HelixError> {
+/// Infos du stream en cours — extraites de GET /streams (un seul appel :
+/// viewers + titre + jeu + started_at + tags, tout arrive dans la même
+/// réponse que le viewer_count).
+#[derive(Debug, Clone)]
+pub struct StreamInfo {
+    /// viewer_count Twitch (approximatif par nature).
+    pub viewers: u32,
+    /// Titre du stream.
+    pub titre: String,
+    /// game_id Helix de la catégorie courante.
+    pub jeu_id: String,
+    /// Nom de la catégorie (game_name).
+    pub jeu: String,
+    /// started_at RFC3339 — début du live côté Twitch.
+    pub debut: String,
+    /// Tags du stream.
+    pub tags: Vec<String>,
+}
+
+/// Viewers + contexte live : GET /streams?user_id=... — si data vide → None
+/// (hors-ligne), sinon Some(StreamInfo).
+pub async fn stream_viewers(
+    broadcaster_id: &str,
+    access: &str,
+) -> Result<Option<StreamInfo>, HelixError> {
     let body = helix_get("/streams", &[("user_id", broadcaster_id)], access).await?;
 
     let data = body["data"]
@@ -670,12 +692,27 @@ pub async fn stream_viewers(broadcaster_id: &str, access: &str) -> Result<Option
         return Ok(None);
     }
 
-    let viewers = data[0]["viewer_count"]
+    let s = &data[0];
+    let viewers = s["viewer_count"]
         .as_u64()
         .map(|v| v as u32)
         .ok_or_else(|| HelixError::Autre("streams: viewer_count absent".into()))?;
 
-    Ok(Some(viewers))
+    Ok(Some(StreamInfo {
+        viewers,
+        titre: s["title"].as_str().unwrap_or_default().to_string(),
+        jeu_id: s["game_id"].as_str().unwrap_or_default().to_string(),
+        jeu: s["game_name"].as_str().unwrap_or_default().to_string(),
+        debut: s["started_at"].as_str().unwrap_or_default().to_string(),
+        tags: s["tags"]
+            .as_array()
+            .map(|a| {
+                a.iter()
+                    .filter_map(|t| t.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default(),
+    }))
 }
 
 /// Broadcaster : GET /users?id=... — display_name, profile_image_url,

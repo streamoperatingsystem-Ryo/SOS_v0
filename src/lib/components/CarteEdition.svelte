@@ -19,12 +19,14 @@
     setBgFlouLocal, setBgPixelLocal, resetFondTransformation, resetFondEffets,
     clearFond, retirerFondCapture,
     setWidgetMediaPaused, setWidgetMediaTime, setWidgetMediaTimeLocal,
-    setBgPaused, setBgTime, setBgTimeLocal,
+    setWidgetMediaLoop,
+    setBgPaused, setBgTime, setBgTimeLocal, setBgLoop,
     setWidgetTrou, deleteObsTrouSource, dupliquerWidget, rotateWidgetLocal,
     setWidgetSansCadre, mettreAJourCadre,
     setChatFiltre, setChatStyle, setChatTaillePoliceLocal,
     setSpeedrunPolice, setSpeedrunPoliceLocal, setSpeedrunConfig,
     setInputViewerConfig, setInputViewerConfigLocal, setCameraDevice, setGoalConfig,
+    cameraDevicesLive,
     setMusiqueConfig,
     resetMorphsWidget, resetMorphsFond,
     ajouterSlidesMedia, retirerSlideMedia, deplacerSlideMedia,
@@ -52,7 +54,9 @@
   import { connexions, connecterTwitch } from "../stores/chat";
   import { t, localeTag } from "../stores/langue";
   import { onMount } from "svelte";
+  import { get } from "svelte/store";
   import { listen } from "@tauri-apps/api/event";
+  import { obsStatus, obsHost, obsPort, obsPassword } from "../stores/obs";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import Gizmo3D from "./Gizmo3D.svelte";
   import PlayerBar from "./PlayerBar.svelte";
@@ -274,6 +278,8 @@
   let selectedObsSource = $derived(selectedWidget?.obsSource ?? null);
   let widgetMediaPaused = $derived(selectedWidget?.mediaPaused ?? true);
   let widgetMediaTime = $derived(selectedWidget?.mediaTime ?? 0);
+  let widgetLoopA = $derived(selectedWidget?.mediaLoopA ?? null);
+  let widgetLoopB = $derived(selectedWidget?.mediaLoopB ?? null);
   let widgetVideoEl = $derived(selectedId ? $videoRegistry.get(selectedId) : undefined);
 
   // ===== Valeurs dérivées du fond =====
@@ -302,6 +308,8 @@
   let fondVideoEl = $derived($videoRegistry.get("fond"));
   let bgPaused = $derived($sceneStore.bgPaused ?? true);
   let bgTime = $derived($sceneStore.bgTime ?? 0);
+  let bgLoopA = $derived($sceneStore.bgLoopA ?? null);
+  let bgLoopB = $derived($sceneStore.bgLoopB ?? null);
 
   // ===== Carrousel d'images (mediaSlides widget / bgSlides fond) =====
   // Liste non vide = carrousel actif (prioritaire sur le média unique, qui
@@ -384,6 +392,9 @@
   // Pendant le drag du slider : état local seul (la vignette suit) ; le
   // commit (snapshot :4321) part au release via onSeek — pas 1/frame.
   function onWidgetSeekLive(t: number) { if (selectedId) setWidgetMediaTimeLocal(selectedId, t); }
+  function onWidgetLoopChange(a: number | null, b: number | null) {
+    if (selectedId) void setWidgetMediaLoop(selectedId, a, b);
+  }
   function onToggleTrou() { if (selectedId) setWidgetTrou(selectedId, !selectedTrou); }
   function onSupprimerClick() { confirmDeleteWidget.set(true); }
 
@@ -426,6 +437,9 @@
   function onBgSeek(t: number) { setBgTime(t); }
   // Idem widget : drag = local, release = commit.
   function onBgSeekLive(t: number) { setBgTimeLocal(t); }
+  function onBgLoopChange(a: number | null, b: number | null) {
+    void setBgLoop(a, b);
+  }
 
   // ===== Chat widget =====
   const FILTRES: ChatFiltre[] = ["unifie", "twitch", "youtube", "kick", "tiktok"];
@@ -548,16 +562,34 @@
   // ===== Widget caméra =====
   let cameraDeviceId = $derived(selectedWidget?.cameraDeviceId ?? null);
   let cameraDevices = $state<string[]>([]);
+  // Re-déclenchée par $cameraDevicesLive : la tâche Rust de hot-plug émet
+  // "camera:devices" à chaque branchement/débranchement → le sélecteur se
+  // rafraîchit sans rouvrir la carte. Quand OBS est connecté, union avec sa
+  // liste dshow (autoritaire : couvre les caméras virtuelles qui ne
+  // s'enregistrent pas en PnP).
   $effect(() => {
     if (!isCameraWidget) { cameraDevices = []; return; }
+    const live = $cameraDevicesLive;
+    const obsOk = $obsStatus === "connected";
     let cancelled = false;
     (async () => {
+      let liste: string[];
       try {
-        const list = await tauri.pcEnumerateCameras();
-        if (!cancelled) cameraDevices = list;
+        liste = await tauri.pcEnumerateCameras();
       } catch {
-        if (!cancelled) cameraDevices = [];
+        liste = live;
       }
+      if (obsOk) {
+        try {
+          const obs = await tauri.obsEnumerateTargets(
+            get(obsHost), parseInt(get(obsPort), 10) || 4455,
+            get(obsPassword), "camera"
+          );
+          liste = [...new Set([...liste, ...obs])];
+        } catch {
+        }
+      }
+      if (!cancelled) cameraDevices = liste;
     })();
     return () => { cancelled = true; };
   });
@@ -631,6 +663,7 @@
             </div>
             {#if cameraDevices.length === 0}
               <p class="hint">{$t("carteEdition.aucuneCamera")}</p>
+              <p class="hint">{$t("carteEdition.hintAndroidCam")}</p>
             {/if}
             <!-- Cadre sur ce widget (sansCadre) + accès modale Cadres —
                  les widgets caméra suivent les mêmes règles de cadre. -->
@@ -1018,7 +1051,7 @@
               {/if}
             {:else if tabFond === "lecture"}
               {#if bgKind === "video"}
-                <PlayerBar videoEl={fondVideoEl} mediaPaused={bgPaused} mediaTime={bgTime} onTogglePlay={onBgTogglePlay} onSeek={onBgSeek} onSeekLive={onBgSeekLive} />
+                <PlayerBar videoEl={fondVideoEl} mediaPaused={bgPaused} mediaTime={bgTime} loopA={bgLoopA} loopB={bgLoopB} onTogglePlay={onBgTogglePlay} onSeek={onBgSeek} onSeekLive={onBgSeekLive} onLoopChange={onBgLoopChange} />
               {/if}
             {/if}
           {/if}
@@ -1156,7 +1189,7 @@
 
 {#snippet controlesLecture()}
   {#if selectedKind === "video"}
-    <PlayerBar videoEl={widgetVideoEl} mediaPaused={widgetMediaPaused} mediaTime={widgetMediaTime} onTogglePlay={onWidgetTogglePlay} onSeek={onWidgetSeek} onSeekLive={onWidgetSeekLive} />
+    <PlayerBar videoEl={widgetVideoEl} mediaPaused={widgetMediaPaused} mediaTime={widgetMediaTime} loopA={widgetLoopA} loopB={widgetLoopB} onTogglePlay={onWidgetTogglePlay} onSeek={onWidgetSeek} onSeekLive={onWidgetSeekLive} onLoopChange={onWidgetLoopChange} />
   {:else}
     <p class="hint">{$t("carteEdition.pasDeVideo")}</p>
   {/if}

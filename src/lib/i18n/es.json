@@ -204,7 +204,9 @@
     "aideCadres": "Clic izquierdo en el fondo o en un widget → «Personalizar el marco…» (panel izquierdo)"
   },
   "consoModal": {
-    "titre": "Diagnóstico — Consumo",
+    "titre": "Diagnóstico",
+    "tabApp": "Aplicación",
+    "tabAudience": "Audiencia",
     "hint": "Mediciones reales, actualizadas cada segundo. Las curvas cubren los últimos 5 minutos — pase el cursor para leer un punto preciso. Nada se graba: todo permanece en memoria.",
     "indisponible": "Medición no disponible — el backend no responde.",
     "collecte": "Recopilando — las curvas aparecerán en unos segundos.",
@@ -223,6 +225,45 @@
     "courbe": "Curva {nom}",
     "mo": "MB",
     "go": "GB"
+  },
+  "audience": {
+    "periode": "Periodo",
+    "j7": "7 días",
+    "j30": "30 días",
+    "j90": "90 días",
+    "session": "Directo",
+    "sessionPic": "pico {n}",
+    "ariaGraphe": "Curva de espectadores del directo",
+    "survol": "{count} espectadores · {heure}",
+    "twitchSeul": "Análisis solo de Twitch por ahora",
+    "liveMeta": "{duree} · media {moyenne} · pico {pic} · {msgs} msgs",
+    "resolution": "Un punto por minuto — un pico más breve puede ser invisible. El contador de espectadores de Twitch es aproximado.",
+    "jeuInconnu": "Categoría desconocida",
+    "pics": "Picos detectados",
+    "aucunPic": "Ningún pico detectado en este directo.",
+    "aucune": "Ningún directo registrado en este período.",
+    "aucuneDonnee": "El análisis empieza con el primer directo de Twitch registrado por la telemetría.",
+    "chargement": "Analizando…",
+    "erreur": "Análisis no disponible — el backend no responde.",
+    "topPic": "Pico más alto",
+    "topPicLigne": "+{delta} a las {heure} · {cause}",
+    "meilleureCategorie": "Mejor categoría",
+    "meilleurTitre": "Mejor título",
+    "meilleurCreneau": "Mejor franja",
+    "creneauLigne": "{jour} ~{heure} h · media {moyenne}",
+    "carteJeu": "media {moyenne} · {temps} · {pics} picos",
+    "carteMoyenne": "media {moyenne}",
+    "pendantPeriode": "Durante el período",
+    "totaux": "{raids} raids · {subs} subs · {bits} bits · {follows} follows",
+    "causeRaid": "Raid de {pseudo} ({nb} espectadores)",
+    "causeContenu": "Cambio de contenido",
+    "causeCommunaute": "Impulso de la comunidad ({nb} eventos)",
+    "causeDebutLive": "Inicio del directo",
+    "causeOrganique": "Orgánico",
+    "confCertaine": "segura",
+    "confProbable": "probable",
+    "confFaible": "baja",
+    "jours": "lun.|mar.|mié.|jue.|vie.|sáb.|dom."
   },
   "ecranAttenteModal": {
     "titre": "Pantalla de espera",
@@ -353,7 +394,7 @@
     "moderation": "Canal",
     "moderationTitle": "Controles del canal",
     "diagnostic": "Diagnóstico",
-    "diagnosticTitle": "Abrir el diagnóstico de consumo (CPU, RAM, actividad…)",
+    "diagnosticTitle": "Abrir el diagnóstico (consumo, audiencia)",
     "preview": "Vista previa",
     "previewTitle": "Miniatura en vivo de la difusión + proyector OBS — la cabecera activa/corta la miniatura",
     "previewFenetre": "Ventana",
@@ -476,6 +517,7 @@
     "deviceCamera": "Dispositivo de cámara",
     "deviceDefaut": "(dispositivo por defecto)",
     "aucuneCamera": "Ninguna cámara detectada. ¿Comprobar la webcam?",
+    "hintAndroidCam": "Teléfono Android: conectar por USB y elegir «Webcam» en las opciones USB del teléfono (Android 14+).",
     "tabContenu": "Contenido",
     "tabTransformation": "Transformación",
     "tabEffets": "Efectos",
@@ -552,6 +594,8 @@
     "dupliquerHint": "La copia aparece en espejo sobre el eje vertical del canvas y se convierte en el widget seleccionado — las guías simétricas ayudan a colocarla.",
     "premierPlan": "Traer al frente",
     "arrierePlan": "Enviar al fondo",
+    "pleinEcran": "Pantalla completa",
+    "pleinEcranOff": "Salir de pantalla completa",
     "retournement": "Volteo",
     "miroirH": "Espejo →",
     "miroirV": "Espejo ↓",
@@ -798,7 +842,7 @@
       "testMessage": "¡Este es mi primer mensaje!"
     },
     "alertes": {
-      "hintIntro": "Twitch. Los nuevos followers se detectan automáticamente (comprobación cada 60 s). Seleccione un tipo a la izquierda para configurar su medio, texto y comportamiento. La posición/tamaño del overlay se ajusta en la pestaña «Esqueleto de posición» (compartida con los clips de bienvenida).",
+      "hintIntro": "Twitch, YouTube, Kick y TikTok: follows, subs, raids, bits, gifts y donaciones disparan alertas en la difusión. Los follows de Twitch se detectan en tiempo real (EventSub). Seleccione un tipo a la izquierda para configurar su medio, texto y comportamiento. La posición/tamaño del overlay se ajusta en la pestaña «Esqueleto de posición» (compartida con los clips de bienvenida).",
       "desactiverType": "Desactivar este tipo de alerta",
       "activerType": "Activar este tipo de alerta",
       "variablesHint": "Variables: {vars}",
@@ -809,7 +853,9 @@
         "sub": "{pseudo} acaba de suscribirse!",
         "resub": "{pseudo} se resuscribió por {nbMoisCumul} meses!",
         "subgift": "{pseudo} regaló una sub a {destinataire}!",
-        "bits": "{pseudo} envió {nbBits} bits!"
+        "bits": "{pseudo} envió {nbBits} bits!",
+        "gift": "{pseudo} envía {nbObjet} × {objet}!",
+        "superchat": "{pseudo} envió {montant}!"
       }
     },
     "commandes": {
@@ -1156,7 +1202,7 @@
       "alertes": {
         "titre": "Alertas y clip de bienvenida",
         "p1": "Barra lateral → «**Interacciones en vivo**». Esta ventana reúne todo lo que reacciona a sus espectadores durante el directo.",
-        "l1": "Pestaña **Alertas**: follow, raid, sub, resub, sub regalado, bits (Twitch). Elija un tipo a la izquierda, luego su medio, su texto y actívelo. «**Probar la alerta en la difusión**» la reproduce sin esperar un follow real.",
+        "l1": "Pestaña **Alertas**: follow, raid, sub, resub, sub regalado, bits (Twitch) — más gifts de TikTok, subs/raids de Kick y SuperChats/miembros de YouTube. Elija un tipo a la izquierda, luego su medio, su texto y actívelo. «**Probar la alerta en la difusión**» la reproduce sin esperar un follow real.",
         "l2": "Pestaña **Clip de bienvenida**: un clip que suena cuando un follower llega al chat. «**Asignación auto**» da un clip a cada uno; también puede elegir el clip a mano, espectador por espectador.",
         "l3": "Pestaña **Esqueleto de posición**: arrastre el overlay donde lo quiera en pantalla — la posición vale para alertas, clips y comandos.",
         "note": "Todo se reproduce en la **difusión OBS**, nunca en el dashboard: use la Vista previa para comprobar."

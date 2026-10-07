@@ -237,6 +237,7 @@ async fn connect_irc(
                 if nb_bits > 0 {
                     let evt = crate::alertes::EventTwitch {
                         type_alerte: "bits".to_string(),
+                        plateforme: "twitch".to_string(),
                         login: payload.pseudo.to_lowercase(),
                         pseudo: payload.pseudo.clone(),
                         user_id: tags.get("user-id").cloned().unwrap_or_default(),
@@ -246,6 +247,9 @@ async fn connect_irc(
                         nb_mois: 0,
                         destinataire: String::new(),
                         system_msg: format!("{} a envoyé {} bits !", payload.pseudo, nb_bits),
+                        montant: String::new(),
+                        objet: String::new(),
+                        nb_objet: 0,
                     };
                     let _ = app.emit("chat:event", &evt);
                     if let Some(alertes) = app.try_state::<crate::alertes::AlertesState>() {
@@ -464,6 +468,7 @@ fn parse_usernotice(line: &str) -> Option<crate::alertes::EventTwitch> {
 
     Some(crate::alertes::EventTwitch {
         type_alerte: type_alerte.to_string(),
+        plateforme: "twitch".to_string(),
         login,
         pseudo,
         user_id,
@@ -473,6 +478,9 @@ fn parse_usernotice(line: &str) -> Option<crate::alertes::EventTwitch> {
         nb_mois,
         destinataire,
         system_msg,
+        montant: String::new(),
+        objet: String::new(),
+        nb_objet: 0,
     })
 }
 

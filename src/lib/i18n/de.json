@@ -204,7 +204,9 @@
     "aideCadres": "Linksklick auf Hintergrund oder Widget → „Rahmen anpassen…“ (linkes Panel)"
   },
   "consoModal": {
-    "titre": "Diagnose — Verbrauch",
+    "titre": "Diagnose",
+    "tabApp": "Anwendung",
+    "tabAudience": "Publikum",
     "hint": "Echte Messwerte, jede Sekunde aktualisiert. Die Kurven decken die letzten 5 Minuten ab — zum Ablesen eines Punkts darüberfahren. Nichts wird gespeichert: Alles bleibt im Arbeitsspeicher.",
     "indisponible": "Messung nicht verfügbar — das Backend antwortet nicht.",
     "collecte": "Erfassung läuft — die Kurven erscheinen in wenigen Sekunden.",
@@ -223,6 +225,45 @@
     "courbe": "Kurve {nom}",
     "mo": "MB",
     "go": "GB"
+  },
+  "audience": {
+    "periode": "Zeitraum",
+    "j7": "7 Tage",
+    "j30": "30 Tage",
+    "j90": "90 Tage",
+    "session": "Stream",
+    "sessionPic": "Peak {n}",
+    "ariaGraphe": "Zuschauerkurve des Streams",
+    "survol": "{count} Zuschauer · {heure}",
+    "twitchSeul": "Vorerst nur Twitch-Analyse",
+    "liveMeta": "{duree} · Ø {moyenne} · Peak {pic} · {msgs} Nachr.",
+    "resolution": "Ein Punkt pro Minute — ein kürzerer Peak kann unsichtbar bleiben. Die Twitch-Zuschauerzahl ist ungefähr.",
+    "jeuInconnu": "Unbekannte Kategorie",
+    "pics": "Erkannte Peaks",
+    "aucunPic": "Kein Peak in diesem Stream erkannt.",
+    "aucune": "Kein aufgezeichneter Stream in diesem Zeitraum.",
+    "aucuneDonnee": "Die Analyse beginnt mit dem ersten von der Telemetrie aufgezeichneten Twitch-Stream.",
+    "chargement": "Analyse läuft…",
+    "erreur": "Analyse nicht verfügbar — Backend antwortet nicht.",
+    "topPic": "Größter Peak",
+    "topPicLigne": "+{delta} um {heure} · {cause}",
+    "meilleureCategorie": "Beste Kategorie",
+    "meilleurTitre": "Bester Titel",
+    "meilleurCreneau": "Bester Zeitslot",
+    "creneauLigne": "{jour} ~{heure} Uhr · Ø {moyenne}",
+    "carteJeu": "Ø {moyenne} · {temps} · {pics} Peaks",
+    "carteMoyenne": "Ø {moyenne}",
+    "pendantPeriode": "Im Zeitraum",
+    "totaux": "{raids} Raids · {subs} Subs · {bits} Bits · {follows} Follows",
+    "causeRaid": "Raid von {pseudo} ({nb} Zuschauer)",
+    "causeContenu": "Content-Wechsel",
+    "causeCommunaute": "Community-Schub ({nb} Events)",
+    "causeDebutLive": "Stream-Start",
+    "causeOrganique": "Organisch",
+    "confCertaine": "sicher",
+    "confProbable": "wahrscheinlich",
+    "confFaible": "gering",
+    "jours": "Mo|Di|Mi|Do|Fr|Sa|So"
   },
   "ecranAttenteModal": {
     "titre": "Wartebildschirm",
@@ -353,7 +394,7 @@
     "moderation": "Kanal",
     "moderationTitle": "Kanal-Steuerung",
     "diagnostic": "Diagnose",
-    "diagnosticTitle": "Verbrauchsdiagnose öffnen (CPU, RAM, Aktivität…)",
+    "diagnosticTitle": "Diagnose öffnen (Verbrauch, Publikum)",
     "preview": "Vorschau",
     "previewTitle": "Live-Miniatur der Ausgabe + OBS-Projektor — die Kopfzeile schaltet die Miniatur ein/aus",
     "previewFenetre": "Fenster",
@@ -476,6 +517,7 @@
     "deviceCamera": "Kamera-Gerät",
     "deviceDefaut": "(Standardgerät)",
     "aucuneCamera": "Keine Kamera erkannt. Webcam prüfen?",
+    "hintAndroidCam": "Android-Telefon: per USB anschließen, dann „Webcam“ in den USB-Optionen des Telefons wählen (Android 14+).",
     "tabContenu": "Inhalt",
     "tabTransformation": "Transformation",
     "tabEffets": "Effekte",
@@ -552,6 +594,8 @@
     "dupliquerHint": "Die Kopie erscheint gespiegelt an der vertikalen Canvas-Achse und wird zum ausgewählten Widget — symmetrische Hilfslinien helfen beim Ausrichten.",
     "premierPlan": "In den Vordergrund",
     "arrierePlan": "In den Hintergrund",
+    "pleinEcran": "Vollbild",
+    "pleinEcranOff": "Vollbild beenden",
     "retournement": "Spiegelung",
     "miroirH": "Spiegeln →",
     "miroirV": "Spiegeln ↓",
@@ -798,7 +842,7 @@
       "testMessage": "Dies ist meine erste Nachricht!"
     },
     "alertes": {
-      "hintIntro": "Twitch. Neue Follower werden automatisch erkannt (Prüfung alle 60 s). Wählen Sie links einen Typ, um Medium, Text und Verhalten einzustellen. Position/Größe des Overlays wird im Tab „Positions-Skelett“ eingestellt (mit den Begrüßungsclips geteilt).",
+      "hintIntro": "Twitch, YouTube, Kick und TikTok: Follows, Subs, Raids, Bits, Gifts und Spenden lösen Alerts in der Ausgabe aus. Twitch-Follows werden in Echtzeit erkannt (EventSub). Wählen Sie links einen Typ, um Medium, Text und Verhalten einzustellen. Position/Größe des Overlays wird im Tab „Positions-Skelett“ eingestellt (mit den Begrüßungsclips geteilt).",
       "desactiverType": "Diesen Alert-Typ deaktivieren",
       "activerType": "Diesen Alert-Typ aktivieren",
       "variablesHint": "Variablen: {vars}",
@@ -809,7 +853,9 @@
         "sub": "{pseudo} hat gerade abonniert!",
         "resub": "{pseudo} resubbt für {nbMoisCumul} Monate!",
         "subgift": "{pseudo} verschenkt einen Sub an {destinataire}!",
-        "bits": "{pseudo} hat {nbBits} Bits gesendet!"
+        "bits": "{pseudo} hat {nbBits} Bits gesendet!",
+        "gift": "{pseudo} sendet {nbObjet} × {objet}!",
+        "superchat": "{pseudo} hat {montant} gespendet!"
       }
     },
     "commandes": {
@@ -1156,7 +1202,7 @@
       "alertes": {
         "titre": "Alerts & Begrüßungsclip",
         "p1": "Seitenleiste → „**Live-Interaktionen**“. Dieses Fenster bündelt alles, was während des Streams auf Ihre Zuschauer reagiert.",
-        "l1": "Tab **Alerts**: Follow, Raid, Sub, Resub, verschenkter Sub, Bits (Twitch). Wählen Sie links einen Typ, dann sein Medium, seinen Text und aktivieren Sie ihn. „**Alert in der Ausgabe testen**“ spielt ihn ab, ohne auf einen echten Follow zu warten.",
+        "l1": "Tab **Alerts**: Follow, Raid, Sub, Resub, verschenkter Sub, Bits (Twitch) — plus TikTok-Gifts, Kick-Subs/-Raids und YouTube-SuperChats/-Mitglieder. Wählen Sie links einen Typ, dann sein Medium, seinen Text und aktivieren Sie ihn. „**Alert in der Ausgabe testen**“ spielt ihn ab, ohne auf einen echten Follow zu warten.",
         "l2": "Tab **Begrüßungsclip**: ein Clip, der abgespielt wird, wenn ein Follower im Chat ankommt. „**Automatische Zuweisung**“ gibt jedem einen Clip; Sie können den Clip auch von Hand wählen, Zuschauer für Zuschauer.",
         "l3": "Tab **Positions-Skelett**: Ziehen Sie das Overlay dorthin, wo Sie es auf dem Bildschirm wollen — die Position gilt für Alerts, Clips und Befehle.",
         "note": "Alles läuft auf der **OBS-Ausgabe**, nie im Dashboard: Prüfen Sie es über die Vorschau."

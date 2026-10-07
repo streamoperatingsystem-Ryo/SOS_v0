@@ -341,6 +341,14 @@
 </div>
 
 <style>
+  /* ===== CONTRAT VISUEL « skin classic » Winamp =====
+     Ce deck est la palette de référence partagée avec diffusion.html
+     (widget musique .mu-*) et WidgetMusique.svelte (vignette canvas) :
+     châssis #2e2e2e→#1c1c1c + bevel outset, écrans LCD #0a140a / LED
+     #050805 + border inset #444, LED verte #4aff4a, EQ #ff4040→#ffb040→
+     #4aff4a + peak #ff9c40, progression crantée + fill #7dff7d→#2fd32f,
+     police "Lucida Console". Toute retouche se reporte aux deux autres. */
+
   /* ── Châssis Winamp classic : dégradé métal sombre + bevel ── */
   .winamp {
     display: flex;

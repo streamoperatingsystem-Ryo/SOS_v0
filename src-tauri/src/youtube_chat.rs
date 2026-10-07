@@ -14,6 +14,7 @@
 /// 3. Si plus de live (activeLiveChatId disparu) → retry resolve 30s
 ///
 /// Reconnexion avec backoff. Arrêt propre via Cancel (AtomicBool).
+use crate::alertes::{AlertesState, EventTwitch};
 use crate::twitch_chat::ChatMessage;
 use crate::youtube_auth::{is_cancelled, Cancel};
 use serde_json::json;
@@ -94,7 +95,7 @@ async fn run_polling(
         }
 
         let (messages, next_token, poll_interval) =
-            fetch_messages(client, token, &live_chat_id, page_token.as_deref()).await?;
+            fetch_messages(app, client, token, &live_chat_id, page_token.as_deref()).await?;
 
         for msg in messages {
             let _ = app.emit("chat:message", &msg);
@@ -234,6 +235,7 @@ async fn resolve_live_chat_id(
 /// GET /liveChat/messages?liveChatId=...&part=snippet,authorDetails
 /// Retourne (messages, nextPageToken, pollingIntervalMillis).
 async fn fetch_messages(
+    app: &AppHandle,
     client: &reqwest::Client,
     token: &str,
     live_chat_id: &str,
@@ -280,11 +282,13 @@ async fn fetch_messages(
 
     let mut messages = Vec::new();
     for item in items {
-        // Filtrer : seulement textMessageEvent (ignorer superChat, newSponsor, etc.)
+        // textMessageEvent → chat. Autres types (superChat, sponsors…)
+        // → moteur d'alertes existant, même point d'entrée que Twitch.
         let msg_type = item["snippet"]["type"]
             .as_str()
             .unwrap_or("");
         if msg_type != "textMessageEvent" {
+            pousser_alerte(app, msg_type, item);
             continue;
         }
 
@@ -335,6 +339,94 @@ async fn fetch_messages(
     }
 
     Ok((messages, next_token, poll_interval))
+}
+
+/// Route un item liveChat non-texte vers le moteur d'alertes.
+///
+/// Mapping YouTube → types existants :
+/// - superChatEvent / superStickerEvent → "superchat"
+/// - newSponsorEvent                    → "sub"
+/// - memberMilestoneChatEvent           → "resub"
+/// - membershipGiftingEvent             → "subgift"
+///
+/// Tout autre type (sponsorshipOnly, tombola…) est ignoré.
+fn pousser_alerte(app: &AppHandle, msg_type: &str, item: &serde_json::Value) {
+    let type_alerte = match msg_type {
+        "superChatEvent" | "superStickerEvent" => "superchat",
+        "newSponsorEvent" => "sub",
+        "memberMilestoneChatEvent" => "resub",
+        "membershipGiftingEvent" => "subgift",
+        _ => return,
+    };
+    let Some(alertes) = app.try_state::<AlertesState>() else {
+        return;
+    };
+
+    let snippet = &item["snippet"];
+    let details = match msg_type {
+        "superChatEvent" => &snippet["superChatDetails"],
+        "superStickerEvent" => &snippet["superStickerDetails"],
+        "newSponsorEvent" => &snippet["newSponsorDetails"],
+        "memberMilestoneChatEvent" => &snippet["memberMilestoneChatDetails"],
+        _ => &snippet["membershipGiftingDetails"],
+    };
+    let str_field = |v: &serde_json::Value, k: &str| {
+        v[k].as_str().unwrap_or("").to_string()
+    };
+
+    let pseudo = item["authorDetails"]["displayName"]
+        .as_str()
+        .unwrap_or("unknown")
+        .to_string();
+    let user_id = item["authorDetails"]["channelId"]
+        .as_str()
+        .unwrap_or("")
+        .to_string();
+
+    let mut evt = EventTwitch {
+        type_alerte: type_alerte.into(),
+        plateforme: "youtube".into(),
+        login: pseudo.clone(),
+        pseudo,
+        user_id,
+        nb_viewers: 0,
+        nb_bits: 0,
+        niveau_sub: String::new(),
+        nb_mois: 0,
+        destinataire: String::new(),
+        system_msg: String::new(),
+        montant: String::new(),
+        objet: String::new(),
+        nb_objet: 0,
+    };
+
+    match msg_type {
+        "superChatEvent" => {
+            evt.montant = str_field(details, "amountDisplayString");
+            evt.objet = "Super Chat".into();
+        }
+        "superStickerEvent" => {
+            evt.montant = str_field(details, "amountDisplayString");
+            evt.objet = {
+                let alt = str_field(&details["superStickerMetadata"], "altText");
+                if alt.is_empty() { "Super Sticker".into() } else { alt }
+            };
+        }
+        "newSponsorEvent" => {
+            evt.niveau_sub = str_field(details, "memberLevelName");
+        }
+        "memberMilestoneChatEvent" => {
+            evt.nb_mois = details["memberMonth"].as_i64().unwrap_or(0);
+            evt.niveau_sub = str_field(details, "memberLevelName");
+        }
+        _ => {
+            // membershipGiftingEvent : pas de destinataire nominal
+            // (les membres offerts vont à des viewers aléatoires).
+            evt.nb_objet = details["giftMembershipsCount"].as_i64().unwrap_or(1);
+            evt.niveau_sub = str_field(details, "memberLevelName");
+        }
+    }
+    alertes.on_event(evt);
 }
 
 async fn await_cancel(cancel: &Cancel) {

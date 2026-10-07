@@ -204,7 +204,9 @@
     "aideCadres": "背景またはウィジェットを左クリック → 「フレームをカスタマイズ…」(左パネル)"
   },
   "consoModal": {
-    "titre": "診断 — リソース使用量",
+    "titre": "診断",
+    "tabApp": "アプリ",
+    "tabAudience": "オーディエンス",
     "hint": "実測値を毎秒更新。グラフは直近5分をカバー — ホバーで値を読めます。データは記録されません。すべてメモリ内に留まります。",
     "indisponible": "測定できません — バックエンドが応答しません。",
     "collecte": "収集中 — グラフは数秒後に表示されます。",
@@ -223,6 +225,45 @@
     "courbe": "{nom} のグラフ",
     "mo": "MB",
     "go": "GB"
+  },
+  "audience": {
+    "periode": "期間",
+    "j7": "7日間",
+    "j30": "30日間",
+    "j90": "90日間",
+    "session": "配信",
+    "sessionPic": "ピーク {n}",
+    "ariaGraphe": "配信の視聴者数グラフ",
+    "survol": "視聴者 {count} 人 · {heure}",
+    "twitchSeul": "現在は Twitch のみ分析",
+    "liveMeta": "{duree} · 平均 {moyenne} · ピーク {pic} · {msgs} メッセージ",
+    "resolution": "1分ごとのポイント——それより短いピークは見えない場合があります。Twitch の視聴者数は概算です。",
+    "jeuInconnu": "不明なカテゴリ",
+    "pics": "検出されたピーク",
+    "aucunPic": "この配信でピークは検出されませんでした。",
+    "aucune": "この期間に記録された配信はありません。",
+    "aucuneDonnee": "テレメトリーが記録した最初の Twitch 配信から分析が始まります。",
+    "chargement": "分析中…",
+    "erreur": "分析を利用できません——バックエンドが応答しません。",
+    "topPic": "最大のピーク",
+    "topPicLigne": "{heure} に +{delta} · {cause}",
+    "meilleureCategorie": "最高のカテゴリ",
+    "meilleurTitre": "最高のタイトル",
+    "meilleurCreneau": "最高の時間帯",
+    "creneauLigne": "{jour} {heure}時頃 · 平均 {moyenne}",
+    "carteJeu": "平均 {moyenne} · {temps} · {pics} ピーク",
+    "carteMoyenne": "平均 {moyenne}",
+    "pendantPeriode": "期間中",
+    "totaux": "レイド {raids} · サブ {subs} · ビッツ {bits} · フォロー {follows}",
+    "causeRaid": "{pseudo} からのレイド（{nb} 人）",
+    "causeContenu": "コンテンツ変更",
+    "causeCommunaute": "コミュニティの支援（{nb} イベント）",
+    "causeDebutLive": "配信開始",
+    "causeOrganique": "自然増加",
+    "confCertaine": "確実",
+    "confProbable": "可能性あり",
+    "confFaible": "低い",
+    "jours": "月|火|水|木|金|土|日"
   },
   "ecranAttenteModal": {
     "titre": "待機画面",
@@ -353,7 +394,7 @@
     "moderation": "チャンネル",
     "moderationTitle": "チャンネル管理",
     "diagnostic": "診断",
-    "diagnosticTitle": "リソース使用量の診断を開く(CPU・メモリ・アクティビティ…)",
+    "diagnosticTitle": "診断を開く(リソース使用量・オーディエンス)",
     "preview": "プレビュー",
     "previewTitle": "配信のライブサムネイル + OBS プロジェクター — ヘッダーでサムネイルのオン/オフ",
     "previewFenetre": "ウィンドウ",
@@ -476,6 +517,7 @@
     "deviceCamera": "カメラデバイス",
     "deviceDefaut": "(デフォルトのデバイス)",
     "aucuneCamera": "カメラが検出されません。ウェブカメラを確認してください。",
+    "hintAndroidCam": "Android スマートフォン：USB で接続し、電話の USB オプションで「ウェブカメラ」を選択してください（Android 14 以降）。",
     "tabContenu": "コンテンツ",
     "tabTransformation": "変形",
     "tabEffets": "エフェクト",
@@ -552,6 +594,8 @@
     "dupliquerHint": "複製はキャンバスの垂直軸でミラーされて現れ、選択中のウィジェットになります — 対称ガイドが整列を助けます。",
     "premierPlan": "最前面へ",
     "arrierePlan": "最背面へ",
+    "pleinEcran": "フルスクリーン",
+    "pleinEcranOff": "全画面を解除",
     "retournement": "反転",
     "miroirH": "ミラー →",
     "miroirV": "ミラー ↓",
@@ -798,7 +842,7 @@
       "testMessage": "これが私の最初のメッセージです!"
     },
     "alertes": {
-      "hintIntro": "Twitch。新しいフォロワーは自動検出されます(60秒ごとに確認)。左でタイプを選んでメディア・テキスト・動作を設定してください。オーバーレイの位置・サイズは「位置フレーム」タブで設定します(歓迎クリップと共有)。",
+      "hintIntro": "Twitch・YouTube・Kick・TikTok:フォロー・サブスク・レイド・ビッツ・ギフト・ドネーションが配信上のアラートを発動します。Twitch のフォローはリアルタイム検出(EventSub)です。左でタイプを選んでメディア・テキスト・動作を設定してください。オーバーレイの位置・サイズは「位置フレーム」タブで設定します(歓迎クリップと共有)。",
       "desactiverType": "このアラートタイプを無効化",
       "activerType": "このアラートタイプを有効化",
       "variablesHint": "変数:{vars}",
@@ -809,7 +853,9 @@
         "sub": "{pseudo} がサブスクライブしました!",
         "resub": "{pseudo} が {nbMoisCumul} か月目の継続サブスク!",
         "subgift": "{pseudo} が {destinataire} にサブスクを贈りました!",
-        "bits": "{pseudo} が {nbBits} ビッツを送りました!"
+        "bits": "{pseudo} が {nbBits} ビッツを送りました!",
+        "gift": "{pseudo} が {nbObjet} × {objet} を送りました!",
+        "superchat": "{pseudo} が {montant} を送りました!"
       }
     },
     "commandes": {
@@ -1156,7 +1202,7 @@
       "alertes": {
         "titre": "アラートと歓迎クリップ",
         "p1": "サイドバー → 「**ライブ連携**」。このウィンドウには、配信中に視聴者へ反応するすべてが集まっています。",
-        "l1": "**アラート**タブ:フォロー、レイド、サブ、リサブ、ギフトサブ、ビッツ(Twitch)。左で種類を選び、メディアとテキストを設定して有効化。「**配信でアラートをテスト**」で本物のフォローを待たずに再生できます。",
+        "l1": "**アラート**タブ:フォロー、レイド、サブ、リサブ、ギフトサブ、ビッツ(Twitch)— さらに TikTok ギフト、Kick サブ/レイド、YouTube SuperChat/メンバー。左で種類を選び、メディアとテキストを設定して有効化。「**配信でアラートをテスト**」で本物のフォローを待たずに再生できます。",
         "l2": "**歓迎クリップ**タブ:フォロワーがチャットに来たときに流れるクリップ。「**自動割り当て**」で全員にクリップを配れます。一人ずつ手動で選ぶことも可能です。",
         "l3": "**位置フレーム**タブ:オーバーレイを画面の好きな場所へドラッグ — その位置がアラート・クリップ・コマンドに適用されます。",
         "note": "すべて **OBS 配信**で再生され、ダッシュボードには出ません:プレビューで確認してください。"

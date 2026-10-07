@@ -10,7 +10,10 @@
 //! "local" = entrée locale (pad numérique) ; "systeme" = autre.
 //!
 //! `kind` : "connexion" | "deconnexion" | "chat" | "viewers" | "alerte"
-//! | "commande" | "welcome" | "bandeau" | "pad".
+//! | "commande" | "welcome" | "bandeau" | "pad" | "musique" | "stream-info"
+//! | "event". `stream-info` = contexte du live (titre/jeu/tags, émis au
+//! changement) ; `event` = alerte pré-filtre `chat:event` (chiffres
+//! conservés : nb_viewers des raids, nb_bits, montant…).
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -34,7 +37,8 @@ pub struct EventTelemetrie {
     /// Titre du stream — rempli par l'enrichissement stream_info (LOT 2).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub titre_stream: Option<String>,
-    /// Jeu/catégorie normalisé (voir `normaliser_titre`) — LOT 2.
+    /// Jeu/catégorie du live (`game_name` Helix, verbatim) — estampillé
+    /// quand un contexte stream-info est connu pour la plateforme.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub jeu: Option<String>,
     /// ID du jeu chez la source (game_id Twitch / category id Kick) — LOT 2.

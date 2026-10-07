@@ -300,7 +300,7 @@ impl PresentationState {
         // Seul le profil est fatal : sans lui il n'y a rien à présenter.
         let b = broadcaster.map_err(crate::helix_err_to_string)?;
         let ch = channel.ok();
-        let viewers = live.ok().flatten();
+        let viewers = live.ok().flatten().map(|s| s.viewers);
         let clips_list = clips.unwrap_or_default();
 
         // Jeux récents : game_ids uniques des clips, dans l'ordre, bornés.

@@ -204,7 +204,9 @@
     "aideCadres": "Clic gauche sur le fond ou un widget → « Personnaliser le cadre… » (panneau de gauche)"
   },
   "consoModal": {
-    "titre": "Diagnostic — Consommation",
+    "titre": "Diagnostic",
+    "tabApp": "Application",
+    "tabAudience": "Audience",
     "hint": "Mesures réelles, rafraîchies chaque seconde. Les courbes couvrent les 5 dernières minutes — survolez pour lire un point précis. Rien n'est enregistré : tout reste en mémoire.",
     "indisponible": "Mesure indisponible — le backend ne répond pas.",
     "collecte": "Collecte en cours — les courbes apparaissent dans quelques secondes.",
@@ -223,6 +225,45 @@
     "courbe": "Courbe {nom}",
     "mo": "Mo",
     "go": "Go"
+  },
+  "audience": {
+    "periode": "Période",
+    "j7": "7 jours",
+    "j30": "30 jours",
+    "j90": "90 jours",
+    "session": "Live",
+    "sessionPic": "pic {n}",
+    "ariaGraphe": "Courbe des viewers du live",
+    "survol": "{count} viewers · {heure}",
+    "twitchSeul": "Analyse Twitch uniquement pour l'instant",
+    "liveMeta": "{duree} · moy. {moyenne} · pic {pic} · {msgs} msgs",
+    "resolution": "Un point par minute — un pic plus bref peut être invisible. Le compteur de viewers Twitch est approximatif.",
+    "jeuInconnu": "Catégorie inconnue",
+    "pics": "Pics détectés",
+    "aucunPic": "Aucun pic détecté sur ce live.",
+    "aucune": "Aucun live enregistré sur cette période.",
+    "aucuneDonnee": "L'analyse démarre dès le premier live Twitch enregistré par la télémétrie.",
+    "chargement": "Analyse en cours…",
+    "erreur": "Analyse indisponible — le backend ne répond pas.",
+    "topPic": "Plus gros pic",
+    "topPicLigne": "+{delta} à {heure} · {cause}",
+    "meilleureCategorie": "Meilleure catégorie",
+    "meilleurTitre": "Meilleur titre",
+    "meilleurCreneau": "Meilleur créneau",
+    "creneauLigne": "{jour} ~{heure} h · moy. {moyenne}",
+    "carteJeu": "moy. {moyenne} · {temps} · {pics} pics",
+    "carteMoyenne": "moy. {moyenne}",
+    "pendantPeriode": "Pendant la période",
+    "totaux": "{raids} raids · {subs} subs · {bits} bits · {follows} follows",
+    "causeRaid": "Raid de {pseudo} ({nb} viewers)",
+    "causeContenu": "Changement de contenu",
+    "causeCommunaute": "Effort communauté ({nb} events)",
+    "causeDebutLive": "Début de live",
+    "causeOrganique": "Organique",
+    "confCertaine": "certaine",
+    "confProbable": "probable",
+    "confFaible": "faible",
+    "jours": "lun.|mar.|mer.|jeu.|ven.|sam.|dim."
   },
   "ecranAttenteModal": {
     "titre": "Écran d'attente",
@@ -355,7 +396,7 @@
     "moderation": "Chaîne",
     "moderationTitle": "Contrôles de la chaîne",
     "diagnostic": "Diagnostic",
-    "diagnosticTitle": "Ouvrir le diagnostic de consommation (CPU, RAM, activité…)",
+    "diagnosticTitle": "Ouvrir le diagnostic (consommation, audience)",
     "preview": "Prévisualisation",
     "previewTitle": "Miniature live de la diffusion + projecteur OBS — l'en-tête active/coupe la miniature",
     "previewFenetre": "Fenêtré",
@@ -476,6 +517,7 @@
     "deviceCamera": "Device caméra",
     "deviceDefaut": "(device par défaut)",
     "aucuneCamera": "Aucune caméra détectée. Vérifier la webcam ?",
+    "hintAndroidCam": "Téléphone Android : brancher en USB puis choisir « Webcam » dans les options USB du téléphone (Android 14+).",
     "tabContenu": "Contenu",
     "tabTransformation": "Transformation",
     "tabEffets": "Effets",
@@ -552,6 +594,8 @@
     "dupliquerHint": "La copie apparaît en miroir sur l'axe vertical du canvas et devient le widget sélectionné — les guides symétriques aident à la caler.",
     "premierPlan": "Mettre au premier plan",
     "arrierePlan": "Mettre en arrière-plan",
+    "pleinEcran": "Mettre en plein écran",
+    "pleinEcranOff": "Enlever le plein écran",
     "retournement": "Retournement",
     "miroirH": "Miroir →",
     "miroirV": "Miroir ↓",
@@ -591,6 +635,9 @@
     "morphHintFond": "Cliquez sur le fond (canvas) pour déformer. Échap = quitter.",
     "morphHintWidget": "Cliquez sur le média pour déformer (effets cumulés). Échap = quitter.",
     "pasDeVideo": "Pas de vidéo en lecture.",
+    "boucleEffacer": "Effacer",
+    "boucleEtat": "Boucle : {a} → {b}",
+    "boucleHint": "Marquer A puis B pour boucler sur un segment",
     "type": {
       "media": "Média",
       "chat": "Chat",
@@ -798,7 +845,7 @@
       "testMessage": "Ceci est mon premier message !"
     },
     "alertes": {
-      "hintIntro": "Twitch. Les nouveaux followers sont détectés automatiquement (vérification toutes les 60 s). Sélectionnez un type à gauche pour régler son média, son texte et son comportement. La position/taille de l'overlay est réglée dans l'onglet « Squelette de position » (partagée avec les clips de bienvenue).",
+      "hintIntro": "Twitch, YouTube, Kick et TikTok : les follows, subs, raids, bits, gifts et dons déclenchent des alertes sur la diffusion. Les follows Twitch sont détectés en temps réel (EventSub). Sélectionnez un type à gauche pour régler son média, son texte et son comportement. La position/taille de l'overlay est réglée dans l'onglet « Squelette de position » (partagée avec les clips de bienvenue).",
       "desactiverType": "Désactiver ce type d'alerte",
       "activerType": "Activer ce type d'alerte",
       "variablesHint": "Variables : {vars}",
@@ -809,7 +856,9 @@
         "sub": "{pseudo} vient de s'abonner !",
         "resub": "{pseudo} resub pour {nbMoisCumul} mois !",
         "subgift": "{pseudo} offre un sub à {destinataire} !",
-        "bits": "{pseudo} a envoyé {nbBits} bits !"
+        "bits": "{pseudo} a envoyé {nbBits} bits !",
+        "gift": "{pseudo} envoie {nbObjet} × {objet} !",
+        "superchat": "{pseudo} envoie un don de {montant} !"
       }
     },
     "commandes": {
@@ -1156,7 +1205,7 @@
       "alertes": {
         "titre": "Alertes & clip de bienvenue",
         "p1": "Barre latérale → « **Interactions Live** ». Cette fenêtre rassemble tout ce qui réagit à vos viewers pendant le direct.",
-        "l1": "Onglet **Alertes** : follow, raid, sub, resub, sub offert, bits (Twitch). Choisissez un type à gauche, puis son média, son texte et activez-le. « **Tester l'alerte côté diffusion** » la joue sans attendre un vrai follow.",
+        "l1": "Onglet **Alertes** : follow, raid, sub, resub, sub offert, bits (Twitch) — plus gifts TikTok, subs/raids Kick et SuperChats/membres YouTube. Choisissez un type à gauche, puis son média, son texte et activez-le. « **Tester l'alerte côté diffusion** » la joue sans attendre un vrai follow.",
         "l2": "Onglet **Clip de bienvenue** : un clip joué quand un follower arrive dans le chat. « **Attribution auto** » donne un clip à chacun ; vous pouvez aussi choisir le clip à la main, viewer par viewer.",
         "l3": "Onglet **Squelette de position** : glissez l'overlay là où vous le voulez sur l'écran — la position vaut pour alertes, clips et commandes.",
         "note": "Tout se joue sur la **diffusion OBS**, jamais dans le dashboard : utilisez la Prévisualisation pour vérifier."

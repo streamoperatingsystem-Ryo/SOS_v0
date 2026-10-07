@@ -26,8 +26,7 @@
   import { valeursGoals, goalsTwitch } from "../stores/objectifs";
   import { t, localeTag } from "../stores/langue";
   import WidgetSpeedrun from "./WidgetSpeedrun.svelte";
-  import { musiqueEtat, musiqueBands, initMusique } from "../stores/musique";
-  import { onMount } from "svelte";
+  import WidgetMusique from "./WidgetMusique.svelte";
 
   let { w, scale }: { w: Widget; scale: number } = $props();
 
@@ -43,21 +42,8 @@
   let isMusique = $derived(widgetType === "musique");
 
   // ===== Widget musique (aperçu dashboard) =====
-  // Vignette Winamp miniature : LCD (titre courant) + barres EQ live +
-  // barre de progression. Le rendu complet (marquee animée, temps,
-  // spectre réel) est dans diffusion.html.
-  onMount(() => {
-    if (isMusique) void initMusique();
-  });
-  let muTitre = $derived(
-    $musiqueEtat?.en_cours ? `♪ ${$musiqueEtat.en_cours.titre}` : "♪ —"
-  );
-  let muPct = $derived.by(() => {
-    const p = $musiqueEtat?.progression;
-    return p && p.duree_s && p.duree_s > 0
-      ? Math.min(100, (p.position_ms / 1000 / p.duree_s) * 100)
-      : 0;
-  });
+  // Vignette Winamp : rendu complet dans WidgetMusique.svelte (miroir 1:1
+  // du widget musique de diffusion.html — marquee, temps, peaks, tick).
 
   // ===== Widget goal (aperçu dashboard) =====
   // Mode manuel : valeur live depuis valeursGoals (communaute/viewers).
@@ -698,24 +684,11 @@
         {/if}
       </div>
     {:else if isMusique}
-      <!-- Widget musique (dashboard) : vignette Winamp — LCD titre +
-           barres EQ live + barre de progression. Le rendu complet
-           (marquee, temps, modes) est dans diffusion.html. -->
+      <!-- Widget musique (dashboard) : miroir 1:1 du mini-lecteur Winamp
+           de diffusion.html (LED temps + LCD marquee + EQ + posbar) —
+           composant dédié, tick local 250 ms sur les stores musique. -->
       {@render mediaFond()}
-      <div class="mu-preview">
-        {#if (w.musiqueMode ?? "player") === "player"}
-          <span class="mu-titre">WINAMP</span>
-          <span class="mu-lcd">{muTitre}</span>
-        {/if}
-        <div class="mu-eq">
-          {#each $musiqueBands as b, i (i)}
-            <div class="mu-eq-bar" style:height="{Math.max(4, Math.round((b / 255) * 100))}%"></div>
-          {/each}
-        </div>
-        {#if (w.musiqueMode ?? "player") === "player"}
-          <div class="mu-prog"><div class="mu-prog-fill" style:width="{muPct}%"></div></div>
-        {/if}
-      </div>
+      <WidgetMusique {w} />
     {:else if slidesList && slideCourante}
       <!-- Carrousel d'images : preview du slide courant (le fondu enchaîné
            n'est rendu que côté diffusion — ici swap de src simple). -->
@@ -1132,69 +1105,8 @@
     border-radius: 999px;
     transition: width 0.4s ease;
   }
-  /* Aperçu widget musique (dashboard) : châssis sombre + LCD vert +
-     barres EQ live + barre de progression — miniature du rendu
-     Winamp de diffusion.html. */
-  .mu-preview {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    gap: 0.3rem;
-    padding: 0.45rem;
-    pointer-events: none;
-    background: linear-gradient(180deg, #2e2e2e, #1c1c1c);
-  }
-  .mu-titre {
-    display: flex;
-    align-items: center;
-    height: 0.55rem;
-    padding: 0 0.3rem;
-    border: 1px solid #111;
-    border-radius: 2px;
-    background: linear-gradient(90deg, #000028 0%, #1d1d6e 45%, #4a4ab8 62%, #000028 100%);
-    font-size: 0.4rem;
-    font-weight: 700;
-    font-style: italic;
-    letter-spacing: 0.2em;
-    color: #d5d6ff;
-    text-shadow: 0 0 3px rgba(150, 150, 255, 0.6);
-  }
-  .mu-lcd {
-    font-family: "Lucida Console", Consolas, monospace;
-    font-size: 0.7rem;
-    font-weight: 700;
-    color: #4aff4a;
-    text-shadow: 0 0 5px rgba(74, 255, 74, 0.55);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .mu-eq {
-    flex: 1;
-    min-height: 12px;
-    display: flex;
-    align-items: flex-end;
-    gap: 2px;
-  }
-  .mu-eq-bar {
-    flex: 1;
-    background: linear-gradient(180deg, #ff4040 0%, #ffb040 30%, #4aff4a 65%);
-    transition: height 120ms linear;
-  }
-  .mu-prog {
-    height: 5px;
-    border-radius: 2px;
-    background: #101410;
-    border: 1px solid #333;
-    overflow: hidden;
-  }
-  .mu-prog-fill {
-    height: 100%;
-    background: linear-gradient(180deg, #7dff7d, #2fd32f);
-    transition: width 0.4s ease;
-  }
+  /* Vignette widget musique (dashboard) : le CSS mu-* vit dans
+     WidgetMusique.svelte — miroir du bloc diffusion.html. */
   /* Fond du widget input viewer (dashboard) : voile opaque sombre + halo
      orange doux au centre — signale visuellement l'overlay OBS. */
   .widget-3d.input-viewer {

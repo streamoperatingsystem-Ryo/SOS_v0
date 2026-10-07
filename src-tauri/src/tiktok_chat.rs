@@ -10,9 +10,11 @@
 //! - Events `RoomUserSeq` → emit "tiktok:viewers" (viewer_count)
 //! - Lifecycle : Connected → emit "tiktok:connecte", Disconnected → emit "tiktok:deconnecte"
 
+use crate::alertes::{AlertesState, EventTwitch};
 use crate::scenes::ScenesState;
 use crate::twitch_chat::ChatMessage;
 use crate::TiktokState;
+use piratetok_live_rs::helpers::gift_streak::GiftStreakTracker;
 use piratetok_live_rs::structs::TikTokLiveEvent;
 use piratetok_live_rs::TikTokLive;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -53,6 +55,9 @@ pub fn demarrer(
         // Dedup viewers : RoomUserSeq arrive en rafale — on ne publie vers
         // :4321 que quand le chiffre change.
         let mut dernier_viewers: Option<i64> = None;
+        // Dedup gifts : les combos arrivent en rafale (repeat_count
+        // cumulatif) — une seule alerte en fin de streak.
+        let mut streaks = GiftStreakTracker::new();
         loop {
             if cancel.load(Ordering::SeqCst) {
                 break;
@@ -163,9 +168,85 @@ pub fn demarrer(
                     }
                 }
 
-                TikTokLiveEvent::Gift(_) => {
-                    // Pour l'instant on ne forward pas les gifts dans le chat.
-                    // Pour plus tard : event dédié "tiktok:gift" + UI alerte.
+                TikTokLiveEvent::Gift(msg) => {
+                    // Combos : TikTok pousse un event par tick avec un
+                    // repeat_count cumulatif — on n'alerte qu'en fin de
+                    // streak (is_final) avec les totaux agrégés.
+                    let streak = streaks.process(&msg);
+                    if !streak.is_final {
+                        continue;
+                    }
+                    let (pseudo, login, user_id) = msg
+                        .user
+                        .as_ref()
+                        .map(|u| {
+                            (
+                                u.nickname.clone(),
+                                u.unique_id.clone(),
+                                u.user_id.to_string(),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            ("unknown".to_string(), "unknown".to_string(), String::new())
+                        });
+                    let objet = msg
+                        .gift_details
+                        .as_ref()
+                        .map(|g| g.gift_name.clone())
+                        .filter(|n| !n.is_empty())
+                        .unwrap_or_else(|| "gift".to_string());
+                    if let Some(alertes) = app.try_state::<AlertesState>() {
+                        alertes.on_event(EventTwitch {
+                            type_alerte: "gift".into(),
+                            plateforme: "tiktok".into(),
+                            login,
+                            pseudo,
+                            user_id,
+                            nb_viewers: 0,
+                            nb_bits: 0,
+                            niveau_sub: String::new(),
+                            nb_mois: 0,
+                            destinataire: String::new(),
+                            system_msg: String::new(),
+                            montant: format!("{} 💎", streak.total_diamond_count),
+                            objet,
+                            nb_objet: streak.total_gift_count.max(1) as i64,
+                        });
+                    }
+                }
+
+                TikTokLiveEvent::Follow(msg) => {
+                    let (pseudo, login, user_id) = msg
+                        .user
+                        .as_ref()
+                        .map(|u| {
+                            (
+                                u.nickname.clone(),
+                                u.unique_id.clone(),
+                                u.user_id.to_string(),
+                            )
+                        })
+                        .unwrap_or_else(|| {
+                            ("unknown".to_string(), "unknown".to_string(), String::new())
+                        });
+                    if let Some(alertes) = app.try_state::<AlertesState>() {
+                        alertes.on_event(EventTwitch {
+                            type_alerte: "follow".into(),
+                            plateforme: "tiktok".into(),
+                            login,
+                            pseudo,
+                            user_id,
+                            nb_viewers: 0,
+                            nb_bits: 0,
+                            niveau_sub: String::new(),
+                            nb_mois: 0,
+                            destinataire: String::new(),
+                            system_msg: String::new(),
+                            montant: String::new(),
+                            objet: String::new(),
+                            nb_objet: 0,
+                        });
+                    }
                 }
 
                 TikTokLiveEvent::Like(_) => {

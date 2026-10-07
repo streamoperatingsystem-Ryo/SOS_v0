@@ -18,6 +18,8 @@ export const TYPES_ALERTE = [
   "resub",
   "subgift",
   "bits",
+  "gift",
+  "superchat",
 ] as const;
 export type TypeAlerte = (typeof TYPES_ALERTE)[number];
 

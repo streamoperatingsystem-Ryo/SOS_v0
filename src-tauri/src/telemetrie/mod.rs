@@ -12,6 +12,7 @@
 //! LOT 1 : collecte (connexions, chat, viewers, plays) + `telemetrie_etat` /
 //! `telemetrie_derniers`. LOT 2 : enrichissement titre/jeu + stats.
 
+pub mod analyse;
 pub mod collecte;
 pub mod commands;
 pub mod modele;
@@ -37,11 +38,23 @@ pub struct TelemetrieState {
     fichier: Arc<PathBuf>,
 }
 
+/// Contexte du live en cours d'une plateforme — posé par les events
+/// `stream-info` (viewers.rs, émis au changement titre/jeu), retiré à
+/// `en_live:false` ou à la déconnexion. Sert à estampiller
+/// `titre_stream`/`jeu`/`jeu_id` sur tous les events de la plateforme.
+struct ContexteLive {
+    titre: String,
+    jeu: String,
+    jeu_id: String,
+}
+
 #[derive(Default)]
 struct TelemetrieInner {
     /// plateforme → session_id courante (posée à `*:connecte`, retirée à
     /// `*:deconnecte`). Fenêtre connexion → déconnexion = une session.
     sessions: HashMap<String, String>,
+    /// plateforme → contexte live courant (stream-info).
+    contextes: HashMap<String, ContexteLive>,
     par_kind: HashMap<String, u64>,
     par_plateforme: HashMap<String, u64>,
     total: u64,
@@ -69,10 +82,6 @@ impl TelemetrieState {
         collecte::demarrer(app, self.clone(), chat_tx);
     }
 
-    fn session_courante(&self, plateforme: &str) -> Option<String> {
-        self.inner.lock().unwrap().sessions.get(plateforme).cloned()
-    }
-
     /// `*:connecte` → ouvre une session (uuid) + event connexion.
     fn connexion(&self, plateforme: &str) {
         let sid = uuid::Uuid::new_v4().to_string();
@@ -90,8 +99,13 @@ impl TelemetrieState {
     }
 
     /// `*:deconnecte` → event deconnexion (avec la session fermée si connue).
+    /// Coupe aussi le contexte live : plus de stream → plus d'estampillage.
     fn deconnexion(&self, plateforme: &str) {
-        let sid = self.inner.lock().unwrap().sessions.remove(plateforme);
+        let sid = {
+            let mut g = self.inner.lock().unwrap();
+            g.contextes.remove(plateforme);
+            g.sessions.remove(plateforme)
+        };
         self.record(EventTelemetrie {
             plateforme: plateforme.to_string(),
             kind: "deconnexion".into(),
@@ -116,16 +130,95 @@ impl TelemetrieState {
             None => return,
         };
         let plateforme = collecte::plateforme_frame(kind, &frame);
-        let session_id = self.session_courante(&plateforme);
         let (pseudo, data) = collecte::extraire(kind, &frame);
+        let (session_id, titre_stream, jeu, jeu_id) =
+            self.preparer_event(&plateforme, kind, &data);
         self.record(EventTelemetrie {
             plateforme,
             kind: kind.to_string(),
             session_id,
+            titre_stream,
+            jeu,
+            jeu_id,
             pseudo,
             data,
             ..EventTelemetrie::nouveau()
         });
+    }
+
+    /// `chat:event` (EventTwitch sérialisé, émis AVANT le filtre alertes) →
+    /// kind "event". Conserve les chiffres que le kind "alerte" perd :
+    /// nb_viewers des raids, nb_bits, montant, objet… Twitch-seul
+    /// aujourd'hui (les autres plateformes n'émettent pas chat:event).
+    fn on_chat_event(&self, payload: &str) {
+        let evt: Value = match serde_json::from_str(payload) {
+            Ok(v) => v,
+            Err(_) => return,
+        };
+        let plateforme = evt["plateforme"]
+            .as_str()
+            .unwrap_or("twitch")
+            .to_string();
+        let pseudo = evt["pseudo"].as_str().map(str::to_string);
+        let data = serde_json::json!({
+            "type_alerte": evt["type_alerte"],
+            "nb_viewers": evt["nb_viewers"],
+            "nb_bits": evt["nb_bits"],
+            "montant": evt["montant"],
+            "objet": evt["objet"],
+            "nb_objet": evt["nb_objet"],
+            "user_id": evt["user_id"],
+            "niveau_sub": evt["niveau_sub"],
+            "nb_mois": evt["nb_mois"],
+        });
+        let (session_id, titre_stream, jeu, jeu_id) =
+            self.preparer_event(&plateforme, "event", &data);
+        self.record(EventTelemetrie {
+            plateforme,
+            kind: "event".into(),
+            session_id,
+            titre_stream,
+            jeu,
+            jeu_id,
+            pseudo,
+            data,
+            ..EventTelemetrie::nouveau()
+        });
+    }
+
+    /// Session courante + contexte live de la plateforme, en UN seul lock
+    /// (règle mutex non réentrant). Un event `stream-info` met d'abord le
+    /// contexte à jour (en_live → insert, !en_live → remove) — la ligne
+    /// stream-info elle-même porte ainsi son propre jeu/titre.
+    /// Retourne (session_id, titre_stream, jeu, jeu_id) à poser sur l'event.
+    fn preparer_event(
+        &self,
+        plateforme: &str,
+        kind: &str,
+        data: &Value,
+    ) -> (Option<String>, Option<String>, Option<String>, Option<String>) {
+        let mut g = self.inner.lock().unwrap();
+        if kind == "stream-info" {
+            if data["en_live"].as_bool().unwrap_or(false) {
+                g.contextes.insert(
+                    plateforme.to_string(),
+                    ContexteLive {
+                        titre: data["titre"].as_str().unwrap_or_default().to_string(),
+                        jeu: data["jeu"].as_str().unwrap_or_default().to_string(),
+                        jeu_id: data["jeu_id"].as_str().unwrap_or_default().to_string(),
+                    },
+                );
+            } else {
+                g.contextes.remove(plateforme);
+            }
+        }
+        let ctx = g.contextes.get(plateforme);
+        (
+            g.sessions.get(plateforme).cloned(),
+            ctx.map(|c| c.titre.clone()),
+            ctx.map(|c| c.jeu.clone()),
+            ctx.map(|c| c.jeu_id.clone()),
+        )
     }
 
     /// Index mémoire + push ligne au writer. Non bloquant côté producteur.

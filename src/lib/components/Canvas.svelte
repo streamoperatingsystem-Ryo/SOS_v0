@@ -8,7 +8,7 @@
     commitScene, setWidgetMediaPaused, resetMediaTransformation,
     resetMediaEffets, resetMorphsWidget, importMedia, clearWidgetMedia,
     setWidgetTrou, deleteObsTrouSource, transformerEnFlottant,
-    transformerEnWidget, mettreWidgetPlan,
+    transformerEnWidget, mettreWidgetPlan, widgetPleinEcran,
   } from "../stores/scene";
   import {
     setCarteEdition, titreFondModalOpen, titreModalOpen, confirmDeleteWidget,
@@ -396,6 +396,7 @@
   async function ctxWgDupliquer(id: string) { fermerFondMenu(); await dupliquerWidget(id); }
   async function ctxWgDevant(id: string) { fermerFondMenu(); await mettreWidgetPlan(id, "avant"); }
   async function ctxWgDerriere(id: string) { fermerFondMenu(); await mettreWidgetPlan(id, "arriere"); }
+  async function ctxWgPleinEcran(id: string) { fermerFondMenu(); await widgetPleinEcran(id); }
   async function ctxWgResetTransfo(id: string) { fermerFondMenu(); await resetMediaTransformation(id); }
   async function ctxWgResetEffets(id: string) { fermerFondMenu(); await resetMediaEffets(id); }
   async function ctxWgResetMorphs(id: string) { fermerFondMenu(); await resetMorphsWidget(id); }
@@ -906,6 +907,7 @@
   >
     <button class="ctx-item" role="menuitem" onclick={() => ctxWgTitre(ctxWidget!.id)}>{$t("titreModal.titreWidget")}</button>
     <button class="ctx-item" role="menuitem" onclick={() => ctxWgDupliquer(ctxWidget!.id)}>{$t("carteEdition.dupliquerWidget")}</button>
+    <button class="ctx-item" role="menuitem" onclick={() => ctxWgPleinEcran(ctxWidget!.id)}>{ctxWidget?.pleinEcran ? $t("carteEdition.pleinEcranOff") : $t("carteEdition.pleinEcran")}</button>
     {#if wgType !== "camera"}
       <!-- Plan (mêmes actions que les boutons -/+ au survol) — caméra
            exclue : plage réservée z=5000 (mettreWidgetPlan est no-op dessus). -->

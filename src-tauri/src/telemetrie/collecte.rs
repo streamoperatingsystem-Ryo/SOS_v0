@@ -23,6 +23,7 @@ pub fn kind_depuis_frame(t: &str) -> Option<&'static str> {
         "bandeau-premier-message-play" => Some("bandeau"),
         "pad-play" => Some("pad"),
         "musique-play" => Some("musique"),
+        "stream-info" => Some("stream-info"),
         _ => None,
     }
 }
@@ -30,7 +31,10 @@ pub fn kind_depuis_frame(t: &str) -> Option<&'static str> {
 /// Plateforme d'origine d'une frame. Ordre : `plateforme` direct (viewers),
 /// `message.plateforme` (chat), `viewer.plateforme` (bandeau). Fallbacks
 /// documentés quand la frame ne la porte pas :
-/// - "alerte" → "twitch" : seul émetteur d'`alerte_declencher` aujourd'hui ;
+/// - "alerte" → "twitch" : fallback historique — les frames `alerte-play`
+///   portent désormais `plateforme` à la racine (lues via le pointeur
+///   `/plateforme` ci-dessus) ; le fallback ne sert plus que pour les tests
+///   manuels (plateforme vide).
 /// - "commande" / "welcome" → "multi" : déclenchables depuis les 4
 ///   plateformes, attribution exacte impossible depuis la frame seule ;
 /// - "pad" → "local" : entrée clavier locale, sans plateforme.
@@ -79,6 +83,19 @@ pub fn extraire(kind: &str, frame: &Value) -> (Option<String>, Value) {
             champ("/piste/demandeur"),
             json!({ "titre": frame.pointer("/piste/titre") }),
         ),
+        // Contexte live : la frame entière est déjà le signal utile (émise
+        // au changement seulement, pas à chaque tick viewers).
+        "stream-info" => (
+            None,
+            json!({
+                "en_live": frame.get("en_live"),
+                "titre": frame.get("titre"),
+                "jeu": frame.get("jeu"),
+                "jeu_id": frame.get("jeu_id"),
+                "debut": frame.get("debut"),
+                "tags": frame.get("tags"),
+            }),
+        ),
         _ => (None, Value::Null),
     }
 }
@@ -96,6 +113,17 @@ pub fn demarrer(app: &AppHandle, state: TelemetrieState, chat_tx: broadcast::Sen
         let st = state.clone();
         app.listen_any(format!("{plat}:deconnecte"), move |_| {
             st.deconnexion(plat);
+        });
+    }
+
+    // Events d'alerte PRÉ-FILTRE (chat:event, EventTwitch sérialisé — émis
+    // avant alertes.on_event) → kind "event" avec les chiffres conservés
+    // (nb_viewers des raids, nb_bits, montant…). Twitch-seul : les autres
+    // plateformes appellent on_event sans emit.
+    {
+        let st = state.clone();
+        app.listen_any("chat:event", move |ev| {
+            st.on_chat_event(ev.payload());
         });
     }
 

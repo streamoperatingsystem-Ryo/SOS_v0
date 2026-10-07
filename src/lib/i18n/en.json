@@ -204,7 +204,9 @@
     "aideCadres": "Left-click the background or a widget → \"Customize frame…\" (left panel)"
   },
   "consoModal": {
-    "titre": "Diagnostic — Usage",
+    "titre": "Diagnostics",
+    "tabApp": "Application",
+    "tabAudience": "Audience",
     "hint": "Real measurements, refreshed every second. Curves cover the last 5 minutes — hover to read a precise point. Nothing is recorded: everything stays in memory.",
     "indisponible": "Measurement unavailable — the backend is not responding.",
     "collecte": "Collecting — curves will appear in a few seconds.",
@@ -223,6 +225,45 @@
     "courbe": "{nom} curve",
     "mo": "MB",
     "go": "GB"
+  },
+  "audience": {
+    "periode": "Period",
+    "j7": "7 days",
+    "j30": "30 days",
+    "j90": "90 days",
+    "session": "Stream",
+    "sessionPic": "peak {n}",
+    "ariaGraphe": "Stream viewer curve",
+    "survol": "{count} viewers · {heure}",
+    "twitchSeul": "Twitch analysis only for now",
+    "liveMeta": "{duree} · avg. {moyenne} · peak {pic} · {msgs} msgs",
+    "resolution": "One point per minute — a shorter spike may be invisible. The Twitch viewer count is approximate.",
+    "jeuInconnu": "Unknown category",
+    "pics": "Detected peaks",
+    "aucunPic": "No peak detected on this stream.",
+    "aucune": "No recorded stream in this period.",
+    "aucuneDonnee": "Analysis starts with the first Twitch stream recorded by telemetry.",
+    "chargement": "Analyzing…",
+    "erreur": "Analysis unavailable — backend not responding.",
+    "topPic": "Biggest peak",
+    "topPicLigne": "+{delta} at {heure} · {cause}",
+    "meilleureCategorie": "Best category",
+    "meilleurTitre": "Best title",
+    "meilleurCreneau": "Best time slot",
+    "creneauLigne": "{jour} ~{heure} h · avg. {moyenne}",
+    "carteJeu": "avg. {moyenne} · {temps} · {pics} peaks",
+    "carteMoyenne": "avg. {moyenne}",
+    "pendantPeriode": "During the period",
+    "totaux": "{raids} raids · {subs} subs · {bits} bits · {follows} follows",
+    "causeRaid": "Raid from {pseudo} ({nb} viewers)",
+    "causeContenu": "Content change",
+    "causeCommunaute": "Community push ({nb} events)",
+    "causeDebutLive": "Stream start",
+    "causeOrganique": "Organic",
+    "confCertaine": "certain",
+    "confProbable": "probable",
+    "confFaible": "low",
+    "jours": "Mon|Tue|Wed|Thu|Fri|Sat|Sun"
   },
   "ecranAttenteModal": {
     "titre": "Waiting screen",
@@ -353,7 +394,7 @@
     "moderation": "Channel",
     "moderationTitle": "Channel controls",
     "diagnostic": "Diagnostic",
-    "diagnosticTitle": "Open the usage diagnostic (CPU, RAM, activity…)",
+    "diagnosticTitle": "Open diagnostics (usage, audience)",
     "preview": "Preview",
     "previewTitle": "Live miniature of the output + OBS projector — the header toggles the miniature",
     "previewFenetre": "Windowed",
@@ -476,6 +517,7 @@
     "deviceCamera": "Camera device",
     "deviceDefaut": "(default device)",
     "aucuneCamera": "No camera detected. Check the webcam?",
+    "hintAndroidCam": "Android phone: plug in via USB, then choose “Webcam” in the phone's USB options (Android 14+).",
     "tabContenu": "Content",
     "tabTransformation": "Transformation",
     "tabEffets": "Effects",
@@ -552,6 +594,8 @@
     "dupliquerHint": "The copy appears mirrored across the canvas vertical axis and becomes the selected widget — the symmetric guides help align it.",
     "premierPlan": "Bring to front",
     "arrierePlan": "Send to back",
+    "pleinEcran": "Fullscreen",
+    "pleinEcranOff": "Exit fullscreen",
     "retournement": "Flip",
     "miroirH": "Mirror →",
     "miroirV": "Mirror ↓",
@@ -798,7 +842,7 @@
       "testMessage": "This is my first message!"
     },
     "alertes": {
-      "hintIntro": "Twitch. New followers are detected automatically (check every 60 s). Select a type on the left to set its media, text and behavior. The overlay position/size is set in the \"Position skeleton\" tab (shared with welcome clips).",
+      "hintIntro": "Twitch, YouTube, Kick and TikTok: follows, subs, raids, bits, gifts and donations trigger alerts on the broadcast. Twitch follows are detected in real time (EventSub). Select a type on the left to set its media, text and behavior. The overlay position/size is set in the \"Position skeleton\" tab (shared with welcome clips).",
       "desactiverType": "Disable this alert type",
       "activerType": "Enable this alert type",
       "variablesHint": "Variables: {vars}",
@@ -809,7 +853,9 @@
         "sub": "{pseudo} just subscribed!",
         "resub": "{pseudo} resubbed for {nbMoisCumul} months!",
         "subgift": "{pseudo} gifted a sub to {destinataire}!",
-        "bits": "{pseudo} sent {nbBits} bits!"
+        "bits": "{pseudo} sent {nbBits} bits!",
+        "gift": "{pseudo} sends {nbObjet} × {objet}!",
+        "superchat": "{pseudo} sent {montant}!"
       }
     },
     "commandes": {
@@ -1156,7 +1202,7 @@
       "alertes": {
         "titre": "Alerts & welcome clip",
         "p1": "Sidebar → \"**Live interactions**\". This window gathers everything that reacts to your viewers during the stream.",
-        "l1": "**Alerts** tab: follow, raid, sub, resub, gift sub, bits (Twitch). Pick a type on the left, then its media, its text, and enable it. \"**Test the alert on the broadcast**\" plays it without waiting for a real follow.",
+        "l1": "**Alerts** tab: follow, raid, sub, resub, gift sub, bits (Twitch) — plus TikTok gifts, Kick subs/raids and YouTube SuperChats/members. Pick a type on the left, then its media, its text, and enable it. \"**Test the alert on the broadcast**\" plays it without waiting for a real follow.",
         "l2": "**Welcome clip** tab: a clip played when a follower arrives in chat. \"**Auto-assign**\" gives everyone a clip; you can also pick the clip by hand, viewer by viewer.",
         "l3": "**Position skeleton** tab: drag the overlay where you want it on screen — the position applies to alerts, clips and commands.",
         "note": "Everything plays on the **OBS broadcast**, never in the dashboard: use the Preview to check."

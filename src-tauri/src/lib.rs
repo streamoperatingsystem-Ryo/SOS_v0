@@ -34,6 +34,7 @@ mod position_overlay;
 mod presentation;
 mod raccourcis;
 mod speedrun;
+mod splash;
 mod telemetrie;
 mod conso;
 // Les commandes speedrun sont définies dans speedrun::commands (réelles sur
@@ -50,7 +51,9 @@ use speedrun::commands::{
     speedrun_demarrer, speedrun_est_actif, speedrun_lire_config,
     speedrun_maj_settings, speedrun_maj_settings_asl, speedrun_sauver_config,
 };
-use telemetrie::commands::{telemetrie_derniers, telemetrie_etat};
+use telemetrie::commands::{
+    audience_session, audience_sessions, telemetrie_derniers, telemetrie_etat,
+};
 
 use scenes::{ScenesState, SceneIndex};
 use std::sync::Arc;
@@ -1716,6 +1719,7 @@ async fn twitch_communaute_viewers(
     let access = state.access_courant().ok_or("Pas connecté")?;
     twitch_helix::stream_viewers(&uid, &access)
         .await
+        .map(|o| o.map(|s| s.viewers))
         .map_err(helix_err_to_string)
 }
 
@@ -3625,6 +3629,7 @@ fn alerte_declencher(
     }
     state.on_event(alertes::EventTwitch {
         type_alerte,
+        plateforme: String::new(),
         login: pseudo.to_lowercase(),
         pseudo,
         user_id,
@@ -3634,6 +3639,9 @@ fn alerte_declencher(
         destinataire,
         niveau_sub: String::new(),
         system_msg: String::new(),
+        montant: String::new(),
+        objet: String::new(),
+        nb_objet: 0,
     });
     Ok(())
 }
@@ -3708,8 +3716,20 @@ pub fn run() {
                 .body(raccourcis::RACCOURCIS_HTML.as_bytes().to_vec())
                 .unwrap()
         })
+        // Splash de démarrage : custom protocol servant le HTML embarqué
+        // (/) + le wallpaper Windows (/wallpaper) + la mascotte (/mascotte).
+        // Routage par path dans splash::repondre.
+        .register_uri_scheme_protocol("streamos-splash", |ctx, request| {
+            splash::repondre(ctx.app_handle(), request.uri().path())
+        })
         .setup(|app| {
             let handle = app.handle().clone();
+
+            // Splash de démarrage EN PREMIER : fenêtre topmost façon Discord
+            // (wallpaper Windows + mascotte + « Bienvenue <pseudo> ») visible
+            // pendant que tout le reste s'initialise. Non-fatal : sans elle,
+            // armer_affichage montre quand même main au bout du compte.
+            splash::demarrer(&handle);
 
             // Boot scènes : migration + chargement initial (UNE scène en RAM).
             let (scene, current_id) = scenes::boot_scenes(&handle).unwrap_or_else(|e| {
@@ -3824,14 +3844,13 @@ pub fn run() {
             let tiktok_state = TiktokState::new();
             app.manage(tiktok_state.clone());
 
-            // Compteur viewers — UNE tâche pour toutes les plateformes
-            // (tick 15s, fetch 60s live / 180s off, dedup, push via chat_tx).
-            viewers::demarrer(handle.clone(), chat_tx.clone());
-
             // Télémétrie multiplateforme — collecte passive (listeners events
-            // + tap chat_tx). Enregistrée AVANT les auto-resume pour capter
-            // leurs connexions. Non-fatal : l'app continue sans si l'init
-            // du fichier échoue.
+            // + tap chat_tx). Enregistrée AVANT viewers::demarrer : la frame
+            // stream-info n'est émise qu'au changement de contexte — si la
+            // télémétrie n'est pas encore abonnée à chat_tx, la 1re frame est
+            // perdue et tout le live reste sans contexte jeu/titre. Et avant
+            // les auto-resume pour capter leurs connexions. Non-fatal : l'app
+            // continue sans si l'init du fichier échoue.
             match telemetrie::TelemetrieState::new(&handle) {
                 Ok(telemetrie_state) => {
                     telemetrie_state.demarrer(&handle, chat_tx.clone());
@@ -3840,6 +3859,10 @@ pub fn run() {
                 Err(e) => eprintln!("[Telemetrie] ERR init: {}", e),
             }
 
+            // Compteur viewers — UNE tâche pour toutes les plateformes
+            // (tick 15s, fetch 60s live / 180s off, dedup, push via chat_tx).
+            viewers::demarrer(handle.clone(), chat_tx.clone());
+
             // Diagnostic consommation (1Hz) — CPU par sous-système (threads
             // nommés : splitter, input viewer…), par processus (WebView2,
             // OBS, jeu), compteurs d'activité. Tap passif sur chat_tx +
@@ -3847,10 +3870,15 @@ pub fn run() {
             conso::demarrer(chat_tx.clone());
 
             // Fenêtre principale : applique écran + mode persistés
-            // (fenetre.json — section Ergonomie) puis montre la fenêtre
+            // (fenetre.json — section Ergonomie) SANS la montrer
             // (visible:false dans tauri.conf.json — anti-flash). Enregistre
             // le hook de sauvegarde de la géométrie fenêtrée à la fermeture.
             fenetre::appliquer_au_boot(&handle);
+
+            // Affichage différé de main : après ≥4 s de splash ET l'event
+            // "frontend:pret" émis par App.svelte en fin d'onMount → show()
+            // main + close splash. Garde-fou timeout si le frontend est mort.
+            splash::armer_affichage(&handle);
 
             // Auto-resume : si token valide en coffre → IRC + point vert.
             // Pas de modal. Si token absent/invalide → reste déconnecté.
@@ -3980,6 +4008,36 @@ pub fn run() {
                     Ok(_) => {}
                     Err(e) => {
                         eprintln!("[Raccourcis] ERR lecture config: {}", e);
+                    }
+                }
+            });
+
+            // Hot-plug caméras : tant que la scène a un widget caméra,
+            // ré-énumère les devices PnP toutes les 3 s et émet
+            // "camera:devices" (Vec<String>) au dashboard quand la liste
+            // change — un Android branché en mode webcam USB (UVC) ou une
+            // caméra virtuelle apparaît sans rouvrir la carte d'édition.
+            // Zéro coût sans widget caméra (le spawn PowerShell est sauté).
+            let cam_app = handle.clone();
+            let cam_scene = scene.clone();
+            tauri::async_runtime::spawn(async move {
+                let mut precedente: Vec<String> = Vec::new();
+                loop {
+                    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+                    let a_camera = {
+                        let s = cam_scene.lock().unwrap();
+                        s.widgets.iter().any(|w| w.widget_type == "camera")
+                    };
+                    if !a_camera {
+                        continue;
+                    }
+                    let devices =
+                        tauri::async_runtime::spawn_blocking(pc_enum::enumerate_cameras)
+                            .await
+                            .unwrap_or_default();
+                    if devices != precedente {
+                        precedente = devices.clone();
+                        let _ = cam_app.emit("camera:devices", devices);
                     }
                 }
             });
@@ -4217,6 +4275,8 @@ pub fn run() {
             speedrun_aller_split,
             telemetrie_etat,
             telemetrie_derniers,
+            audience_sessions,
+            audience_session,
             conso_etat
         ])
         .run(tauri::generate_context!())

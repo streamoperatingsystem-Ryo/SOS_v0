@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
-  import { listen, emitTo } from "@tauri-apps/api/event";
-  import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore, syncCapturesOBS } from "./lib/stores/scene";
+  import { listen, emit, emitTo } from "@tauri-apps/api/event";
+  import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore, syncCapturesOBS, initCameraHotplug } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene, exportScene, importScene } from "./lib/stores/scenes";
   import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "./lib/stores/obs";
@@ -449,6 +449,12 @@
     await initJustChatting();
     await chargerJustChatting();
 
+    // 3f-quinquies. Hot-plug caméras : listener "camera:devices" (tâche Rust
+    //     3 s tant qu'un widget caméra existe) → refresh du sélecteur +
+    //     auto-sélection d'un device fraîchement branché (Android en mode
+    //     webcam USB, caméra virtuelle) si le widget n'a pas de device valide.
+    await initCameraHotplug();
+
     // 3g. Barre de raccourcis : état initial (visible/bord/moniteur) + listener
     //     des actions émises par la fenêtre + handshake "ready" (la barre peut
     //     être créée avant que le dashboard ait fini son init → elle demande
@@ -504,6 +510,12 @@
     // 6. Sync captures OBS : géré par bootObs() après obsConnect réussi (via
     //    server_ready / fallback fetch / auto-reconnect 20s). L'ancien appel
     //    one-shot ici était redondant et échouait bruyamment quand OBS offline.
+
+    // 7. Signal « frontend prêt » → Rust affiche la fenêtre main (créée
+    //    visible:false, affichage différé dans fenetre::appliquer_au_boot —
+    //    la fenêtre apparaît avec le dashboard déjà monté, sans webview
+    //    blanche). Si cet emit ne part pas, fallback timer 5 s côté Rust.
+    await emit("frontend:pret");
   });
 
   // Suppr : demande confirmation suppression widget (même flux que bouton Toolbar).

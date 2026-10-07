@@ -15,6 +15,7 @@ import {
 import { pointsClipPathCadre } from "../cadres/points";
 import { obsHost, obsPort, obsPassword } from "./obs";
 import { t } from "./langue";
+import { listen } from "@tauri-apps/api/event";
 
 export const sceneStore = writable<Scene>({
   widgets: [],
@@ -304,6 +305,46 @@ export async function setCameraDevice(id: string, deviceId: string | null): Prom
   // forcer : un nouveau device peut changer la résolution native de la
   // source → le masque doit être recalculé même si la forme n'a pas bougé.
   await syncCameraMask(true);
+}
+
+// ===== Hot-plug caméras (USB UVC Android 14+, caméras virtuelles) =====
+// Tant qu'un widget caméra existe, la tâche Rust de surveillance ré-énumère
+// les devices PnP (classes Camera,Image) toutes les 3 s et émet
+// "camera:devices" (string[]) quand la liste change. cameraDevicesLive
+// alimente le sélecteur de CarteEdition (refresh sans rouvrir la carte) ;
+// initCameraHotplug (App.svelte au boot) auto-sélectionne le 1er device
+// NOUVELLEMENT apparu si le widget caméra n'a pas de device valide → un
+// Android branché en mode webcam apparaît en diffusion sans intervention.
+export const cameraDevicesLive = writable<string[]>([]);
+
+let cameraHotplugPret = false;
+export async function initCameraHotplug(): Promise<void> {
+  if (cameraHotplugPret) return;
+  cameraHotplugPret = true;
+  // Snapshot initial : les devices déjà branchés avant le boot ne sont PAS
+  // des « nouveaux » → jamais auto-sélectionnés (on ne détourne pas le
+  // device par défaut d'OBS sans action de l'utilisateur).
+  let precedents: string[];
+  try {
+    precedents = await tauri.pcEnumerateCameras();
+  } catch {
+    precedents = [];
+  }
+  cameraDevicesLive.set(precedents);
+  await listen<string[]>("camera:devices", (e) => {
+    const liste = e.payload;
+    cameraDevicesLive.set(liste);
+    const cam = get(sceneStore).widgets.find((w) => w.type === "camera");
+    const nouveaux = liste.filter((d) => !precedents.includes(d));
+    precedents = liste;
+    if (
+      cam &&
+      !(cam.cameraDeviceId && liste.includes(cam.cameraDeviceId)) &&
+      nouveaux.length > 0
+    ) {
+      void setCameraDevice(cam.id, nouveaux[0]);
+    }
+  });
 }
 
 /// Points du polygone du masque caméra (coords widget-local) — la forme
@@ -1106,6 +1147,43 @@ export async function mettreWidgetPlan(
   await commitScene();
 }
 
+/// Toggle « plein écran » d'un widget (clic droit → « Mettre/Enlever le
+/// plein écran »). Activation : le rect courant est sauvegardé dans
+/// w.pleinEcran puis le widget est agrandi au maximum dans le canvas en
+/// conservant son ratio, centré (bandes vides si les ratios diffèrent ;
+/// réduit aussi un widget plus grand que le canvas). Désactivation : rect
+/// restauré, champ effacé. Ordre de plan inchangé. Maj locale + commit
+/// (save + snapshot :4321 — la caméra/captures suivent via obsSyncTrous
+/// comme tout resize).
+export async function widgetPleinEcran(id: string): Promise<void> {
+  sceneStore.update((s) => {
+    const canvasW = s.canvasW ?? 1920;
+    const canvasH = s.canvasH ?? 1080;
+    return {
+      ...s,
+      widgets: s.widgets.map((w) => {
+        if (w.id !== id) return w;
+        if (w.pleinEcran) {
+          return { ...w, ...w.pleinEcran, pleinEcran: undefined };
+        }
+        if (w.largeur <= 0 || w.hauteur <= 0) return w;
+        const k = Math.min(canvasW / w.largeur, canvasH / w.hauteur);
+        const largeur = Math.round(w.largeur * k);
+        const hauteur = Math.round(w.hauteur * k);
+        return {
+          ...w,
+          pleinEcran: { x: w.x, y: w.y, largeur: w.largeur, hauteur: w.hauteur },
+          largeur,
+          hauteur,
+          x: Math.round((canvasW - largeur) / 2),
+          y: Math.round((canvasH - hauteur) / 2),
+        };
+      }),
+    };
+  });
+  await commitScene();
+}
+
 /// Déduit le kind ("image"|"video") d'un chemin relatif média.
 const VIDEO_EXT = ["mp4", "webm"];
 function kindFromMedia(rel: string): string {
@@ -1698,6 +1776,38 @@ export function setBgTimeLocal(time: number): void {
 /// Change la position (seek) du fond vidéo → commit (snapshot :4321).
 export async function setBgTime(time: number): Promise<void> {
   setBgTimeLocal(time);
+  await commitScene();
+}
+
+/// Définit la boucle A–B d'un widget vidéo (secondes) → commit (snapshot
+/// :4321). Les deux bornes définies = boucle sur [A, B[ ; null/null = retour
+/// à la boucle native complète. b > a garanti par l'appelant (PlayerBar).
+export async function setWidgetMediaLoop(
+  id: string,
+  a: number | null,
+  b: number | null
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id
+        ? { ...w, mediaLoopA: a ?? undefined, mediaLoopB: b ?? undefined }
+        : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Idem pour la vidéo de fond de scène (bgLoopA/bgLoopB).
+export async function setBgLoop(
+  a: number | null,
+  b: number | null
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    bgLoopA: a ?? undefined,
+    bgLoopB: b ?? undefined,
+  }));
   await commitScene();
 }
 

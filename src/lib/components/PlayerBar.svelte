@@ -12,16 +12,24 @@
     videoEl,
     mediaPaused,
     mediaTime,
+    loopA,
+    loopB,
     onTogglePlay,
     onSeek,
     onSeekLive,
+    onLoopChange,
   }: {
     videoEl: HTMLVideoElement | undefined;
     mediaPaused: boolean;
     mediaTime: number;
+    /// Bornes de la boucle A–B (secondes, null = non définie). Les deux
+    /// définies avec B > A = boucle sur le segment en diffusion.
+    loopA: number | null;
+    loopB: number | null;
     onTogglePlay: () => void;
     onSeek: (time: number) => void;
     onSeekLive: (time: number) => void;
+    onLoopChange: (a: number | null, b: number | null) => void;
   } = $props();
 
   let duration = $state(0);
@@ -72,6 +80,20 @@
     const t = parseFloat((e.target as HTMLInputElement).value);
     if (Number.isFinite(t)) onSeek(t);
   }
+
+  // Marque A ou B à la position courante du slider. Les bornes sont
+  // réordonnées (min, max) : l'ordre de marquage importe peu, A < B toujours.
+  function onMarqueA() {
+    if (loopB === null) onLoopChange(mediaTime, null);
+    else onLoopChange(Math.min(mediaTime, loopB), Math.max(mediaTime, loopB));
+  }
+  function onMarqueB() {
+    if (loopA === null) onLoopChange(null, mediaTime);
+    else onLoopChange(Math.min(mediaTime, loopA), Math.max(mediaTime, loopA));
+  }
+  function onEffaceLoop() {
+    onLoopChange(null, null);
+  }
 </script>
 
 <div class="player">
@@ -93,6 +115,18 @@
     onchange={onSeekChange}
   />
   <span class="player-time">{fmt(mediaTime)} / {fmt(duration)}</span>
+  <div class="player-row">
+    <button class="action" class:active={loopA !== null} onclick={onMarqueA}>A</button>
+    <button class="action" class:active={loopB !== null} onclick={onMarqueB}>B</button>
+    <button class="action" onclick={onEffaceLoop}>{$t("carteEdition.boucleEffacer")}</button>
+  </div>
+  <span class="player-time">
+    {#if loopA !== null && loopB !== null}
+      {$t("carteEdition.boucleEtat", { a: fmt(loopA), b: fmt(loopB) })}
+    {:else}
+      {$t("carteEdition.boucleHint")}
+    {/if}
+  </span>
 </div>
 
 <style>
@@ -129,6 +163,12 @@
   .action:active {
     background: var(--btn-surface-active);
     box-shadow: var(--btn-inset-active);
+  }
+  /* Borne de boucle posée (A ou B) : bordure accentuée, même recette que
+     l'état actif des fit-btn de la carte. */
+  .action.active {
+    border-color: var(--accent-ui);
+    color: var(--accent-ui);
   }
   .player-time {
     font-size: 0.75rem;

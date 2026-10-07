@@ -288,6 +288,8 @@
     resub: "Resub",
     subgift: "Sub gift",
     bits: "Bits",
+    gift: "Gift",
+    superchat: "Super Chat",
   };
   const PRESETS_OVERLAY: Record<string, string> = {
     "haut-gauche": "↖",
@@ -1333,7 +1335,7 @@
                 />
               </label>
               <p class="hint">
-                {$t("interactions.alertes.variablesHint", { vars: "{pseudo} {nbViewers} {nbBits} {niveauSub} {nbMoisCumul} {destinataire}" })}
+                {$t("interactions.alertes.variablesHint", { vars: "{pseudo} {nbViewers} {nbBits} {niveauSub} {nbMoisCumul} {destinataire} {montant} {objet} {nbObjet}" })}
               </p>
               <p class="hint">
                 {$t("interactions.hintCadre")}

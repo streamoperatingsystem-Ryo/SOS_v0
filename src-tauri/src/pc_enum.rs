@@ -30,8 +30,10 @@ mod imp {
         pub obs_value: String,
     }
 
-    /// Énumère les caméras du PC via PowerShell (Get-PnpDevice -Class Camera).
+    /// Énumère les caméras du PC via PowerShell (Get-PnpDevice -Class Camera,Image).
     /// Retourne les FriendlyName = valeurs video_device_id pour OBS dshow_input.
+    /// Classe Image incluse : l'UVC « mode webcam » d'Android 14+ et plusieurs
+    /// caméras virtuelles (DroidCam, Iriun, Camo…) s'enregistrent en Image.
     /// Fallback WMI si Get-PnpDevice indisponible (Windows 7/8).
     pub fn enumerate_cameras() -> Vec<String> {
         // Essayer Get-PnpDevice (Windows 10+), fallback WMI.
@@ -40,7 +42,7 @@ mod imp {
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                "try { Get-PnpDevice -Class Camera -Status OK | Select-Object -ExpandProperty FriendlyName } catch { Get-WmiObject Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Camera' -or $_.PNPClass -eq 'Image' } | Where-Object { $_.Status -eq 'OK' } | Select-Object -ExpandProperty Name }",
+                "try { Get-PnpDevice -Class Camera,Image -Status OK | Select-Object -ExpandProperty FriendlyName } catch { Get-WmiObject Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Camera' -or $_.PNPClass -eq 'Image' } | Where-Object { $_.Status -eq 'OK' } | Select-Object -ExpandProperty Name }",
             ])
             .output();
 

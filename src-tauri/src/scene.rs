@@ -205,6 +205,18 @@ pub struct MediaSlide {
     pub nom: String,
 }
 
+/// Rect sauvegardé d'un widget avant sa mise « en plein écran » (menu
+/// contextuel → « Mettre en plein écran »). Some = le widget EST en plein
+/// écran et le rect est sa position/taille de restauration ; None = état
+/// normal. Sérialisé dans la scène comme tout champ Widget.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PleinEcranRect {
+    pub x: f64,
+    pub y: f64,
+    pub largeur: f64,
+    pub hauteur: f64,
+}
+
 /// NB : champs camelCase VOLONTAIRES — contrat JSON direct avec le frontend
 /// (mêmes noms que scene.ts). D'où le allow(non_snake_case).
 #[allow(non_snake_case)]
@@ -265,6 +277,14 @@ pub struct Widget {
     pub mediaPaused: bool,
     #[serde(default = "default_zero_f64")]
     pub mediaTime: f64,
+    /// Boucle A–B (secondes) sur la vidéo : les deux définis avec mediaLoopB >
+    /// mediaLoopA = la diffusion boucle sur le segment [A, B[ (reseek à A dès
+    /// que currentTime ≥ B) au lieu de boucler sur toute la vidéo.
+    /// None = boucle native complète (comportement historique).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mediaLoopA: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mediaLoopB: Option<f64>,
     /// Carrousel d'images : liste non vide = ACTIF et prioritaire sur `media`
     /// (le média unique reste stocké, il redevient visible si la liste est
     /// vidée). Images uniquement. Intervalle = mediaSlidesSec (défaut 5 s).
@@ -433,6 +453,11 @@ pub struct Widget {
     /// Épaisseur du contour des lettres en px (0-6 ; 0 = aucun contour). Défaut 2.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub titreContourEpaisseur: Option<u32>,
+    /// Rect de restauration du mode « plein écran » (clic droit →
+    /// « Mettre/Enlever le plein écran »). Some = plein écran actif, le rect
+    /// est restauré à la désactivation ; None = état normal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pleinEcran: Option<PleinEcranRect>,
 }
 
 /// Mapping des touches manette pour un widget input-viewer.
@@ -601,6 +626,12 @@ pub struct Scene {
     pub bgPaused: bool,
     #[serde(default = "default_zero_f64")]
     pub bgTime: f64,
+    /// Boucle A–B (secondes) sur la vidéo de fond — même règle que
+    /// mediaLoopA/mediaLoopB des widgets. None = boucle native complète.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgLoopA: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgLoopB: Option<f64>,
     /// Nom de la source OBS de capture liée au FOND (fenêtre/jeu plein canvas,
     /// ex: "SOS-Fond-ab12cd34" — une par scène). None = fond normal (bgMedia
     /// ou transparent). Présence = PRIORITAIRE sur bgMedia : la diffusion ne
@@ -733,6 +764,8 @@ impl Default for Scene {
             bgPixel: 0.0,
             bgPaused: true,
             bgTime: 0.0,
+            bgLoopA: None,
+            bgLoopB: None,
             bgObsSource: None,
             // Cadre par défaut à la naissance : MGStyle noir/violet actif
             // (choix produit — une nouvelle sauvegarde sans cadre choisi

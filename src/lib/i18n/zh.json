@@ -204,7 +204,9 @@
     "aideCadres": "左键点击背景或小组件 → “自定义边框…”（左侧面板）"
   },
   "consoModal": {
-    "titre": "诊断——资源占用",
+    "titre": "诊断",
+    "tabApp": "应用",
+    "tabAudience": "观众",
     "hint": "真实测量值，每秒刷新。曲线覆盖最近 5 分钟——悬停可读取具体数值。不记录任何数据：全部保存在内存中。",
     "indisponible": "测量不可用——后端无响应。",
     "collecte": "正在采集——曲线将在几秒后出现。",
@@ -223,6 +225,45 @@
     "courbe": "{nom} 曲线",
     "mo": "MB",
     "go": "GB"
+  },
+  "audience": {
+    "periode": "时间范围",
+    "j7": "7 天",
+    "j30": "30 天",
+    "j90": "90 天",
+    "session": "直播",
+    "sessionPic": "峰值 {n}",
+    "ariaGraphe": "直播观众曲线",
+    "survol": "{count} 观众 · {heure}",
+    "twitchSeul": "目前仅分析 Twitch",
+    "liveMeta": "{duree} · 平均 {moyenne} · 峰值 {pic} · {msgs} 条消息",
+    "resolution": "每分钟一个点——更短的峰值可能不可见。Twitch 观众数为近似值。",
+    "jeuInconnu": "未知分类",
+    "pics": "检测到的峰值",
+    "aucunPic": "本场直播未检测到峰值。",
+    "aucune": "该时间段内没有记录的直播。",
+    "aucuneDonnee": "遥测记录到首场 Twitch 直播后即开始分析。",
+    "chargement": "分析中…",
+    "erreur": "分析不可用——后端无响应。",
+    "topPic": "最高峰值",
+    "topPicLigne": "{heure} +{delta} · {cause}",
+    "meilleureCategorie": "最佳分类",
+    "meilleurTitre": "最佳标题",
+    "meilleurCreneau": "最佳时段",
+    "creneauLigne": "{jour} ~{heure} 点 · 平均 {moyenne}",
+    "carteJeu": "平均 {moyenne} · {temps} · {pics} 次峰值",
+    "carteMoyenne": "平均 {moyenne}",
+    "pendantPeriode": "期间数据",
+    "totaux": "{raids} 次突袭 · {subs} 次订阅 · {bits} 比特 · {follows} 关注",
+    "causeRaid": "来自 {pseudo} 的突袭（{nb} 观众）",
+    "causeContenu": "内容变更",
+    "causeCommunaute": "社区助推（{nb} 个事件）",
+    "causeDebutLive": "直播开始",
+    "causeOrganique": "自然增长",
+    "confCertaine": "确定",
+    "confProbable": "可能",
+    "confFaible": "低",
+    "jours": "一|二|三|四|五|六|日"
   },
   "ecranAttenteModal": {
     "titre": "等待画面",
@@ -353,7 +394,7 @@
     "moderation": "频道",
     "moderationTitle": "频道控制",
     "diagnostic": "诊断",
-    "diagnosticTitle": "打开资源占用诊断（CPU、内存、活动…）",
+    "diagnosticTitle": "打开诊断（资源占用、观众分析）",
     "preview": "预览",
     "previewTitle": "直播实时缩略图 + OBS 投影器——标题开关缩略图",
     "previewFenetre": "窗口",
@@ -476,6 +517,7 @@
     "deviceCamera": "摄像头设备",
     "deviceDefaut": "（默认设备）",
     "aucuneCamera": "未检测到摄像头。检查网络摄像头？",
+    "hintAndroidCam": "Android 手机：通过 USB 连接，然后在手机的 USB 选项中选择“网络摄像头”（需 Android 14 及以上）。",
     "tabContenu": "内容",
     "tabTransformation": "变换",
     "tabEffets": "效果",
@@ -552,6 +594,8 @@
     "dupliquerHint": "副本将沿画布垂直轴镜像出现并成为选中的小组件——对称参考线帮助对齐。",
     "premierPlan": "置于顶层",
     "arrierePlan": "置于底层",
+    "pleinEcran": "全屏",
+    "pleinEcranOff": "退出全屏",
     "retournement": "翻转",
     "miroirH": "镜像 →",
     "miroirV": "镜像 ↓",
@@ -798,7 +842,7 @@
       "testMessage": "这是我的第一条消息！"
     },
     "alertes": {
-      "hintIntro": "Twitch。新关注者会被自动检测（每 60 秒检查一次）。在左侧选择类型以设置其媒体、文本和行为。叠加层的位置/大小在“位置框架”选项卡中设置（与欢迎剪辑共享）。",
+      "hintIntro": "Twitch、YouTube、Kick 和 TikTok：关注、订阅、突袭、bits、礼物和打赏会在直播上触发提醒。Twitch 关注通过 EventSub 实时检测。在左侧选择类型以设置其媒体、文本和行为。叠加层的位置/大小在“位置框架”选项卡中设置（与欢迎剪辑共享）。",
       "desactiverType": "禁用此提醒类型",
       "activerType": "启用此提醒类型",
       "variablesHint": "变量：{vars}",
@@ -809,7 +853,9 @@
         "sub": "{pseudo} 刚刚订阅了！",
         "resub": "{pseudo} 续订了 {nbMoisCumul} 个月！",
         "subgift": "{pseudo} 向 {destinataire} 赠送了订阅！",
-        "bits": "{pseudo} 发送了 {nbBits} 个 bits！"
+        "bits": "{pseudo} 发送了 {nbBits} 个 bits！",
+        "gift": "{pseudo} 送出 {nbObjet} × {objet}！",
+        "superchat": "{pseudo} 发送了 {montant}！"
       }
     },
     "commandes": {
@@ -1156,7 +1202,7 @@
       "alertes": {
         "titre": "提醒与欢迎剪辑",
         "p1": "侧边栏 → 「**直播互动**」。这个窗口汇集了直播中响应观众的一切。",
-        "l1": "**提醒**标签页：关注、Raid、订阅、续订、赠送订阅、Bits（Twitch）。在左侧选择类型，再设置媒体、文本并启用。「**在直播上测试提醒**」无需等待真实关注即可播放。",
+        "l1": "**提醒**标签页：关注、Raid、订阅、续订、赠送订阅、Bits（Twitch）——以及 TikTok 礼物、Kick 订阅/突袭和 YouTube SuperChat/会员。在左侧选择类型，再设置媒体、文本并启用。「**在直播上测试提醒**」无需等待真实关注即可播放。",
         "l2": "**欢迎剪辑**标签页：当关注者进入聊天时播放的剪辑。「**自动分配**」为每人分配一个剪辑；也可以手动逐个选择。",
         "l3": "**位置框架**标签页：把覆盖层拖到您想要的屏幕位置——该位置对提醒、剪辑和命令都生效。",
         "note": "一切都在 **OBS 直播**上播放，绝不在仪表盘：用预览来验证。"

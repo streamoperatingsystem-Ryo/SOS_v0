@@ -114,7 +114,7 @@ npm run tauri dev                    # dev complet (Rust + frontend)
   Cookie `ttwid` acquis anonymement (GET tiktok.com). Pas de signing server, pas de x_bogus.
 - **Chat** : WebSocket Webcast (protobuf-encoded events).
   `room_id` résolu depuis le username. Auto-reconnect géré par PirateTok (50 retries, backoff exponentiel).
-- **Events gérés** : `Chat` (message), `RoomUserSeq` (viewer count), `Gift` (log), `Like` (ignoré), `Connected`, `Reconnecting`, `Disconnected`.
+- **Events gérés** : `Chat` (message), `RoomUserSeq` (viewer count), `Gift` (alerte `gift` — combos agrégés via `GiftStreakTracker`), `Follow` (alerte `follow`), `Like` (ignoré), `Connected`, `Reconnecting`, `Disconnected`.
 - **Events emit** : `tiktok:connecte`, `tiktok:deconnecte`, `tiktok:erreur`, `tiktok:viewers`, `chat:message`.
 - **Persistance** : `tiktok.json` (username du streamer).
 - **Auto-resume** : lit `tiktok.json` au boot → WS direct.
@@ -870,6 +870,34 @@ chevauchant le rect caméra clippés via clipPath SVG evenodd (#sos-cam-clip).
 9. ❌ Kind `mask_filter` (v1) — `opacity` entière, 1.0 = 1 % → voile noir ; toujours `SOS_MASQUE_KIND`.
 10. ❌ Reorder avec `top_to_bottom.len()-1` comme index de départ — range le bloc SOS en BAS de scène ; départ = `arr.len()-1`.
 
+### Hot-plug devices — Android UVC + caméras virtuelles (2026-10-06)
+
+> Un téléphone Android branché en USB n'expose aucune caméra par défaut :
+> **Android 14+** en mode « Webcam » (notification USB du téléphone) expose
+> un device UVC en classe PnP `Camera`/`Image` ; les apps de caméra
+> virtuelle (DroidCam, Iriun, Camo…) créent un device dshow, souvent en
+> `Image`. Le mode « Webcam » ne peut pas être activé à distance — choix
+> obligatoire sur le téléphone à chaque branchement.
+
+- **Énumération** (`pc_enum::enumerate_cameras`) : `Get-PnpDevice -Class
+  Camera,Image -Status OK` (Image ajoutée pour Android UVC + caméras
+  virtuelles ; fallback WMI identique). `CarteEdition.svelte` y ajoute,
+  quand OBS est connecté, l'union de `obs_enumerate_targets` kind `camera`
+  (liste dshow autoritaire — couvre les devices non-PnP).
+- **Watch Rust** (spawn `setup()`, lib.rs) : tick 3 s **uniquement si un
+  widget caméra existe** dans la scène (zéro coût sinon — le spawn
+  PowerShell est sauté) → emit `camera:devices` (`Vec<String>`) SEULEMENT
+  quand la liste change.
+- **Frontend** (`scene.ts`) : `cameraDevicesLive` (store, refresh du
+  sélecteur sans rouvrir la carte) + `initCameraHotplug` (App.svelte boot).
+  **Auto-sélection** : le 1er device NOUVELLEMENT apparu est appliqué via
+  `setCameraDevice` si le widget caméra n'a pas de `cameraDeviceId` valide
+  (absent ou disparu de la liste). Les devices déjà branchés au boot ne
+  sont JAMAIS auto-sélectionnés (snapshot initial = référence, pas de
+  détournement du device par défaut d'OBS sans action utilisateur).
+- **i18n** : `carteEdition.hintAndroidCam` — aide « Android → USB → Webcam »
+  affichée sous `aucuneCamera` quand la liste est vide.
+
 ## Fond de scène = capture OBS (app/jeu) — SOS-Fond-* (2026-09-21)
 
 > Le fond de l'application peut être une CAPTURE OBS (fenêtre ou jeu) plein
@@ -931,23 +959,32 @@ diffusion.html : renderBg — bgObsSource PRIORITAIRE sur bgMedia → même chem
 | `src/lib/components/Canvas.svelte` | `bgObsSource` derived + pastille + gate morphable |
 | `src-tauri/resources/diffusion.html` | `renderBg` : `!rel \|\| scene.bgObsSource` → chemin transparent |
 
-## Alertes Twitch — follow/raid/sub/resub/subgift/bits (2026-09-12)
+## Alertes multi-plateformes — follow/raid/sub/resub/subgift/bits/gift/superchat (2026-09-12)
 
 > Architecture inspirée de l'ancienne app (RUST_SOS_2026) et réécrite pour la
-> base v0 — même pattern que `bandeau.rs`. **Twitch d'abord ; les autres
-> plateformes passeront par le même point d'entrée** (`alerte_declencher`).
+> base v0 — même pattern que `bandeau.rs`. **Multi-plateformes : les 4 sources
+> passent par le même point d'entrée** (`AlertesState::on_event` +
+> `EventTwitch`). 8 types : les 6 historiques Twitch + `gift` (objet
+> monétaire : TikTok gift, Kick KicksGifted) + `superchat` (don monétaire :
+> YouTube SuperChat/SuperSticker).
 
 ### Flux
 
 ```
 Twitch IRC (twitch_chat.rs)
-  ├─ USERNOTICE (msg-id: sub|resub|subgift|raid, tags msg-param-*) ─┐
-  └─ PRIVMSG tag bits=<n> (cheers) ─────────────────────────────────┤
-                                                                    ▼
-Follows : EventSub WS channel.follow v2 (twitch_eventsub.rs,      alertes.rs
-push temps réel — plus de poll Helix)  ──→ on_event (direct)
-                                                                    │
-                    ┌───────────────────────────────────────────────┘
+  ├─ USERNOTICE (msg-id: sub|resub|subgift|raid, tags msg-param-*)
+  └─ PRIVMSG tag bits=<n> (cheers)
+Follows : EventSub WS channel.follow v2 (twitch_eventsub.rs,
+push temps réel — plus de poll Helix)
+YouTube polling (youtube_chat.rs) : superChatEvent/superStickerEvent
+  → superchat, newSponsorEvent → sub, memberMilestoneChatEvent → resub,
+  membershipGiftingEvent → subgift
+Kick Centrifugo (kick.rs) : SubscriptionEvent → sub,
+  GiftedSubscriptionsEvent → subgift, StreamHostEvent → raid,
+  KicksGifted → gift
+TikTok Webcast (tiktok_chat.rs) : Gift → gift (combos agrégés via
+  GiftStreakTracker — 1 alerte en fin de streak), Follow → follow
+                    │
                     ▼ moteur : config par type → cooldowns (viewer + global)
                               → file FIFO (max 5) → UNE alerte à la fois
                     ▼ WS chat_tx : alerte-config + alerte-play + alerte-stop
@@ -988,10 +1025,14 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
    par type, contournés par le bouton Test.
 6. **Sons** : importés via `import_son` (mp3/ogg/wav ≤ 10 Mo, magic bytes) dans
    `medias/`, servis par :4321 sur `/medias/`, joués côté diffusion (viewers).
-7. **Extensibilité multi-plateformes** : `alerte_declencher(type, pseudo,
-   user_id, nb_viewers, nb_bits, nb_mois, destinataire)` est LE point d'entrée
-   — Kick/YouTube/TikTok appelleront la même commande (TikTok gifts = candidat
-   naturel via PirateTok).
+7. **Multi-plateformes (implémenté)** : tous les producteurs appellent
+   `AlertesState::on_event(EventTwitch)` — `EventTwitch.plateforme` porte
+   l'attribution (`"twitch"|"youtube"|"kick"|"tiktok"`, vide = test manuel)
+   et remonte à la racine de la frame `alerte-play` pour la télémétrie.
+   Variables template supplémentaires : `{montant}` `{objet}` `{nbObjet}`
+   (superchat/gift). La commande Tauri `alerte_declencher` reste dispo pour
+   tests/intégrations futures. Payloads Kick non documentés → chaque event
+   non-chat loggé à sa 1re occurrence (`[Kick]`) pour ajuster le mapping.
 
 ### Squelette de position unifié (clip de bienvenue + alertes) — 2026-09-14
 
@@ -1218,15 +1259,22 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
   chips `CD pseudo Ns` décrémentés en local.
 - **Widget scène `musique`** (`createMusiqueWidget`, 340×140) : rendu dans
   `diffusion.html` (branche `wtype === "musique"`, modèle `goal` — create/
-  update/reuse via `widgetMap`, kind `musique`) : mini barre de titre
-  `WINAMP` dégradé nuit + LCD marquee + temps
-  (`musiqueAudio.currentTime/duration` — même page) + 16 barres EQ avec
-  **peak dots** (`eqPeaks[]` décrémenté dans `eqTick`, affiché si crête
-  > bande) + barre crantée ; tick 250 ms partagé démarré à la création.
+  update/reuse via `widgetMap`, kind `musique`) : barre de titre `WINAMP`
+  dégradé nuit + rangée écrans `.mu-lcd` (boîte LED temps `.mu-temps`
+  pos/rest à gauche + écran marquee `.mu-defile-wrap` à droite, placeholder
+  `♪ —` si rien ne joue) + 16 barres EQ avec **peak dots** (`eqPeaks[]`
+  décrémenté dans `eqTick`, affiché si crête > bande) + barre de
+  progression crantée ; tick 250 ms partagé démarré à la création.
+  **Contrat visuel « skin classic »** (palette canonique : châssis
+  #2e2e2e→#1c1c1c + bevel outset, écrans #0a140a/#050805 + inset #444,
+  EQ #ff4040→#ffb040→#4aff4a + peak #ff9c40, fill #7dff7d→#2fd32f,
+  "Lucida Console") — diffusion.html est la référence, toute retouche se
+  reporte aux deux miroirs. Dimensionnement `--mu-w`/`--mu-h` inline.
+  Vignette dashboard = `WidgetMusique.svelte` (miroir 1:1 du markup +
+  CSS mu-*, tick local 250 ms sur `progression` + `musiqueBands`).
   Option `musiqueMode` : `"player"` (défaut, tout) / `"eq"` (bandes
   seules, classe `mu-eq-only` — titre masqué aussi) — `setMusiqueConfig`,
-  carte d'édition, vignette dashboard dans `Widget.svelte` (mini titre +
-  LCD + EQ live via les stores).
+  carte d'édition.
 - **Import** : `musique_importer` — dialog multi-fichiers, nom lisible
   CONSERVÉ (≠ uuid des alertes : c'est le titre demandé), exts
   `mp3/ogg/wav/m4a/flac`, magic bytes (`fLaC`, `ftyp` offset 4), ≤ 50 Mo
@@ -1239,28 +1287,29 @@ push temps réel — plus de poll Helix)  ──→ on_event (direct)
 | Fichier | Rôle |
 |---|---|
 | `src-tauri/src/position_overlay.rs` | Source de vérité unifiée : `PositionOverlayConfig` + `PositionOverlayState` (persistée `position_overlay.json`), WS `position-overlay-config` |
-| `src-tauri/src/alertes.rs` | Moteur : config 6 types (persistée `alertes_config.json`), file, cooldowns, templates, overlay (lit depuis PositionOverlayState), WS |
+| `src-tauri/src/alertes.rs` | Moteur : config 8 types (persistée `alertes_config.json`), file, cooldowns, templates, overlay (lit depuis PositionOverlayState), WS |
 | `src-tauri/src/commandes.rs` | Commandes chat `!cmd` : config par commande (persistée `commandes_config.json`), file + cooldowns + timer, hooks chat, WS `commande-config/-play/-stop` |
 | `src-tauri/src/musique.rs` | Musique `!rs` : bibliothèque locale `medias/musique/`, file non bornée + cooldowns + max/viewer, hooks chat (accusés Twitch), WS `musique-play/-stop/-pause/-volume`, upstream `musique-ended/-resync/-meta/-spectrum`, `LectureEnCours` (timing progression) + `cooldowns_actifs` dans `etat()` |
 | `src/lib/stores/musique.ts` | Store musique : `musiqueEtat` (`musique:update`), `musiqueBands`/`musiqueBandsTs` (`musique:spectrum`), `initMusique`, config/import/contrôles file |
-| `src/lib/components/LecteurMusique.svelte` | Lecteur « Winamp 2.x » de l'onglet Musique : barre de titre + shade, compteur LED, LCD marquee + indicateurs, EQ 16 bandes + peak dots (réel/simulé), barre progression, transport ⏮⏯⏹⏭⏏ + volume, playlist intégrée (file), chips cooldowns — tick local 250 ms sur snapshot `progression` |
+| `src/lib/components/LecteurMusique.svelte` | Lecteur « Winamp 2.x » de l'onglet Musique : barre de titre + shade, compteur LED, LCD marquee + indicateurs, EQ 16 bandes + peak dots (réel/simulé), barre progression, transport ⏮⏯⏹⏭⏏ + volume, playlist intégrée (file), chips cooldowns — tick local 250 ms sur snapshot `progression` — palette « skin classic » de référence |
+| `src/lib/components/WidgetMusique.svelte` | Vignette dashboard du widget musique : miroir 1:1 du rendu `diffusion.html` (mu-titre / mu-lcd LED+marquee / mu-eq peaks / mu-posbar crantée), dimensionnement `--mu-w`/`--mu-h`, tick local 250 ms |
 | `src/lib/components/MusiqueTab.svelte` | Onglet « Musique » de la modale Interactions Live : lecteur Winamp (file incluse), bibliothèque, réglages |
 | `src-tauri/src/twitch_chat.rs` | `irc_command()` + `parse_irc_tags()` + `parse_usernotice()` + tag bits |
 | `src-tauri/src/lib.rs` | `AlertesState` + `PositionOverlayState` + commandes `alertes_*` / `alerte_declencher` / `import_son` / `import_alerte_media` / `position_overlay_etat` / `position_overlay_set` |
 | `src/lib/stores/positionOverlay.ts` | Store unifié : `positionOverlay`, `initPositionOverlay`, `chargerPositionOverlay`, `sauverPositionOverlay` |
-| `src/lib/stores/alertes.ts` | Config store par type (événements follows/subs/bits/raids gérés côté Rust — IRC + EventSub WS) — overlay retiré (géré par positionOverlay) |
+| `src/lib/stores/alertes.ts` | Config store par type (événements gérés côté Rust — IRC + EventSub Twitch, polling YouTube, Centrifugo Kick, Webcast TikTok) — overlay retiré (géré par positionOverlay) |
 | `src/lib/stores/commandes.ts` | Store commandes chat : `commandesStore`, `chargerCommandes`, `sauverCommande` (upsert), `supprimerCommande`, `testerCommande` |
-| `src/lib/components/InteractionViewerModal.svelte` | Modale Interactions chat — 5 onglets : Clip de bienvenue / Bandeau premier message / Alertes / Commandes / Squelette de position |
+| `src/lib/components/InteractionViewerModal.svelte` | Modale Interactions Live — 9 onglets : Clip de bienvenue / Bandeau premier message / Alertes / Commandes / Pad numérique / Présentation / Planning / Musique / Squelette de position |
 | `src-tauri/resources/diffusion.html` | Overlay welcome (z 9999) + overlay alerte (z 9997) + overlay commande (z 9996) + handler `position-overlay-config` (applique aux trois) |
 
-**NB organisation UI** : le panneau Alertes vit dans la modale **Interactions chat**
-(ex "Interaction viewer", renommée 2026-09-12) — 4 onglets : Clip de bienvenue /
-Bandeau premier message / Alertes / Squelette de position. La section "Alertes"
-de la sidebar Toolbar a été supprimée (tout passe par la modale). Les commandes
-chat sont prévues mais non implémentées (pas d'onglet placeholder). La section
-sidebar "Interactions chat" est
-un **lanceur direct** (pas un accordéon) : le clic ouvre la modale — seule section
-non dépliable de la sidebar.
+**NB organisation UI** : le panneau Alertes vit dans la modale **Interactions
+Live** (ex "Interactions chat", ex "Interaction viewer") — 9 onglets : Clip de
+bienvenue / Bandeau premier message / Alertes / Commandes / Pad numérique /
+Présentation / Planning / Musique / Squelette de position. La section
+"Alertes" de la sidebar Toolbar a été supprimée (tout passe par la modale).
+La section sidebar "Interactions chat" est un **lanceur direct** (pas un
+accordéon) : le clic ouvre la modale — seule section non dépliable de la
+sidebar.
 
 ## Input Viewer — capture globale clavier + souris + manette (2026-10-03)
 
@@ -2467,17 +2516,33 @@ i18n : `toolbar.justChatting` + `toolbar.justChattingTitle` (5 dicts).
   (commande/welcome — la frame ne porte pas la plateforme d'origine) |
   **`local`** (pad numérique) | `systeme`.
 - `kind` : `connexion` | `deconnexion` | `chat` | `viewers` | `alerte` |
-  `commande` | `welcome` | `bandeau` | `pad`.
+  `commande` | `welcome` | `bandeau` | `pad` | **`stream-info`** |
+  **`event`**.
 - **Whitelist frames** : `chat`, `viewers`, `alerte-play`, `commande-play`,
-  `welcome-clip-play`, `bandeau-premier-message-play`, `pad-play`. Les frames
+  `welcome-clip-play`, `bandeau-premier-message-play`, `pad-play`,
+  `stream-info`. Les frames
   de synchro UI (`*-config`, `*-stop`, `input-viewer-etat` 30 Hz,
   `speedrun-etat`, `position-overlay-config`, `snapshot`) ne sont **PAS**
   enregistrées — ajouter un type = décision documentée dans `collecte.rs`.
-- `titre_stream` / `jeu` / `jeu_id` : champs réservés — remplis par
-  l'enrichissement stream_info (LOT 2), ignorés à la sérialisation tant
-  qu'absents.
-- Attribution plateforme des overlays : `alerte`→`twitch` (seul émetteur
-  actuel), `bandeau`→`viewer.plateforme` (réel, porté par la frame),
+- **`stream-info`** : frame émise par `viewers.rs` (Twitch) au changement du
+  tuple `(en_live, jeu_id, titre)` — dédupliquée, jamais à chaque count.
+  `{"type":"stream-info","plateforme":"twitch","en_live":true,"titre","jeu",
+  "jeu_id","debut","tags"}` ; `en_live:false` à la transition live→offline.
+  Inerte côté `diffusion.html` (type inconnu → ignoré par le dispatch).
+- **`event`** : kind rempli depuis le listener Tauri `chat:event`
+  (`collecte.rs` — émis par Twitch avant `alertes.on_event`, pré-filtre =
+  vérité terrain). `data` porte `type_alerte`, `nb_viewers` (raids),
+  `nb_bits`, `montant`, `objet`, `nb_objet`, `user_id`. ⚠️ Twitch seul
+  émet `chat:event` — kick/youtube/tiktok appellent `on_event` directement.
+- `titre_stream` / `jeu` / `jeu_id` : estampillés sur **tous** les events
+  d'une plateforme tant qu'un contexte live est connu
+  (`contextes: HashMap<plateforme, ContexteLive>` dans `TelemetrieInner` —
+  insert sur `stream-info en_live:true`, remove sur `en_live:false` et
+  `deconnexion`). Rétro-compatible : absents ⇒ non sérialisés.
+- Attribution plateforme des overlays : `alerte`→`/plateforme` racine de la
+  frame `alerte-play` (portée par `EventTwitch.plateforme` ; fallback
+  `twitch` pour les tests manuels à plateforme vide),
+  `bandeau`→`viewer.plateforme` (réel, porté par la frame),
   `commande`/`welcome`→`multi` (attribution exacte = hooks explicites dans
   les émetteurs, LOT ultérieur si besoin).
 
@@ -2488,21 +2553,26 @@ i18n : `toolbar.justChatting` + `toolbar.justChattingTitle` (5 dicts).
 | `src-tauri/src/telemetrie/mod.rs` | `TelemetrieState` (compteurs, sessions courantes, anneau 500 events) + `record()` non bloquant (mpsc non borné → writer) |
 | `src-tauri/src/telemetrie/modele.rs` | `EventTelemetrie` schéma v1 + `maintenant_iso()` |
 | `src-tauri/src/telemetrie/stockage.rs` | Writer JSONL thread dédié — flush 500 ms / 64 lignes, dégradé mémoire-only si fichier inouvrable |
-| `src-tauri/src/telemetrie/collecte.rs` | Whitelist + extraction plateforme/pseudo/data + listeners `*:connecte`/`*:deconnecte` + subscriber `chat_tx` |
-| `src-tauri/src/telemetrie/commands.rs` | `telemetrie_etat` (compteurs + sessions + fichier), `telemetrie_derniers(limit)` (anneau, ≤500) |
+| `src-tauri/src/telemetrie/collecte.rs` | Whitelist + extraction plateforme/pseudo/data + listeners `*:connecte`/`*:deconnecte` + `chat:event` + subscriber `chat_tx` |
+| `src-tauri/src/telemetrie/commands.rs` | `telemetrie_etat` (compteurs + sessions + fichier), `telemetrie_derniers(limit)` (anneau, ≤500), `audience_sessions(depuis_jours)`, `audience_session(session_id)` |
+| `src-tauri/src/telemetrie/analyse.rs` | Moteur audience : parse JSONL borné → sessions → série viewers 60 s → segments jeu → détection de pics + causes + agrégats (tests unitaires) |
 
 Init dans `lib.rs` setup : `TelemetrieState::new` + `demarrer` **avant** les
 auto-resume (pour capter leurs connexions) — non-fatal si le fichier est
 inaccessible. `chat:message`/`viewers:update`/etc. continuent d'aller au
 frontend et à :4321 exactement comme avant — le tap est un abonné de plus.
 
-## Diagnostic consommation — modale « Diagnostic » (2026-09-22)
+## Diagnostic — modale à onglets (consommation 2026-09-22, audience 2026-10-XX)
 
-> Module `conso.rs` : échantillonneur **1 Hz** de la consommation réelle
-> (crash thermique 2026-09-21 — rend mesurable « qui consomme quoi »).
-> ⚠️ **Le module s'appelle `conso`, pas `diagnostic`** : un module racine
-> nommé `diagnostic` masque le namespace built-in rustc `#[diagnostic::*]`
-> que la macro `tauri::command` génère → E0433 sur TOUTES les commandes.
+> La modale « Diagnostic » (`ConsoModal.svelte` — nom conservé) a deux
+> onglets : **« Application »** (l'existant : consommation 1 Hz) et
+> **« Audience »** (analyse des pics de viewers, Twitch d'abord).
+> ⚠️ **Le module backend s'appelle `conso`, pas `diagnostic`** : un module
+> racine nommé `diagnostic` masque le namespace built-in rustc
+> `#[diagnostic::*]` que la macro `tauri::command` génère → E0433 sur
+> TOUTES les commandes.
+
+### Onglet « Application » — consommation (`conso.rs`)
 
 ### Ce qui est mesuré (Windows, échec = 0, jamais de crash)
 
@@ -2541,8 +2611,42 @@ frontend et à :4321 exactement comme avant — le tap est un abonné de plus.
 |---|---|
 | `src-tauri/src/conso.rs` | Échantillonneur 1 Hz, registre threads, PDH GPU, commande `conso_etat`, tests du tap |
 | `src/lib/stores/conso.ts` | Store `consoEtat` + polling 1 Hz borné à la modale |
-| `src/lib/components/ConsoModal.svelte` | Modale : lignes nom + % + RAM/GPU + sparkline SVG (survol = point précis « il y a N s ») — variables thème uniquement |
+| `src/lib/components/ConsoModal.svelte` | Modale à onglets (`application`/`audience`, pattern `.tabs` d'InteractionViewerModal) : onglet Application = lignes nom + % + RAM/GPU + sparkline SVG (survol = point précis « il y a N s ») — variables thème uniquement |
 | `src/lib/stores/ui.ts` | Flag `consoModalOpen` ; lanceur Toolbar « Diagnostic » ; montage `App.svelte` |
+
+### Onglet « Audience » — analyse des pics de viewers (Twitch d'abord)
+
+> Dashboard historique **consultatif**, alimenté par `events.jsonl` —
+> zéro polling, re-fetch au changement de période/session uniquement.
+
+**Pipeline** : `telemetrie/analyse.rs` parse le JSONL (borné `depuis_jours`,
+lignes cassées ignorées) → reconstruction des sessions par `session_id` →
+série viewers rééchantillonnée grille **60 s** (carry-forward, le kind
+`viewers` n'étant émis qu'au changement) → segments jeu aux changements de
+`jeu_id` → détection des pics → attribution d'une cause.
+
+**Algorithme de pic** : baseline `b(t)` = médiane de l'historique dispo
+(robuste aux pics) ; ouverture si `v ≥ max(1.25×b, b+8)` sur ≥2 points,
+fermeture si `v < 1.10×b` sur 2 points ; retenu si `delta ≥ 10` ou `≥30 %`.
+Causes ordonnées (1re qui matche dans `[t_debut−300s, +120s]`) : `raid`
+(avec `nb_viewers` → confiance certaine/probable) → `contenu` (changement
+jeu/titre) → `communaute` (≥3 events bits/sub/gift) → `debut_live`
+(≤3 min du début) → `organique`. Sessions <5 min ou <2 points ignorées.
+
+**Commandes** : `audience_sessions(depuis_jours) → { periode_jours,
+sessions: [SessionResume], agregats }` et `audience_session(session_id) →
+{ meta, serie, segments, pics, timeline }`. Agrégats : top jeux/titres/
+créneaux (jour_sem×heure), top pics, totaux events pendant les lives.
+
+**Fichiers** : `stores/audience.ts` (résultats + chargement + erreur, pas
+de polling), `AudienceTab.svelte` (graphe SVG aire+ligne, bandes jeu,
+marqueurs timeline, zones de pics, cartes agrégats, liste de pics).
+`tauri.ts` porte les types miroir.
+
+**Limites documentées** : résolution 60 s (pic <1-2 min invisible),
+`viewer_count` Twitch approximatif, `chat:event` Twitch-seul (autres
+plateformes → état « Twitch uniquement »), aucune valeur fabriquée en
+l'absence de données, tags stockés mais pas de stats par tag en v1.
 
 ## Grille magnétique + guides symétriques + duplication miroir (2026-09-19)
 
@@ -2882,8 +2986,22 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
   `appliquer_au_boot`), `app_arreter`/`app_redemarrer` (exit()/restart()
   ne déclenchent pas forcément CloseRequested), et chaque
   `fenetre_appliquer` (post-apply si mode fenêtré, pré-apply sinon).
-- **Anti-flash boot** : `"visible": false` dans `tauri.conf.json` →
-  `appliquer_au_boot` (setup) positionne/mode puis `show()`.
+- **Anti-flash boot + splash (2026-10-06)** : `"visible": false` dans
+  `tauri.conf.json` → `appliquer_au_boot` (setup) positionne/mode SANS
+  `show()`. Le splash `streamos-splash://localhost/` (fenêtre « splash »
+  440×280 topmost centrée créée par `splash::demarrer` en tête de setup —
+  wallpaper Windows via `SPI_GETDESKWALLPAPER` + mascotte + « Bienvenue
+  <pseudo Windows> » traduit via langue.json) couvre le chargement.
+  `splash::armer_affichage` montre `main` + ferme le splash à
+  max(4 s de splash, event `frontend:pret` émis par App.svelte en fin
+  d'onMount) — garde-fou : timeout 8 s supplémentaires si le frontend ne
+  répond pas (jamais de fenêtre invisible définitive, splash ≤ ~12 s).
+  `show()`/`close()` idempotents (HMR, double appel = no-op). Wallpaper
+  indisponible (couleur unie/fichier illisible) → 404 → dégradé CSS,
+  jamais bloquant. **Dev** (`tauri::is_dev()`) : le splash devient une
+  fenêtre normale maximisée (barre de titre → draggable, resizable, dans
+  la barre des tâches) et n'est JAMAIS fermée automatiquement — elle
+  reste ouverte à côté du dashboard ; fermeture manuelle par sa croix.
 - **Frontend** : sélecteur moniteur **partagé** avec la section
   Raccourcis (`raccourcisMoniteurs` / `monsOptions` — la commande
   `raccourcis_moniteurs` liste les écrans, pas de doublon). 3 boutons
@@ -2893,12 +3011,14 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 |---|---|
 | `src-tauri/src/fenetre.rs` | Commandes `fenetre_etat`/`fenetre_appliquer`, `appliquer_au_boot`, `sauver_geo`/`capturer_geo`, `geo_intersecte` |
 | `src-tauri/src/config.rs` | `FenetreConfig`/`FenetreGeo` + lire/sauver `fenetre.json` |
-| `src-tauri/src/lib.rs` | `mod fenetre`, handler, `appliquer_au_boot` dans setup, `sauver_geo` dans `app_arreter`/`app_redemarrer` |
-| `src-tauri/tauri.conf.json` | `"visible": false` (anti-flash — show() par le boot) |
+| `src-tauri/src/lib.rs` | `mod fenetre`/`mod splash`, handler, `appliquer_au_boot` + `splash::demarrer`/`armer_affichage` dans setup, protocole `streamos-splash`, `sauver_geo` dans `app_arreter`/`app_redemarrer` |
+| `src-tauri/src/splash.rs` | `demarrer` (fenêtre splash), `repondre` (routes `/`, `/wallpaper`, `/mascotte`), `armer_affichage` (transition splash→main) |
+| `src-tauri/resources/splash.html` | Page du splash (placeholders `__USER__`/`__GREETING__`) |
+| `src-tauri/tauri.conf.json` | `"visible": false` (anti-flash — show() différé par `splash::armer_affichage` sur `frontend:pret`) |
 | `src/lib/tauri.ts` | `ModeFenetre`/`FenetreEtat` + `fenetreEtat`/`fenetreAppliquer` |
 | `src/lib/stores/fenetre.ts` | `fenetreMonitorIndex`/`fenetreMode` + `initFenetre`/`appliquerFenetre` |
 | `src/lib/components/Toolbar.svelte` | Contrôles écran+mode dans la section Ergonomie |
-| `src/App.svelte` | `initFenetre()` au boot |
+| `src/App.svelte` | `initFenetre()` au boot + `emit("frontend:pret")` en fin d'onMount |
 | `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `toolbar.mode.{fenetre,maximise,fullscreen}` + `toolbar.demarrageHint` |
 
 ## Bandeau premier message — teinte cadre + mascotte animée (2026-10-04)

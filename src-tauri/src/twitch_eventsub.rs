@@ -193,6 +193,7 @@ async fn connect_session(
                     let user_id_evt = evt["user_id"].as_str().unwrap_or_default().to_string();
                     let evt_alerte = crate::alertes::EventTwitch {
                         type_alerte: "follow".to_string(),
+                        plateforme: "twitch".to_string(),
                         login,
                         pseudo,
                         user_id: user_id_evt,
@@ -202,6 +203,9 @@ async fn connect_session(
                         nb_mois: 0,
                         destinataire: String::new(),
                         system_msg: String::new(),
+                        montant: String::new(),
+                        objet: String::new(),
+                        nb_objet: 0,
                     };
                     // Même double diffusion que l'IRC (twitch_chat.rs).
                     let _ = app.emit("chat:event", &evt_alerte);

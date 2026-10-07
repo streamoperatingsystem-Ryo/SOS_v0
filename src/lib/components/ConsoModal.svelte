@@ -7,9 +7,9 @@
   // Objectif : ultra lisible pour un non-technicien — une ligne = un nom,
   // sa valeur actuelle, son max récent, et sa courbe des 5 dernières minutes.
   // Le survol d'une courbe affiche le point précis (valeur + il y a N s).
-  import { onMount } from "svelte";
   import { get } from "svelte/store";
   import Modal from "./Modal.svelte";
+  import AudienceTab from "./AudienceTab.svelte";
   import {
     consoEtat,
     consoErreur,
@@ -20,10 +20,17 @@
 
   let { onFermer }: { onFermer: () => void } = $props();
 
-  // Polling 1 Hz tant que la modale est montée (arrêt propre au démontage).
-  onMount(() => {
-    demarrerPollingConso();
-    return arreterPollingConso;
+  // Onglet courant : "application" (conso temps réel) | "audience" (analyse
+  // des lives depuis la télémétrie).
+  let tab = $state<"application" | "audience">("application");
+
+  // Polling 1 Hz UNIQUEMENT sur l'onglet application (l'audience lit
+  // l'historique JSONL — pas de temps réel). Teardown au switch + démontage.
+  $effect(() => {
+    if (tab === "application") {
+      demarrerPollingConso();
+      return arreterPollingConso;
+    }
   });
 
   const COULEURS = [
@@ -189,6 +196,26 @@
   maxWidth="980px"
   hint={$t("consoModal.hint")}
 >
+  <div class="tabs">
+    <button
+      class="tab"
+      class:active={tab === "application"}
+      onclick={() => (tab = "application")}
+    >
+      {$t("consoModal.tabApp")}
+    </button>
+    <button
+      class="tab"
+      class:active={tab === "audience"}
+      onclick={() => (tab = "audience")}
+    >
+      {$t("consoModal.tabAudience")}
+    </button>
+  </div>
+
+  {#if tab === "audience"}
+    <AudienceTab />
+  {:else}
   <div class="corps">
     {#if $consoErreur}
       <p class="vide">{$t("consoModal.indisponible")}</p>
@@ -332,9 +359,41 @@
       {/each}
     {/if}
   </div>
+  {/if}
 </Modal>
 
 <style>
+  /* Tabs — même pattern qu'InteractionViewerModal (bordure accent-ui sur
+     l'actif, pas de radius). */
+  .tabs {
+    display: flex;
+    flex-wrap: wrap;
+    flex-shrink: 0;
+    gap: 0.2rem;
+    border-bottom: 1px solid var(--bordure-ui);
+    padding: 0 1rem;
+  }
+  .tab {
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
+    color: var(--texte);
+    border: none;
+    border-bottom: 2px solid transparent;
+    padding: 0.4rem 0.8rem;
+    cursor: pointer;
+    opacity: 0.6;
+    white-space: nowrap;
+    transition: background 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  }
+  .tab:hover {
+    background: var(--btn-surface-hover);
+    box-shadow: var(--btn-inset-hover);
+    opacity: 0.8;
+  }
+  .tab.active {
+    opacity: 1;
+    border-bottom-color: var(--accent-ui);
+  }
   .corps {
     flex: 1;
     min-height: 0;

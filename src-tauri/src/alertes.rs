@@ -1,13 +1,16 @@
-/// Alertes Twitch — follow/raid/sub/resub/subgift/bits → overlay diffusion.
+/// Alertes multi-plateformes — follow/raid/sub/resub/subgift/bits/gift/
+/// superchat → overlay diffusion.
 ///
 /// Sources d'événements :
 ///   - twitch_chat.rs : USERNOTICE (sub/resub/subgift/raid via tag `msg-id`) +
 ///     PRIVMSG avec tag `bits` → `alerte::on_event(...)` + event Tauri
 ///     "chat:event" (dashboard).
-///   - Follows : pas d'event IRC pour les follows → diff des snapshots
-///     followers côté frontend (stores/alertes.ts) → commande `alerte_declencher`.
-///     C'est aussi le point d'entrée prévu pour les futures plateformes
-///     (Kick/YouTube/TikTok) : elles appelleront la même commande.
+///   - twitch_eventsub.rs : follows `channel.follow` v2 → `on_event`.
+///   - tiktok_chat.rs : Gift → type "gift", Follow → type "follow".
+///   - youtube_chat.rs : superChat/superSticker → "superchat", newSponsor →
+///     "sub", memberMilestone → "resub", membershipGifting → "subgift".
+///   - kick.rs : SubscriptionEvent → "sub", GiftedSubscriptionsEvent →
+///     "subgift", StreamHostEvent → "raid", KicksGifted → "gift".
 ///
 /// Moteur (inspiré de l'ancienne app RUST_SOS_2026, réécrit pour l'architecture
 /// v0 — même pattern que bandeau.rs) :
@@ -36,8 +39,20 @@ use tokio::sync::broadcast;
 /// Jeton d'annulation du timer courant.
 type TimerCancel = Arc<AtomicBool>;
 
-/// Types d'alerte supportés (ordre d'affichage UI).
-pub const TYPES_ALERTE: &[&str] = &["follow", "raid", "sub", "resub", "subgift", "bits"];
+/// Types d'alerte supportés (ordre d'affichage UI). Les types historiques
+/// (follow..bits) sont partagés par toutes les plateformes — les équivalents
+/// s'y mappent (member YouTube → sub, sub Kick → sub…). "gift" et "superchat"
+/// sont les seuls types dédiés (pas d'équivalent Twitch historique).
+pub const TYPES_ALERTE: &[&str] = &[
+    "follow",
+    "raid",
+    "sub",
+    "resub",
+    "subgift",
+    "bits",
+    "gift",
+    "superchat",
+];
 
 /// Taille max de la file d'attente (au-delà → l'oldest est évincé).
 const FILE_MAX: usize = 5;
@@ -96,6 +111,8 @@ fn config_type_defaut(type_alerte: &str, langue: &str) -> AlerteTypeConfig {
             "resub" => "{pseudo} resubbed for {nbMoisCumul} months!",
             "subgift" => "{pseudo} gifted a sub to {destinataire}!",
             "bits" => "{pseudo} sent {nbBits} bits!",
+            "gift" => "{pseudo} sends {nbObjet} × {objet}!",
+            "superchat" => "{pseudo} sent {montant}!",
             _ => "{pseudo}",
         },
         "es" => match type_alerte {
@@ -105,6 +122,8 @@ fn config_type_defaut(type_alerte: &str, langue: &str) -> AlerteTypeConfig {
             "resub" => "{pseudo} se resuscribió por {nbMoisCumul} meses!",
             "subgift" => "{pseudo} regaló una sub a {destinataire}!",
             "bits" => "{pseudo} envió {nbBits} bits!",
+            "gift" => "{pseudo} envía {nbObjet} × {objet}!",
+            "superchat" => "{pseudo} envió {montant}!",
             _ => "{pseudo}",
         },
         "it" => match type_alerte {
@@ -114,6 +133,8 @@ fn config_type_defaut(type_alerte: &str, langue: &str) -> AlerteTypeConfig {
             "resub" => "{pseudo} riabbonato da {nbMoisCumul} mesi!",
             "subgift" => "{pseudo} ha regalato un sub a {destinataire}!",
             "bits" => "{pseudo} ha inviato {nbBits} bits!",
+            "gift" => "{pseudo} invia {nbObjet} × {objet}!",
+            "superchat" => "{pseudo} ha inviato {montant}!",
             _ => "{pseudo}",
         },
         "zh" => match type_alerte {
@@ -123,6 +144,8 @@ fn config_type_defaut(type_alerte: &str, langue: &str) -> AlerteTypeConfig {
             "resub" => "{pseudo} 续订了 {nbMoisCumul} 个月！",
             "subgift" => "{pseudo} 向 {destinataire} 赠送了订阅！",
             "bits" => "{pseudo} 发送了 {nbBits} 个 bits！",
+            "gift" => "{pseudo} 送出 {nbObjet} × {objet}！",
+            "superchat" => "{pseudo} 发送了 {montant}！",
             _ => "{pseudo}",
         },
         _ => match type_alerte {
@@ -132,6 +155,8 @@ fn config_type_defaut(type_alerte: &str, langue: &str) -> AlerteTypeConfig {
             "resub" => "{pseudo} resub pour {nbMoisCumul} mois !",
             "subgift" => "{pseudo} offre un sub à {destinataire} !",
             "bits" => "{pseudo} a envoyé {nbBits} bits !",
+            "gift" => "{pseudo} envoie {nbObjet} × {objet} !",
+            "superchat" => "{pseudo} envoie un don de {montant} !",
             _ => "{pseudo}",
         },
     };
@@ -163,6 +188,12 @@ pub struct AlertesConfig {
     pub subgift: Option<AlerteTypeConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bits: Option<AlerteTypeConfig>,
+    /// Gift nommé (TikTok Gift, Kick KicksGifted) : {objet} {nbObjet} {montant}.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gift: Option<AlerteTypeConfig>,
+    /// Don monétaire YouTube (SuperChat + SuperSticker) : {montant} {objet}.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub superchat: Option<AlerteTypeConfig>,
     /// Position/taille de l'overlay diffusion — MÊME mécanisme que la carte
     /// des clips de bienvenue (welcome.rs OverlayConfig). None = défaut.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -203,6 +234,8 @@ impl AlertesConfig {
             "resub" => self.resub.clone().unwrap_or(defaut),
             "subgift" => self.subgift.clone().unwrap_or(defaut),
             "bits" => self.bits.clone().unwrap_or(defaut),
+            "gift" => self.gift.clone().unwrap_or(defaut),
+            "superchat" => self.superchat.clone().unwrap_or(defaut),
             _ => defaut,
         }
     }
@@ -216,6 +249,8 @@ impl AlertesConfig {
             "resub" => self.resub = Some(cfg),
             "subgift" => self.subgift = Some(cfg),
             "bits" => self.bits = Some(cfg),
+            "gift" => self.gift = Some(cfg),
+            "superchat" => self.superchat = Some(cfg),
             _ => {}
         }
     }
@@ -223,12 +258,19 @@ impl AlertesConfig {
 
 // ===== Événement Twitch (depuis IRC) =====
 
-/// Événement Twitch normalisé (USERNOTICE / bits / follow via commande).
+/// Événement d'alerte normalisé (USERNOTICE / bits / follow Twitch, gifts
+/// TikTok, SuperChat/membres YouTube, subs/gifts/raids Kick — toutes
+/// plateformes passent par la même struct).
 /// Sérialisé vers le dashboard (event Tauri "chat:event") et consommé par le
 /// moteur. `type_alerte` ∈ TYPES_ALERTE.
 #[derive(Debug, Clone, Serialize)]
 pub struct EventTwitch {
     pub type_alerte: String,
+    /// Plateforme d'origine : "twitch" | "youtube" | "kick" | "tiktok".
+    /// Vide = test manuel. Portée à la racine de la frame `alerte-play`
+    /// (attribution télémétrie + icône plateforme éventuelle).
+    #[serde(default)]
+    pub plateforme: String,
     pub login: String,
     /// Nom d'affichage (display-name tag, fallback login).
     pub pseudo: String,
@@ -237,12 +279,23 @@ pub struct EventTwitch {
     pub nb_bits: i64,
     /// "Prime" | "Tier 1" | "Tier 2" | "Tier 3" (sub/resub/subgift).
     pub niveau_sub: String,
-    /// Mois cumulés (resub).
+    /// Mois cumulés (resub, milestone YouTube).
     pub nb_mois: i64,
     /// Destinataire du subgift.
     pub destinataire: String,
     /// Message système Twitch (tag system-msg, \s déjà décodé).
     pub system_msg: String,
+    /// Montant formaté pour affichage ("$5.00", "120 diamants", "500 Kicks").
+    /// Variable {montant} (superchat, gift).
+    #[serde(default)]
+    pub montant: String,
+    /// Nom de l'objet offert (gift TikTok "Rose", sticker YouTube, gift Kick).
+    /// Variable {objet}.
+    #[serde(default)]
+    pub objet: String,
+    /// Quantité offerte (repeat_count TikTok, quantity Kick). Variable {nbObjet}.
+    #[serde(default)]
+    pub nb_objet: i64,
 }
 
 // ===== Item de file =====
@@ -250,6 +303,7 @@ pub struct EventTwitch {
 #[derive(Debug, Clone)]
 struct AlerteItem {
     type_alerte: String,
+    plateforme: String,
     texte: String,
     son: Option<String>,
     media: Option<String>,
@@ -336,6 +390,7 @@ impl AlertesState {
 
         let item = AlerteItem {
             type_alerte: evt.type_alerte.clone(),
+            plateforme: evt.plateforme.clone(),
             texte: rendre_template(&cfg.texte_template, &evt),
             son: cfg.son.clone(),
             media: cfg.media.clone(),
@@ -365,7 +420,7 @@ impl AlertesState {
         // Pousser la config avant le play (cohérence diffusion).
         self.emit_config_ws();
 
-        let msg = serde_json::json!({
+        let mut msg = serde_json::json!({
             "type": "alerte-play",
             "alerte": {
                 "type": item.type_alerte,
@@ -377,6 +432,12 @@ impl AlertesState {
                 "duree_ms": item.duree_ms,
             },
         });
+        // Plateforme à la racine : attribution télémétrie (collecte.rs lit
+        // /plateforme en priorité). Vide (test manuel) → champ absent, le
+        // fallback "twitch" historique s'applique.
+        if !item.plateforme.is_empty() {
+            msg["plateforme"] = serde_json::Value::String(item.plateforme.clone());
+        }
         let _ = self.chat_tx.send(msg.to_string());
 
         // Timer → alerte-stop + libération + alerte suivante de la file.
@@ -430,6 +491,7 @@ impl AlertesState {
         let evt = match type_alerte {
             "follow" => EventTwitch {
                 type_alerte: "follow".into(),
+                plateforme: String::new(),
                 login: "streamy".into(),
                 pseudo: "Streamy".into(),
                 user_id: "test".into(),
@@ -439,6 +501,9 @@ impl AlertesState {
                 nb_mois: 0,
                 destinataire: String::new(),
                 system_msg: String::new(),
+                montant: String::new(),
+                objet: String::new(),
+                nb_objet: 0,
             },
             "raid" => EventTwitch {
                 nb_viewers: 25,
@@ -466,6 +531,18 @@ impl AlertesState {
                 nb_bits: 500,
                 pseudo: "Streamy".into(),
                 ..evt_test_base("bits")
+            },
+            "gift" => EventTwitch {
+                objet: "Rose".into(),
+                nb_objet: 3,
+                montant: "3 diamants".into(),
+                pseudo: "Streamy".into(),
+                ..evt_test_base("gift")
+            },
+            "superchat" => EventTwitch {
+                montant: "5,00 €".into(),
+                pseudo: "Streamy".into(),
+                ..evt_test_base("superchat")
             },
             _ => unreachable!(),
         };
@@ -555,6 +632,8 @@ impl AlertesState {
                 "resub": cfg.resub,
                 "subgift": cfg.subgift,
                 "bits": cfg.bits,
+                "gift": cfg.gift,
+                "superchat": cfg.superchat,
                 "overlay": {
                     "x": ov.x,
                     "y": ov.y,
@@ -584,6 +663,7 @@ impl AlertesState {
 fn evt_test_base(type_alerte: &str) -> EventTwitch {
     EventTwitch {
         type_alerte: type_alerte.to_string(),
+        plateforme: String::new(), // test manuel = pas de plateforme
         login: "streamy".to_string(),
         pseudo: String::new(), // rempli par l'appelant (..evt_test_base)
         user_id: "test".to_string(),
@@ -593,11 +673,15 @@ fn evt_test_base(type_alerte: &str) -> EventTwitch {
         nb_mois: 0,
         destinataire: String::new(),
         system_msg: String::new(),
+        montant: String::new(),
+        objet: String::new(),
+        nb_objet: 0,
     }
 }
 
 /// Remplace les variables {pseudo}, {nbViewers}, {nbBits}, {niveauSub},
-/// {nbMoisCumul}, {destinataire} dans le template.
+/// {nbMoisCumul}, {destinataire}, {montant}, {objet}, {nbObjet} dans le
+/// template.
 fn rendre_template(template: &str, evt: &EventTwitch) -> String {
     template
         .replace("{pseudo}", &evt.pseudo)
@@ -606,6 +690,9 @@ fn rendre_template(template: &str, evt: &EventTwitch) -> String {
         .replace("{niveauSub}", &evt.niveau_sub)
         .replace("{nbMoisCumul}", &evt.nb_mois.to_string())
         .replace("{destinataire}", &evt.destinataire)
+        .replace("{montant}", &evt.montant)
+        .replace("{objet}", &evt.objet)
+        .replace("{nbObjet}", &evt.nb_objet.to_string())
 }
 
 /// Overlay effectif (config absente → défaut haut-centré).

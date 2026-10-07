@@ -17,7 +17,7 @@ use serde::Serialize;
 use tauri::{AppHandle, Manager};
 
 /// Label de la fenêtre principale (1re fenêtre de tauri.conf.json).
-const LABEL: &str = "main";
+pub const LABEL: &str = "main";
 
 /// Taille de repli en mode fenêtré sans géométrie persistée (logique,
 /// = width/height de tauri.conf.json).
@@ -73,7 +73,9 @@ pub fn fenetre_appliquer(
 }
 
 /// Appelé dans setup() : lit fenetre.json, applique écran + mode à la fenêtre
-/// main (créée visible:false par tauri.conf.json — anti-flash), puis la montre.
+/// main (créée visible:false par tauri.conf.json — anti-flash). NE montre
+/// PAS la fenêtre : c'est `splash::armer_affichage` qui décide du show()
+/// (après 4 s de splash + event "frontend:pret" du frontend).
 /// Enregistre aussi le hook CloseRequested → sauvegarde de la géométrie
 /// fenêtrée à la fermeture par la croix.
 pub fn appliquer_au_boot(app: &AppHandle) {
@@ -89,7 +91,9 @@ pub fn appliquer_au_boot(app: &AppHandle) {
         Ok(None) => {}
         Err(e) => eprintln!("[Fenetre] ERR lecture config: {}", e),
     }
-    let _ = win.show();
+    // PAS de show() ici : l'affichage de main est chorégraphié par
+    // splash::armer_affichage (4 s de splash + event "frontend:pret",
+    // garde-fou si le frontend ne répond pas).
     // Sauver la géométrie fenêtrée quand la fenêtre se ferme par la croix.
     // capturer_geo ignore fullscreen/maximisé — pas de pollution de geo.
     // (app.exit()/restart() couverts par sauver_geo appelé dans app_arreter/

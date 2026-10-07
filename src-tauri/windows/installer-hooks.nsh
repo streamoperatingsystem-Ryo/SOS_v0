@@ -1,39 +1,32 @@
-; StreamOS v0 — Hooks NSIS pour l'installer (setup-base0007).
+; StreamOS v0 — Hooks NSIS pour l'installer.
 ;
 ; NSIS_HOOK_PREINSTALL : runs before copying files, after the PageReinstall
 ; page (which already offered to uninstall the old app version).
 ;
-; Wipe silencieux du dossier %APPDATA%/com.streamos.v0/ (données de toute
-; install précédente : scènes, médias importés, kick.json, tiktok.json,
-; configs). Garantit un fresh install aux utilisateurs à qui le setup.exe
-; est partagé — aucune donnée résiduelle de l'ancienne version n'est reprise.
+; Les données utilisateur dans %APPDATA%/com.streamos.v0/ (scènes, médias
+; importés, configs) sont CONSERVÉES à l'installation : une mise à jour ne
+; doit jamais détruire le travail de l'utilisateur. La rétro-compatibilité
+; des formats est gérée par serde(default) + migrations dans le code
+; (Scene::migrer_cadres / migrer_titres / migrer_ancien_config).
 ;
 ; Les tokens OAuth2 Twitch/YouTube sont stockés dans le keyring OS (coffre
-; Windows), PAS dans APPDATA → ils ne sont PAS affectés par ce wipe.
-;
-; Les autres hooks (POSTINSTALL, PREUNINSTALL, POSTUNINSTALL) sont laissés
-; vides — ils existent juste pour que le fichier soit complet.
+; Windows), PAS dans APPDATA → indépendants du dossier de données.
 
 !macro NSIS_HOOK_PREINSTALL
-  ; $APPDATA = C:\Users\<user>\AppData\Roaming (currentUser install mode).
-  ; Si le dossier com.streamos.v0 n'existe pas, on ne fait rien (silencieux).
-  IfFileExists "$APPDATA\com.streamos.v0\*.*" 0 skip_data_cleanup
-
-    ; Wipe silencieux (sans MessageBox) : fresh install garanti.
-    DetailPrint "Suppression des donnees precedentes : $APPDATA\com.streamos.v0"
-    RMDir /r "$APPDATA\com.streamos.v0"
-
-  skip_data_cleanup:
 !macroend
 
 !macro NSIS_HOOK_POSTINSTALL
-  ; Langue par défaut du dashboard : anglais. Écrit langue.json APRÈS le
-  ; wipe PREINSTALL → au 1er boot, lire_langue retourne "en" (prioritaire
-  ; sur navigator.language). Le sélecteur topbar permet de changer ensuite.
-  CreateDirectory "$APPDATA\com.streamos.v0"
-  FileOpen $0 "$APPDATA\com.streamos.v0\langue.json" w
-  FileWrite $0 '{"langue": "en"}'
-  FileClose $0
+  ; Langue par défaut du dashboard : anglais. langue.json est créé SEULEMENT
+  ; s'il est absent (première install) — une mise à jour ne doit pas écraser
+  ; la langue choisie par l'utilisateur. Au 1er boot, lire_langue retourne
+  ; "en" (prioritaire sur navigator.language). Le sélecteur topbar permet
+  ; de changer ensuite.
+  IfFileExists "$APPDATA\com.streamos.v0\langue.json" skip_langue_create
+    CreateDirectory "$APPDATA\com.streamos.v0"
+    FileOpen $0 "$APPDATA\com.streamos.v0\langue.json" w
+    FileWrite $0 '{"langue": "en"}'
+    FileClose $0
+  skip_langue_create:
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
