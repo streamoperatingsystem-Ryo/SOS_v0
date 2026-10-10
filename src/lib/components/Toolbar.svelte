@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, createMusiqueWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview } from "../stores/obs";
-  import { openSection, toggleSection, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen } from "../stores/ui";
+  import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen } from "../stores/ui";
   import { jcActif, toggleJustChatting } from "../stores/justChatting";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
   import { connecterKick, deconnecterKick, kickErreur as kickErreurStore, lireSlugSauve } from "../stores/kick";
@@ -269,12 +269,44 @@
     if (!kickSlug) kickSlug = (await lireSlugSauve()) ?? "";
     if (!tiktokUsername) tiktokUsername = (await lireUsernameSauve()) ?? "";
   });
+
+  // ===== Fermeture auto de la carte d'édition au scroll de la sidebar =====
+  // La carte ouverte (CarteEdition, au-dessus) compresse l'accordéon : si
+  // l'utilisateur scrolle la section ainsi rétrécie (wheel ou drag de la
+  // scrollbar fine), c'est qu'il veut atteindre les sections — la carte se
+  // referme d'elle-même et lui rend l'espace. Le scroll INTERNE de la carte
+  // (.carte-corps, élément sœur de l'aside) ne déclenche RIEN : le scroll ne
+  // bulle pas, et le wheel sur la carte n'atteint jamais l'aside.
+  let carteOuverteA = 0;
+  $effect(() => {
+    if ($carteEditionCible !== null) carteOuverteA = performance.now();
+  });
+  // Garde 350 ms anti « clamp » : ouvrir la carte ferme l'accordéon → le
+  // contenu de la sidebar rétrécit → le navigateur RECALE scrollTop (scroll
+  // programmatique, pas un geste) — sans garde, la carte se refermerait
+  // aussitôt ouverte dès que la sidebar était scrollée plus bas que le
+  // nouveau contenu.
+  function onSidebarScroll(): void {
+    if (performance.now() - carteOuverteA < 350) return;
+    if (get(carteEditionCible) !== null) carteEditionCible.set(null);
+  }
+  // Wheel = intention explicite, même sans scrollbar visible (contenu
+  // compressé qui tient). Même garde : une molette en inertie residuelle ne
+  // doit pas refermer une carte fraîchement ouverte.
+  function onSidebarWheel(): void {
+    if (performance.now() - carteOuverteA < 350) return;
+    if (get(carteEditionCible) !== null) carteEditionCible.set(null);
+  }
+
 </script>
 
-<aside class="sidebar">
+<aside class="sidebar" onscroll={onSidebarScroll} onwheel={onSidebarWheel}>
   <!-- L'édition du fond de l'application et des widgets se fait maintenant
        via la carte d'édition contextuelle (CarteEdition.svelte) en bas du
        panneau latéral — plus de section d'accordéon dédiée. -->
+  <!-- Fermeture auto : scroller/wheeler cette zone referme la carte
+       d'édition ouverte au-dessus (elle comprime l'accordéon) —
+       voir onSidebarScroll/onSidebarWheel dans le script. -->
 
   <!-- Section Widgets : la carte bleue (.carte-edition.cible-widgets) est
        portée par la .section elle-même quand elle est ouverte — elle englobe

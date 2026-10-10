@@ -28,6 +28,12 @@ export const totalSplits = writable<number>(0);
 /// nouveau run = les précédents ne comptent pas comme finis.
 export const splits = writable<string[]>([]);
 
+/// Cumuls de run aux splits réalisés (String formaté "MM:SS.mmm", index =
+/// segment 0-based). Base du delta cumulé (avance/retard de la run vs PB —
+/// référence LiveSplit) : rempli par event.cumul sur split/ended et par
+/// splitCumuls sur etat (resync), vidé par started/reset/goto/stopped.
+export const cumulsSplits = writable<(string | null)[]>([]);
+
 /// Temps vivant du segment courant (event `time.segmentTime`, formaté).
 /// null quand le timer ne tourne pas (la ligne armée affiche 0:00.00).
 export const tempsSegment = writable<string | null>(null);
@@ -94,6 +100,7 @@ export async function initSpeedrun() {
         // index = split de départ (armé par clic en NotRunning, sinon 0).
         indexSplitCourant.set(event.index ?? 0);
         splits.set([]);
+        cumulsSplits.set([]);
         tempsSegment.set(null);
         break;
       case "split":
@@ -111,6 +118,15 @@ export async function initSpeedrun() {
             return s;
           });
         }
+        // Cumul de run au split réalisé (base du delta cumulé LiveSplit).
+        if (event.cumul && event.index !== undefined) {
+          const segIdx = event.index - 1;
+          cumulsSplits.update((c) => {
+            while (c.length <= segIdx) c.push(null);
+            c[segIdx] = event.cumul!;
+            return c;
+          });
+        }
         break;
       case "splitSkipped":
         if (event.index !== undefined) {
@@ -126,12 +142,17 @@ export async function initSpeedrun() {
             if (event.index! < s.length) s[event.index!] = "";
             return s;
           });
+          cumulsSplits.update((c) => {
+            if (event.index! < c.length) c[event.index!] = null;
+            return c;
+          });
         }
         break;
       case "reset":
         phaseTimer.set("NotRunning");
         indexSplitCourant.set(null);
         splits.set([]);
+        cumulsSplits.set([]);
         tempsJeu.set(null);
         tempsReel.set("00:00.00");
         tempsSegment.set(null);
@@ -151,6 +172,16 @@ export async function initSpeedrun() {
             });
           }
         }
+        if (event.cumul) {
+          const segIdx = (event.index ?? get(totalSplits)) - 1;
+          if (segIdx >= 0) {
+            cumulsSplits.update((c) => {
+              while (c.length <= segIdx) c.push(null);
+              c[segIdx] = event.cumul!;
+              return c;
+            });
+          }
+        }
         break;
       case "goto":
         // Clic sur une ligne : armement (NotRunning) ou retry de segment.
@@ -159,6 +190,7 @@ export async function initSpeedrun() {
         if (event.phase) phaseTimer.set(event.phase);
         if (event.index !== undefined) indexSplitCourant.set(event.index);
         splits.set([]);
+        cumulsSplits.set([]);
         tempsSegment.set(null);
         break;
       case "etat":
@@ -168,6 +200,7 @@ export async function initSpeedrun() {
           event.index !== undefined && event.index >= 0 ? event.index : null
         );
         splits.set((event.splitTimes ?? []).map((t) => t ?? ""));
+        cumulsSplits.set((event.splitCumuls ?? []).map((t) => t ?? null));
         if (event.realTime) tempsReel.set(event.realTime);
         tempsJeu.set(event.gameTime ?? event.realTime ?? null);
         tempsSegment.set(event.segmentTime ?? null);
@@ -192,6 +225,7 @@ export async function initSpeedrun() {
         phaseTimer.set("NotRunning");
         indexSplitCourant.set(null);
         splits.set([]);
+        cumulsSplits.set([]);
         tempsJeu.set(null);
         tempsReel.set("00:00.00");
         tempsSegment.set(null);
@@ -205,6 +239,7 @@ export async function initSpeedrun() {
         phaseTimer.set("NotRunning");
         indexSplitCourant.set(null);
         splits.set([]);
+        cumulsSplits.set([]);
         tempsSegment.set(null);
         break;
       case "paused":
@@ -219,6 +254,14 @@ export async function initSpeedrun() {
       case "settings-list":
         // Les settings sont gérés côté frontend (toggles), pas besoin de
         // les synchroniser depuis le backend ici.
+        break;
+      case "saved":
+        // PB sauvegardé dans le .lss (run terminée plus rapide que le PB) :
+        // recharger silencieusement le fichier pour rafraîchir les PB
+        // affichés. La garde same-path côté Rust évite tout reset moteur.
+        if (event.chemin) {
+          chargerLss(event.chemin).catch(() => {});
+        }
         break;
     }
   });

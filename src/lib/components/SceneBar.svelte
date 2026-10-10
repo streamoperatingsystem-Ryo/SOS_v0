@@ -21,6 +21,7 @@
   import { dupliquerSceneModalOpen } from "../stores/ui";
   import { t } from "../stores/langue";
   import type { SceneIndex } from "../tauri";
+  import CtxMenu from "./CtxMenu.svelte";
 
   let index = $derived($scenesIndexStore);
   let currentId = $derived($currentSceneIdStore);
@@ -32,6 +33,12 @@
 
   // ===== Dropdown "Vos scènes" (liste des pastilles) =====
   let scenesOuvert = $state(false);
+
+  // Colonnes de la grille des pastilles : min(3, nb scènes) — une seule
+  // scène = une colonne, trois et plus = 3 colonnes (« tableau » borné en
+  // hauteur). Ordre ligne par ligne (gauche→droite) = ordre du document :
+  // le split horizontal avant/après du drag reste cohérent.
+  let colsScenes = $derived(Math.min(3, Math.max(1, index.length)));
 
   function toggleScenes() {
     scenesOuvert = !scenesOuvert;
@@ -49,10 +56,9 @@
     menuSceneId = null;
   }
 
-  // Fermer le menu sur clic n'importe où ailleurs
+  // Fermeture du menu contextuel pastille : gérée par CtxMenu (clic
+  // extérieur + Escape). Ici : uniquement le dropdown "Vos scènes".
   function onWindowClick(e: MouseEvent) {
-    if (menuSceneId) fermerMenu();
-    // Fermer le dropdown "Vos scènes" si clic en dehors
     if (scenesOuvert) {
       const target = e.target as HTMLElement;
       if (!target.closest(".vos-scenes-wrap")) {
@@ -62,10 +68,7 @@
   }
 
   function onWindowKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      if (menuSceneId) fermerMenu();
-      if (scenesOuvert) scenesOuvert = false;
-    }
+    if (e.key === "Escape" && scenesOuvert) scenesOuvert = false;
   }
 
   // ===== Rename inline par pastille =====
@@ -250,8 +253,8 @@
     <span class="vs-label">{$t("sceneBar.vosScenes")} <span class="fleche">{scenesOuvert ? "▾" : "▸"}</span></span>
   </button>
   {#if scenesOuvert}
-    <div class="pastilles-dropdown">
-      <div class="pastilles">
+    <div class="pastilles-dropdown ctx-menu">
+      <div class="pastilles" style="grid-template-columns: repeat({colsScenes}, minmax(8rem, auto))">
         {#each index as s (s.id)}
           <!-- svelte-ignore a11y_no_static_element_interactions -->
           <div
@@ -297,15 +300,7 @@
 </div>
 
 {#if menuSceneId}
-  <div
-    class="ctx-menu"
-    style="left:{menuX}px; top:{menuY}px;"
-    onclick={(e) => e.stopPropagation()}
-    oncontextmenu={(e) => e.preventDefault()}
-    onkeydown={(e) => e.stopPropagation()}
-    role="menu"
-    tabindex="-1"
-  >
+  <CtxMenu x={menuX} y={menuY} onclose={fermerMenu}>
     <button class="ctx-item" role="menuitem" onclick={() => demarrerRename(menuSceneId!)}>
       {$t("commun.renommer")}
     </button>
@@ -334,7 +329,7 @@
         {$t("commun.supprimer")}
       </button>
     {/if}
-  </div>
+  </CtxMenu>
 {/if}
 
 <style>
@@ -395,31 +390,27 @@
   .vos-scenes-btn .fleche {
     font-size: 0.7rem;
   }
-  /* Dropdown : panneau sous le bouton, ancré à droite (groupe outils du
-     header), fond panneau + bordure active + glow violet. Scroll vertical
-     si trop de scènes, pas de scrollbar visible. */
+  /* Dropdown : panneau .ctx-menu (app.css — verre dépoli teinté accent +
+     filet dégradé, même look que les menus clic droit et le dropdown
+     Langue) ancré en absolu sous le bouton à la place du fixed à la
+     souris. Scroll vertical si trop de scènes, pas de scrollbar visible. */
   .pastilles-dropdown {
     position: absolute;
     top: calc(100% + 0.25rem);
     right: 0;
-    z-index: 1000;
-    background: var(--fond-panneau);
-    border: 1px solid var(--bordure-ui-active);
-    border-radius: var(--rayon-petit);
-    box-shadow: 0 0 20px color-mix(in srgb, var(--accent-ui) 20%, transparent);
-    padding: 0.3rem;
     min-width: 10rem;
     max-height: 60vh;
-    overflow-y: auto;
     scrollbar-width: none;
   }
   .pastilles-dropdown::-webkit-scrollbar {
     display: none;
   }
+  /* Grille multi-colonnes (« tableau ») : le nombre de colonnes est posé en
+     inline (repeat(colsScenes, minmax(8rem, auto))) — la liste ne s'allonge
+     plus indéfiniment en hauteur. Les pistes s'adaptent au contenu ; les
+     noms longs sont bornés par l'ellipse de .pastille-nom. */
   .pastilles {
-    display: flex;
-    flex-direction: column;
-    align-items: stretch;
+    display: grid;
     gap: 0.25rem;
   }
   .pastille-group {
@@ -461,6 +452,12 @@
     font-size: 0.8rem;
     cursor: pointer;
     white-space: nowrap;
+    /* Truncate : en grille multi-colonnes, un nom très long élargirait sa
+       colonne — ellipse bornée pour garder le tableau compact (le nom
+       complet reste lisible via l'édition / le survol). */
+    max-width: 14rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
     width: 100%;
     text-align: left;
   }

@@ -771,12 +771,15 @@
         position: relative;
         z-index: 1;
       }
-      /* En-tête : jeu + catégorie (gauche) + statut connexion (droite). */
+      /* En-tête : titre du jeu centré en haut, catégorie juste en dessous,
+         pastille de statut garée en coin (absolute) — comme le dashboard. */
       .sr-header {
         display: flex;
+        flex-direction: column;
         align-items: center;
-        justify-content: space-between;
-        gap: 0.4em;
+        gap: 2px;
+        /* Ancre pour la pastille de statut (garée en coin, hors flux). */
+        position: relative;
       }
       .sr-titre-jeu {
         font-size: 0.75em;
@@ -785,14 +788,19 @@
         overflow: hidden;
         text-overflow: ellipsis;
         white-space: nowrap;
-        flex: 1;
-        min-width: 0;
+        text-align: center;
+        /* En colonne centrée l'item shrink-wrappe son contenu : max-width
+           pour que les titres longs ellipsent au lieu de déborder. */
+        max-width: 100%;
         /* Ombre de lisibilité : titre clair sur fond sombre → ombre noire. */
         text-shadow: 0 1px 2px #000, 0 0 1px #000;
       }
-      .sr-header .sr-cat {
+      /* Catégorie sur sa propre ligne (comme le dashboard), un peu plus
+         petite que le titre. */
+      .sr-cat {
         color: var(--gris);
         font-weight: 400;
+        font-size: 0.7em;
       }
       .sr-placeholder {
         color: var(--gris);
@@ -800,6 +808,10 @@
         font-weight: 400;
       }
       .sr-status {
+        /* Garée en coin haut-droit du header — hors du flux centré. */
+        position: absolute;
+        top: 0;
+        right: 0;
         font-size: 0.7em;
         flex-shrink: 0;
       }
@@ -900,7 +912,6 @@
         font-size: 0.78em;
         border: 1px solid transparent;
         border-radius: var(--rayon-petit);
-        color: var(--gris);
         /* BG gradient : on garde la couleur du user (variable) mais on remplace
            la couleur claire par du noir profond → dégradé couleur user → noir.
            Teinte assombrie (35% sur noir) pour les splits non actifs afin que
@@ -930,15 +941,16 @@
         text-shadow: 0 1px 2px #000, 0 0 1px #000;
       }
       /* Colonne delta (dernière colonne, "+/−" façon LiveSplit) : vert =
-         temps gagné vs PB du segment, rouge = temps perdu, gris = neutre.
-         Largeur de colonne fixe — la case reste visible même vide (jamais
-         display:none). Variables sémantiques — jamais d'hex en dur. */
+         temps gagné vs PB (avance cumulée de la run), rouge = temps perdu,
+         gris = neutre. Largeur pour "-1234.5" (delta cumulé en secondes +
+         dixième) — la case reste visible même vide (jamais display:none).
+         Variables sémantiques — jamais d'hex en dur. */
       .sr-seg-pb {
         font-variant-numeric: tabular-nums;
         color: var(--gris);
         font-size: 0.9em;
         text-shadow: 0 1px 2px #000;
-        min-width: 3.2em;
+        min-width: 4.5em;
         text-align: right;
         flex-shrink: 0;
       }
@@ -3521,16 +3533,17 @@
         return cadre;
       }
 
-      // strokeWidth plafonné pour les bulles : la valeur scène est calibrée
-      // pour un widget (~160px+). Sur une bulle ~45px tout dépassement de
-      // ~2px rend épais — les renderers dessinent ~3×ep en bande visible
-      // (sous-couche ep*2.2 + traits internes) et leurs ornements ont un
-      // plancher 8-12px (bevels/coins). Plafond absolu 2px quelle que soit
-      // la valeur scène (sw=1 reste respecté). Échelle partagée avec le
-      // widget goal via cadreGoal — cadre visuellement identique.
+      // strokeWidth ramené à l'échelle « bulle » : ratio 40% de la valeur
+      // scène (calibrée pour un widget ~160px+ ; sur une bulle ~45px les
+      // renderers dessinent ~3×ep en bande visible — sous-couche ep*2.2 +
+      // traits internes — et leurs ornements ont un plancher 8-12px).
+      // Le slider suit donc proportionnellement jusqu'à sw=20 puis sature :
+      // plafond absolu 8px (sw=1 reste respecté, arrondi, plancher 1px).
+      // Échelle partagée avec le widget goal via cadreGoal — cadre
+      // visuellement identique.
       function cadreMsgScale(cadre) {
         var sw = cadre.strokeWidth || 4;
-        var scaled = Math.max(1, Math.min(sw, 2));
+        var scaled = Math.max(1, Math.min(Math.round(sw * 0.4), 8));
         if (scaled === sw) return cadre;
         var c = {};
         for (var k in cadre) c[k] = cadre[k];
@@ -4782,14 +4795,16 @@
       // coords en % via viewBox 100x100). La barre de LEDs est un SVG séparé
       // non étiré (meet, calé à droite) : les LEDs portent data-touche →
       // elles s'allument avec la touche comme sur un vrai clavier.
-      function ivChassisHTML() {
+      // carre : cadre de scène "carre" actif → plaque et lit équerres
+      // (la silhouette suit le cadre choisi par l'utilisateur).
+      function ivChassisHTML(carre) {
         return '<svg class="iv-kb-chassis" viewBox="0 0 100 100" preserveAspectRatio="none">'
           + '<defs><linearGradient id="ivk-plate" x1="0" y1="0" x2="0" y2="1">'
           + '<stop offset="0" stop-color="#333844"/><stop offset="0.5" stop-color="#23262e"/><stop offset="1" stop-color="#14161b"/>'
           + '</linearGradient></defs>'
-          + '<rect class="iv-kb-plate" x="2" y="1.5" width="96" height="97" rx="3" fill="url(#ivk-plate)"/>'
+          + '<rect class="iv-kb-plate" x="2" y="1.5" width="96" height="97" rx="' + (carre ? 0 : 3) + '" fill="url(#ivk-plate)"/>'
           + '<rect class="iv-kb-cable" x="46" y="0" width="8" height="2" rx="0.8"/>'
-          + '<rect class="iv-kb-bed" x="4" y="10.5" width="92" height="84" rx="2"/>'
+          + '<rect class="iv-kb-bed" x="4" y="10.5" width="92" height="84" rx="' + (carre ? 0 : 2) + '"/>'
           + '</svg>'
           + '<svg class="iv-kb-topbar" viewBox="0 0 280 46" preserveAspectRatio="xMaxYMid meet">'
           + '<g data-touche="CapsLock"><circle class="iv-kb-led" cx="176" cy="16" r="7"/><text class="iv-kb-led-txt" x="176" y="38">CAPS</text></g>'
@@ -4798,10 +4813,10 @@
           + '</svg>';
       }
 
-      function ivGenererClavierHTML(layout) {
+      function ivGenererClavierHTML(layout, carre) {
         var rangees = layout === "qwerty" ? IV_CLAVIER_QWERTY : IV_CLAVIER_AZERTY;
         var html = '<div class="iv-section iv-section-clavier"><div class="iv-kb">'
-          + ivChassisHTML()
+          + ivChassisHTML(carre)
           + '<div class="iv-kb-keys"><div class="iv-clavier">';
         for (var r = 0; r < rangees.length; r++) {
           html += '<div class="iv-rangee">';
@@ -4866,11 +4881,11 @@
 
       // Pavé numérique : reconnaît AUSSI les chiffres du haut du clavier
       // (Digit0-9) en plus du pavé (Numpad0-9) via data-touche-alt.
-      function ivGenererNumpadHTML() {
+      function ivGenererNumpadHTML(carre) {
         return '<div class="iv-section iv-section-numpad"><div class="iv-kb">'
-          + ivChassisHTML()
+          + ivChassisHTML(carre)
           + '<div class="iv-kb-keys"><div class="iv-numpad">'
-          + '<div class="iv-numpad-touche" data-touche="NumLock">Num</div>'
+          + '<div class="iv-numpad-touche" data-touche="Escape">Esc</div>'
           + '<div class="iv-numpad-touche" data-touche="NumpadDivide">/</div>'
           + '<div class="iv-numpad-touche" data-touche="NumpadMultiply">*</div>'
           + '<div class="iv-numpad-touche" data-touche="NumpadSubtract">−</div>'
@@ -5169,12 +5184,20 @@
         return ivGenererManetteXboxSVG();
       }
 
-      function ivGenererHTML(w) {
+      // Cadre « carre » actif sur ce widget ? (même condition qu'applyCadreWidget :
+      // actif + strokeWidth > 0 + pas de sansCadre). Pilote le rx du châssis.
+      function ivChassisCarre(w, cadre) {
+        return !!(cadre && cadre.actif && (cadre.strokeWidth || 0) > 0
+          && (cadre.style || "carre") === "carre" && w.sansCadre !== true);
+      }
+
+      function ivGenererHTML(w, cadre) {
         var mode = w.inputMode || "clavier";
+        var carre = ivChassisCarre(w, cadre);
         if (mode === "souris") return ivGenererSourisHTML();
-        if (mode === "numpad") return ivGenererNumpadHTML();
+        if (mode === "numpad") return ivGenererNumpadHTML(carre);
         if (mode === "manette") return ivGenererManetteHTML(w.inputSkin);
-        return ivGenererClavierHTML(w.inputLayout || "azerty");
+        return ivGenererClavierHTML(w.inputLayout || "azerty", carre);
       }
 
       // Dernier état reçu (pour ne mettre à jour que les touches qui changent).
@@ -5381,20 +5404,12 @@
         return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") + "." + String(cs).padStart(2, "0");
       }
 
-      /// Formate un delta signé façon LiveSplit (colonne "+/−") : signe
-      /// toujours présent, format m:ss (h:mm:ss au-delà d'une heure),
-      /// secondes arrondies — jamais de décimales ("-1:01", "+0:12").
+      /// Formate un delta signé (colonne "+/−") : signe toujours présent,
+      /// secondes avec 1 dixième — MÊME au-delà de 60 s ("-2.4", "+62.4").
+      /// Choix utilisateur : toujours en secondes, jamais m:ss.
       function srFormatDelta(secs) {
         var sign = secs < 0 ? "-" : "+";
-        var totalS = Math.round(Math.abs(secs));
-        var h = Math.floor(totalS / 3600);
-        var m = Math.floor((totalS % 3600) / 60);
-        var s = totalS % 60;
-        var ss = String(s).padStart(2, "0");
-        if (h > 0) {
-          return sign + h + ":" + String(m).padStart(2, "0") + ":" + ss;
-        }
-        return sign + m + ":" + ss;
+        return sign + Math.abs(secs).toFixed(1);
       }
 
       /// Recrée le HTML de la liste des segments (quand le total change).
@@ -5450,23 +5465,35 @@
           var estActif = (idx !== null && j === idx);
           var enCours = estActif &&
             (entry.srPhase === "Running" || entry.srPhase === "Paused");
-          // Delta vs PB du segment — colonne "+/−" façon LiveSplit :
-          // actif = temps vivant − PB (défile à chaque tick), passé = durée
-          // réalisée − PB (figé au split), non atteint / skippé / armé en
-          // NotRunning / sans PB = vide.
+          // Delta cumulé vs PB — colonne "+/−" façon LiveSplit (avance/
+          // retard de la run ENTIÈRE à ce split) : actif = chrono total
+          // vivant − PB cumulé (défile à chaque tick), passé = cumul de
+          // run enregistré − PB cumulé (figé au split), non atteint /
+          // skippé / armé en NotRunning / sans PB = vide.
           var deltaTxt = "";
           var deltaSens = "";
-          if (segPb !== null) {
-            var segSecs = null;
-            if (idx !== null && j < idx && enregistre) {
-              segSecs = srParseTime(enregistre);
-            } else if (enCours && entry.srSegTime) {
-              segSecs = srParseTime(entry.srSegTime);
+          // PB cumulé au split j (le .lss stocke les PB en CUMUL — pas de
+          // soustraction ; real time d'abord, fallback game time).
+          var pbCumul = null;
+          if (segDef) {
+            pbCumul = (segDef.pbRealTime != null)
+              ? segDef.pbRealTime
+              : segDef.pbGameTime;
+          }
+          if (pbCumul !== null) {
+            var cumulSecs = null;
+            var cumulRec = (entry.srSplitCumuls && j < entry.srSplitCumuls.length)
+              ? entry.srSplitCumuls[j]
+              : null;
+            if (idx !== null && j < idx && cumulRec) {
+              cumulSecs = srParseTime(cumulRec);
+            } else if (enCours) {
+              cumulSecs = srParseTime(entry.srGameTime || entry.srRealTime);
             }
-            if (segSecs !== null) {
-              // Classer sur la valeur arrondie à la seconde (cohérent avec
-              // l'affichage m:ss : "+0:00" ne bascule pas de couleur).
-              var dd = Math.round(segSecs - segPb);
+            if (cumulSecs !== null) {
+              // Classer sur la valeur arrondie au dixième (cohérente avec
+              // l'affichage : "+0.0" ne bascule pas de couleur).
+              var dd = Math.round((cumulSecs - pbCumul) * 10) / 10;
               deltaTxt = srFormatDelta(dd);
               deltaSens = dd < 0 ? "ahead" : dd > 0 ? "behind" : "";
             }
@@ -5570,17 +5597,16 @@
 
       /// Met à jour l'en-tête (jeu + catégorie + statut connexion) selon l'état
       /// consolidé de l'entry. Reproduit le rendu dashboard (WidgetSpeedrun) :
-      /// titre à gauche, pastille de statut à droite (● connecté, ○ en attente).
+      /// titre centré en haut, catégorie sur sa propre ligne dessous, pastille
+      /// de statut en coin haut-droit (● connecté, ○ en attente).
       function srMajHeader(entry) {
         var header = entry.el.querySelector(".sr-header");
         if (!header) return;
         // Titre jeu + catégorie (ou placeholder si aucun splits chargé).
         var html = "";
         if (entry.srNomJeu || entry.srNomCategorie) {
-          html = '<div class="sr-titre-jeu">' +
-            (entry.srNomJeu || "") +
-            (entry.srNomCategorie ? '<span class="sr-cat"> — ' + entry.srNomCategorie + '</span>' : '') +
-            '</div>';
+          html = '<div class="sr-titre-jeu">' + (entry.srNomJeu || "") + '</div>' +
+            (entry.srNomCategorie ? '<div class="sr-cat">' + entry.srNomCategorie + '</div>' : '');
         } else {
           html = '<div class="sr-titre-jeu"><span class="sr-placeholder">Aucun splits chargé</span></div>';
         }
@@ -5628,6 +5654,7 @@
               // index = split de départ (armé par clic en NotRunning, sinon 0).
               entry.srIndex = (etat.index !== undefined) ? etat.index : 0;
               entry.srSplitTimes = [];
+              entry.srSplitCumuls = [];
               entry.srSegTime = "00:00.00";
               break;
             case "split":
@@ -5640,6 +5667,13 @@
                 var segIdx = etat.index - 1;
                 while (entry.srSplitTimes.length <= segIdx) entry.srSplitTimes.push("");
                 entry.srSplitTimes[segIdx] = etat.time;
+              }
+              // Cumul de run au split réalisé (base du delta cumulé).
+              if (etat.cumul && etat.index !== undefined) {
+                if (!entry.srSplitCumuls) entry.srSplitCumuls = [];
+                var cumIdx = etat.index - 1;
+                while (entry.srSplitCumuls.length <= cumIdx) entry.srSplitCumuls.push(null);
+                entry.srSplitCumuls[cumIdx] = etat.cumul;
               }
               // Le nouveau segment repart de zéro (segmentTime réel arrive
               // au prochain tick Time).
@@ -5656,6 +5690,9 @@
                 if (entry.srSplitTimes && etat.index < entry.srSplitTimes.length) {
                   entry.srSplitTimes[etat.index] = "";
                 }
+                if (entry.srSplitCumuls && etat.index < entry.srSplitCumuls.length) {
+                  entry.srSplitCumuls[etat.index] = null;
+                }
               }
               // Le segment défait reprend là où il en était (d_k) — le temps
               // réel arrive au prochain tick Time.
@@ -5667,6 +5704,7 @@
               entry.srGameTime = null;
               entry.srRealTime = "00:00.00";
               entry.srSplitTimes = [];
+              entry.srSplitCumuls = [];
               entry.srSegTime = null;
               break;
             case "ended":
@@ -5682,6 +5720,12 @@
                   while (entry.srSplitTimes.length <= lastIdx) entry.srSplitTimes.push("");
                   entry.srSplitTimes[lastIdx] = etat.time;
                 }
+                if (etat.cumul) {
+                  if (!entry.srSplitCumuls) entry.srSplitCumuls = [];
+                  var lastCumIdx = etat.index - 1;
+                  while (entry.srSplitCumuls.length <= lastCumIdx) entry.srSplitCumuls.push(null);
+                  entry.srSplitCumuls[lastCumIdx] = etat.cumul;
+                }
               }
               entry.srSegTime = null;
               break;
@@ -5693,6 +5737,7 @@
               if (etat.phase) entry.srPhase = etat.phase;
               if (etat.index !== undefined) entry.srIndex = etat.index;
               entry.srSplitTimes = [];
+              entry.srSplitCumuls = [];
               entry.srSegTime =
                 (etat.phase === "Running" || etat.phase === "Paused")
                   ? "00:00.00" : null;
@@ -5703,6 +5748,7 @@
               entry.srIndex =
                 (etat.index !== undefined && etat.index >= 0) ? etat.index : null;
               entry.srSplitTimes = (etat.splitTimes || []).map(function (t) { return t || ""; });
+              entry.srSplitCumuls = (etat.splitCumuls || []).map(function (t) { return t || null; });
               if (etat.realTime) entry.srRealTime = etat.realTime;
               entry.srGameTime = etat.gameTime || etat.realTime || null;
               entry.srSegTime = etat.segmentTime || null;
@@ -5734,6 +5780,7 @@
               entry.srConnecte = false;
               entry.srProcessus = null;
               entry.srSplitTimes = [];
+              entry.srSplitCumuls = [];
               entry.srSegTime = null;
               break;
             case "connected":
@@ -5750,6 +5797,7 @@
               entry.srGameTime = null;
               entry.srRealTime = "00:00.00";
               entry.srSplitTimes = [];
+              entry.srSplitCumuls = [];
               entry.srSegTime = null;
               break;
             case "lss":
@@ -6017,7 +6065,10 @@
             var ivLayout = w.inputLayout || "azerty";
             var ivSkin = w.inputSkin || "xbox";
             var ivCouleur = w.inputCouleur || "#8b5cf6";
-            var ivKey = ivMode + "|" + ivLayout + "|" + ivSkin;
+            // Le flag "carre" du châssis fait partie de la clé : un changement
+            // de style de cadre régénère le markup (rx de la plaque).
+            var ivKey = ivMode + "|" + ivLayout + "|" + ivSkin
+              + "|" + (ivChassisCarre(w, scene.cadreWidget) ? "c" : "r");
             if (ivEntry && ivEntry.kind !== "inputviewer") {
               slidesArreter(ivEntry); // timer carrousel éventuel
               ivEntry.wrapEl.remove();
@@ -6030,7 +6081,7 @@
               ivEntry.wrapEl.style.zIndex = w.z;
               if (ivEntry.inputKey !== ivKey) {
                 ivEntry.inputKey = ivKey;
-                ivEntry.el.innerHTML = ivGenererHTML(w);
+                ivEntry.el.innerHTML = ivGenererHTML(w, scene.cadreWidget);
                 // innerHTML a détruit l'overlay cadre SVG → forcer recréation.
                 ivEntry.cadreOverlayEl = null;
                 ivEntry.cadreKey = "";
@@ -6063,7 +6114,7 @@
                 "--inputviewer-couleur-presse",
                 w.inputCouleur || "#8b5cf6"
               );
-              ivEl.innerHTML = ivGenererHTML(w);
+              ivEl.innerHTML = ivGenererHTML(w, scene.cadreWidget);
               ivEl._inputMapping = w.inputMapping || null;
               ivWrap.appendChild(ivEl);
               stageEl.appendChild(ivWrap);
@@ -6159,7 +6210,8 @@
                 srTotalSplits: 0, srPhase: "NotRunning", srSegments: [],
                 srIndex: null, srGameTime: null, srRealTime: "00:00.00",
                 srNomJeu: "", srNomCategorie: "", srConnecte: false, srActif: false,
-                srProcessus: null, srSplitTimes: [], srSegTime: null
+                srProcessus: null, srSplitTimes: [], srSplitCumuls: [],
+                srSegTime: null
               };
               widgetMap.set(w.id, srNew);
               // Média de fond (premier enfant, sous le timer + les splits).
@@ -7549,6 +7601,7 @@
           el.style.clipPath = "";
           el.style.webkitClipPath = "";
           el.style.border = "";
+          el.style.borderRadius = "";
           if (entry.cadreOverlayEl) {
             entry.cadreOverlayEl.remove();
             entry.cadreOverlayEl = null;
@@ -7564,6 +7617,10 @@
         // overflow:hidden clippe le trait sur les bords droit/bas (anneau
         // blanc résiduel autour du cadre dans OBS).
         el.style.border = "none";
+        // Le cadre de scène gouverne la silhouette : radius natif neutralisé
+        // ("carre" n'a pas de clip-path — sans ça le fond glass de
+        // l'input-viewer garde des coins ronds sous le cadre carré).
+        el.style.borderRadius = "0";
         // Clip-path : appliquer à chaque fois (cheap, pas de recréation DOM).
         var clip = genererCadreClipPath(cadre, w.largeur, w.hauteur);
         if (clip) {

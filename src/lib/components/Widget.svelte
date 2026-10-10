@@ -1,7 +1,6 @@
 <script lang="ts">
   import {
     moveWidgetLocal,
-    resizeWidgetLocal,
     commitScene,
     selectedIdStore,
     selectWidget,
@@ -72,22 +71,14 @@
     return goalLieLive.description || $t("goal.ttype." + goalLieLive.goal_type);
   });
 
-  // Mini widget — jamais en dessous.
-  const MIN = 80;
-  // Poignées resize : 4 coins + 4 bords.
-  const HANDLES = ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as const;
-
-  let outerEl: HTMLDivElement;
+  // Le resize (poignées) est géré par SelectionOverlay.svelte — frère des
+  // .widget dans Canvas, au-dessus de tout (jamais masqué par un voisin).
 
   let dragging = $state(false);
-  let resizing = $state(false);
-  let handle = "";
   let startX = 0;
   let startY = 0;
   let startWX = 0;
   let startWY = 0;
-  let startW = 0;
-  let startH = 0;
 
   // Grille magnétique : cibles figées au pointerdown (snapshot, pas de get() par frame).
   // Bypass si Alt enfoncé (free-drag sans aimantation).
@@ -169,11 +160,12 @@
   // Le badge « en lecture dans OBS » est orange fixe (.lecture-obs —
   // recette .msg-pill, app.css) — jamais la couleur du cadre.
   // Épaisseur effective : le widget goal adopte l'échelle « bulle »
-  // (plafond 2px — même cadre que les messages chat en mode bulles en
-  // diffusion, cadreMsgScale/cadreGoal de diffusion.html) ; son format
-  // compact rendrait le stroke scène disproportionné.
+  // (ratio 40% du stroke scène, plafond 8px — même cadre que les messages
+  // chat en mode bulles en diffusion, cadreMsgScale/cadreGoal de
+  // diffusion.html) ; son format compact rendrait le stroke scène
+  // disproportionné.
   let cadreStroke = $derived(
-    isGoal ? Math.max(1, Math.min(cadre?.strokeWidth ?? 4, 2)) : (cadre?.strokeWidth ?? 4)
+    isGoal ? Math.max(1, Math.min(Math.round((cadre?.strokeWidth ?? 4) * 0.4), 8)) : (cadre?.strokeWidth ?? 4)
   );
   let clipPathCorps = $derived(
     cadreActif && cadre
@@ -191,7 +183,6 @@
   let titreBas = $derived(w.titreBas ?? "");
   let titreGauche = $derived(w.titreGauche ?? "");
   let titreDroite = $derived(w.titreDroite ?? "");
-  let titreVisible = $derived(!!(titreHaut || titreBas || titreGauche || titreDroite));
   let titrePolice = $derived(w.titrePolice ?? POLICE_TITRE_DEFAUT);
   let titreTaille = $derived(w.titreTaille ?? TAILLE_TITRE_DEFAUT);
   let titreGras = $derived(w.titreGras ?? false);
@@ -417,35 +408,11 @@
     startY = e.clientY;
     startWX = w.x;
     startWY = w.y;
-    startW = w.largeur;
-    startH = w.hauteur;
     // Snapshot des cibles de snap (figé pendant tout le drag — pas de get() par frame).
     snapTargets = buildSnapTargets(get(sceneStore), w.id);
     // Afficher les guides d'alignement (dashboard uniquement).
     afficherGuidesDrag({ x: w.x, y: w.y, width: w.largeur, height: w.hauteur });
     (e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);
-  }
-
-  function onHandleDown(e: PointerEvent, h: string) {
-    // Bouton gauche uniquement (même raison que onpointerdown).
-    if (e.button !== 0) return;
-    e.stopPropagation();
-    selectWidget(w.id);
-    setCarteEdition("widget");
-    resizing = true;
-    handle = h;
-    startX = e.clientX;
-    startY = e.clientY;
-    startWX = w.x;
-    startWY = w.y;
-    startW = w.largeur;
-    startH = w.hauteur;
-    // Snapshot des cibles de snap (figé pendant tout le resize).
-    snapTargets = buildSnapTargets(get(sceneStore), w.id);
-    // Afficher les guides d'alignement (dashboard uniquement).
-    afficherGuidesDrag({ x: w.x, y: w.y, width: w.largeur, height: w.hauteur });
-    // Capture sur l'outer : move/up écoutés sur l'outer.
-    outerEl.setPointerCapture(e.pointerId);
   }
 
   function onpointermove(e: PointerEvent) {
@@ -474,60 +441,11 @@
       afficherGuidesDrag({ x: nx, y: ny, width: w.largeur, height: w.hauteur });
       return;
     }
-    if (resizing) {
-      const dx = (e.clientX - startX) / scale;
-      const dy = (e.clientY - startY) / scale;
-      let nw = startW;
-      let nh = startH;
-      let nx = startWX;
-      let ny = startWY;
-      // Directions horizontales.
-      if (handle.includes("w")) {
-        nw = startW - dx;
-        if (nw < MIN) {
-          nx = startWX + (startW - MIN);
-          nw = MIN;
-        } else {
-          nx = startWX + dx;
-        }
-      } else if (handle.includes("e")) {
-        nw = Math.max(MIN, startW + dx);
-      }
-      // Directions verticales.
-      if (handle.includes("n")) {
-        nh = startH - dy;
-        if (nh < MIN) {
-          ny = startWY + (startH - MIN);
-          nh = MIN;
-        } else {
-          ny = startWY + dy;
-        }
-      } else if (handle.includes("s")) {
-        nh = Math.max(MIN, startH + dy);
-      }
-      // Grille magnétique sur le resize sauf si Alt enfoncé.
-      if (!e.altKey && snapTargets) {
-        const snap = computeSnap(nx, ny, nw, nh, snapTargets);
-        // Ajuste position selon le snap (les dims restent les mêmes sauf
-        // pour les poignées w/n où le snap décale aussi la taille).
-        const ddx = snap.x - nx;
-        const ddy = snap.y - ny;
-        nx = snap.x;
-        ny = snap.y;
-        if (handle.includes("w")) nw -= ddx;
-        if (handle.includes("n")) nh -= ddy;
-      }
-      resizeWidgetLocal(w.id, nx, ny, nw, nh);
-      // Mettre à jour les guides visuels pendant le resize.
-      afficherGuidesDrag({ x: nx, y: ny, width: nw, height: nh });
-    }
   }
 
   async function onpointerup(e: PointerEvent) {
-    if (!dragging && !resizing) return;
+    if (!dragging) return;
     dragging = false;
-    resizing = false;
-    handle = "";
     snapTargets = null;
     masquerGuides();
     (e.currentTarget as HTMLElement).releasePointerCapture(e.pointerId);
@@ -570,7 +488,6 @@
   class:dragging
   class:morphable
   data-widget-id={w.id}
-  bind:this={outerEl}
   style="left:{w.x}px; top:{w.y}px; width:{w.largeur}px; height:{w.hauteur}px; z-index:{w.z};"
   onpointerdown={onpointerdown}
   onpointermove={onpointermove}
@@ -809,43 +726,13 @@
     <div class="widget-titre droite" style={titreStyle}>{titreDroite}</div>
   {/if}
 
-  <!-- Zones de double-clic (haut/bas/gauche/droite) — affichées au survol du
-       widget sélectionné (avec ou sans titre existant) pour indiquer où
+  <!-- Bandes de double-clic (haut/bas/gauche/droite) — affichées au survol de
+       tout widget (avec ou sans titre existant) pour indiquer où
        double-cliquer pour ajouter/modifier un titre. -->
-  {#if selected}
-    <div class="titre-zone titre-zone-haut">
-      <div class="msg-pill">
-        <span class="msg-pill-icon">▶</span>
-        <span class="msg-pill-text"
-          >Double-cliquez ici pour {titreVisible ? "modifier les" : "ajouter des"} titres au-dessus de votre widget</span
-        >
-      </div>
-    </div>
-    <div class="titre-zone titre-zone-bas">
-      <div class="msg-pill">
-        <span class="msg-pill-icon">▶</span>
-        <span class="msg-pill-text"
-          >Double-cliquez ici pour {titreVisible ? "modifier les" : "ajouter des"} titres en dessous de votre widget</span
-        >
-      </div>
-    </div>
-    <div class="titre-zone titre-zone-gauche">
-      <div class="msg-pill">
-        <span class="msg-pill-icon">▶</span>
-        <span class="msg-pill-text"
-          >Double-cliquez ici pour {titreVisible ? "modifier les" : "ajouter des"} titres à gauche de votre widget</span
-        >
-      </div>
-    </div>
-    <div class="titre-zone titre-zone-droite">
-      <div class="msg-pill">
-        <span class="msg-pill-icon">▶</span>
-        <span class="msg-pill-text"
-          >Double-cliquez ici pour {titreVisible ? "modifier les" : "ajouter des"} titres à droite de votre widget</span
-        >
-      </div>
-    </div>
-  {/if}
+  <div class="titre-zone titre-zone-haut"><span>Titre (double-clic)</span></div>
+  <div class="titre-zone titre-zone-bas"><span>Titre (double-clic)</span></div>
+  <div class="titre-zone titre-zone-gauche"><span>Titre (double-clic)</span></div>
+  <div class="titre-zone titre-zone-droite"><span>Titre (double-clic)</span></div>
 
   <!-- Boutons -/+ de plan : visibles au survol du widget (dashboard
        uniquement — jamais en diffusion). pointerdown/dblclick stoppés : un
@@ -895,16 +782,6 @@
       class="morph-curseur"
       style="left:{morphCx}px; top:{morphCy}px; width:{morphDiam}px; height:{morphDiam}px;"
     ></div>
-  {/if}
-
-  <!-- Poignées resize : 4 coins + 4 bords. Widget sélectionné seulement.
-       Affordance souris pure — le widget parent (role=button, tabindex=0)
-       reste l'unique cible clavier, d'où le svelte-ignore. -->
-  {#if selected}
-    {#each HANDLES as h (h)}
-      <!-- svelte-ignore a11y_no_static_element_interactions -->
-      <div class="handle {h}" onpointerdown={(e) => onHandleDown(e, h)}></div>
-    {/each}
   {/if}
 </div>
 
@@ -1121,24 +998,6 @@
   /* Badge « en lecture dans OBS » : pastille .msg-pill (recette app.css),
      teinte orange partagée (.lecture-obs, règle globale). Dans .widget-3d
      → suit le tilt 3D et est découpé par le clip-path du cadre. */
-  .handle {
-    position: absolute;
-    width: 8px;
-    height: 8px;
-    background: var(--texte);
-    border: 1px solid var(--fond);
-    box-sizing: border-box;
-    z-index: 1;
-  }
-  .nw { left: -4px;  top: -4px;    cursor: nwse-resize; }
-  .n  { left: 50%;  top: -4px;    transform: translateX(-50%); cursor: ns-resize; }
-  .ne { right: -4px; top: -4px;    cursor: nesw-resize; }
-  .e  { right: -4px; top: 50%;    transform: translateY(-50%); cursor: ew-resize; }
-  .se { right: -4px; bottom: -4px; cursor: nwse-resize; }
-  .s  { left: 50%;  bottom: -4px; transform: translateX(-50%); cursor: ns-resize; }
-  .sw { left: -4px;  bottom: -4px; cursor: nesw-resize; }
-  .w  { left: -4px;  top: 50%;    transform: translateY(-50%); cursor: ew-resize; }
-
   /* ===== Titres du widget ===== */
   /* Positionnés autour du widget : haut/bas centrés horizontalement,
      gauche/droite centrés verticalement en TEXTE VERTICAL (writing-mode).
@@ -1184,42 +1043,59 @@
     left: 100%;
     margin-left: 2px;
   }
-  /* Zones de double-clic (haut/bas pleine largeur, gauche/droite entre les
-     deux) — vraie pastille .msg-pill (même recette que « lecture OBS »,
-     teinte ambre action) au survol du widget sélectionné, avec ou sans titre
-     existant. container-type:inline-size pour le cqw de la pastille.
-     pointer-events:none (le dblclick est géré par le parent). */
+  /* Bandes de double-clic : fines bandes ambre (--message-user-action-color,
+     sémantique « action » comme les z-controls) le long des 4 bords intérieurs
+     — haut/bas pleine largeur, gauche/droite entre les deux — affichées au
+     :hover de tout widget, avec ou sans titre existant. Le seul libellé
+     est le mot « Titre » (vertical sur les côtés). pointer-events:none (le
+     dblclick est géré par le parent). */
   .titre-zone {
     position: absolute;
-    left: 0;
-    width: 100%;
-    height: 25%;
-    container-type: inline-size;
+    display: flex;
+    align-items: center;
+    justify-content: center;
     pointer-events: none;
     z-index: 3;
     opacity: 0;
     transition: opacity 0.15s ease;
-    background: color-mix(in srgb, var(--message-user-action-color) 8%, transparent);
-    border: 1px dashed color-mix(in srgb, var(--message-user-action-color) 40%, transparent);
+    background: color-mix(in srgb, var(--message-user-action-color) 10%, transparent);
+    border: 1px dashed color-mix(in srgb, var(--message-user-action-color) 45%, transparent);
+    color: var(--message-user-action-color);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    overflow: hidden;
   }
-  .titre-zone-haut { top: 0; }
-  .titre-zone-bas { bottom: 0; }
+  .titre-zone-haut {
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 7%;
+  }
+  .titre-zone-bas {
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 7%;
+  }
   .titre-zone-gauche {
     left: 0;
-    top: 25%;
-    height: 50%;
-    width: 22%;
+    top: 7%;
+    height: 86%;
+    width: 7%;
   }
   .titre-zone-droite {
     right: 0;
-    top: 25%;
-    height: 50%;
-    width: 22%;
+    top: 7%;
+    height: 86%;
+    width: 7%;
+  }
+  .titre-zone-gauche span,
+  .titre-zone-droite span {
+    writing-mode: vertical-rl;
   }
   .widget:hover .titre-zone { opacity: 1; }
-  .titre-zone .msg-pill {
-    color: var(--message-user-action-color);
-  }
 
   /* ===== Boutons -/+ de plan ===== */
   /* Badge flottant AU-DESSUS du coin supérieur droit du widget (ne recouvre

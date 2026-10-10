@@ -1,3 +1,4 @@
+
 <script lang="ts">
   // Module HUD sur le canvas du dashboard (horloge / musique en cours /
   // objectifs du stream). Couche SÉPARÉE des widgets : pas de sélection

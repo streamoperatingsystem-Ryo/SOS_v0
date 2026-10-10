@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import {
-    sceneStore, selectWidget, ajouterMorphFond, importFond, clearFond,
+    sceneStore, selectWidget, selectedIdStore, ajouterMorphFond, importFond, clearFond,
     setBgFit, toggleBgMiroir, resetFondTransformation, resetFondEffets,
     resetMorphsFond, setBgPaused, retirerFondCapture,
     dupliquerWidget, setMediaFit, toggleMediaMiroir, rotateWidgetLocal,
@@ -19,11 +19,13 @@
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
   import { creerRenduMorph, dessinerFitCanvas, chaineFilter, type RenduMorph } from "../morph/gl-morph";
   import WidgetComp from "./Widget.svelte";
+  import SelectionOverlay from "./SelectionOverlay.svelte";
   import ModuleHud from "./ModuleHud.svelte";
   import { MODULE_IDS } from "../tauri";
   import AlignmentGuides from "./AlignmentGuides.svelte";
   import CadreSVG from "./CadreSVG.svelte";
   import ObsSourceDialog from "./ObsSourceDialog.svelte";
+  import CtxMenu from "./CtxMenu.svelte";
   import { gradientCadre } from "../cadres/registre";
   import { POLICE_TITRE_DEFAUT, TAILLE_TITRE_DEFAUT, ESPACEMENT_TITRE_DEFAUT } from "../fonts";
   import { t } from "../stores/langue";
@@ -41,6 +43,12 @@
     availW && availH
       ? Math.min(availW / canvasW, availH / canvasH)
       : 0
+  );
+
+  // Widget sélectionné (poignées resize rendues dans SelectionOverlay,
+  // frère des .widget — jamais couvertes par un voisin à z supérieur).
+  let widgetSelectionne = $derived(
+    $sceneStore.widgets.find((x) => x.id === $selectedIdStore)
   );
 
   // ===== Fond de scène =====
@@ -299,12 +307,13 @@
   }
 
   // ===== Menus contextuels (clic droit sur le canvas) =====
-  // Recette .ctx-menu de SceneBar : fixed à la position souris, fermeture
-  // clic extérieur (svelte:window onclick — le clic droit n'émet pas click)
-  // + Escape. Deux menus mutuellement exclusifs pilotés par ctxWidgetId :
-  // null = menu FOND, sinon menu du widget identifié (data-widget-id posé
-  // sur .widget — contextmenu bouillonne jusqu'à .canvas). confirmDeleteFond
-  // = confirmation inline Oui/Non avant clearFond.
+  // Wrapper CtxMenu (recette .ctx-menu de app.css) : fixed à la position
+  // souris, fermeture clic extérieur + Escape et clamping viewport gérés
+  // par le composant. Deux menus mutuellement exclusifs pilotés par
+  // ctxWidgetId : null = menu FOND, sinon menu du widget identifié
+  // (data-widget-id posé sur .widget — contextmenu bouillonne jusqu'à
+  // .canvas). confirmDeleteFond = confirmation inline Oui/Non avant
+  // clearFond.
   let fondMenuOpen = $state(false);
   let fondMenuX = $state(0);
   let fondMenuY = $state(0);
@@ -336,10 +345,6 @@
     fondMenuOpen = false;
     confirmDeleteFond = false;
     ctxWidgetId = null;
-  }
-
-  function onWindowKeydown(e: KeyboardEvent) {
-    if (e.key === "Escape" && fondMenuOpen) fermerFondMenu();
   }
 
   // Toggles : gardent le menu ouvert (essai rapide des réglages).
@@ -732,6 +737,13 @@
         <WidgetComp {w} {scale} />
       {/each}
 
+      <!-- Poignées resize du widget sélectionné : overlay frère des .widget
+           (z 9500, au-dessus des widgets et modules) — jamais masquées par
+           un voisin chevauchant, hit-box écran constante. -->
+      {#if widgetSelectionne}
+        <SelectionOverlay w={widgetSelectionne} {scale} />
+      {/if}
+
       <!-- Modules HUD (scene.modules — horloge / musique / objectifs) :
            couche séparée des widgets, au-dessus d'eux (z 9000 en diffusion),
            drag/resize propres, config via la modale Modules. -->
@@ -820,26 +832,13 @@
   {/if}
 </div>
 
-<!-- Clic n'importe où → ferme le menu fond (le menu stoppe sa propre
-     propagation). Escape idem. Coexiste avec les autres svelte:window
-     (App.svelte, SceneBar) — chacun ne ferme que son propre état. -->
-<svelte:window onclick={fermerFondMenu} onkeydown={onWindowKeydown} />
-
 {#if fondMenuOpen && ctxWidgetId === null}
   <!-- Menu contextuel du fond de l'application (clic droit canvas hors
        widget). Contenu miroir de la carte fond (CarteEdition, cible "fond") :
        3 branches bgObsSource / !hasFond / média. "Morphing" hardcodé comme
        dans CarteEdition. Les toggles (fit/miroir/lecture/morphing) gardent
        le menu ouvert ; les actions le ferment. -->
-  <div
-    class="ctx-menu"
-    style="left:{fondMenuX}px; top:{fondMenuY}px;"
-    onclick={(e) => e.stopPropagation()}
-    oncontextmenu={(e) => e.preventDefault()}
-    onkeydown={(e) => e.stopPropagation()}
-    role="menu"
-    tabindex="-1"
-  >
+  <CtxMenu x={fondMenuX} y={fondMenuY} onclose={fermerFondMenu}>
     {#if bgObsSource}
       <button class="ctx-item" role="menuitem" onclick={ctxObsFond}>{$t("carteEdition.changerCapture")}</button>
       <button class="ctx-item" role="menuitem" onclick={ctxRetirerCapture}>{$t("carteEdition.retirerCapture")}</button>
@@ -888,7 +887,7 @@
         <button class="ctx-item danger" role="menuitem" onclick={() => (confirmDeleteFond = true)}>{$t("carteEdition.supprimerFond")}</button>
       {/if}
     {/if}
-  </div>
+  </CtxMenu>
 {/if}
 
 {#if fondMenuOpen && ctxWidget}
@@ -896,15 +895,7 @@
        carte widget : actions communes d'abord, réglages média si w.media,
        branche média (trou/OBS/flottant) pour les types média, suppression
        via la modale ConfirmDeleteWidgetModal. -->
-  <div
-    class="ctx-menu"
-    style="left:{fondMenuX}px; top:{fondMenuY}px;"
-    onclick={(e) => e.stopPropagation()}
-    oncontextmenu={(e) => e.preventDefault()}
-    onkeydown={(e) => e.stopPropagation()}
-    role="menu"
-    tabindex="-1"
-  >
+  <CtxMenu x={fondMenuX} y={fondMenuY} onclose={fermerFondMenu}>
     <button class="ctx-item" role="menuitem" onclick={() => ctxWgTitre(ctxWidget!.id)}>{$t("titreModal.titreWidget")}</button>
     <button class="ctx-item" role="menuitem" onclick={() => ctxWgDupliquer(ctxWidget!.id)}>{$t("carteEdition.dupliquerWidget")}</button>
     <button class="ctx-item" role="menuitem" onclick={() => ctxWgPleinEcran(ctxWidget!.id)}>{ctxWidget?.pleinEcran ? $t("carteEdition.pleinEcranOff") : $t("carteEdition.pleinEcran")}</button>
@@ -971,7 +962,7 @@
     {/if}
     <div class="ctx-sep" role="separator"></div>
     <button class="ctx-item danger" role="menuitem" onclick={ctxWgSupprimer}>{$t("carteEdition.supprimerWidget")}</button>
-  </div>
+  </CtxMenu>
 {/if}
 
 {#if obsFondDialogOpen}

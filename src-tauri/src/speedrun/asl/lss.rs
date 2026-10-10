@@ -367,6 +367,247 @@ pub fn formater_temps(secondes: f64) -> String {
 }
 
 // =============================================================================
+// Mise à jour des temps PB (sauvegarde d'une run qui bat le PB)
+// =============================================================================
+
+/// Met à jour les temps "Personal Best" d'un fichier .lss : pour chaque
+/// `<Segment>` (dans l'ordre), le RealTime ou le GameTime du
+/// `<SplitTime name="Personal Best">` prend le cumul fourni (secondes).
+/// `game_time` = true → colonne GameTime, false → colonne RealTime.
+///
+/// Remplacement CHIRURGICAL par balayage : seul le contenu de la balise
+/// temps ciblée est remplacé/créé — tout le reste du XML (AttemptHistory,
+/// historiques de segments, Best Segments, métadonnées) est préservé tel
+/// quel (pas de re-sérialisation complète). Écriture via .tmp + rename
+/// (sur Windows, rename ne remplace pas un fichier existant → remove puis
+/// rename, avec fallback écriture directe — le contenu est en mémoire,
+/// aucune perte possible).
+pub fn maj_pb(path: &str, cumuls: &[f64], game_time: bool) -> Result<(), LssError> {
+    let source = std::fs::read_to_string(path)
+        .map_err(|e| LssError { message: format!("Lecture .lss: {}", e) })?;
+    let maj = maj_pb_source(&source, cumuls, game_time)?;
+    let chemin = std::path::Path::new(path);
+    let tmp = chemin.with_extension("lss.tmp");
+    std::fs::write(&tmp, &maj)
+        .map_err(|e| LssError { message: format!("Écriture .tmp: {}", e) })?;
+    if std::fs::rename(&tmp, chemin).is_err() {
+        // Windows : rename ne remplace pas un fichier existant → remove
+        // puis rename ; en dernier recours, écriture directe.
+        let _ = std::fs::remove_file(chemin);
+        if std::fs::rename(&tmp, chemin).is_err() {
+            std::fs::write(chemin, &maj)
+                .map_err(|e| LssError { message: format!("Écriture .lss: {}", e) })?;
+            let _ = std::fs::remove_file(&tmp);
+        }
+    }
+    Ok(())
+}
+
+/// Version pure (sans I/O) de maj_pb : retourne le source mis à jour.
+/// Erreur si le nombre de `<Segment>` du .lss ≠ nombre de cumuls fournis
+/// (config changée sur disque depuis le chargement — on refuse plutôt que
+/// de décaler les temps d'un cran).
+pub fn maj_pb_source(source: &str, cumuls: &[f64], game_time: bool) -> Result<String, LssError> {
+    if cumuls.is_empty() {
+        return Err(LssError {
+            message: "Aucun cumul à sauvegarder".to_string(),
+        });
+    }
+    let balise_temps = if game_time { "GameTime" } else { "RealTime" };
+    let mut sortie = String::with_capacity(source.len() + 256);
+    let mut reste = source;
+    let mut nb_segments = 0usize;
+
+    loop {
+        // Prochain bloc <Segment>...</Segment> (les <Segments> conteneurs
+        // sont ignorés par bornes_segment_suivant).
+        let bornes = match bornes_segment_suivant(reste) {
+            Some(b) => b,
+            None => {
+                sortie.push_str(reste);
+                break;
+            }
+        };
+        sortie.push_str(&reste[..bornes.0]);
+        let bloc = &reste[bornes.0..bornes.1];
+        if nb_segments < cumuls.len() {
+            sortie.push_str(&maj_segment_pb(bloc, balise_temps, cumuls[nb_segments])?);
+        } else {
+            sortie.push_str(bloc);
+        }
+        nb_segments += 1;
+        reste = &reste[bornes.1..];
+    }
+
+    if nb_segments != cumuls.len() {
+        return Err(LssError {
+            message: format!(
+                "{} segment(s) dans le .lss mais {} cumul(s) fournis",
+                nb_segments,
+                cumuls.len()
+            ),
+        });
+    }
+    Ok(sortie)
+}
+
+/// Bornes du prochain bloc `<Segment>...</Segment>` (ignore `<Segments>`) :
+/// Some((debut, fin)) où fin = position juste après `</Segment>`. Même scan
+/// qu'extraire_segments (le caractère suivant "segment" ne doit pas 's').
+fn bornes_segment_suivant(source: &str) -> Option<(usize, usize)> {
+    let lower = source.to_lowercase();
+    let mut search_from = 0;
+    while let Some(pos) = lower[search_from..].find("<segment") {
+        let abs_pos = search_from + pos;
+        let after = abs_pos + 8;
+        if after >= lower.len() {
+            return None;
+        }
+        if lower.as_bytes()[after] == b's' {
+            search_from = abs_pos + 8;
+            continue;
+        }
+        let open_end = lower[abs_pos..].find('>')? + abs_pos;
+        // Self-closing <Segment/> (rare) : bloc vide.
+        if source[abs_pos..=open_end].ends_with("/>") {
+            return Some((abs_pos, open_end + 1));
+        }
+        let close_idx = lower[open_end + 1..].find("</segment>")? + open_end + 1;
+        return Some((abs_pos, close_idx + "</segment>".len()));
+    }
+    None
+}
+
+/// Met à jour la balise temps du SplitTime "Personal Best" d'UN bloc
+/// `<Segment>` avec le cumul fourni (formaté "MM:SS.mmm"). Crée la balise
+/// si absente (SplitTime self-closing ou balise temps manquante). Le reste
+/// du bloc (autres SplitTime, BestSegmentTime, SegmentHistory, Icon…) est
+/// préservé tel quel.
+fn maj_segment_pb(bloc: &str, balise: &str, cumul: f64) -> Result<String, LssError> {
+    let temps = formater_temps(cumul);
+    let lower = bloc.to_lowercase();
+
+    // Localiser le <SplitTime ... name="Personal Best" ...> du segment.
+    let mut search_from = 0;
+    let mut st_trouve: Option<(usize, usize)> = None;
+    while let Some(p) = lower[search_from..].find("<splittime") {
+        let abs = search_from + p;
+        let open_end = match lower[abs..].find('>') {
+            Some(x) => abs + x,
+            None => break,
+        };
+        if bloc[abs..=open_end].to_lowercase().contains("personal best") {
+            st_trouve = Some((abs, open_end));
+            break;
+        }
+        search_from = open_end + 1;
+    }
+    let (st_debut, st_open_end) = st_trouve.ok_or_else(|| LssError {
+        message: "SplitTime \"Personal Best\" introuvable dans le segment".to_string(),
+    })?;
+    let open_tag = &bloc[st_debut..=st_open_end];
+
+    // Self-closing <SplitTime name="Personal Best" /> : l'expandre avec la
+    // balise temps créée, indentée comme la ligne du SplitTime.
+    if open_tag.ends_with("/>") {
+        let ligne_debut = bloc[..st_debut]
+            .rfind('\n')
+            .map(|p| p + 1)
+            .unwrap_or(0);
+        let indent = bloc[ligne_debut..st_debut].to_string();
+        let mut sortie = String::with_capacity(bloc.len() + 64);
+        sortie.push_str(&bloc[..st_debut]);
+        let ouvert = open_tag
+            .strip_suffix('>')
+            .unwrap_or(open_tag)
+            .trim_end_matches('/')
+            .trim_end();
+        sortie.push_str(ouvert);
+        sortie.push('>');
+        sortie.push('\n');
+        sortie.push_str(&indent);
+        sortie.push_str("  ");
+        sortie.push_str(&format!("<{0}>{1}</{0}>", balise, temps));
+        sortie.push('\n');
+        sortie.push_str(&indent);
+        sortie.push_str("</SplitTime>");
+        sortie.push_str(&bloc[st_open_end + 1..]);
+        return Ok(sortie);
+    }
+
+    // Cas normal : <SplitTime name="Personal Best">...</SplitTime> →
+    // reconstruire le contenu interne avec la balise temps mise à jour.
+    let close_rel = lower[st_open_end + 1..].find("</splittime>").ok_or_else(|| {
+        LssError {
+            message: "</SplitTime> introuvable".to_string(),
+        }
+    })?;
+    let contenu_start = st_open_end + 1;
+    let contenu_end = st_open_end + 1 + close_rel;
+    let contenu = &bloc[contenu_start..contenu_end];
+    let nouveau_contenu = maj_balise_temps(contenu, balise, &temps);
+    let mut sortie = String::with_capacity(bloc.len() + 64);
+    sortie.push_str(&bloc[..contenu_start]);
+    sortie.push_str(&nouveau_contenu);
+    sortie.push_str(&bloc[contenu_end..]);
+    Ok(sortie)
+}
+
+/// Remplace la balise temps dans le contenu d'un SplitTime "Personal
+/// Best" ; la crée si absente (indentée comme la dernière balise
+/// existante, ou 4 espaces par défaut). L'autre colonne de temps est
+/// préservée. Le whitespace de fin (avant </SplitTime>) est réutilisé
+/// après l'insertion pour conserver la mise en forme du fichier.
+fn maj_balise_temps(contenu: &str, balise: &str, temps: &str) -> String {
+    let lower = contenu.to_lowercase();
+    let open_pattern = format!("<{}", balise.to_lowercase());
+    let close_pattern = format!("</{}>", balise.to_lowercase());
+    let nouvelle = format!("<{}>{}</{}>", balise, temps, balise);
+
+    // Balise présente (avec contenu ou self-closing) → remplacer.
+    if let Some(p) = lower.find(&open_pattern) {
+        let open_end = lower[p..]
+            .find('>')
+            .map(|oe| p + oe)
+            .unwrap_or(contenu.len().saturating_sub(1));
+        let self_closing = lower[p..=open_end].ends_with("/>");
+        let apres_balise = if self_closing {
+            open_end + 1
+        } else if let Some(cp) = lower[open_end + 1..].find(&close_pattern) {
+            open_end + 1 + cp + close_pattern.len()
+        } else {
+            contenu.len()
+        };
+        let mut s = String::with_capacity(contenu.len() + nouvelle.len() + 8);
+        s.push_str(&contenu[..p]);
+        s.push_str(&nouvelle);
+        s.push_str(&contenu[apres_balise..]);
+        return s;
+    }
+
+    // Balise absente : l'insérer en fin de contenu, indentée comme la
+    // dernière ligne existante (ou 4 espaces par défaut).
+    let corps = contenu.trim_end_matches(|c: char| c.is_whitespace());
+    let fin_ws = &contenu[corps.len()..];
+    let indent = corps
+        .lines()
+        .last()
+        .map(|l| l.len() - l.trim_start().len())
+        .unwrap_or(4);
+    let mut s = String::with_capacity(contenu.len() + nouvelle.len() + indent + 8);
+    s.push_str(corps);
+    if !corps.is_empty() {
+        s.push('\n');
+        for _ in 0..indent {
+            s.push(' ');
+        }
+    }
+    s.push_str(&nouvelle);
+    s.push_str(fin_ws);
+    s
+}
+
+// =============================================================================
 // Tests unitaires
 // =============================================================================
 #[cfg(test)]
@@ -517,6 +758,63 @@ mod tests {
         assert_eq!(formater_temps(83.45), "01:23.450");
         assert_eq!(formater_temps(3600.0), "01:00:00.000");
         assert_eq!(formater_temps(-1.5), "-00:01.500");
+    }
+
+    #[test]
+    fn test_maj_pb_source_remplace_real_time() {
+        let cumuls = [70.0, 150.0, 300.0];
+        let maj = maj_pb_source(LSS_EXEMPLE, &cumuls, false).expect("maj doit réussir");
+        // Re-parse : les nouveaux PB doivent être les cumuls fournis.
+        let run = parse(&maj).expect("re-parse doit réussir");
+        assert!((run.segments[0].pb_real_time.unwrap() - 70.0).abs() < 0.001);
+        assert!((run.segments[1].pb_real_time.unwrap() - 150.0).abs() < 0.001);
+        assert!((run.segments[2].pb_real_time.unwrap() - 300.0).abs() < 0.001);
+        // Le GameTime existant est préservé (colonne non ciblée).
+        assert!((run.segments[0].pb_game_time.unwrap() - 80.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_maj_pb_source_remplace_game_time() {
+        let cumuls = [60.0, 120.0, 240.0];
+        let maj = maj_pb_source(LSS_EXEMPLE, &cumuls, true).expect("maj doit réussir");
+        let run = parse(&maj).expect("re-parse doit réussir");
+        assert!((run.segments[0].pb_game_time.unwrap() - 60.0).abs() < 0.001);
+        // RealTime préservé (colonne non ciblée).
+        assert!((run.segments[0].pb_real_time.unwrap() - 83.45).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_maj_pb_source_split_time_self_closing() {
+        // Un .lss sans PB (SplitTime self-closing) : la balise temps doit
+        // être CRÉÉE et relisible au re-parse.
+        let lss = r#"<Run><Segments>
+          <Segment>
+            <Name>Empty</Name>
+            <SplitTimes>
+              <SplitTime name="Personal Best" />
+            </SplitTimes>
+          </Segment>
+        </Segments></Run>"#;
+        let maj = maj_pb_source(lss, &[42.5], false).expect("maj doit réussir");
+        let run = parse(&maj).expect("re-parse doit réussir");
+        assert!((run.segments[0].pb_real_time.unwrap() - 42.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_maj_pb_source_nombre_incoherent() {
+        let result = maj_pb_source(LSS_EXEMPLE, &[10.0], false);
+        assert!(result.is_err(), "1 cumul pour 3 segments doit échouer");
+    }
+
+    #[test]
+    fn test_maj_pb_source_preserve_le_reste() {
+        let cumuls = [70.0, 150.0, 300.0];
+        let maj = maj_pb_source(LSS_EXEMPLE, &cumuls, false).expect("maj doit réussir");
+        // Métadonnées + Best Segments doivent survivre à la mise à jour.
+        assert!(maj.contains("Super Mario World"));
+        assert!(maj.contains("<SplitTime name=\"Best Segments\">"));
+        assert!(maj.contains("<RealTime>00:01:20.00</RealTime>"));
+        assert!(maj.contains("<BestSegmentTime>"));
     }
 
     // --- Tests avec un vrai .lss LiveSplit (structure réaliste) ---

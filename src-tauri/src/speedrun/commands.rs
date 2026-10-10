@@ -99,6 +99,15 @@ fn last_lss_slot() -> &'static Mutex<Option<lss::LssRun>> {
     T.get_or_init(|| Mutex::new(None))
 }
 
+/// Chemin du dernier .lss chargé — poussé au moteur (cible de la
+/// sauvegarde PB) à chaque chargement ET au démarrage du splitter (le
+/// moteur peut être créé APRÈS le premier charger_lss : au boot, le widget
+/// restaure ses chemins avant que l'utilisateur ne presse Démarrer).
+fn last_lss_path_slot() -> &'static Mutex<Option<String>> {
+    static T: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(None))
+}
+
 /// Re-émet la dernière run LSS vers la diffusion (resync à la reconnexion
 /// WS), puis demande au moteur l'état consolidé (event `etat` : phase,
 /// index — armé inclus —, temps de segments, chronos) pour qu'un reload
@@ -147,7 +156,13 @@ pub async fn speedrun_charger_asl(
         let lock = get_or_init_engine(&app_handle);
         let guard = lock.lock().unwrap();
         let engine = guard.as_ref().ok_or("Moteur non initialisé")?;
-        engine.load_asl(&path)
+        let result = engine.load_asl(&path)?;
+        // Script changé pendant que la boucle tourne → resync : reset de la
+        // tentative + re-attach (les watchers doivent être reconstruits
+        // depuis le NOUVEAU script). Le total (du .lss) est conservé. No-op
+        // effectif si la boucle ne tourne pas.
+        let _ = engine.resync();
+        Ok(result)
     })
     .await
     .map_err(|e| format!("speedrun_charger_asl: {}", e))?
@@ -164,7 +179,19 @@ pub async fn speedrun_charger_lss(_app_handle: AppHandle, path: String) -> Resul
         let source = std::fs::read_to_string(&path)
             .map_err(|e| format!("Lecture fichier .lss: {}", e))?;
         let run = lss::parse(&source).map_err(|e| e.to_string())?;
+        let nb_segments = run.segments.len() as i32;
         emit_ws_lss(&run);
+        // Pousser le chemin au moteur : cible de la sauvegarde PB (fin de
+        // run qui bat le PB) ET garde de resync — si le moteur tourne et que
+        // le chemin CHANGE (autre catégorie/splitter), la tentative en cours
+        // est resynchronisée avec le nouveau total (reset + re-attach).
+        // Recharger le MÊME chemin (event saved) ne reset rien.
+        *last_lss_path_slot().lock().unwrap() = Some(path.clone());
+        if let Some(lock) = ASL_ENGINE.get() {
+            if let Some(engine) = lock.lock().unwrap().as_ref() {
+                let _ = engine.set_lss_path(Some(path), Some(nb_segments));
+            }
+        }
         Ok(run)
     })
     .await
@@ -184,6 +211,12 @@ pub async fn speedrun_demarrer(
         let lock = get_or_init_engine(&app_handle);
         let guard = lock.lock().unwrap();
         let engine = guard.as_ref().ok_or("Moteur non initialisé")?;
+        // Pousser le chemin .lss courant au moteur AVANT le start : au boot
+        // le widget restaure ses chemins avant que l'utilisateur ne presse
+        // Démarrer — le moteur est créé ici et n'a encore aucun chemin (cible
+        // de la sauvegarde PB). Le moteur ne tourne pas encore → aucun resync.
+        let chemin_lss = last_lss_path_slot().lock().unwrap().clone();
+        let _ = engine.set_lss_path(chemin_lss, None);
         let settings = AslSettings { start, split, reset };
         engine.start(total_splits, settings)
     })

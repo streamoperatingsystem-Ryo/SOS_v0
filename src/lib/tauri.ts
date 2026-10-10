@@ -383,7 +383,8 @@ export interface SpeedrunEvent {
     | "paused"
     | "resumed"
     | "splitSkipped"
-    | "splitUndone";
+    | "splitUndone"
+    | "saved";
   time?: string;
   cumul?: string;
   index?: number;
@@ -392,6 +393,11 @@ export interface SpeedrunEvent {
   gameTime?: string | null;
   segmentTime?: string | null;
   splitTimes?: (string | null)[];
+  /// Cumuls de run aux splits réalisés (event etat — resync). Index =
+  /// segment 0-based, même longueur que splitTimes. Base du delta cumulé.
+  splitCumuls?: (string | null)[];
+  /// Chemin du .lss dont le PB vient d'être sauvegardé (event saved).
+  chemin?: string;
   process?: string;
   pid?: number;
   message?: string;

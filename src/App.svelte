@@ -52,6 +52,7 @@
   import { fondDash } from "./lib/stores/fondDash";
   import { gradientCadre } from "./lib/cadres/registre";
   import { langue, LANGUES, setLangue, initLangue, t, type Langue } from "./lib/stores/langue";
+  import { tailleUi, tailleEcran, initTailleUi, NIVEAUX_TAILLE_UI } from "./lib/stores/tailleUi";
   import logoSOS from "./assets/logo/LogoSOSDashboardSmallSize.png";
 
   let serverError = $state<string | null>(null);
@@ -127,6 +128,16 @@
       root.removeProperty("--cadre-couleur");
       root.removeProperty("--cadre-couleur-fin");
     };
+  });
+
+  // Taille des polices de l'interface : font-size sur <html> =
+  //   16 px × tailleUi (select topbar, ajustement relatif 80 → 125 %)
+  //         × tailleEcran (base auto du moniteur courant, 1080p → 80 %).
+  // Tous les textes du chrome étant en rem, toute l'UI suit (boutons,
+  // sidebar, modales, menus). Le canvas WYSIWYG (px/cqw) et les pages OBS
+  // (diffusion/raccourcis/chat-popout) ne sont PAS affectés.
+  $effect(() => {
+    document.documentElement.style.fontSize = `${(16 * $tailleUi * $tailleEcran) / 10000}px`;
   });
 
   // ===== Communauté : chargement réactif =====
@@ -463,6 +474,10 @@
     // Fenêtre principale : préférence persistée (écran + mode de démarrage)
     // pour les contrôles de la section Ergonomie.
     await initFenetre();
+    // Base « écran » de la taille UI : calcul depuis le moniteur courant +
+    // listeners de suivi quand la fenêtre change d'écran. Avant
+    // "frontend:pret" (la fenêtre apparaît déjà à la bonne taille).
+    await initTailleUi();
     await listen<{ id: string }>("raccourcis:action", (e) => {
       void dispatchRaccourcis(e.payload.id);
     });
@@ -724,6 +739,27 @@
       <button class="ctrl-btn ctrl-refresh" onclick={onRefreshObs} title={$t("app.refreshObs")} aria-label={$t("app.refreshObs")}>
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/><path d="M3 21v-5h5"/></svg>
       </button>
+      <!-- Réglage de la taille des polices de l'interface : select compact
+           (niveaux NIVEAUX_TAILLE_UI, 80 % → 125 %), persisté en
+           localStorage. La recette « verre » du bouton vient du select
+           global (app.css) ; la classe ctx-select rend son popup déroulant
+           stylable avec la recette .ctx-menu (appearance: base-select,
+           app.css — repli natif gracieux si WebView2 < 135). La loupe est
+           un SVG absolu par-dessus le select — un select natif ne peut
+           pas contenir d'icône. -->
+      <div class="taille-ui-wrap">
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        <select
+          class="taille-ui-select ctx-select"
+          bind:value={$tailleUi}
+          title={$t("app.tailleUi")}
+          aria-label={$t("app.tailleUi")}
+        >
+          {#each NIVEAUX_TAILLE_UI as n (n)}
+            <option value={n}>{n} %</option>
+          {/each}
+        </select>
+      </div>
       <!-- Sélecteur de langue : petit bouton topbar du groupe outils.
            Dropdown au clic — pattern « Vos scènes » (fermeture : sélection,
            clic extérieur via fermerLangues, Escape via onSupprKey). Les noms
@@ -1068,6 +1104,30 @@
     color: var(--ctrl-refresh);
     border-color: var(--ctrl-refresh);
     box-shadow: var(--btn-inset-hover), 0 0 8px color-mix(in srgb, var(--ctrl-refresh) 40%, transparent);
+  }
+  /* Select de taille des polices : compact 32 px aligné sur les boutons du
+     header (surface/bordure/hover viennent de la recette select globale).
+     Le wrap porte la loupe en absolu ; le padding-left du select dégage le
+     texte de l'icône (pointer-events:none → les clics passent au select). */
+  .taille-ui-wrap {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+  .taille-ui-wrap .ico {
+    position: absolute;
+    left: 0.45rem;
+    width: 0.8rem;
+    height: 0.8rem;
+    color: var(--gris);
+    pointer-events: none;
+  }
+  .taille-ui-select {
+    height: 32px;
+    padding: 0 0.4rem 0 1.5rem;
+    font-size: 0.8rem;
+    flex-shrink: 0;
   }
   /* Sorties OBS (stream/record) : recette verre sombre (même base que
      .ctrl-btn) mais proéminente — texte + icône. Vert --message-ok-color au

@@ -57,6 +57,11 @@ pub enum SpeedrunEvent {
         index: i32,
         #[serde(rename = "splitTimes")]
         split_times: Vec<Option<String>>,
+        /// Cumuls de run aux splits réalisés (base du delta cumulé
+        /// LiveSplit : avance/retard de la run vs PB). Même longueur que
+        /// splitTimes ; null = segment skippé/non splitté.
+        #[serde(rename = "splitCumuls")]
+        split_cumuls: Vec<Option<String>>,
         #[serde(rename = "realTime")]
         real_time: String,
         #[serde(rename = "gameTime")]
@@ -102,6 +107,12 @@ pub enum SpeedrunEvent {
     SplitSkipped { index: i32 },
     #[serde(rename = "splitUndone")]
     SplitUndone { index: i32 },
+    /// PB sauvegardé dans le .lss (run terminée plus rapide que le PB).
+    /// chemin = fichier .lss mis à jour — le frontend le recharge pour
+    /// rafraîchir les PB affichés (relecture same-path, pas de reset de
+    /// run en cours).
+    #[serde(rename = "saved")]
+    Saved { chemin: String },
 }
 
 /// Action manuelle du timer (déclenchée depuis le widget, pas par l'ASL).
@@ -163,6 +174,19 @@ enum EngineCommand {
     /// Met à jour les settings ASL individuels (120+ pour MGS) dans le Context Boa.
     MajSettingsAsl {
         valeurs: std::collections::HashMap<String, bool>,
+    },
+    /// Resynchronisation à chaud (changement d'ASL pendant que la boucle
+    /// tourne) : reset de la tentative + re-attach processus (les watchers
+    /// doivent être reconstruits depuis le nouveau script).
+    Resync,
+    /// Définit le chemin .lss courant du moteur (cible de la sauvegarde PB
+    /// à la fin d'une run). Si la boucle tourne et que le chemin CHANGE, la
+    /// tentative est resynchronisée avec le nouveau total de splits —
+    /// changer de catégorie/splitter à chaud ne mélange plus les runs.
+    /// Même chemin (relecture après sauvegarde PB) : aucun reset.
+    SetLssPath {
+        path: Option<String>,
+        total_splits: Option<i32>,
     },
     /// Émet l'état consolidé (event `etat`) — resync diffusion à la
     /// reconnexion WS (reload OBS en cours de run).
@@ -263,6 +287,33 @@ impl AslEngine {
             .send(EngineCommand::EmitEtat)
             .map_err(|e| format!("Channel: {}", e))
     }
+
+    /// Resynchronise le moteur (changement d'ASL à chaud) : reset de la
+    /// tentative + re-attach processus. No-op effectif si la boucle ne
+    /// tourne pas (l'état est déjà frais — aucun event émis).
+    pub fn resync(&self) -> Result<(), String> {
+        self.sender
+            .send(EngineCommand::Resync)
+            .map_err(|e| format!("Channel: {}", e))
+    }
+
+    /// Définit le chemin .lss courant du moteur (cible de la sauvegarde PB
+    /// à la fin d'une run). Si la boucle tourne et que le chemin CHANGE, la
+    /// tentative en cours est resynchronisée (reset + re-attach) avec le
+    /// nouveau total de splits. Même chemin (relecture après sauvegarde
+    /// PB) : aucun reset, la run en cours continue.
+    pub fn set_lss_path(
+        &self,
+        path: Option<String>,
+        total_splits: Option<i32>,
+    ) -> Result<(), String> {
+        self.sender
+            .send(EngineCommand::SetLssPath {
+                path,
+                total_splits,
+            })
+            .map_err(|e| format!("Channel: {}", e))
+    }
 }
 
 impl Drop for AslEngine {
@@ -296,6 +347,22 @@ struct EngineInner {
     /// reset/goto (retry de segment : les précédents ne comptent pas comme
     /// finis) ; lu par undo_split (reprend le segment défait à d_k).
     temps_segs: Vec<Option<f64>>,
+    /// Cumuls de run aux splits réalisés (index = segment 0-based) = le
+    /// primary du timer au moment du split (téléscope des durées — exact
+    /// même après un skip). Base du delta cumulé LiveSplit (avance/retard
+    /// de la run vs PB), de l'event etat (resync) et de la sauvegarde PB.
+    /// Maintenu en parallèle de temps_segs aux mêmes endroits.
+    cumuls_segs: Vec<Option<f64>>,
+    /// Chemin du .lss courant (cible de la sauvegarde PB quand une run
+    /// terminée bat le PB). Défini par speedrun_charger_lss /
+    /// speedrun_demarrer ; sert aussi de garde : recharger le MÊME chemin
+    /// (event saved) ne resync pas le moteur.
+    lss_path: Option<String>,
+    /// Events secondaires à émettre vers les frontaux en dehors de l'event
+    /// principal d'un tick/action (ex: Saved après Ended — la sauvegarde
+    /// PB a lieu dans faire_split qui ne retourne qu'un event). Vidé par
+    /// le thread principal du moteur après chaque itération.
+    events_pendants: Vec<SpeedrunEvent>,
     /// Compteur de ticks d'attente d'attach. Double usage : throttle du log
     /// "en attente" ET throttle du scan de processus (1 scan/s — le scan est
     /// un CreateToolhelp32Snapshot complet, coûteux en kernel, et il y a un
@@ -323,6 +390,9 @@ impl EngineInner {
             running: false,
             script_ctx: ScriptContext::new(),
             temps_segs: Vec::new(),
+            cumuls_segs: Vec::new(),
+            lss_path: None,
+            events_pendants: Vec::new(),
             ticks_attente_attach: 0,
         }
     }
@@ -432,6 +502,7 @@ impl EngineInner {
         self.timer = TimerModel::new();
         self.timer.state.total_splits = total_splits;
         self.temps_segs = vec![None; total_splits.max(0) as usize];
+        self.cumuls_segs = vec![None; total_splits.max(0) as usize];
         self.init_completed = false;
         self.process = None;
         self.running = true;
@@ -441,9 +512,64 @@ impl EngineInner {
         log::info!("[ASL] Moteur démarré ({} splits)", total_splits);
     }
 
+    /// Resynchronisation à chaud (changement de .lss/.asl pendant que la
+    /// boucle tourne) : reset complet de la tentative — timer neuf (total
+    /// fourni ou conservé), temps/cumuls vidés, processus décroché pour
+    /// forcer re-attach + re-init avec la NOUVELLE configuration (les
+    /// watchers sont reconstruits depuis le script courant). Retourne
+    /// l'event Reset à émettre UNIQUEMENT si la boucle tourne (sinon les
+    /// frontaux recevraient un reset fantôme — l'état est déjà frais).
+    fn handle_resync(&mut self, total_splits: Option<i32>) -> Option<SpeedrunEvent> {
+        let total = total_splits.unwrap_or(self.timer.state.total_splits);
+        self.timer = TimerModel::new();
+        self.timer.state.total_splits = total;
+        self.temps_segs = vec![None; total.max(0) as usize];
+        self.cumuls_segs = vec![None; total.max(0) as usize];
+        self.init_completed = false;
+        self.process = None;
+        self.script_ctx.set_pid(None);
+        pont_memoire::deconnecter_lecteur();
+        self.watchers = MemoryWatcherList::new();
+        self.ticks_attente_attach = 0;
+        if self.running {
+            log::info!("[ASL] Resync moteur — config changée à chaud ({} splits)", total);
+            Some(SpeedrunEvent::Reset)
+        } else {
+            None
+        }
+    }
+
     fn handle_stop(&mut self) {
         self.running = false;
         log::info!("[ASL] Moteur arrêté");
+    }
+
+    /// Appelle un handler d'évènement ASL (onStart/onSplit/onReset/exit) —
+    /// parsés et compilés par handle_load_asl mais auparavant JAMAIS
+    /// invoqués. LiveSplit les déclenche sur les transitions du timer :
+    /// beaucoup de scripts y réinitialisent leur état interne (vars), sans
+    /// quoi il persiste entre les runs → split() ne se déclenche plus après
+    /// quelques parties (bug « bloqué au 2e split, timer qui tourne »).
+    /// Non-fatal : erreurs JS log-warnées (pattern des autres appels).
+    fn appeler_handler(&mut self, name: &str) {
+        if !self.script_ctx.has_method(name) {
+            return;
+        }
+        let timer_json = serialize_timer(&self.timer.state);
+        let old_json = serialize_watchers_old(&self.watchers);
+        let current_json = serialize_watchers_current(&self.watchers);
+        let proc_json = self.process.as_ref().map(|p| serialize_process(p));
+        match self.script_ctx.call_method(
+            name,
+            &timer_json,
+            &old_json,
+            &current_json,
+            proc_json.as_deref(),
+            &self.settings,
+        ) {
+            Ok(_) => {}
+            Err(e) => log::warn!("[ASL] Error in {}: {}", name, e),
+        }
     }
 
     /// Une itération de polling. Retourne un event si quelque chose s'est passé.
@@ -520,6 +646,11 @@ impl EngineInner {
         // 2. Vérifier que le processus est vivant
         if !self.process.as_ref().unwrap().is_alive() {
             log::info!("[ASL] Processus jeu fermé");
+            // exit() : handler ASL appelé à la mort du processus (sémantique
+            // LiveSplit) AVANT le teardown — les watchers portent encore les
+            // dernières valeurs lues. Sans lui, l'état interne du script
+            // persiste à travers les redémarrages du jeu.
+            self.appeler_handler("exit");
             // Sortie du jeu : le timer reset → émettre Reset pour que
             // l'affichage (store + diffusion) suive le timer Rust. Couvre
             // aussi l'armement d'un split (armed_index effacé par reset).
@@ -527,6 +658,12 @@ impl EngineInner {
                 || self.timer.state.armed_index.is_some()
             {
                 self.timer.reset();
+                // Purger les temps de la tentative morte (latence corrigée :
+                // ils survivaient à la mort du processus et risquaient de
+                // se mélanger avec la run suivante au resync/undo).
+                self.temps_segs.iter_mut().for_each(|t| *t = None);
+                self.cumuls_segs.iter_mut().for_each(|t| *t = None);
+                self.appeler_handler("onReset");
                 callback(SpeedrunEvent::Reset);
             }
             self.process = None;
@@ -629,6 +766,7 @@ impl EngineInner {
                         self.timer.start();
                         let index = self.timer.state.current_split_index;
                         log::info!("[ASL] Timer démarré (split #{})", index);
+                        self.appeler_handler("onStart");
                         return Some(SpeedrunEvent::Started { index });
                     }
                     // E8 Bug A — log throttle si start() retourne false
@@ -723,6 +861,8 @@ impl EngineInner {
             if do_reset && self.settings.reset {
                 self.timer.reset();
                 self.temps_segs.iter_mut().for_each(|t| *t = None);
+                self.cumuls_segs.iter_mut().for_each(|t| *t = None);
+                self.appeler_handler("onReset");
                 return Some(SpeedrunEvent::Reset);
             } else if do_split && self.settings.split {
                 if let Some(event) = self.faire_split() {
@@ -760,23 +900,110 @@ impl EngineInner {
     }
 
     /// Split (auto ASL ou manuel) : enregistre la durée du segment bouclé
-    /// dans temps_segs et retourne l'event Split (ou Ended sur le dernier).
-    /// Contrat : `time` = durée du segment, `cumul` = temps total de run.
-    /// None si le timer a refusé le split (phase ou temps nul).
+    /// dans temps_segs et son cumul de run dans cumuls_segs, appelle le
+    /// handler ASL onSplit, puis retourne l'event Split (ou Ended sur le
+    /// dernier). Contrat : `time` = durée du segment, `cumul` = temps total
+    /// de run. None si le timer a refusé le split (phase ou temps nul).
     fn faire_split(&mut self) -> Option<SpeedrunEvent> {
         let seg_dur = self.timer.split()?;
         let index = self.timer.state.current_split_index;
         let seg_idx = (index - 1).max(0) as usize;
         if self.temps_segs.len() <= seg_idx {
             self.temps_segs.resize(seg_idx + 1, None);
+            self.cumuls_segs.resize(seg_idx + 1, None);
         }
         self.temps_segs[seg_idx] = Some(seg_dur);
+        // Cumul exact au split : timer.split() vient de poser seg_start sur
+        // le primary au moment du split (téléscope des durées — reste exact
+        // après un skip). Même valeur que le champ `cumul` de l'event, en
+        // f64 pour l'etat (resync) et la sauvegarde PB.
+        self.cumuls_segs[seg_idx] = Some(self.timer.state.seg_start);
+        self.appeler_handler("onSplit");
         let cumul = self.timer.state.current_time().format();
         let time = timer::format_time(seg_dur);
         if self.timer.state.current_phase == TimerPhase::Ended {
+            // Run terminée : sauvegarder le PB dans le .lss si la run le bat
+            // (event Saved poussé en secondaire — le frontend recharge le
+            // fichier pour rafraîchir les PB affichés).
+            if let Some(chemin) = self.sauver_pb_si_battu() {
+                self.events_pendants.push(SpeedrunEvent::Saved { chemin });
+            }
             return Some(SpeedrunEvent::Ended { time, cumul, index });
         }
         Some(SpeedrunEvent::Split { time, cumul, index })
+    }
+
+    /// Sauvegarde du PB dans le .lss quand la run terminée bat le PB.
+    /// Compare le cumul final de la tentative (cumuls_segs — base primary du
+    /// timer) au PB cumulé du dernier segment du .lss (real time d'abord,
+    /// fallback game time — convention LssSegment). Un segment skippé =
+    /// cumuls non comparables → pas de sauvegarde (ne jamais effacer un PB).
+    /// La base de temps de la run (game time si initialisé, sinon RTA) doit
+    /// correspondre à la colonne PB du .lss — sinon sauvegarde annulée
+    /// (ne pas mélanger les bases). Écriture chirurgicale (lss::maj_pb)
+    /// qui préserve le reste du XML. Retourne le chemin si mis à jour.
+    fn sauver_pb_si_battu(&mut self) -> Option<String> {
+        let path = self.lss_path.clone()?;
+        if self.cumuls_segs.iter().any(|t| t.is_none()) {
+            log::info!("[ASL] Run incomplète (segment skippé) — PB non sauvegardé");
+            return None;
+        }
+        let cumuls: Vec<f64> = self.cumuls_segs.iter().filter_map(|t| *t).collect();
+        let final_cumul = *cumuls.last()?;
+
+        let source = match std::fs::read_to_string(&path) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("[ASL] Sauvegarde PB : lecture {} impossible ({})", path, e);
+                return None;
+            }
+        };
+        let run = match asl::lss::parse(&source) {
+            Ok(r) => r,
+            Err(e) => {
+                log::warn!("[ASL] Sauvegarde PB : parse {} impossible ({})", path, e);
+                return None;
+            }
+        };
+        let dernier = run.segments.last()?;
+        let pb_final = dernier.pb_real_time.or(dernier.pb_game_time);
+        // Base de temps de la run : game time si initialisé, sinon RTA.
+        let run_game_time = self.timer.state.is_game_time_initialized();
+        // Colonne PB du .lss : game time si le PB existe SANS real time.
+        let pb_game_time = pb_final.is_some() && dernier.pb_real_time.is_none();
+        if pb_final.is_some() && pb_game_time != run_game_time {
+            log::warn!(
+                "[ASL] Sauvegarde PB annulée : base de temps .lss ({}) ≠ run ({})",
+                if pb_game_time { "game time" } else { "real time" },
+                if run_game_time { "game time" } else { "real time" }
+            );
+            return None;
+        }
+        // Sauver si PB absent (première run de référence) ou battu.
+        if let Some(pb) = pb_final {
+            if final_cumul >= pb {
+                log::info!(
+                    "[ASL] Run {} ≥ PB {} — pas de sauvegarde",
+                    timer::format_time(final_cumul),
+                    timer::format_time(pb)
+                );
+                return None;
+            }
+        }
+        match asl::lss::maj_pb(&path, &cumuls, run_game_time) {
+            Ok(()) => {
+                log::info!(
+                    "[ASL] PB sauvegardé dans {} ({})",
+                    path,
+                    timer::format_time(final_cumul)
+                );
+                Some(path)
+            }
+            Err(e) => {
+                log::warn!("[ASL] Sauvegarde PB : écriture impossible ({})", e);
+                None
+            }
+        }
     }
 
     /// État consolidé pour resync (event `etat`) : phase, index (armé
@@ -790,6 +1017,11 @@ impl EngineInner {
             index: st.current_split_index,
             split_times: self
                 .temps_segs
+                .iter()
+                .map(|d| d.map(timer::format_time))
+                .collect(),
+            split_cumuls: self
+                .cumuls_segs
                 .iter()
                 .map(|d| d.map(timer::format_time))
                 .collect(),
@@ -816,6 +1048,7 @@ impl EngineInner {
                     self.timer.start();
                     let index = self.timer.state.current_split_index;
                     log::info!("[ASL] Timer démarré (manuel) — split #{}", index);
+                    self.appeler_handler("onStart");
                     return Some(SpeedrunEvent::Started { index });
                 }
                 None
@@ -844,6 +1077,7 @@ impl EngineInner {
                     // Le segment sauté ne compte pas : aucun temps enregistré.
                     if skipped < self.temps_segs.len() {
                         self.temps_segs[skipped] = None;
+                        self.cumuls_segs[skipped] = None;
                     }
                     let index = self.timer.state.current_split_index;
                     log::info!("[ASL] Split skip (manuel) → #{}", index);
@@ -863,6 +1097,7 @@ impl EngineInner {
                     let duree = self.temps_segs.get(undone).copied().flatten();
                     if undone < self.temps_segs.len() {
                         self.temps_segs[undone] = None;
+                        self.cumuls_segs[undone] = None;
                     }
                     self.timer.undo_split(duree);
                     let index = self.timer.state.current_split_index;
@@ -878,6 +1113,8 @@ impl EngineInner {
                 {
                     self.timer.reset();
                     self.temps_segs.iter_mut().for_each(|t| *t = None);
+                    self.cumuls_segs.iter_mut().for_each(|t| *t = None);
+                    self.appeler_handler("onReset");
                     log::info!("[ASL] Reset (manuel)");
                     return Some(SpeedrunEvent::Reset);
                 }
@@ -894,6 +1131,7 @@ impl EngineInner {
                 // comptent pas comme finis. Le PB reste la référence
                 // affichée (colonne droite).
                 self.temps_segs.iter_mut().for_each(|t| *t = None);
+                self.cumuls_segs.iter_mut().for_each(|t| *t = None);
                 let phase = format!("{:?}", self.timer.state.current_phase);
                 log::info!("[ASL] Goto split #{} (phase {})", index, phase);
                 Some(SpeedrunEvent::Goto { index, phase })
@@ -1060,6 +1298,27 @@ where
                 EngineCommand::UpdateSettings { settings } => {
                     engine.settings = settings;
                 }
+                EngineCommand::Resync => {
+                    // Changement d'ASL à chaud : reset de la tentative +
+                    // re-attach (watchers reconstruits depuis le nouveau
+                    // script). No-op effectif si la boucle ne tourne pas.
+                    if let Some(event) = engine.handle_resync(None) {
+                        callback(event);
+                    }
+                }
+                EngineCommand::SetLssPath { path, total_splits } => {
+                    let chemin_change = engine.lss_path.as_deref() != path.as_deref();
+                    engine.lss_path = path;
+                    if chemin_change && engine.running {
+                        // .lss changé à chaud (autre catégorie/splitter du
+                        // même jeu ou d'un autre) : resync avec le nouveau
+                        // total — le moteur suit la nouvelle configuration.
+                        log::info!("[ASL] .lss changé à chaud — resync");
+                        if let Some(event) = engine.handle_resync(total_splits) {
+                            callback(event);
+                        }
+                    }
+                }
                 EngineCommand::ActionManuelle { action } => {
                     if let Some(event) = engine.handle_action_manuelle(action) {
                         callback(event);
@@ -1087,6 +1346,13 @@ where
             if let Some(event) = engine.poll_tick(&callback) {
                 callback(event);
             }
+        }
+
+        // Events secondaires (ex: Saved après Ended — la sauvegarde PB a
+        // lieu dans faire_split qui ne retourne qu'un event principal) :
+        // flush après l'event du tick/de l'action.
+        for event in engine.events_pendants.drain(..) {
+            callback(event);
         }
 
         // Sleep selon le refresh rate

@@ -13,6 +13,7 @@
     totalSplits,
     segmentsLss,
     splits,
+    cumulsSplits,
     tempsSegment,
     allerSplit,
     nomJeuLss,
@@ -155,45 +156,49 @@
     return pb !== null ? formatSegment(pb) : "";
   }
 
-  // Formate un delta signé façon LiveSplit (colonne "+/−") : signe toujours
-  // présent, format m:ss (h:mm:ss au-delà d'une heure), secondes arrondies —
-  // jamais de décimales ("-1:01", "+0:12", "+1:02:03").
-  function formatDelta(secs: number): string {
-    const sign = secs < 0 ? "-" : "+";
-    const totalS = Math.round(Math.abs(secs));
-    const h = Math.floor(totalS / 3600);
-    const m = Math.floor((totalS % 3600) / 60);
-    const s = totalS % 60;
-    const ss = String(s).padStart(2, "0");
-    if (h > 0) return `${sign}${h}:${String(m).padStart(2, "0")}:${ss}`;
-    return `${sign}${m}:${ss}`;
+  // PB cumulé au split i (référence du delta cumulé, façon LiveSplit). Le
+  // .lss stocke les PB en CUMUL — pas de soustraction (real time d'abord,
+  // fallback game time). null si le segment n'a pas de PB.
+  function pbCumul(i: number): number | null {
+    const segs = $segmentsLss;
+    const cur = segs[i];
+    if (!cur) return null;
+    return cur.pbRealTime ?? cur.pbGameTime;
   }
 
-  // Delta vs PB du segment (référence = segPb, durée PB du segment) — colonne
-  // "+/−" façon LiveSplit :
-  //   - actif : temps vivant − segPb (défile à chaque tick)
-  //   - passé : durée réalisée − segPb (figé au split)
+  // Formate un delta signé (colonne "+/−") : signe toujours présent,
+  // secondes avec 1 dixième — MÊME au-delà de 60 s ("-2.4", "+62.4").
+  // Choix utilisateur : toujours en secondes, jamais m:ss.
+  function formatDelta(secs: number): string {
+    const sign = secs < 0 ? "-" : "+";
+    return `${sign}${Math.abs(secs).toFixed(1)}`;
+  }
+
+  // Delta cumulé vs PB (colonne "+/−" façon LiveSplit — avance/retard de la
+  // run ENTIÈRE à ce split) :
+  //   - actif : chrono total vivant − PB cumulé du split (défile à chaque tick)
+  //   - passé : cumul de run enregistré au split (figé) − PB cumulé
   //   - non atteint / skippé / armé en NotRunning / sans PB : vide
   // sens : "ahead" (vert, gagné) | "behind" (rouge, perdu) | "neutre".
   function deltaInfo(i: number): { texte: string; sens: "ahead" | "behind" | "neutre" } {
     const vide = { texte: "", sens: "neutre" as const };
     const idx = $indexSplitCourant;
-    const pb = segPb(i);
+    const pb = pbCumul(i);
     if (idx === null || i > idx || pb === null) return vide;
-    let seg: number | null = null;
+    let cumul: number | null = null;
     if (i < idx) {
-      // Split passé : durée enregistrée (vide si le segment a été skippé).
-      const t = $splits[i];
-      if (t) seg = parseTime(t);
+      // Split passé : cumul de run enregistré (null si segment skippé).
+      const c = $cumulsSplits[i];
+      if (c) cumul = parseTime(c);
     } else if ($phaseTimer !== "NotRunning") {
-      // Actif : temps vivant du segment. En NotRunning armé, pas de delta
-      // (le chrono n'a pas démarré).
-      if ($tempsSegment) seg = parseTime($tempsSegment);
+      // Actif : chrono total vivant de la run. En NotRunning armé, pas de
+      // delta (le chrono n'a pas démarré).
+      cumul = parseTime($tempsJeu ?? $tempsReel);
     }
-    if (seg === null) return vide;
-    // Classer sur la valeur ARRONDIE à la seconde (cohérent avec
-    // l'affichage m:ss : un delta affiché "+0:00" ne bascule pas de couleur).
-    const d = Math.round(seg - pb);
+    if (cumul === null) return vide;
+    // Classer sur la valeur ARRONDIE au dixième (cohérente avec
+    // l'affichage : un delta affiché "+0.0" ne bascule pas de couleur).
+    const d = Math.round((cumul - pb) * 10) / 10;
     return { texte: formatDelta(d), sens: d < 0 ? "ahead" : d > 0 ? "behind" : "neutre" };
   }
 
@@ -557,7 +562,9 @@
     color: var(--gris);
     font-size: 0.9em;
     text-shadow: 0 1px 2px #000;
-    min-width: 3.2em;
+    /* Largeur pour "-1234.5" (delta cumulé en secondes + dixième) : la case
+       reste visible même vide (jamais display:none). */
+    min-width: 4.5em;
     text-align: right;
     flex-shrink: 0;
   }

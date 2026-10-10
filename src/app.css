@@ -345,7 +345,10 @@ input[type="radio"] {
 
 /* Carte contextuelle pointillée — recette partagée (carte d'édition +
    groupes de la sidebar). La couleur vit dans --accent-carte /
-   --accent-carte-glow, assignés par les variantes .cible-*. */
+   --accent-carte-glow, assignés par les variantes .cible-*.
+   Fond teinté à 10 % (ex-22 %) : l'identité de la cible reste portée par
+   la bordure pointillée + le glow ; un fond moins chargé laisse respirer
+   les boutons/sections internes et réduit le bruit visuel. */
 .carte-edition {
   display: flex;
   flex-direction: column;
@@ -353,7 +356,7 @@ input[type="radio"] {
   min-width: 0;
   border-radius: var(--rayon);
   border: 2px dashed var(--accent-carte);
-  background: color-mix(in srgb, var(--accent-carte) 22%, var(--fond-panneau));
+  background: color-mix(in srgb, var(--accent-carte) 10%, var(--fond-panneau));
   box-shadow: 0 0 16px var(--accent-carte-glow), 0 8px 24px rgba(0, 0, 0, 0.4);
   overflow: hidden;
   flex-shrink: 0;
@@ -728,4 +731,102 @@ input[type="radio"] {
   box-shadow:
     var(--btn-inset-hover),
     inset 0 -2px 0 var(--accent-ui);
+}
+
+/* ===== Select natif — popup stylé recette .ctx-* (2026-10-07) =====
+   `appearance: base-select` (sélecteur personnalisable, Chromium ≥135 /
+   WebView2 evergreen) rend le popup déroulant stylable via ::picker(select)
+   — vrai panneau CSS (top layer, ancré sous le bouton, jamais rogné par un
+   overflow d'ancêtre). Repli gracieux : navigateur trop vieux → select
+   natif classique (fonctionnel, juste non thémé).
+   Classe .ctx-select à poser sur le <select> — NE PAS appliquer
+   globalement : les selects de formulaires/modales gardent leur look.
+   Le panneau reprend la recette .ctx-menu (mêmes variables, même motif) ;
+   le filet ::before n'existant pas sur un pseudo-élément, il est porté par
+   border-image. Les <option> sont transposés de .ctx-item. */
+select.ctx-select,
+select.ctx-select::picker(select) {
+  appearance: base-select;
+}
+/* En base-select le bouton devient un flex container (selectedcontent +
+   chevron ::picker-icon) : selectedcontent s'étire en hauteur par défaut
+   → le texte colle en haut. align-items:center recentre verticalement. */
+select.ctx-select {
+  align-items: center;
+}
+select.ctx-select selectedcontent {
+  line-height: normal;
+}
+select.ctx-select:open {
+  border-color: var(--accent-ui);
+  box-shadow: var(--btn-inset-hover), var(--glow-ui);
+}
+select.ctx-select::picker-icon {
+  color: var(--gris);
+  transition: transform 0.15s ease;
+}
+select.ctx-select:open::picker-icon {
+  transform: rotate(180deg);
+}
+select.ctx-select::picker(select) {
+  /* Recette .ctx-menu : panneau verre dépoli teinté accent utilisateur. */
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-ui) 7%, var(--fond-panneau)) 0%,
+      color-mix(in srgb, var(--accent-ui) 2%, var(--fond-panneau)) 100%
+    );
+  backdrop-filter: blur(14px) saturate(1.15);
+  border: 1px solid var(--bordure-ui-active);
+  /* Filet signature (équivalent .ctx-menu::before, impossible sur un
+     pseudo-élément) : dégradé du cadre en bordure haute. */
+  border-top: 2px solid transparent;
+  border-image: var(--gradient-cadre) 1;
+  border-radius: var(--rayon);
+  box-shadow:
+    0 10px 30px rgba(0, 0, 0, 0.55),
+    var(--glow-ui),
+    inset 0 1px 0 color-mix(in srgb, #fff 6%, transparent);
+  padding: 0.3rem;
+  min-width: 11rem;
+  max-height: 82vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--bordure-ui-active) transparent;
+  animation: ctx-pop 0.12s ease-out;
+}
+/* Options : transposition .ctx-item (pill accent au hover/focus,
+   option cochée = état .active avec barre gauche). */
+select.ctx-select option {
+  background: transparent;
+  color: var(--texte);
+  border: none;
+  border-radius: var(--rayon-petit);
+  padding: 0.35rem 0.6rem;
+  font: inherit;
+  font-size: 0.8rem;
+  opacity: 0.85;
+}
+select.ctx-select option:is(:hover, :focus-visible) {
+  opacity: 1;
+  background:
+    linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent-ui) 16%, var(--fond-controle)) 0%,
+      color-mix(in srgb, var(--accent-ui) 8%, var(--fond-controle)) 100%
+    );
+  box-shadow:
+    var(--btn-inset),
+    inset 0 -2px 0 var(--accent-ui);
+}
+select.ctx-select option:checked {
+  opacity: 1;
+  font-weight: 600;
+  background: color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle));
+  box-shadow: inset 2px 0 0 var(--accent-ui);
+}
+/* Coche de l'option sélectionnée (rendue par le UA dans option::before
+   en base-select) : teintée accent utilisateur. */
+select.ctx-select option::before {
+  color: var(--accent-ui);
 }

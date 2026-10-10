@@ -432,9 +432,49 @@ live, `N/A` si non mesurée). `Toolbar` → « Créer un widget objectif ».
   masqué pendant `.dragging` ; `stopPropagation` pointerdown/dblclick (pas
   de drag/sélection/modale titres/morph) ; `disabled` aux extrémités de la
   bande non-caméra (un widget à égalité de z peut encore bouger).
+- **Poignées de resize** (`SelectionOverlay.svelte`, monté dans
+  `Canvas.svelte` après la boucle des widgets, prop `widgetSelectionne`)
+  : overlay transparent plaqué sur le rect du widget sélectionné,
+  `z-index 9500` (au-dessus des widgets <5000 et des modules HUD 9000) —
+  JAMAIS masquées par un voisin chevauchant à z supérieur (avant :
+  enfants du widget à `z-index: w.z`, avalées par son stacking context).
+  Hit-box **26 px ÉCRAN constante** quel que soit le zoom
+  (`calc(Npx * var(--hs))`, `--hs` = 1/scale posé inline — même
+  contre-scale que `.z-controls`), centrée pile sur le coin/bord
+  (`-13px`) ; carré visible 12 px ambre `--message-user-action-color` +
+  liseré `--fond` via `::after` (on vise large, on voit fin).
+  `pointer-events:none` sur l'overlay sauf sur les poignées. Le drag
+  reste sur `.widget` (Widget.svelte) ; TOUTE la mécanique resize vit
+  dans l'overlay (snap `buildSnapTargets`/`computeSnap`, guides,
+  MIN=80, pointer capture, `commitScene` au pointerup).
 - **Menu contextuel widget** (`Canvas.svelte`, clic droit) : entrées
   `carteEdition.premierPlan` / `carteEdition.arrierePlan` après « Dupliquer »
   — action → ferme le menu (pattern établi, pas de disabled dans `.ctx-item`).
+
+## Menus contextuels — recette `.ctx-*` unifiée (2026-10-07)
+
+> Une seule recette visuelle (app.css) + un seul wrapper (CtxMenu.svelte)
+> pour tous les menus clic droit et les dropdowns du chrome.
+
+- **Recette CSS** `.ctx-menu` / `.ctx-item` / `.ctx-sep` / `.ctx-label` /
+  `.ctx-fit-*` / `.ctx-confirm` (app.css) : verre dépoli teinté
+  `--accent-ui`, filet `--gradient-cadre`, animation `ctx-pop`. Ne jamais
+  re-copier le bloc dans un composant.
+- **`CtxMenu.svelte`** : wrapper des menus **fixed à la souris** — props
+  `{x, y, onclose, children}` ; gère stopPropagation, preventDefault
+  contextmenu, fermeture clic extérieur + Escape (svelte:window interne)
+  et **clamping viewport** (marge 8 px, re-mesuré par ResizeObserver).
+  Utilisé par SceneBar (menu pastille) et Canvas (menus fond + widget).
+  Les dropdowns ancrés sous un bouton n'utilisent PAS le composant : ils
+  posent `.ctx-menu` en `position:absolute` (pattern `.langues-dropdown` /
+  `.pastilles-dropdown`).
+- **`.ctx-select`** (app.css) : recette pour le **popup d'un `<select>`
+  natif** — `appearance: base-select` (Chromium ≥135 / WebView2 evergreen)
+  rend `::picker(select)` stylable (panneau .ctx-menu + options façon
+  .ctx-item, `option:checked` actif, coche `option::before` accentuée,
+  `select:open`, `::picker-icon`). Repli gracieux natif si non supporté.
+  Posée sur le select zoom topbar (`.taille-ui-select`) ; ne pas
+  l'appliquer globalement — les selects de formulaires gardent leur look.
 
 ## État partagé (tauri::State)
 
@@ -1699,7 +1739,7 @@ les boutons sémantiques qui reposent un `--btn-tint` coloré.
 - `.msg-pill` : conteneur (centrage `translate(-50%,-50%)`, fond `--fond` 82%, `--rayon-petit`, `font-size: clamp(0.5rem, 9cqw, 1.25rem)`).
 - `.msg-pill-text` : sur le `<span>` texte — 4 lignes max + ellipsis (`-webkit-line-clamp:4` ; `min-width:0` requis pour le shrink flex).
 - `.msg-pill-icon` : icône ▶ à `1.08em` (suit le clamp cqw).
-- **Prérequis cqw** : un ancêtre `container-type: inline-size` (`.widget-3d`, `.bg-layer`, `.titre-zone`), sinon fallback % viewport.
+- **Prérequis cqw** : un ancêtre `container-type: inline-size` (`.widget-3d`, `.bg-layer`), sinon fallback % viewport.
 - Couleur de texte : `--texte` par défaut ; les badges « rendu dans OBS » (`.lecture-obs` widget vidéo, `.lecture-obs-fond` fond canvas, `.input-viewer-obs`) partagent `--message-user-action-color` (orange) via une règle globale app.css — un seul message = une seule couleur, lisible quel que soit le cadre (2026-10-04 : remplace l'ancien `color:` inline = couleur du cadre, illisible quand l'utilisateur choisissait une couleur sombre — NE PAS réintroduire).
 
 ### Couleurs de marque des plateformes (décoratif, 2026-09-15)
@@ -1823,10 +1863,13 @@ Double-clic sur un widget : bord le plus proche du clic (relX/relY, min des
 `{ id, position }`) → `TitreModal.svelte` → `TitreEditForm.svelte` (corps
 partagé widget + fond : 4 champs texte + style + 2 pickers de dégradé
 (perso/auto-cadre) + aperçu mini-canvas avec les textes ancrés à leur
-position) → `setWidgetTitre` (scene.ts). Zones
-`.titre-zone` : haut/bas 25% pleine largeur, gauche/droite 22% × 50%
-centrées — affichées au `:hover` du widget sélectionné, avec ou sans titre
-existant. Fond : bouton « Titre du fond » (CarteEdition) →
+position) → `setWidgetTitre` (scene.ts). Bandes
+`.titre-zone` : fines bandes ambre `--message-user-action-color` de 7 %
+le long des 4 bords intérieurs (haut/bas pleine largeur, gauche/droite
+entre les deux), libellées « Titre (double-clic) » (writing-mode vertical
+sur les côtés) — affichées au `:hover` de TOUT widget, avec ou sans titre
+existant (pointer-events:none, le dblclick est géré par le parent).
+Fond : bouton « Titre du fond » (CarteEdition) →
 `TitreFondModal.svelte` (même TitreEditForm) → `setBgTitre`.
 
 ### Rendu
@@ -2058,54 +2101,112 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
 
 - Tauri `speedrun:event` → store Svelte dashboard (types: started, split, reset,
   ended, goto, etat, gameTime, time, connected, disconnected, error, stopped,
-  loaded, paused, resumed, splitSkipped, splitUndone, settings-list).
+  loaded, paused, resumed, splitSkipped, splitUndone, settings-list, saved).
 - WS `speedrun-etat` → diffusion.html `majSpeedrunEtat` (maj DOM directe,
   pattern input-viewer : textContent/classList, zéro re-render). Sous-types
   spéciaux : `lss` (segments) et `etat` (resync complet émis via `EmitEtat`
   par `reemit_lss` — un reload OBS retrouve index + temps de la run).
+- **En-tête identique des deux côtés** (réaligné 2026-10-10 — la diffusion
+  était restée sur l'ancien layout en ligne) : `.sr-header` = colonne
+  centrée — `.sr-titre-jeu` centré, `.sr-cat` sur sa propre ligne (0.7em),
+  `.sr-status` en `absolute` coin haut-droit. `.sr-seg` n'assombrit PAS
+  les noms (le gris est réservé à `.sr-seg-done`).
 
-### Modèle de temps par segment — référence LiveSplit (2026-10-02)
+### Modèle de temps par split — référence LiveSplit (2026-10-09)
 
-> Chaque ligne de split affiche `nom | temps | delta`. La référence est
-> le **PB du segment** (`pb[i] − pb[i−1]` — les PB du .lss sont CUMULÉS,
-> real time puis game time). Si `pb[i−1]` est absent la durée est
-> indéterminable → delta/temps vides, jamais le cumul entier. Il n'y a PAS
-> de baseline « dernière fois » persistée (`speedrun_baselines.json`
-> supprimé — pas de sauvegarde de run).
+> Chaque ligne de split affiche `nom | temps | delta`. La référence du
+> delta est le **PB cumulé du split** (`pb[i]` direct — les PB du .lss
+> sont CUMULÉS, real time puis game time ; plus de soustraction
+> `pb[i] − pb[i−1]` pour le delta). Il n'y a PAS de baseline « dernière
+> fois » persistée (`speedrun_baselines.json` supprimé) — la sauvegarde
+> de run se fait dans le .lss (voir « Handlers ASL + hot-reload +
+> sauvegarde PB » plus bas).
 
-- **Delta (colonne « +/− », droite)** : écart au PB du segment, format
-  LiveSplit `m:ss` sans décimales (`−1:01`, `+0:12`). Actif = live à chaque
-  tick (`segmentTime` des events `time`/`etat` = `segment_elapsed()` =
-  primary − `seg_start`), figé au split pour les passés, vide pour les non
-  atteints / skippés / armés / sans PB. `−x` vert (`--message-ok-color`),
-  `+x` rouge (`--message-error-color`) — sur la valeur ET la bordure de la
-  ligne (`.seg-ahead`/`.seg-behind`, `.sr-seg-ahead`/`.sr-seg-behind`).
-  Pas de hex nouveau ; chrono principal teinté `--sr-grad-from`. Les deux
-  `<span>` de temps ont une largeur de colonne (jamais `display:none`).
+- **Delta (colonne « +/− », droite)** : **avance/retard CUMULÉ de la run
+  vs PB** (façon LiveSplit), format **secondes + 1 dixième** — `−2.4` /
+  `+62.4`, secondes pures MÊME au-delà de 60 s (choix utilisateur
+  2026-10-09 — jamais `m:ss`). Actif = chrono total vivant − `pb[i]`
+  (défile à chaque tick `time` : `tempsJeu ?? tempsReel` côté dashboard,
+  `srGameTime || srRealTime` côté diffusion) ; passé = cumul de run
+  enregistré au split − `pb[i]` (figé) ; vide pour les non atteints /
+  skippés / armés en NotRunning / sans PB. Couleur classée sur la valeur
+  ARRONDIE au dixième (`+0.0` ne bascule pas) : `−x` vert
+  (`--message-ok-color`), `+x` rouge (`--message-error-color`) — sur la
+  valeur ET la bordure de la ligne (`.seg-ahead`/`.seg-behind`,
+  `.sr-seg-ahead`/`.sr-seg-behind`). Pas de hex nouveau ; chrono
+  principal teinté `--sr-grad-from`. Les deux `<span>` de temps ont une
+  largeur de colonne (jamais `display:none`).
 - **Temps (milieu)** : durée de segment — passé = durée réalisée figée,
   actif = temps vivant (0:00.00 si armé, jamais de signe), non atteint /
-  skippé = durée PB du segment (vide si indéterminable).
-- **Contrat events** : `split`/`ended` portent `time` = **durée de segment**
-  et `cumul` = temps total de run (champ séparé). Les deux consommateurs
-  (store `speedrun.ts` + `diffusion.html`) lisent `time` comme durée — un
-  oubli = régression visible.
+  skippé = durée PB du segment (`pb[i] − pb[i−1]` — la soustraction
+  reste ICI, vide si indéterminable).
+- **Contrat events** : `split`/`ended` portent `time` = **durée de
+  segment** et `cumul` = temps total de run. Les deux consommateurs
+  (store `speedrun.ts` + `diffusion.html`) lisent `time` comme durée ET
+  `cumul` comme cumul du split réalisé (base du delta : `cumulsSplits`
+  store / `srSplitCumuls` entry). `etat` porte `splitTimes` +
+  `splitCumuls` (resync). Un oubli = régression visible.
 - **Clic sur une ligne** (`speedrun_aller_split`, `.speedrun-segment`
   `pointer-events:auto` + `stopPropagation`, pas de `commitScene`) :
   en NotRunning → **arme** l'index (`armed_index` dans timer.rs, chrono à
   zéro, ne démarre pas — attend le start ASL/manuel ; `Started.index` porte
   l'index armé sinon le frontend reviendrait à 0) ; en Running/Paused/Ended →
   saute à l'index en **retry de segment** : chrono de segment à zéro, TOUS
-  les temps de la tentative effacés (`temps_segs` Rust + `splits`/
-  `srSplitTimes` frontend — les précédents ne comptent pas comme finis),
-  PAS un reset de run.
+  les temps de la tentative effacés (`temps_segs` + `cumuls_segs` Rust,
+  `splits`/`cumulsSplits` + `srSplitTimes`/`srSplitCumuls` frontend — les
+  précédents ne comptent pas comme finis), PAS un reset de run.
 - **undo** : `seg_start` recule de `d_k` (durée enregistrée dans
   `EngineInner.temps_segs`, passée à `undo_split`) → le segment défait
-  reprend là où il en était au lieu de repartir de zéro.
-- **`disconnected`** (sortie du jeu) : le timer Rust reset → `reset` émis
-  avant `disconnected` — l'affichage suit le timer sur les deux frontaux.
+  reprend là où il en était au lieu de repartir de zéro. Le `cumuls_segs`
+  de l'entrée défaite est effacé (repris au re-split).
+- **`disconnected`** (sortie du jeu) : handler ASL `exit()` invoqué puis
+  timer reset → `reset` émis avant `disconnected` — l'affichage suit le
+  timer sur les deux frontaux. `temps_segs`/`cumuls_segs` purgés (ils
+  survivaient à la mort du processus — latence de mélange corrigée).
+
+## Handlers ASL + hot-reload + sauvegarde PB (2026-10-09)
+
+> Trois correctifs moteur issus du retour utilisateur « les runs se
+> mélangent / bloqué au 2e split après 3-4 parties alors que le timer
+> tourne / changer de catégorie ou de splitter doit être pris en compte ».
+
+- **Handlers ASL `onStart`/`onSplit`/`onReset`/`exit`** : parsés et
+  compilés depuis le début mais JAMAIS invoqués — or LiveSplit les
+  déclenche sur les transitions du timer, et beaucoup de scripts y
+  réinitialisent leur état interne (`vars`). Sans `onReset`, l'état
+  persistait entre les runs → `split()` ne se déclenche plus après
+  quelques parties. `appeler_handler` (asl_engine.rs) les appelle sur
+  chaque transition : start (ASL + manuel), split (`faire_split`),
+  reset (ASL, manuel, mort du processus — `exit()` AVANT le teardown des
+  watchers, `onReset` ensuite). Non-fatal : erreurs JS log-warnées.
+- **Hot-reload config** : commandes moteur internes `Resync` et
+  `SetLssPath { path, total_splits }` (asl_engine.rs). Charger un AUTRE
+  .lss pendant que la boucle tourne (autre catégorie du même jeu, autre
+  splitter) → reset complet de la tentative : timer neuf avec le
+  NOUVEAU total, `temps_segs`/`cumuls_segs` vidés, processus décroché →
+  re-attach + re-init (watchers reconstruits) + event `reset`. Recharger
+  le MÊME chemin (event `saved` → relecture PB) → AUCUN reset, la run en
+  cours continue. Charger un .asl à chaud → `resync()` (total du .lss
+  conservé). `speedrun_demarrer` pousse aussi le chemin .lss au moteur
+  (au boot le moteur est créé APRÈS le premier `speedrun_charger_lss`).
+- **Sauvegarde PB automatique** : à la fin d'une run (`ended`), si la
+  run bat le PB du .lss (comparaison des cumuls finaux — la base de
+  temps du timer, `is_game_time_initialized()`, doit correspondre à la
+  colonne PB du .lss : game time si le PB n'a pas de RealTime, sinon
+  refus), `lss::maj_pb` réécrit les `<SplitTime name="Personal Best">`
+  de chaque segment de façon CHIRURGICALE (AttemptHistory, Best
+  Segments et métadonnées préservés ; balise temps créée si le SplitTime
+  est self-closing ; .tmp + rename avec fallback Windows). Gardes : un
+  segment skippé → PAS de sauvegarde (ne jamais effacer un PB) ; nombre
+  de segments ≠ cumuls → refus. Event `saved { chemin }` → le store
+  recharge le .lss en silence (PB affichés rafraîchis). Cumuls exacts
+  via `cumuls_segs` (primary au moment du split — téléscope exact même
+  après un skip, contrairement à une somme des durées). Choix : sauvegarde
+  AUTO sans fenêtre de confirmation.
 
 > **Sujet suivant (non implémenté)** : à la sortie du jeu détectée par l'ASL,
-> proposer à l'utilisateur de sauver ou non ses splits (nom + dossier) ;
+> proposer à l'utilisateur de sauver ou non ses splits (nom + dossier) —
+> aujourd'hui la sauvegarde PB est automatique à la fin d'une run gagnante ;
 > l'ASL serait chargé par layout (3 layouts → 3 jeux, le switch recharge).
 
 ### Disposition « ligne » horizontale (2026-09-29)
@@ -3020,6 +3121,45 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 | `src/lib/components/Toolbar.svelte` | Contrôles écran+mode dans la section Ergonomie |
 | `src/App.svelte` | `initFenetre()` au boot + `emit("frontend:pret")` en fin d'onMount |
 | `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `toolbar.mode.{fenetre,maximise,fullscreen}` + `toolbar.demarrageHint` |
+
+## Taille d'interface — base adaptative à l'écran (2026-10-07)
+
+> La police de base du dashboard s'adapte à la résolution de l'écran où se
+> trouve la fenêtre `main` ; le select topbar (80–125 %) reste un réglage
+> **relatif** à cette base — il n'est ni modifié ni borné par le calcul.
+
+- **Formule** : `font-size` sur `<html>` = `16 px × tailleUi/100 ×
+  tailleEcran/100`. `tailleEcran` = proportion de la **GRANDE DIMENSION
+  physique** du moniteur courant (`max(largeur, hauteur)` — invariante à
+  la rotation : un écran portrait garde la base de sa hauteur, sa longue
+  dimension), ancrée `80 % × dim/1080` (≡ 1366 px → ~100 %), arrondie au
+  pas de 5, bornée **55–125 %** (portrait 768×1366 → ~100 %, 720p paysage
+  → 95 %, ≥ ~1690 px dont 1080p/4K paysage → 125 %).
+  ⚠️ Ne PAS revenir à la hauteur seule : en portrait la hauteur devient
+  la longue dimension → un petit écran portrait obtiendrait une base plus
+  grande qu'un paysage 1080p (régression mesurée 2026-10-07 : portrait
+  768×1366 → 100 % « très bien » vs TV 1842×1036 → 75 % « tout en petit »).
+- **Détection** (`stores/tailleUi.ts::initTailleUi`, App.svelte onMount,
+  avant `frontend:pret`) : `currentMonitor()` (fonction module de
+  `@tauri-apps/api/window` — PAS méthode de `Window`, contrairement à
+  `onMoved`/`onScaleChanged`) puis recalcule sur `onMoved`/
+  `onScaleChanged` debouncés 150 ms — couvre le drag de la fenêtre ET le
+  saut via le sélecteur Ergonomie (les deux émettent des events de
+  déplacement). Fallbacks : `window.screen × devicePixelRatio` →
+  1920×1080. Runtime-only pour `tailleEcran`, zéro Rust.
+- **Réglage utilisateur persisté PAR RÉSOLUTION** : `sos-taille-ui`
+  contient un objet `{ "768x1366": 100, … }` — le select mémorise un
+  niveau par taille d'écran (deux moniteurs identiques = même réglage).
+  La clé `""` = ancienne valeur globale (legacy nombre seul migré à la
+  1re écriture) = repli pour les écrans jamais réglés. À chaque
+  changement de moniteur, `initTailleUi` ré-applique le niveau persisté
+  de la résolution courante dans `tailleUi`.
+- ⚠️ Dimensions **physiques** volontaires (choix utilisateur : « la
+  résolution de l'écran ») — sur un écran avec scaling Windows > 100 %, la
+  base
+  s'AJOUTE au grossissement OS. Bascule possible sur
+  `Math.max(size.width, size.height) / scaleFactor` (dimension logique)
+  si trop grand.
 
 ## Bandeau premier message — teinte cadre + mascotte animée (2026-10-04)
 
