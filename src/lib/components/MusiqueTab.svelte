@@ -19,6 +19,7 @@
     importerMusique,
     supprimerFichierMusique,
     testerMusique,
+    ajouterFileMusique,
   } from "../stores/musique";
   import LecteurMusique from "./LecteurMusique.svelte";
   import type { MusiqueConfig, MusiqueFichier } from "../tauri";
@@ -37,6 +38,8 @@
   let msg = $state<{ texte: string; ok: boolean } | null>(null);
   /// Src du fichier écouté localement (bouton Écouter → devient Stop).
   let ecouteEnCours = $state<string | null>(null);
+  /// Srcs cochés dans la bibliothèque (multi-sélection → file d'attente).
+  let selection = $state<string[]>([]);
 
   onMount(async () => {
     await initMusique();
@@ -82,6 +85,36 @@
     ecouteEnCours = f.src;
   }
 
+  // ── Multi-sélection bibliothèque → file ────────────────────────────
+
+  function toggleSelection(src: string): void {
+    selection = selection.includes(src)
+      ? selection.filter((s) => s !== src)
+      : [...selection, src];
+  }
+
+  /// Coche tout, ou décoche tout si tout est déjà coché.
+  function toutSelectionner(): void {
+    const tous = biblio.map((f) => f.src);
+    selection = selection.length === tous.length ? [] : tous;
+  }
+
+  /// Envoie la sélection à la file côté Rust (sans limites viewer, en fin
+  /// de file ; 1re piste direct si rien ne joue, puis lecture auto).
+  async function lireSelection(): Promise<void> {
+    if (selection.length === 0) return;
+    const nb = await ajouterFileMusique([...selection]);
+    msg = {
+      texte: get(t)(
+        nb != null && nb > 0
+          ? "interactions.musique.ajoutFileOk"
+          : "interactions.musique.ajoutFileKo",
+        { n: nb ?? 0 }
+      ),
+      ok: nb != null && nb > 0,
+    };
+  }
+
   function tailleLisible(octets: number): string {
     if (octets >= 1024 * 1024) return (octets / 1048576).toFixed(1) + " Mo";
     return Math.max(1, Math.round(octets / 1024)) + " Ko";
@@ -124,6 +157,21 @@
       <div class="modal-bloc-titre">
         {$t("interactions.musique.bibliotheque")} ({biblio.length})
         <span class="spacer"></span>
+        {#if biblio.length > 0}
+          <button class="action small" onclick={toutSelectionner}>
+            {selection.length === biblio.length
+              ? $t("interactions.musique.toutDeselectionner")
+              : $t("interactions.musique.toutSelectionner")}
+          </button>
+          <button
+            class="action small"
+            title={$t("interactions.musique.lireSelectionTitle")}
+            disabled={selection.length === 0}
+            onclick={() => void lireSelection()}
+          >
+            ▶ {$t("interactions.musique.lireSelection", { n: selection.length })}
+          </button>
+        {/if}
         <button class="action small" onclick={() => void importerMusique()}>
           + {$t("interactions.musique.importer")}
         </button>
@@ -134,6 +182,13 @@
         <ul class="liste">
           {#each biblio as f (f.src)}
             <li class="ligne">
+              <input
+                type="checkbox"
+                class="ligne-check"
+                aria-label={$t("interactions.musique.selectionner")}
+                checked={selection.includes(f.src)}
+                onchange={() => toggleSelection(f.src)}
+              />
               <span class="ligne-titre">{f.titre}</span>
               <span class="ligne-meta">{tailleLisible(f.taille)}</span>
               <span class="ligne-actions">
@@ -158,6 +213,7 @@
                       }),
                       async () => {
                         await supprimerFichierMusique(nomFichier(f.src));
+                        selection = selection.filter((s) => s !== f.src);
                       }
                     )}>✕</button
                 >
@@ -292,6 +348,11 @@
     padding: 0.25rem 0.4rem;
     border-radius: var(--rayon-petit);
     background: color-mix(in srgb, var(--fond-controle) 60%, transparent);
+  }
+  .ligne-check {
+    flex: none;
+    margin: 0;
+    accent-color: var(--accent-ui);
   }
   .ligne-titre {
     flex: 1;

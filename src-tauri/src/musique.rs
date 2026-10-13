@@ -550,6 +550,53 @@ impl MusiqueState {
         Ok(())
     }
 
+    /// Ajoute des fichiers de la bibliothèque à la file (contrôle dashboard
+    /// « Lire la sélection »). Chemin STREAMER : pas de cooldown, pas de
+    /// max_par_viewer, pas de file_max (règles viewer — le streamer n'y est
+    /// pas soumis). Ajoute en FIN de file (les demandes !rs déjà en file
+    /// passent d'abord) ; si rien ne joue, la 1re piste démarre immédiatement
+    /// et le reste s'enchaîne via l'auto-avance existant (musique-ended).
+    /// Retourne le nombre de pistes ajoutées (srcs invalides ignorés).
+    pub fn ajouter_file(&self, srcs: &[String]) -> Result<usize, String> {
+        let biblio = self.bibliotheque();
+        let mut items: Vec<MusiqueItem> = srcs
+            .iter()
+            .filter_map(|src| {
+                let f = biblio.iter().find(|f| f.src == *src)?;
+                Some(MusiqueItem {
+                    id: uuid::Uuid::new_v4().simple().to_string(),
+                    titre: f.titre.clone(),
+                    src: f.src.clone(),
+                    demandeur: "streamer".to_string(),
+                    plateforme: "local".to_string(),
+                })
+            })
+            .collect();
+        if items.is_empty() {
+            return Err("Aucun fichier valide".into());
+        }
+        let nb = items.len();
+
+        // Rien en cours → la 1re piste part direct, le reste en file.
+        // (Guard en_cours lâché avant jouer() — règle non-réentrance.)
+        let premiere = {
+            let en_cours = self.en_cours.lock().unwrap();
+            (en_cours.is_none()).then(|| items.remove(0))
+        };
+        {
+            let mut file = self.file.lock().unwrap();
+            for it in items {
+                file.push_back(it);
+            }
+        }
+        if let Some(it) = premiere {
+            self.jouer(it); // emit_update inclus
+        } else {
+            self.emit_update();
+        }
+        Ok(nb)
+    }
+
     /// Test manuel : joue immédiatement un fichier de la bibliothèque sur la
     /// diffusion (remplace la piste courante — c'est un test, pas une demande).
     pub fn tester(&self, src: &str) -> Result<(), String> {

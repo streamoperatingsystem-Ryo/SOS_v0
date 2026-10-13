@@ -136,6 +136,18 @@ export async function musiqueDeplacer(id: string, delta: number): Promise<void> 
   }
 }
 
+/// Ajoute des fichiers de la bibliothèque à la file (sélection streamer —
+/// sans limites viewer, en fin de file ; 1re piste direct si rien ne joue).
+/// Retourne le nombre de pistes ajoutées (null = erreur).
+export async function ajouterFileMusique(srcs: string[]): Promise<number | null> {
+  try {
+    return await tauri.musiqueFileAjouter(srcs);
+  } catch (e) {
+    console.error("ajouterFileMusique:", e);
+    return null;
+  }
+}
+
 /// Joue un fichier de la bibliothèque sur la diffusion (test manuel).
 export async function testerMusique(src: string): Promise<void> {
   try {

@@ -3314,6 +3314,16 @@ fn musique_deplacer(
     state.deplacer_file(&id, delta as isize)
 }
 
+/// Ajoute des fichiers de la bibliothèque à la file (sélection streamer :
+/// sans limites viewer, en fin de file ; 1re piste direct si rien ne joue).
+#[tauri::command]
+fn musique_file_ajouter(
+    state: tauri::State<'_, musique::MusiqueState>,
+    srcs: Vec<String>,
+) -> Result<usize, String> {
+    state.ajouter_file(&srcs)
+}
+
 /// Test manuel : joue un fichier de la bibliothèque côté diffusion.
 #[tauri::command]
 fn musique_tester(
@@ -4255,6 +4265,7 @@ pub fn run() {
             musique_vider,
             musique_retirer,
             musique_deplacer,
+            musique_file_ajouter,
             musique_tester,
             musique_volume,
             input_viewer_set_actif,

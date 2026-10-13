@@ -1691,6 +1691,13 @@ export const tauri = {
     await invoke("musique_deplacer", { id, delta });
   },
 
+  /// Ajoute des fichiers de la bibliothèque à la file (sélection streamer :
+  /// sans limites viewer, en fin de file ; 1re piste direct si rien ne joue).
+  /// Retourne le nombre de pistes ajoutées.
+  async musiqueFileAjouter(srcs: string[]): Promise<number> {
+    return invoke<number>("musique_file_ajouter", { srcs });
+  },
+
   /// Test manuel : joue un fichier de la bibliothèque côté diffusion.
   async musiqueTester(src: string): Promise<void> {
     await invoke("musique_tester", { src });
