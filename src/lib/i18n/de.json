@@ -490,6 +490,9 @@
     "equaliseur": {
       "micro": "Standardmikrofon einbeziehen (Stimme)",
       "bulles": "Animierte Blasen über den Balken",
+      "couleur": "Balkenfarbe",
+      "couleurFin": "Gradientende",
+      "couleursAuto": "Auto-Farben (Szenenrahmen)",
       "hintMicro": "Das Spektrum stammt vom Windows-Standard-Audioausgang (≈ „Desktop Audio“ in OBS); die Stimme fehlt ohne OBS-Monitoring — daher die eigene Mikrofonaufnahme.",
       "placeholder": "Equalizer — wird in der Übertragung gerendert"
     }

@@ -484,6 +484,12 @@ export interface ModuleHud {
   eqMicro?: boolean;
   /// Équaliseur : bulles animées au-dessus des barres (défaut true).
   eqBulles?: boolean;
+  /// Équaliseur : couleur primaire des barres (hex, bas du dégradé).
+  /// undefined = résolution auto (couleurs du cadre + garde de lisibilité).
+  eqCouleur?: string;
+  /// Équaliseur : couleur de fin du dégradé (haut). undefined = dérivée
+  /// de eqCouleur (assombrie 25 %) si posée, sinon résolution auto.
+  eqCouleurFin?: string;
 }
 
 /// Modules HUD d'une scène — un emplacement par module. undefined =

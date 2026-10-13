@@ -8243,6 +8243,8 @@
           x: m.x, y: m.y,
           largeur: m.largeur, hauteur: m.hauteur,
           bulles: m.eqBulles !== false,
+          couleur: m.eqCouleur,
+          couleurFin: m.eqCouleurFin,
         };
         if (!eqRaf) {
           eqT0 = performance.now();
@@ -8282,21 +8284,30 @@
           eqBandes[i] = Math.max(0, b);
           if (b > maxV) maxV = b;
         }
-        // Couleurs du cadre de scène : barres en gradient primaire→secondaire.
-        var col = bpmResoudreCouleurs();
-        // Garde de lisibilité : un cadre très sombre (ex. #4c0606 → #000000)
-        // rend les barres invisibles sur un fond sombre → fallback gris clair.
-        if (bpmLuminance(col.p) < 70 && bpmLuminance(col.s) < 70) col = BPM_COULEURS_DEFAUT;
+        // Couleurs : CHOIX USER prioritaire (eqCouleur/eqCouleurFin du
+        // module — décision explicite, respectée telle quelle), sinon
+        // l'ACCENT du cadre de scène = extrémité la plus lumineuse (le p
+        // de bpmResoudreCouleurs — même résolution que le placeholder
+        // dashboard : accentCadre dans ModuleHud.svelte). L'apparence MIRE
+        // l'aperçu dashboard : dégradé qui FOND vers le haut (placeholder
+        // = linear-gradient to top, accent, transparent 130% → sommet à
+        // ~23 % d'alpha), SAUF couleurFin user posée (dégradé p→s complet).
+        // Pas de fallback gris : la couleur du cadre est un choix
+        // utilisateur, sombre compris.
+        var userP = cfg.couleur && bpmHexValide(cfg.couleur) ? cfg.couleur : null;
+        var userS = cfg.couleurFin && bpmHexValide(cfg.couleurFin) ? cfg.couleurFin : null;
+        var colP = userP || bpmResoudreCouleurs().p;
+        var colHaut = userP && userS ? userS : "rgba(" + bpmHexVersRgb(colP) + ", 0.23)";
         var x0 = cfg.x, y0 = cfg.y, W = cfg.largeur, H = cfg.hauteur;
         var padX = W * 0.012;
         var pas = (W - padX * 2) / EQ_NB;
         var bw = Math.max(2, pas * 0.62);
         var grad = ctx.createLinearGradient(0, y0 + H, 0, y0);
-        grad.addColorStop(0, col.p);
-        grad.addColorStop(1, col.s);
+        grad.addColorStop(0, colP);
+        grad.addColorStop(1, colHaut);
         ctx.save();
         ctx.fillStyle = grad;
-        ctx.shadowColor = col.p;
+        ctx.shadowColor = colP;
         var rCoin = Math.min(6, bw / 2);
         for (var i = 0; i < EQ_NB; i++) {
           var vb = eqBandes[i];
@@ -8325,7 +8336,7 @@
             });
           }
           var plafond = y0 - H * 1.6;
-          ctx.strokeStyle = col.p;
+          ctx.strokeStyle = colP;
           ctx.lineWidth = 1.2;
           ctx.shadowBlur = 8;
           for (var i = eqBulles.length - 1; i >= 0; i--) {

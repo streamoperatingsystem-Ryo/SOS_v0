@@ -490,6 +490,9 @@
     "equaliseur": {
       "micro": "包含默认麦克风（人声）",
       "bulles": "条形上方的动画气泡",
+      "couleur": "频条颜色",
+      "couleurFin": "渐变末端",
+      "couleursAuto": "自动配色（场景边框）",
       "hintMicro": "频谱来自 Windows 默认音频输出（≈ OBS 的“桌面音频”）；未启用 OBS 监听时人声不在其中——因此有专用麦克风采集。",
       "placeholder": "均衡器——在直播中渲染"
     }

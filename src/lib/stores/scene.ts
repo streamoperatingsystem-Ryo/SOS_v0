@@ -13,6 +13,7 @@ import {
   type LigneObjectif,
 } from "../tauri";
 import { pointsClipPathCadre } from "../cadres/points";
+import { hexValide, assombrir } from "../cadres/couleurs";
 import { obsHost, obsPort, obsPassword } from "./obs";
 import { t } from "./langue";
 import { listen } from "@tauri-apps/api/event";
@@ -636,6 +637,53 @@ export function moduleDefaut(id: ModuleId, canvasW: number, canvasH: number): Mo
 /// Lit un module de la scène courante (undefined = jamais configuré).
 export function moduleCourant(id: ModuleId): ModuleHud | undefined {
   return get(sceneStore).modules?.[id];
+}
+
+/// Luminance perceptuelle 0-255 d'un hex (rec.601) — miroir bpmLuminance
+/// (diffusion.html).
+function lumHex(hex: string): number {
+  const n = parseInt(hex.slice(1), 16);
+  return 0.299 * ((n >> 16) & 0xff) + 0.587 * ((n >> 8) & 0xff) + 0.114 * (n & 0xff);
+}
+
+/// Couleurs de l'équaliseur (rendu diffusion + pickers de la modale) :
+/// choix USER prioritaire (eqCouleur/eqCouleurFin du module, respecté tel
+/// quel — décision explicite), sinon l'ACCENT du cadre de scène = extrémité
+/// la plus lumineuse (même résolution que le placeholder dashboard :
+/// accentCadre dans ModuleHud.svelte, et que eqDessiner dans
+/// diffusion.html — le rendu fait fondre p vers le haut ~23 % d'alpha,
+/// le s renvoyé n'est qu'indicatif pour les pickers). Pas de fallback
+/// gris : la couleur du cadre est un choix utilisateur, sombre compris.
+export function couleursEqualiseur(
+  eqCouleur: string | undefined,
+  eqCouleurFin: string | undefined,
+  cadre: CadreConfig | undefined
+): { p: string; s: string } {
+  if (eqCouleur && hexValide(eqCouleur)) {
+    return {
+      p: eqCouleur,
+      s: eqCouleurFin && hexValide(eqCouleurFin) ? eqCouleurFin : assombrir(eqCouleur, 0.45),
+    };
+  }
+  let p = "#e0e0e0";
+  let s = "#a0a0a0";
+  if (cadre && cadre.actif) {
+    const c1 = hexValide(cadre.couleur) ? cadre.couleur : null;
+    const c2 = hexValide(cadre.couleurFin) ? cadre.couleurFin : null;
+    if (c1 && c2) {
+      if (lumHex(c1) < lumHex(c2)) {
+        p = c2;
+        s = c1;
+      } else {
+        p = c1;
+        s = c2;
+      }
+    } else if (c1) {
+      p = c1;
+      s = assombrir(c1, 0.45);
+    }
+  }
+  return { p, s };
 }
 
 /// Merge partiel d'un module + commit. Le module est créé avec ses défauts

@@ -490,6 +490,9 @@
     "equaliseur": {
       "micro": "Include the default microphone (voice)",
       "bulles": "Animated bubbles above the bars",
+      "couleur": "Bar color",
+      "couleurFin": "Gradient end",
+      "couleursAuto": "Auto colors (scene frame)",
       "hintMicro": "The spectrum comes from the Windows default audio output (≈ OBS “Desktop Audio”); your voice is not in it unless OBS monitoring is enabled — hence the dedicated mic capture.",
       "placeholder": "Equalizer — rendered in broadcast"
     }

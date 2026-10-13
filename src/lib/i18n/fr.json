@@ -490,6 +490,9 @@
     "equaliseur": {
       "micro": "Inclure le micro par défaut (voix)",
       "bulles": "Bulles animées au-dessus des barres",
+      "couleur": "Couleur des barres",
+      "couleurFin": "Dégradé (fin)",
+      "couleursAuto": "Couleurs auto (cadre de scène)",
       "hintMicro": "Le spectre vient de la sortie audio par défaut de Windows (≈ « Desktop Audio » d'OBS) ; la voix n'y figure pas sans monitoring OBS — d'où la capture micro dédiée.",
       "placeholder": "Équaliseur — rendu en diffusion"
     }

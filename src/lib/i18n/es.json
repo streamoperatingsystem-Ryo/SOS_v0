@@ -490,6 +490,9 @@
     "equaliseur": {
       "micro": "Incluir el micrófono predeterminado (voz)",
       "bulles": "Burbujas animadas sobre las barras",
+      "couleur": "Color de las barras",
+      "couleurFin": "Final del degradado",
+      "couleursAuto": "Colores automáticos (marco de escena)",
       "hintMicro": "El espectro proviene de la salida de audio predeterminada de Windows (≈ «Desktop Audio» de OBS); la voz no aparece sin monitoreo de OBS — de ahí la captura de micrófono dedicada.",
       "placeholder": "Ecualizador — se renderiza en la difusión"
     }

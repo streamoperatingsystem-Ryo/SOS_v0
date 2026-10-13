@@ -551,6 +551,16 @@ pub struct ModuleHud {
     /// Équaliseur : bulles montantes au sommet des barres. None = true.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eqBulles: Option<bool>,
+    /// Équaliseur : couleur primaire des barres (hex #rrggbb, extrémité
+    /// BASSE du dégradé). None = résolution automatique (couleurs du cadre
+    /// de scène, garde de lisibilité → défaut si trop sombres).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqCouleur: Option<String>,
+    /// Équaliseur : couleur de fin du dégradé (extrémité HAUTE). None =
+    /// dérivée de eqCouleur (assombrie 25 %) si eqCouleur est posé, sinon
+    /// résolution automatique.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqCouleurFin: Option<String>,
 }
 
 /// Modules HUD d'une scène — un emplacement fixe par module (singletons).

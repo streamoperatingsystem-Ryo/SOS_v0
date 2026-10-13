@@ -26,6 +26,7 @@
     retirerLigneObjectif,
     deplacerLigneObjectif,
     sceneStore,
+    couleursEqualiseur,
   } from "../stores/scene";
   import { modulesModalOpen } from "../stores/ui";
   import { valeursGoals, goalsTwitch } from "../stores/objectifs";
@@ -53,6 +54,9 @@
   let m = $derived($sceneStore.modules?.[sel]);
   let cfg = $derived(m ?? moduleDefaut(sel, $sceneStore.canvasW ?? 1920, $sceneStore.canvasH ?? 1080));
   let lignes = $derived(cfg.lignes ?? []);
+  // Couleurs effectives de l'équaliseur (user → cadre + garde de lisibilité
+  // → défaut) — affichées dans les pickers, même résolution que la diffusion.
+  let eqEff = $derived(couleursEqualiseur(cfg.eqCouleur, cfg.eqCouleurFin, $sceneStore.cadreWidget));
 
   function onFermer() {
     modulesModalOpen.set(null);
@@ -211,6 +215,21 @@
           <label class="toggle"><input type="checkbox" checked={cfg.eqBulles !== false}
               onchange={(e) => patch({ eqBulles: e.currentTarget.checked })} />
             <span>{$t("modules.equaliseur.bulles")}</span></label>
+          <!-- Couleurs des barres : pickers = couleur EFFECTIVE (user si
+               posée, sinon résolution auto cadre+garde — mêmes règles que
+               la diffusion via couleursEqualiseur). Le bouton auto retire
+               le choix user (retour à la résolution du cadre). -->
+          <div class="pos-grid">
+            <label class="pos-field"><span class="field-label">{$t("modules.equaliseur.couleur")}</span>
+              <input type="color" value={eqEff.p}
+                onchange={(e) => patch({ eqCouleur: (e.target as HTMLInputElement).value })} /></label>
+            <label class="pos-field"><span class="field-label">{$t("modules.equaliseur.couleurFin")}</span>
+              <input type="color" value={eqEff.s}
+                onchange={(e) => patch({ eqCouleurFin: (e.target as HTMLInputElement).value })} /></label>
+          </div>
+          <button class="action" onclick={() => patch({ eqCouleur: undefined, eqCouleurFin: undefined })}>
+            {$t("modules.equaliseur.couleursAuto")}
+          </button>
           <p class="hint">{$t("modules.equaliseur.hintMicro")}</p>
         {:else}
           <label class="pos-field"><span class="field-label">{$t("modules.objectifs.titre")}</span>

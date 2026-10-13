@@ -3394,10 +3394,9 @@ appelés au boot dans `App.svelte`), wrappers `tauri.ts`. i18n
   `pointer-events:none`. `renderModuleEqualiseur` dans `renderScene`
   sync rect/options + boucle rAF (aucune rAF si inactif). `eq-spectrum`
   → `eqCible` ; `eqDessiner` fait le lissage attack ~70 ms / decay ~220 ms,
-  barres néon arrondies en gradient primaire→secondaire de
-  `bpmResoudreCouleurs` (couleurs du cadre de scène) + bulles néon
-  translucides qui montent au-dessus du bandeau (`eqBulles`), spawn
-  proportionnel à l'énergie. Frames plates dédupliquées côté Rust.
+  barres néon arrondies + bulles néon translucides qui montent au-dessus
+  du bandeau (`eqBulles`), spawn proportionnel à l'énergie. Frames
+  plates dédupliquées côté Rust.
   ⚠️ Bug corrigé 2026-10-10 : `#eq-root` porte `display:none` en feuille de
   style — l'affichage DOIT être `style.display = "block"` (`""` ne retire
   que l'inline → couche jamais visible + rAF tournant à vide). Garde
@@ -3414,9 +3413,21 @@ appelés au boot dans `App.svelte`), wrappers `tauri.ts`. i18n
   (le bloc musique garde `eqCtx`). Même classe de bug que la collision
   `eqTick` documentée dans diffusion.html — **toute nouvelle variable
   du module doit vérifier qu'aucun bloc plus bas ne la redéclare**.
-  + garde de lisibilité dans `eqDessiner` : les deux extrémités du cadre
-  trop sombres (luminance < 70, ex. `#4c0606`→`#000000` sur fond sombre)
-  → fallback `BPM_COULEURS_DEFAUT` (gris clair).
+- **Couleurs des barres (2026-10-13)** : CHOIX USER prioritaire
+  (`eqCouleur`/`eqCouleurFin` du module, pickers dans la modale —
+  décision explicite respectée telle quelle, `couleurFin` posée sans
+  `couleur` est ignorée), sinon **l'accent du cadre de scène**
+  (extrémité la plus lumineuse, `p` de `bpmResoudreCouleurs` — même
+  résolution que `accentCadre` du placeholder dashboard). Le rendu
+  DIFFUSION mire l'apparence du placeholder dashboard : dégradé qui
+  FOND vers le haut (`rgba(accent, 0.23)` au sommet ≈ le
+  `linear-gradient to top, accent, transparent 130%` de `.eq-ph i`),
+  sauf `couleurFin` user posée (dégradé p→s complet). **Pas de fallback
+  gris** : la couleur du cadre est un choix utilisateur, sombre compris
+  (une garde de lisibilité essayée le 2026-10-13 a été retirée à la
+  demande de l'utilisateur — elle écrasait sa couleur de cadre).
+  Résolution partagée `couleursEqualiseur` (stores/scene.ts) pour les
+  pickers de la modale.
 - **Dashboard** : placeholder statique dans `ModuleHud.svelte` (barres
   figées + label « rendu en diffusion »), drag/resize inchangé.
 
@@ -3427,7 +3438,7 @@ appelés au boot dans `App.svelte`), wrappers `tauri.ts`. i18n
 | `src-tauri/src/lib.rs` | `mod equaliseur` + init + sync boot |
 | `src-tauri/resources/diffusion.html` | `#eq-root` + `renderModuleEqualiseur`/`eqDessiner` + handler WS |
 | `src/lib/components/ModuleHud.svelte` | Placeholder statique drag/resize |
-| `src/lib/components/ModulesModal.svelte` | Toggles micro/bulles (bloc Style masqué) |
+| `src/lib/components/ModulesModal.svelte` | Toggles micro/bulles + pickers couleur (bloc Style masqué) |
 
 ## Système CSS unifié + scale rem (2026-XX) — convention et annulation
 
