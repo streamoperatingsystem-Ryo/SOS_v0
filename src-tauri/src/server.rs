@@ -128,11 +128,15 @@ pub async fn run_server(
         .route("/fonts/{name}", get(font_handler))
         .route("/brand/{name}", get(brand_handler))
         .nest_service("/medias", ServeDir::new(medias_dir))
-        .merge(api_deck::routes())
         // CORS permissif : le dashboard (localhost:1420 / tauri.localhost) charge
         // les médias de :4321 en cross-origin — requis pour texImage2D WebGL
-        // (morphing) sans tainted canvas. Localhost only, pas de risque.
+        // (morphing) sans tainted canvas. LECTURE seule — ne couvre PAS /api/*.
         .layer(CorsLayer::permissive())
+        // API Stream Deck : merge APRÈS le layer → PAS de CORS permissif.
+        // Une page web quelconque ne peut ni lire ni écrire (les POST JSON
+        // exigent un preflight OPTIONS sans réponse CORS → bloqué navigateur).
+        // api_deck ajoute sa garde Host local (anti-DNS-rebinding).
+        .merge(api_deck::routes())
         .with_state(server_state);
 
     let listener = tokio::net::TcpListener::bind(&addr)
