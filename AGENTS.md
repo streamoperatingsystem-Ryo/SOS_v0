@@ -257,7 +257,7 @@ ponctuation collée acceptée). `diffusion.html` et `chat-popout.html` rendent
 XSS-safe). Les émojis Unicode passent en texte brut (transport UTF-8 intact,
 fallback police OS).
 
-## Compteur viewers — widget chat en diffusion (2026-XX)
+## Compteur viewers — widget chat en diffusion (2026-09-17)
 
 > UNE seule tâche centralisée (`viewers.rs`) pour toutes les plateformes — PAS
 > de boucle de polling par plateforme. Tick toutes les 15s ; chaque plateforme
@@ -400,7 +400,7 @@ live, `N/A` si non mesurée). `Toolbar` → « Créer un widget objectif ».
   1re frame.
 - **i18n** : `goal.ttype.*` (7 types Helix : follower, subscription(_count),
   new_subscription(_count), new_bit, new_cheerer) + `carteEdition.goals*`
-  dans fr/en/es/it/zh — fr.json source de vérité.
+  dans les 8 locales — fr.json source de vérité.
 
 ## Ordre de plan (z) des widgets — boutons −/+ au survol (2026-10-03)
 
@@ -476,6 +476,39 @@ live, `N/A` si non mesurée). `Toolbar` → « Créer un widget objectif ».
   Posée sur le select zoom topbar (`.taille-ui-select`) ; ne pas
   l'appliquer globalement — les selects de formulaires gardent leur look.
 
+## API Stream Deck — HTTP :4321 (api_deck.rs, 2026-08-27)
+
+> Endpoints `/api/*` servis par le MÊME serveur :4321 que la diffusion —
+> pas de 2e port, pas de process Elgato. Consommateurs : plugin Stream
+> Deck natif, scripts, curl (le dashboard n'appelle JAMAIS /api/* — il
+> passe par les commandes Tauri).
+
+```
+GET  /api/scenes           → [{ id, nom }]
+POST /api/scene/ouvrir      { id }   → 200 / 404
+POST /api/scene/nouvelle    { nom }  → 200 + { id, nom } / 500
+GET  /api/scene/courante    → { id, nom }
+```
+
+- Mêmes fonctions que l'UI (`scenes::ouvrir` = save + load + snapshot) :
+  une action Stream Deck bascule réellement la scène (diffusion incluse).
+- **Sécurité (2026-10-13)** — pas d'auth, mais DOUBLE garde locale :
+  - `server.rs` merge les routes api_deck APRÈS le layer CORS permissif →
+    **/api/* n'a PAS de CORS** : un POST JSON exige un preflight OPTIONS
+    sans réponse CORS → bloqué par le navigateur. Une page web quelconque
+    ouverte dans le navigateur ne peut donc ni lire ni basculer/créer des
+    scènes (le CORS permissif reste pour la LECTURE : médias :4321 →
+    texImage2D morphing, inchangé).
+  - `api_deck.rs::garde_host_locale` : Host limité à
+    `127.0.0.1`/`localhost`/`::1` (port optionnel) — **anti-DNS-rebinding**
+    (un domaine attaquant résolu vers 127.0.0.1 porte son propre nom en
+    Host et devient same-origin pour le navigateur : le CORS ne
+    s'applique alors jamais). Sinon 403.
+  - Les clients natifs (plugin Stream Deck, curl) passent inchangés —
+    ils se connectent via 127.0.0.1/localhost et ignorent le CORS.
+- Structuré pour étendre plus tard (widgets, fond, lecture) sans gonfler
+  server.rs — une extension = un handler + une ligne dans `routes()`.
+
 ## État partagé (tauri::State)
 
 | State         | Champs clés                          | Commandes associées |
@@ -530,27 +563,38 @@ live, `N/A` si non mesurée). `Toolbar` → « Créer un widget objectif ».
 
 ## Persistance (config.rs)
 
-## Persistance (config.rs)
-
 Fichiers dans `%APPDATA%\com.streamos.v0\` (identifiant Tauri `com.streamos.v0` —
 PAS "StreamOS" ; `config.rs` → `app_data_dir()`) :
 - `config.json` — `{ "sceneId": "..." }` (scène courante, migration legacy)
 - `obs_canvas.json` — résolution canvas OBS (globale)
-- `alertes_config.json` — config des alertes par type
+- `alertes_config.json` — config des alertes par type (alertes.rs)
+- `commandes_config.json` — commandes chat `!cmd` (commandes.rs)
+- `musique_config.json` — config musique `!rs` : noms de commandes, cooldowns,
+  file_max, max_par_viewer (musique.rs)
+- `pad_numerique.json` — config du pad numérique (pad_numerique.rs)
+- `bandeau_premier_message.json` — config du bandeau 1er message (bandeau.rs)
 - `position_overlay.json` — squelette de position unifié (clip de bienvenue + alertes)
+- `clips_bienvenue.json` — registre des viewers Twitch + config globale du
+  clip de bienvenue (welcome.rs)
+- `presentation_favoris.json` — favoris de la présentation streamer
+  (presentation.rs)
 - `kick.json` — `{ "slug": "..." }`
 - `tiktok.json` — `{ "username": "..." }`
-- `obs_canvas.json` — résolution canvas OBS (globale)
 - `followers_snapshot.json` — snapshot des followers Twitch (user_id, login, followed_at + timestamp). Sert à détecter les unfollows au démarrage suivant.
 - `unfollows.json` — historique append-only des unfollows détectés (user_id, login, date_unfollow). Dédupliqué par user_id.
 - `raccourcis.json` — `{ "visible": bool, "bord": "gauche|droite|haut|bas", "monitor_index": n }` (barre de raccourcis)
 - `onboarding.json` — `{ "fait": true }` (présence de la galerie de presets au 1er lancement ; absent = premier démarrage)
-![alt text](image.png)- `langue.json` — `{ "langue": "fr" }` (langue UI du dashboard — i18n, voir section dédiée)
+- `langue.json` — `{ "langue": "fr" }` (langue UI du dashboard — i18n, voir section dédiée)
+- `fenetre.json` — écran + mode au démarrage + géométrie fenêtrée (fenetre.rs)
+- `speedrun.json` — chemins .asl/.lss + settings du splitter (config.rs)
 - `telemetrie/events.jsonl` — journal append-only des événements télémétrie (schéma v1, voir section dédiée)
 - `ecran_attente.json` — config de l'écran d'attente BRB (duree_s, titre,
   afficher_titre, son, volume, media/kind/nom, source_audio OBS)
 - `scenes/` — scènes SOS (JSON)
-- `medias/` — médias importés
+- `medias/` — médias importés (`medias/musique/` = bibliothèque musicale,
+  noms de fichiers CONSERVÉS ≠ uuid des alertes)
+- `obs/` — cache des masques PNG caméra `masque-{camera|fond}-<hash16>.png`
+  (obs_trou.rs + mask_png.rs — nettoyage des orphelins intégré)
 
 Twitch et YouTube utilisent keyring (coffre OS) pour les tokens OAuth2 — pas de fichier JSON.
 
@@ -1181,7 +1225,7 @@ TikTok Webcast (tiktok_chat.rs) : Gift → gift (combos agrégés via
   live). ⚠️ Test manuel : `tester_clip` n'a que `display_name` → login
   dérivé en lowercase (fetch silencieusement vide si display ≠ login).
 - **i18n** : `interactions.bienvenue.utiliserSquelette` +
-  `utiliserSqueletteHint` (fr uniquement, fallback convention TRADUCTIONS).
+  `utiliserSqueletteHint` (les 8 locales).
 
 ### Commandes chat — "!commande" tapée par un viewer (2026-09-14)
 
@@ -1215,6 +1259,33 @@ TikTok Webcast (tiktok_chat.rs) : Gift → gift (combos agrégés via
   `commande_tester`. Frontend : `stores/commandes.ts` + onglet "Commandes"
   (master-detail : liste gauche + bouton « + Ajouter », détail = Commande /
   Média / Texte / Comportement / Test & suppression).
+
+### Pad numérique — 16 touches Numpad × 3 plages (2026-09-17)
+
+> Porté de l'ancienne app (`features/pad-numerique/`), réécrit pour v0
+> (`pad_numerique.rs`, même pattern que alertes.rs / commandes.rs).
+> Déclenchement par le STREAMER uniquement : capture clavier GLOBALE des
+> touches Numpad (thread poll `GetAsyncKeyState` dédié 60Hz, indépendant
+> de input_viewer.rs) → sons/images/vidéos sur l'overlay de diffusion.
+> Le message chat n'existe PAS ici — rien à voir avec les commandes `!cmd`.
+
+- **Config** `pad_numerique.json` : `actif`, `plage_actuelle`, touches
+  (14 assignables — `NumpadAdd`/`NumpadSubtract` RÉSERVÉES : navigation
+  entre les 3 plages 0/1/2) → `media_type` (son|image|video) +
+  `media`/`son`/`duree_ms`/`volume`/`bounce`/`zoom` par touche.
+- **Overlay diffusion** : `pad-play`/`pad-stop` sur chat_tx → z 9995
+  (sous commandes 9996), même squelette de position que welcome/alertes/
+  commandes (`position_overlay.rs`).
+- **Audio double face** : joué côté diffusion (OBS le capte pour les
+  viewers) ET côté dashboard (`event Tauri pad:touche` → le streamer
+  l'entend sur son PC) ; vidéo = son porté par la vidéo côté diffusion
+  uniquement (pas de doublon dashboard).
+- **Commandes** : `pad_etat`, `pad_set_actif`, `pad_set_touche`,
+  `pad_supprimer_touche`, `pad_set_plage`, `pad_tester_touche`,
+  `pad_importer_media`, `pad_importer_son`. Frontend : `stores/padNumerique.ts`
+  + onglet « Pad numérique » de la modale Interactions Live.
+- **Télémétrie** : frames `pad-play` whitelistées → kind `pad`,
+  plateforme `local`.
 
 ### Musique — "!rs <titre>" demandé par un viewer (bibliothèque LOCALE)
 
@@ -1940,8 +2011,11 @@ cyberpunk = runner lumineux, hexagon = nœud voyageur — les deux en
 `animateMotion` avec attribut `path=` direct (PAS de `mpath`/`xlink:href` :
 non résolus par les vieux CEF d'OBS → runner figé) + grappes d'alvéoles
 rotatives (`animateTransform`, décor marge), story = étincelle voyageuse
-(`animateMotion` sur borderPath), thin-line/mgstyle/carre/arrondis =
-segment comète (`stroke-dashoffset` sur `pathLength="100"`). Jamais de
+(`animateMotion` sur borderPath), tribal = nœud voyageur (`animateMotion`
+path= direct) + respiration SMIL des griffes (`animate` opacity), arena =
+nœud voyageur (`animateMotion` path= direct) + pulsation SMIL des 4 orbs,
+thin-line/mgstyle/carre/arrondis = segment comète (`stroke-dashoffset`
+sur `pathLength="100"`). Jamais de
 filtre animé. `animer` est propagé :
 `CadreOpts.animer` → `genererSVG`/`genererCadreSVG` (les 3 sites : TS +
 diffusion.html + chat-popout.html), `cadreKey`/`majEtatCadre` l'incluent
@@ -1981,8 +2055,12 @@ tous les autres widgets.
 |----------------|---------------------|-------------------------|---------------------|
 | média          | oui (clip-path + overlay SVG) | oui | n/a |
 | chat           | oui (clip-path + overlay SVG) | oui | n/a |
-| welcome-clip   | oui (clip-path + overlay SVG) | n/a (overlay autonome) | n/a |
 | **trou**       | **oui** (clip-path + overlay SVG) | **oui** | **forme du clip-path du cadre** |
+
+> Le clip de bienvenue n'est PAS un type de widget (l'ancien type
+> `welcome-clip` est purgé au chargement par `scenes.rs` — overlay autonome
+> piloté par WS) ; sa carte reçoit le cadre SVG via `appliquerCadreOverlay`,
+> comme les alertes/commandes/écran d'attente.
 
 ### Fichiers concernés
 
@@ -2042,7 +2120,7 @@ tous les autres widgets.
 Dashboard (Svelte + TS)                Backend Rust                    Diffusion (CEF OBS)
 ┌──────────────────────┐  invoke  ┌─────────────────────┐  chat_tx   ┌──────────────────┐
 │ WidgetSpeedrun.ts    │ ───────→ │ speedrun/commands.rs │ ─────────→ │ diffusion.html   │
-│  - timer + contrôles │          │  (9 commandes Tauri) │  WS :4321  │  - rendu timer   │
+│  - timer + contrôles │          │ (11 commandes Tauri) │  WS :4321  │  - rendu timer   │
 │  - charge .asl/.lss  │ ←─────── │ speedrun/asl_engine  │ ←───────── │  - splits LSS    │
 │  - settings toggles  │  event   │ speedrun/timer       │  event     │  - maj DOM WS    │
 │  speedrun-store.ts   │  Tauri   │ speedrun/transpiler  │  Tauri     │  (zéro re-render) │
@@ -2090,6 +2168,10 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
 - `speedrun_demarrer(totalSplits, start, split, reset)` → démarre boucle polling
 - `speedrun_arreter()` → arrête boucle
 - `speedrun_maj_settings(start, split, reset)` → met à jour settings
+- `speedrun_maj_settings_asl(valeurs)` → met à jour les settings ASL
+  individuels (map code→bool, ex. 120+ pour MGS) dans le Context Boa ;
+  appelé à la validation de la modale de config, persisté séparément
+  par `speedrun_sauver_config`
 - `speedrun_est_actif()` → true si actif
 - `speedrun_action_manuelle(action)` → start/split/skip/undo/reset/pause
 - `speedrun_aller_split(index)` → clic sur une ligne : arme l'index (timer
@@ -2242,7 +2324,7 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
 | Fichier | Rôle |
 |---|---|
 | `src-tauri/src/speedrun/mod.rs` | Déclaration modules + cfg(windows) + stubs non-Windows |
-| `src-tauri/src/speedrun/commands.rs` | 9 commandes Tauri + singleton AslEngine + emit (Tauri + WS) |
+| `src-tauri/src/speedrun/commands.rs` | 11 commandes Tauri + singleton AslEngine + emit (Tauri + WS) |
 | `src-tauri/src/speedrun/asl/parser.rs` | Parser .asl manuel (states + 13 méthodes) |
 | `src-tauri/src/speedrun/asl/lss.rs` | Parser .lss XML (segments + PB) |
 | `src-tauri/src/speedrun/engine/timer.rs` | TimerModel (start/split/reset/pause/undo/skip) |
@@ -2471,7 +2553,7 @@ migré tel quel dans Ergonomie).
   Payload `raccourcis:connexions` étendu : `stream` / `record` (bools),
   poussés par le même `$effect`/`pushRaccourcisConnexions` d'App.svelte.
 
-## Section Prévisualisation — miniature live + projecteur OBS (2026-XX)
+## Section Prévisualisation — miniature live + projecteur OBS (2026-10-06)
 
 Section **accordéon standard** de la barre latérale (`.sec-preview`,
 carte jaune `.cible-preview`, section `"preview"` dans `ui.ts`) : pliée =
@@ -2519,7 +2601,7 @@ ouverte = miniature + sélecteur écran + bouton projecteur. Deux fonctions :
   `obs_projecteur_fermer` (lib.rs) → `moniteurs_liste` /
   `ouvrir_projecteur_preview` / `fermer_projecteurs` (obs.rs).
 
-## Just Chatting — overlay non-destructif caméra + chat (2026-XX)
+## Just Chatting — overlay non-destructif caméra + chat (2026-10-04)
 
 > Mode bascule « scene IRL » : en diffusion, seuls la caméra et le(s) chat(s)
 > restent visibles, repositionnés sur un layout calculé. **La scène réelle
@@ -2803,7 +2885,7 @@ drag ET resize :
   identiques dashboard (`Widget.svelte`) et diffusion (`diffusion.html`),
   persistés dans la scène JSON comme avant.
 
-## Écran d'attente (BRB) — overlay plein écran + chrono (2026-XX)
+## Écran d'attente (BRB) — overlay plein écran + chrono (2026-09-26)
 
 > Porté de l'ancienne app (`features/ecran-attente/`), réécrit pour
 > l'architecture v0 — **même pattern que `pad_numerique.rs`/`bandeau.rs`** :
@@ -3357,7 +3439,7 @@ appelés au boot dans `App.svelte`), wrappers `tauri.ts`. i18n
 | `src-tauri/resources/diffusion.html` | CSS `.module`/`.mh-*`/`.mm-*`/`.mo-*` + `renderModules`/`majModule*`/`assurerTick*` |
 | `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `modules.*` + `toolbar.modules*` + `commun.hauteur` |
 
-## Module Équaliseur — overlay spectre audio sous les widgets (2026-XX)
+## Module Équaliseur — overlay spectre audio sous les widgets (2026-10-13)
 
 > Quatrième module (`modules.equaliseur`, même `ModuleHud` + config/drag/
 > resize que les 3 autres) MAIS rendu différemment : ce n'est **pas** un
@@ -3440,7 +3522,7 @@ appelés au boot dans `App.svelte`), wrappers `tauri.ts`. i18n
 | `src/lib/components/ModuleHud.svelte` | Placeholder statique drag/resize |
 | `src/lib/components/ModulesModal.svelte` | Toggles micro/bulles + pickers couleur (bloc Style masqué) |
 
-## Système CSS unifié + scale rem (2026-XX) — convention et annulation
+## Système CSS unifié + scale rem (2026-10-13) — convention et annulation
 
 > Chantier « chrome responsive » : tout le chrome dashboard (topbar, sidebar,
 > modales, onglets) est dimensionné en **rem** ; le canvas WYSIWYG (px/cqw)
