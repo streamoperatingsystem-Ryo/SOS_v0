@@ -520,7 +520,6 @@
   "widget": {
     "chatActif": "Чат активен",
     "camera": "Камера",
-    "clipBienvenue": "Клип приветствия",
     "inputViewerObs": "Ваш показ ввода отображается в OBS",
     "videoLectureObs": "Ваше видео играет в OBS"
   },
@@ -653,7 +652,6 @@
       "media": "Медиа",
       "chat": "Чат",
       "camera": "Камера",
-      "welcome-clip": "Клип приветствия",
       "input-viewer": "Показ ввода",
       "speedrun": "Сплиттер",
       "goal": "Цель",

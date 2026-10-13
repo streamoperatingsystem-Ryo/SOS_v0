@@ -520,7 +520,6 @@
   "widget": {
     "chatActif": "聊天已激活",
     "camera": "摄像头",
-    "clipBienvenue": "欢迎剪辑",
     "inputViewerObs": "您的输入显示器正在 OBS 中显示",
     "videoLectureObs": "您的视频正在 OBS 中播放"
   },
@@ -653,7 +652,6 @@
       "media": "媒体",
       "chat": "聊天",
       "camera": "摄像头",
-      "welcome-clip": "欢迎剪辑",
       "input-viewer": "输入显示器",
       "speedrun": "分段器",
       "goal": "目标",

@@ -238,7 +238,7 @@
   // (champ titre du widget), on l'utilise en priorité. Pour les widgets média,
   // on ajoute le nom du fichier importé si disponible (mediaNom).
   const TYPES_WIDGET = [
-    "media", "chat", "camera", "welcome-clip", "input-viewer", "speedrun", "goal",
+    "media", "chat", "camera", "input-viewer", "speedrun", "goal",
     "musique",
   ];
   let nomsTypes = $derived.by(() => {

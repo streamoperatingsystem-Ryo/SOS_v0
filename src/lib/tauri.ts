@@ -12,7 +12,7 @@ export interface MediaSlide {
 
 export interface Widget {
   id: string;
-  type: "media" | "chat" | "camera" | "welcome-clip" | "input-viewer" | "speedrun" | "goal" | "musique";
+  type: "media" | "chat" | "camera" | "input-viewer" | "speedrun" | "goal" | "musique";
   x: number;
   y: number;
   largeur: number;

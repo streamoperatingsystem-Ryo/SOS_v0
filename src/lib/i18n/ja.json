@@ -520,7 +520,6 @@
   "widget": {
     "chatActif": "チャット有効",
     "camera": "カメラ",
-    "clipBienvenue": "歓迎クリップ",
     "inputViewerObs": "入力表示は OBS に表示されています",
     "videoLectureObs": "動画は OBS で再生中です"
   },
@@ -653,7 +652,6 @@
       "media": "メディア",
       "chat": "チャット",
       "camera": "カメラ",
-      "welcome-clip": "歓迎クリップ",
       "input-viewer": "入力表示",
       "speedrun": "スプリッター",
       "goal": "目標",

@@ -29,12 +29,10 @@
 
   let { w, scale }: { w: Widget; scale: number } = $props();
 
-  // Type du widget : "media" (défaut), "chat", "camera", "welcome-clip" ou
-  // "input-viewer".
+  // Type du widget : "media" (défaut), "chat", "camera" ou "input-viewer".
   let widgetType = $derived(w.type ?? "media");
   let isChat = $derived(widgetType === "chat");
   let isCamera = $derived(widgetType === "camera");
-  let isWelcomeClip = $derived(widgetType === "welcome-clip");
   let isInputViewer = $derived(widgetType === "input-viewer");
   let isSpeedrun = $derived(widgetType === "speedrun");
   let isGoal = $derived(widgetType === "goal");
@@ -554,13 +552,6 @@
       <div class="camera-actif">
         <span>{$t("widget.camera")}</span>
       </div>
-    {:else if isWelcomeClip}
-      <!-- Widget clip de bienvenue (dashboard) : placeholder seulement.
-           Le clip se joue dans diffusion.html (OBS :4321) via WS
-           {"type":"welcome-clip-play"}. Position/taille/z pilotées ici. -->
-      <div class="welcome-clip-actif">
-        <span>{$t("widget.clipBienvenue")}</span>
-      </div>
     {:else if isInputViewer}
       <!-- Widget input viewer (dashboard) : badge "affiché dans OBS" seulement.
            Les entrées (clavier/souris/numpad/manette) s'affichent dans
@@ -923,20 +914,6 @@
     pointer-events: none;
     transform: translate(-50%, -50%);
     z-index: 20;
-  }
-  .welcome-clip-actif {
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 0.4rem;
-    pointer-events: none;
-    opacity: 0.7;
-    font-size: 0.9rem;
-    background: #000;
-    color: var(--texte);
   }
   /* Badge « input viewer affiché dans OBS » (dashboard) : pastille centrée
      .msg-pill — teinte orange via la règle globale app.css (même couleur

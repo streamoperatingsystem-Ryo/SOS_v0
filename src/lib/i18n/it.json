@@ -520,7 +520,6 @@
   "widget": {
     "chatActif": "Chat attiva",
     "camera": "Camera",
-    "clipBienvenue": "Clip di benvenuto",
     "inputViewerObs": "Il Suo input viewer è mostrato in OBS",
     "videoLectureObs": "Il Suo video è in riproduzione in OBS"
   },
@@ -653,7 +652,6 @@
       "media": "Media",
       "chat": "Chat",
       "camera": "Camera",
-      "welcome-clip": "Clip di benvenuto",
       "input-viewer": "Input Viewer",
       "speedrun": "Splitter",
       "goal": "Obiettivo",
