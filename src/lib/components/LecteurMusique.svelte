@@ -353,8 +353,8 @@
   .winamp {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 8px;
+    gap: 0.375rem;
+    padding: 0.5rem;
     border: 2px outset #555;
     border-radius: 3px;
     background: linear-gradient(180deg, #2e2e2e 0%, #1c1c1c 100%);
@@ -365,7 +365,7 @@
     user-select: none;
   }
   .winamp.shade {
-    padding: 4px;
+    padding: 0.25rem;
     gap: 0;
   }
 
@@ -374,8 +374,8 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    height: 15px;
-    padding: 0 3px;
+    height: 0.9375rem;
+    padding: 0 0.1875rem;
     border: 1px solid #111;
     border-bottom-color: #000;
     border-radius: 2px;
@@ -397,16 +397,16 @@
   }
   .wt-btns {
     display: flex;
-    gap: 2px;
+    gap: 0.125rem;
   }
   .wt-btn {
-    width: 11px;
-    height: 9px;
+    width: 0.6875rem;
+    height: 0.5625rem;
     padding: 0;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    font-size: 6px;
+    font-size: 0.375rem;
     line-height: 1;
     font-family: inherit;
     border: 1px outset #888;
@@ -428,14 +428,14 @@
   .main {
     display: flex;
     align-items: stretch;
-    gap: 6px;
+    gap: 0.375rem;
   }
   .clutter {
     display: flex;
     flex-direction: column;
     justify-content: space-around;
-    padding: 3px 0;
-    font-size: 6px;
+    padding: 0.1875rem 0;
+    font-size: 0.375rem;
     font-weight: 700;
     line-height: 1;
     color: #464646;
@@ -445,7 +445,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 0 4px;
+    padding: 0 0.25rem;
     border: 2px inset #444;
     border-radius: 2px;
     background: #050805;
@@ -462,10 +462,10 @@
     border: 2px inset #444;
     border-radius: 2px;
     background: #0a140a;
-    padding: 4px 6px;
+    padding: 0.25rem 0.375rem;
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    gap: 0.125rem;
     overflow: hidden;
   }
   .lcd-marquee {
@@ -496,7 +496,7 @@
   .lcd-specs {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 0.625rem;
     font-size: 0.58rem;
     font-weight: 700;
     color: #2f6e2f;
@@ -519,9 +519,9 @@
   .eq {
     display: flex;
     align-items: flex-end;
-    gap: 2px;
-    height: 42px;
-    padding: 3px 4px;
+    gap: 0.125rem;
+    height: 2.625rem;
+    padding: 0.1875rem 0.25rem;
     border: 2px inset #444;
     border-radius: 2px;
     background: #0a140a;
@@ -537,7 +537,7 @@
     position: absolute;
     left: 0;
     right: 0;
-    height: 2px;
+    height: 0.125rem;
     background: #ff9c40;
     box-shadow: 0 0 3px rgba(255, 156, 64, 0.6);
   }
@@ -550,16 +550,16 @@
 
   /* ── Barre de progression crantée ── */
   .prog {
-    height: 8px;
+    height: 0.5rem;
     border: 1px inset #444;
     border-radius: 2px;
     background:
       repeating-linear-gradient(
         90deg,
         transparent 0,
-        transparent 9px,
-        rgba(0, 0, 0, 0.55) 9px,
-        rgba(0, 0, 0, 0.55) 10px
+        transparent 0.5625rem,
+        rgba(0, 0, 0, 0.55) 0.5625rem,
+        rgba(0, 0, 0, 0.55) 0.625rem
       ),
       #101410;
     overflow: hidden;
@@ -575,7 +575,7 @@
   .transport {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 0.375rem;
   }
   .wbtn {
     border: 2px outset #666;
@@ -584,7 +584,7 @@
     color: #d8d8d8;
     font-family: inherit;
     font-size: 0.85rem;
-    padding: 2px 9px;
+    padding: 0.125rem 0.5625rem;
     cursor: pointer;
     line-height: 1.4;
   }
@@ -605,31 +605,31 @@
   .wvol {
     display: inline-flex;
     align-items: center;
-    gap: 4px;
+    gap: 0.25rem;
     color: #b8b8b8;
     font-size: 0.75rem;
   }
   .wvol input[type="range"] {
-    width: 90px;
+    width: 5.625rem;
     appearance: none;
     -webkit-appearance: none;
-    height: 6px;
+    height: 0.375rem;
     border: 1px inset #444;
     background: #101410;
     border-radius: 2px;
   }
   .wvol input[type="range"]::-webkit-slider-thumb {
     -webkit-appearance: none;
-    width: 10px;
-    height: 16px;
+    width: 0.625rem;
+    height: 1rem;
     border: 1px outset #777;
     border-radius: 2px;
     background: linear-gradient(180deg, #4a4a4a, #2c2c2c);
     cursor: pointer;
   }
   .wvol input[type="range"]::-moz-range-thumb {
-    width: 10px;
-    height: 16px;
+    width: 0.625rem;
+    height: 1rem;
     border: 1px outset #777;
     border-radius: 2px;
     background: linear-gradient(180deg, #4a4a4a, #2c2c2c);
@@ -639,7 +639,7 @@
     margin-left: auto;
     font-size: 0.65rem;
     font-weight: 700;
-    padding: 1px 6px;
+    padding: 0.0625rem 0.375rem;
     border: 1px inset #444;
     border-radius: 2px;
     color: #777;
@@ -654,8 +654,8 @@
   .wconfirm {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 3px 6px;
+    gap: 0.375rem;
+    padding: 0.1875rem 0.375rem;
     border: 1px inset #444;
     border-radius: 2px;
     background: #141414;
@@ -672,7 +672,7 @@
     border: 2px inset #444;
     border-radius: 2px;
     background: #050805;
-    max-height: 104px;
+    max-height: 6.5rem;
     overflow-y: auto;
     font-size: 0.7rem;
     font-weight: 700;
@@ -680,8 +680,8 @@
   .pl-row {
     display: flex;
     align-items: center;
-    gap: 6px;
-    padding: 1px 6px;
+    gap: 0.375rem;
+    padding: 0.0625rem 0.375rem;
     color: #3fbf3f;
   }
   .pl-row.courant {
@@ -710,10 +710,10 @@
   }
   .pl-actions {
     display: flex;
-    gap: 2px;
+    gap: 0.125rem;
   }
   .pl-btn {
-    padding: 0 4px;
+    padding: 0 0.25rem;
     font-size: 0.65rem;
     font-family: inherit;
     line-height: 1.3;
@@ -735,7 +735,7 @@
     color: #ff8a8a;
   }
   .pl-vide {
-    padding: 5px 8px;
+    padding: 0.3125rem 0.5rem;
     font-size: 0.62rem;
     color: #2a7a2a;
   }
@@ -744,12 +744,12 @@
   .cds {
     display: flex;
     flex-wrap: wrap;
-    gap: 4px;
+    gap: 0.25rem;
   }
   .cd {
     font-size: 0.65rem;
     font-weight: 700;
-    padding: 1px 6px;
+    padding: 0.0625rem 0.375rem;
     border: 1px inset #444;
     border-radius: 2px;
     color: #ffb040;

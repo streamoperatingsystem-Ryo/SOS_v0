@@ -646,11 +646,11 @@
   }
   .xaxis {
     position: relative;
-    height: 15px;
+    height: 0.9375rem;
   }
   .xtick {
     position: absolute;
-    top: 2px;
+    top: 0.125rem;
     font-size: 0.6rem;
     opacity: 0.55;
     font-variant-numeric: tabular-nums;
@@ -669,8 +669,8 @@
   }
   .bande-label {
     position: absolute;
-    top: 2px;
-    left: 4px;
+    top: 0.125rem;
+    left: 0.25rem;
     font-size: 0.62rem;
     color: var(--texte);
     opacity: 0.7;
@@ -683,21 +683,21 @@
     position: relative;
     display: block;
     width: 100%;
-    height: 180px;
+    height: 11.25rem;
     cursor: crosshair;
   }
   .marqueurs {
     position: absolute;
     left: 0;
     right: 0;
-    bottom: 4px;
-    height: 8px;
+    bottom: 0.25rem;
+    height: 0.5rem;
     pointer-events: none;
   }
   .marqueur {
     position: absolute;
-    width: 6px;
-    height: 6px;
+    width: 0.375rem;
+    height: 0.375rem;
     border-radius: 50%;
     transform: translateX(-50%);
     pointer-events: auto;

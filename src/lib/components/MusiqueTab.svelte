@@ -95,8 +95,8 @@
 <div class="musique-layout">
   <!-- Encart explicatif : le catalogue est 100 % LOCAL, rien n'est cherché
        en ligne — le nom du fichier EST le titre demandable. -->
-  <div class="bloc bloc-info">
-    <div class="bloc-titre">{$t("interactions.musique.titreInfo")}</div>
+  <div class="modal-bloc bloc-info">
+    <div class="modal-bloc-titre">{$t("interactions.musique.titreInfo")}</div>
     <p class="hint">{$t("interactions.musique.intro")}</p>
     <p class="hint">{$t("interactions.musique.introCommandes")}</p>
     <p class="hint">{$t("interactions.musique.introNommage")}</p>
@@ -107,8 +107,8 @@
   {:else}
     <!-- Lecture courante + contrôles live : lecteur Winamp complet
          (playlist intégrée — la file vit dans le deck). -->
-    <div class="bloc">
-      <div class="bloc-titre">
+    <div class="modal-bloc">
+      <div class="modal-bloc-titre">
         {$t("interactions.musique.enCours")}
         {#if etat.config.actif}
           <span class="etat on">ON</span>
@@ -120,11 +120,11 @@
     </div>
 
     <!-- Bibliothèque locale -->
-    <div class="bloc">
-      <div class="bloc-titre">
+    <div class="modal-bloc">
+      <div class="modal-bloc-titre">
         {$t("interactions.musique.bibliotheque")} ({biblio.length})
         <span class="spacer"></span>
-        <button class="btn mini" onclick={() => void importerMusique()}>
+        <button class="action small" onclick={() => void importerMusique()}>
           + {$t("interactions.musique.importer")}
         </button>
       </div>
@@ -138,18 +138,18 @@
               <span class="ligne-meta">{tailleLisible(f.taille)}</span>
               <span class="ligne-actions">
                 <button
-                  class="btn mini"
+                  class="action small"
                   title={$t("interactions.musique.ecouter")}
                   onclick={() => onEcouter(f)}
                   >{ecouteEnCours === f.src ? "⏹" : "👂"}</button
                 >
                 <button
-                  class="btn mini"
+                  class="action small"
                   title={$t("interactions.musique.tester")}
                   onclick={() => void testerMusique(f.src)}>▶</button
                 >
                 <button
-                  class="btn mini danger"
+                  class="action small danger"
                   title={$t("interactions.musique.supprimer")}
                   onclick={() =>
                     demanderConfirm(
@@ -170,8 +170,8 @@
 
     <!-- Réglages -->
     {#if cfg}
-      <div class="bloc">
-        <div class="bloc-titre">{$t("interactions.musique.reglages")}</div>
+      <div class="modal-bloc">
+        <div class="modal-bloc-titre">{$t("interactions.musique.reglages")}</div>
         <label class="row">
           <input
             type="checkbox"
@@ -181,33 +181,33 @@
           {$t("interactions.musique.actif")}
         </label>
         <div class="grid-cmds">
-          <label class="champ">
+          <label class="field">
             <span class="field-label">{$t("interactions.musique.commandeRs")}</span>
             <span class="cmd">!<input type="text" bind:value={cfg.commande} /></span>
           </label>
-          <label class="champ">
+          <label class="field">
             <span class="field-label">{$t("interactions.musique.commandeSkip")}</span>
             <span class="cmd">!<input type="text" bind:value={cfg.commande_skip} /></span>
           </label>
-          <label class="champ">
+          <label class="field">
             <span class="field-label">{$t("interactions.musique.commandeRetirer")}</span>
             <span class="cmd">!<input type="text" bind:value={cfg.commande_retirer} /></span>
           </label>
-          <label class="champ">
+          <label class="field">
             <span class="field-label">{$t("interactions.musique.commandeFile")}</span>
             <span class="cmd">!<input type="text" bind:value={cfg.commande_file} /></span>
           </label>
         </div>
         <div class="grid-cmds">
-          <label class="champ">
+          <label class="field">
             <span class="field-label">{$t("interactions.musique.cooldown")}</span>
             <input type="number" min="0" bind:value={cfg.cooldown_viewer_s} />
           </label>
-          <label class="champ">
+          <label class="field">
             <span class="field-label">{$t("interactions.musique.maxParViewer")}</span>
             <input type="number" min="0" bind:value={cfg.max_par_viewer} />
           </label>
-          <label class="champ">
+          <label class="field">
             <span class="field-label">{$t("interactions.musique.fileMax")}</span>
             <input type="number" min="1" bind:value={cfg.file_max} />
           </label>
@@ -217,7 +217,7 @@
           {$t("interactions.musique.reponsesChat")}
         </label>
         <div>
-          <button class="btn" onclick={() => void onEnregistrer()}>
+          <button class="action" onclick={() => void onEnregistrer()}>
             {$t("interactions.musique.enregistrer")}
           </button>
         </div>
@@ -233,10 +233,10 @@
   {#if confirm}
     <div class="confirm">
       <span>{confirm.texte}</span>
-      <button class="btn mini danger" onclick={() => void onConfirmer()}>
+      <button class="action small danger" onclick={() => void onConfirmer()}>
         {$t("interactions.musique.confirmer")}
       </button>
-      <button class="btn mini" onclick={() => (confirm = null)}>
+      <button class="action small" onclick={() => (confirm = null)}>
         {$t("interactions.musique.annuler")}
       </button>
     </div>
@@ -250,24 +250,10 @@
     gap: 0.6rem;
   }
 
-  .bloc {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon);
-    padding: 0.6rem 0.9rem;
-    background: var(--fond-panneau);
-  }
   .bloc-info {
     border-color: color-mix(in srgb, var(--accent-ui) 40%, var(--bordure-ui));
   }
-  .bloc-titre {
-    font-size: 0.85rem;
-    font-weight: 600;
-    opacity: 0.85;
-    border-bottom: 1px solid var(--bordure-ui);
-    padding-bottom: 0.2rem;
+  .modal-bloc-titre {
     display: flex;
     align-items: center;
     gap: 0.4rem;
@@ -296,7 +282,7 @@
     display: flex;
     flex-direction: column;
     gap: 0.25rem;
-    max-height: 220px;
+    max-height: 13.75rem;
     overflow-y: auto;
   }
   .ligne {
@@ -325,37 +311,6 @@
     gap: 0.2rem;
   }
 
-  .btn {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon-petit);
-    padding: 0.3rem 0.55rem;
-    font: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .btn:hover:not(:disabled) {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-ui);
-  }
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-  .btn.mini {
-    padding: 0.12rem 0.4rem;
-    font-size: 0.75rem;
-  }
-  .btn.danger {
-    border-color: color-mix(in srgb, var(--message-error-color) 40%, var(--bordure-ui));
-    color: var(--message-error-color);
-  }
-
   .row {
     display: flex;
     align-items: center;
@@ -364,39 +319,14 @@
   }
   .grid-cmds {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(8.75rem, 1fr));
     gap: 0.5rem;
-  }
-  .champ {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
   }
   .cmd {
     display: flex;
     align-items: center;
     gap: 0.15rem;
     font-size: 0.85rem;
-  }
-  .champ input[type="text"],
-  .champ input[type="number"] {
-    width: 100%;
-    background: var(--fond-controle);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon-petit);
-    padding: 0.3rem 0.45rem;
-    font: inherit;
-    font-size: 0.85rem;
-  }
-  .field-label {
-    font-size: 0.7rem;
-    opacity: 0.6;
-  }
-  .hint {
-    font-size: 0.75rem;
-    opacity: 0.5;
-    margin: 0;
   }
   .hint-centre {
     font-size: 0.9rem;

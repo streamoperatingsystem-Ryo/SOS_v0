@@ -457,12 +457,14 @@
     "nom": {
       "horloge": "Uhr",
       "musique": "Laufende Musik",
-      "objectifs": "Stream-Ziele"
+      "objectifs": "Stream-Ziele",
+      "equaliseur": "Equalizer"
     },
     "hint": {
       "horloge": "Datum und Uhrzeit durch einen Strich getrennt, in Canvas-Pixeln. Kann auch direkt auf dem Canvas verschoben/vergrößert werden.",
       "musique": "Karte „Läuft gerade“ + Zeit-/Fortschritts-Bubble — gespeist aus der Musikwarteschlange (!rs).",
-      "objectifs": "Zeilen „Metrik — Wert / Ziel“ mit Fortschrittsbalken. Jede Zeile = eine gemessene Metrik oder ein verknüpftes Twitch-Ziel."
+      "objectifs": "Zeilen „Metrik — Wert / Ziel“ mit Fortschrittsbalken. Jede Zeile = eine gemessene Metrik oder ein verknüpftes Twitch-Ziel.",
+      "equaliseur": "Audio-Spektrum-Overlay unten in der Übertragung: transluzente Neonbalken + Blasen, unter den Widgets. Wird nur in der Übertragung (OBS) gerendert — hier nur als positionierbarer Platzhalter."
     },
     "horloge": {
       "date": "Datum anzeigen (TT / MM / JJ)",
@@ -484,6 +486,12 @@
       "descendre": "Nach unten",
       "lier": "Twitch-Ziel verknüpfen",
       "vide": "Ziele in der Modul-Modal hinzufügen"
+    },
+    "equaliseur": {
+      "micro": "Standardmikrofon einbeziehen (Stimme)",
+      "bulles": "Animierte Blasen über den Balken",
+      "hintMicro": "Das Spektrum stammt vom Windows-Standard-Audioausgang (≈ „Desktop Audio“ in OBS); die Stimme fehlt ohne OBS-Monitoring — daher die eigene Mikrofonaufnahme.",
+      "placeholder": "Equalizer — wird in der Übertragung gerendert"
     }
   },
   "app": {

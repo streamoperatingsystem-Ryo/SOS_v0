@@ -193,7 +193,7 @@
   title={$t("consoModal.titre")}
   onClose={onFermer}
   crochet="var(--crochet-teal)"
-  maxWidth="980px"
+  maxWidth="61rem"
   hint={$t("consoModal.hint")}
 >
   <div class="tabs">
@@ -437,8 +437,8 @@
     font-size: 0.78rem;
   }
   .pastille {
-    width: 9px;
-    height: 9px;
+    width: 0.5625rem;
+    height: 0.5625rem;
     border-radius: 50%;
     flex-shrink: 0;
   }
@@ -482,7 +482,7 @@
   }
   .courbe svg {
     flex: 1;
-    height: 36px;
+    height: 2.25rem;
     display: block;
     cursor: crosshair;
   }

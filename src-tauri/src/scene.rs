@@ -544,6 +544,13 @@ pub struct ModuleHud {
     /// Objectifs : lignes affichées, dans l'ordre.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub lignes: Option<Vec<LigneObjectif>>,
+    /// Équaliseur : inclure le micro (périphérique d'entrée par défaut)
+    /// dans le spectre en plus de la sortie (loopback). None = true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqMicro: Option<bool>,
+    /// Équaliseur : bulles montantes au sommet des barres. None = true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eqBulles: Option<bool>,
 }
 
 /// Modules HUD d'une scène — un emplacement fixe par module (singletons).
@@ -557,6 +564,11 @@ pub struct ScenesModules {
     pub musique: Option<ModuleHud>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub objectifs: Option<ModuleHud>,
+    /// Équaliseur audio plein écran : couche dédiée `#eq-root` en diffusion
+    /// (au-dessus du fond, SOUS les widgets — pas #modules-root z 9000).
+    /// Spectre calculé côté Rust (equaliseur.rs, capture WASAPI).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub equaliseur: Option<ModuleHud>,
 }
 
 /// Scène unique (source de vérité). canvasW/canvasH = résolution OBS lue

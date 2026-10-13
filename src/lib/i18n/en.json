@@ -457,12 +457,14 @@
     "nom": {
       "horloge": "Clock",
       "musique": "Now playing",
-      "objectifs": "Stream goals"
+      "objectifs": "Stream goals",
+      "equaliseur": "Equalizer"
     },
     "hint": {
       "horloge": "Date and time separated by a line, in canvas pixels. You can also drag/resize it directly on the canvas.",
       "musique": "\"Now playing\" card + time/progress pill — fed by the music queue (!rs).",
-      "objectifs": "\"metric — value / target\" lines with a progress bar. Each line = a measured metric or a linked Twitch goal."
+      "objectifs": "\"metric — value / target\" lines with a progress bar. Each line = a measured metric or a linked Twitch goal.",
+      "equaliseur": "Audio spectrum overlay at the bottom of the broadcast: translucent neon bars + bubbles, under the widgets. Rendered in the broadcast (OBS) only — shown here as a positionable placeholder."
     },
     "horloge": {
       "date": "Show date (DD / MM / YY)",
@@ -484,6 +486,12 @@
       "descendre": "Move down",
       "lier": "Link a Twitch goal",
       "vide": "Add goals in the Modules modal"
+    },
+    "equaliseur": {
+      "micro": "Include the default microphone (voice)",
+      "bulles": "Animated bubbles above the bars",
+      "hintMicro": "The spectrum comes from the Windows default audio output (≈ OBS “Desktop Audio”); your voice is not in it unless OBS monitoring is enabled — hence the dedicated mic capture.",
+      "placeholder": "Equalizer — rendered in broadcast"
     }
   },
   "app": {

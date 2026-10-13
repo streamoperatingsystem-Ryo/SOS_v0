@@ -90,37 +90,37 @@
   title={mode === "fond" ? $t("obsSourceDialog.titreFond") : $t("obsSourceDialog.titreWidget")}
   onClose={onClose}
   crochet="var(--crochet-dore)"
-  maxWidth="460px"
+  maxWidth="30rem"
   hint={mode === "fond"
     ? $t("obsSourceDialog.hintFond")
     : $t("obsSourceDialog.hintWidget")}
 >
   <div class="dialog-body">
     {#if etape === "type"}
-      <p class="note">{$t("obsSourceDialog.choisirType")}</p>
+      <p class="hint">{$t("obsSourceDialog.choisirType")}</p>
       <div class="type-buttons">
         {#if mode !== "fond"}
-          <button class="modal-action" onclick={() => pickType("camera")}>{$t("obsSourceDialog.kind.camera")}</button>
+          <button class="action centre" onclick={() => pickType("camera")}>{$t("obsSourceDialog.kind.camera")}</button>
         {/if}
-        <button class="modal-action" onclick={() => pickType("window")}>{$t("obsSourceDialog.kind.window")}</button>
-        <button class="modal-action" onclick={() => pickType("game")}>{$t("obsSourceDialog.kind.game")}</button>
+        <button class="action centre" onclick={() => pickType("window")}>{$t("obsSourceDialog.kind.window")}</button>
+        <button class="action centre" onclick={() => pickType("game")}>{$t("obsSourceDialog.kind.game")}</button>
       </div>
 
     {:else if etape === "liste" || etape === "working"}
       <div class="list-header">
-        <button class="modal-action small" onclick={onBack} disabled={working}>← {$t("obsSourceDialog.retour")}</button>
+        <button class="action small" onclick={onBack} disabled={working}>← {$t("obsSourceDialog.retour")}</button>
         <span class="list-title">{$t("obsSourceDialog.kind." + kind)}</span>
       </div>
 
       {#if loading}
-        <p class="note">{$t("commun.chargement")}</p>
+        <p class="hint">{$t("commun.chargement")}</p>
       {:else if liste.length === 0}
-        <p class="note warn">{$t("obsSourceDialog.aucuneCible")}</p>
+        <p class="hint msg-warn">{$t("obsSourceDialog.aucuneCible")}</p>
       {:else}
-        <div class="list">
+        <div class="modal-list">
           {#each liste as item, i (i)}
             <button
-              class="row"
+              class="action list-row"
               onclick={() => onPick(item)}
               disabled={working}
             >
@@ -134,11 +134,11 @@
       {/if}
 
       {#if error}
-        <p class="note warn">{error}</p>
+        <p class="hint msg-warn">{error}</p>
       {/if}
     {/if}
 
-    <button class="cancel" onclick={onClose}>{$t("commun.annuler")}</button>
+    <button class="action ghost" onclick={onClose}>{$t("commun.annuler")}</button>
   </div>
 </Modal>
 
@@ -148,15 +148,6 @@
     display: flex;
     flex-direction: column;
     gap: 0.6rem;
-  }
-  .note {
-    font-size: 0.85rem;
-    opacity: 0.8;
-    margin: 0;
-  }
-  .note.warn {
-    opacity: 1;
-    color: var(--message-user-action-color);
   }
   .type-buttons {
     display: grid;
@@ -173,54 +164,11 @@
     text-transform: capitalize;
     opacity: 0.8;
   }
-  .list {
-    overflow-y: auto;
-    max-height: 320px;
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-  }
-  .row {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    padding: 0.4rem 0.6rem;
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-    text-align: left;
-    word-break: break-word;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .row:hover:not(:disabled) {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-ui);
-  }
-  .row:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
   .exe {
     opacity: 0.6;
     font-size: 0.8rem;
   }
-  .modal-action.small {
-    padding: 0.25rem 0.5rem;
-    font-size: 0.8rem;
-  }
-  .cancel {
-    background: transparent;
-    color: var(--texte);
-    border: none;
-    padding: 0.3rem;
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-    opacity: 0.6;
-  }
-  .cancel:hover {
-    opacity: 1;
+  .modal-list {
+    max-height: 20rem;
   }
 </style>

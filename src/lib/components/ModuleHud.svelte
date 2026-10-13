@@ -180,6 +180,7 @@
   let fsDefaut = $derived.by(() => {
     if (id === "horloge") return lh * 0.42;
     if (id === "musique") return lh * 0.24;
+    if (id === "equaliseur") return lh * 0.14;
     const n = Math.max(1, m.lignes?.length ?? 0);
     return Math.min(lh / (n * 2.4 + (m.titre ? 1.6 : 0.8)), lw * 0.075);
   });
@@ -278,6 +279,15 @@
         <span>{muRest}</span>
       </div>
     {/if}
+  {:else if id === "equaliseur"}
+    <!-- Placeholder : le vrai spectre n'existe qu'en diffusion (sous les
+         widgets). Barres figées = aperçu de l'emplacement/gabarit. -->
+    <div class="eq-ph">
+      {#each [0.3, 0.65, 0.45, 0.85, 0.55, 0.95, 0.4, 0.7, 0.5, 0.8, 0.35, 0.6] as h, i (i)}
+        <i style="height:{Math.round(h * 100)}%"></i>
+      {/each}
+    </div>
+    <span class="eq-label">{$t("modules.equaliseur.placeholder")}</span>
   {:else}
     <div class="mod-fond"></div>
     {#if m.titre}<div class="mo-titre">{m.titre}</div>{/if}
@@ -392,6 +402,36 @@
   .mo-bar { height: 2px; border-radius: 2px; background: rgba(255, 255, 255, 0.22); overflow: hidden; }
   .mo-fill { height: 100%; background: var(--mod-accent); box-shadow: 0 0 6px var(--mod-accent); transition: width 0.5s ease; }
   .mo-vide { font-size: 0.65em; color: #b9b9c2; text-align: center; }
+  /* Équaliseur — placeholder dashboard (aperçu statique, le rendu animé
+     n'existe qu'en diffusion). Translucide comme l'overlay réel. */
+  .module.equaliseur { display: flex; align-items: flex-end; }
+  .eq-ph {
+    display: flex;
+    align-items: flex-end;
+    gap: 1.5%;
+    width: 100%;
+    height: 72%;
+    padding: 0 1.2%;
+    box-sizing: border-box;
+  }
+  .eq-ph i {
+    flex: 1;
+    border-radius: 3px 3px 0 0;
+    background: linear-gradient(to top, var(--mod-accent), transparent 130%);
+    opacity: 0.75;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--mod-accent) 45%, transparent);
+  }
+  .eq-label {
+    position: absolute;
+    top: 0.35em;
+    left: 50%;
+    transform: translateX(-50%);
+    font-size: 0.62em;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: #b9b9c2;
+    white-space: nowrap;
+  }
   /* Poignées (même géométrie que Widget.svelte, couleur accent). */
   .poignee {
     position: absolute;

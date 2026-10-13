@@ -789,14 +789,14 @@
     flex: 1;
     min-height: 0;
     /* Jour entre le contenu et la piste de scroll. */
-    padding-right: 6px;
+    padding-right: 0.375rem;
     scrollbar-width: thin;
     scrollbar-color: var(--bordure-ui-active) transparent;
   }
-  /* Scrollbar du panneau : plus fine que la globale (6px), piste
+  /* Scrollbar du panneau : plus fine que la globale (0.375rem), piste
      transparente, pouce aux couleurs de bordure déjà en place. */
   .sidebar::-webkit-scrollbar {
-    width: 6px;
+    width: 0.375rem;
   }
   .sidebar::-webkit-scrollbar-track {
     background: transparent;
@@ -1002,17 +1002,24 @@
   .section.carte-edition .header.ouvert {
     border-color: var(--accent-carte);
   }
-  /* Boutons dans la carte : bordure de la couleur de la carte (même token),
-     éclaircie au hover via color-mix. Hors carte, la bordure neutre
-     .action est inchangée. */
+  /* Boutons dans la carte : anneau de la couleur de la carte (même token),
+     éclairci au hover via color-mix. La recette globale .action (app.css)
+     peint sa bordure via le gradient --btn-border — on le réassigne ici
+     (border-color seul serait invisible : le border est transparent).
+     Hors carte, l'anneau neutre .action est inchangé. */
   .section.carte-edition .action {
+    --btn-border: linear-gradient(var(--accent-carte), var(--accent-carte));
     border-color: var(--accent-carte);
   }
   .section.carte-edition .action:hover:not(:disabled) {
+    --btn-border: linear-gradient(
+      color-mix(in srgb, var(--accent-carte) 70%, var(--texte)),
+      color-mix(in srgb, var(--accent-carte) 70%, var(--texte)));
     border-color: color-mix(in srgb, var(--accent-carte) 70%, var(--texte));
   }
   .section.carte-edition .action:disabled,
   .section.carte-edition .action:disabled:hover {
+    --btn-border: linear-gradient(var(--accent-carte), var(--accent-carte));
     border-color: var(--accent-carte);
   }
   /* Variantes — même mécanisme que les .cible-* de CarteEdition : seule la
@@ -1059,35 +1066,6 @@
   .dash-fond .chevron {
     margin-left: 0.3rem;
   }
-  .action {
-    /* Bouton d'action — pilule verre sombre translucide commune. */
-    background: var(--btn-surface);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui-active);
-    box-shadow: var(--btn-inset);
-    padding: 0.35rem 0.6rem;
-    font: inherit;
-    cursor: pointer;
-    text-align: left;
-    transition: background 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease;
-  }
-  .action:hover {
-    background: var(--btn-surface-hover);
-    border-color: var(--bordure-ui-active);
-    box-shadow: var(--btn-inset-hover);
-  }
-  .action:active {
-    box-shadow: var(--btn-inset-active);
-  }
-  .action:disabled {
-    opacity: 0.35;
-    cursor: not-allowed;
-  }
-  .action:disabled:hover {
-    background: var(--btn-surface);
-    border-color: var(--bordure-ui-active);
-    box-shadow: var(--btn-inset);
-  }
   /* Miniature de prévisualisation : boîte noire au ratio du canvas scène,
      l'iframe (:4321, dims réelles) est réduite par transform depuis le coin
      haut-gauche. pointer-events:none sur l'iframe — le clic monte au bouton
@@ -1122,15 +1100,6 @@
   .preview-thumb:disabled {
     opacity: 0.5;
     cursor: not-allowed;
-  }
-  /* Feedback projecteur (succès / échec obs-websocket) — couleurs
-     sémantiques, jamais codées en dur (règle figée couleurs). */
-  .hint.msg-ok { color: var(--message-ok-color); }
-  .hint.msg-err { color: var(--message-error-color); }
-  .hint {
-    font-size: 0.8rem;
-    opacity: 0.6;
-    line-height: 1.3;
   }
   input {
     background: var(--fond-controle);
@@ -1210,15 +1179,11 @@
     flex: 1;
     font-size: 0.85rem;
   }
-  .action.small {
-    padding: 0.15rem 0.4rem;
-    font-size: 0.78rem;
-  }
   /* Input slug/username : compressible dans la carte (la ligne wrappe
      quand même si nécessaire — le min évite un champ trop étriqué). */
   .plat-input {
-    width: 70px;
-    min-width: 44px;
+    width: 4.4rem;
+    min-width: 2.75rem;
     flex-shrink: 1;
     padding: 0.1rem 0.3rem;
     font-size: 0.78rem;
@@ -1229,18 +1194,18 @@
     flex-wrap: wrap;
     gap: 0.3rem;
   }
-  .action.small.actif {
-    border: 1px solid var(--accent-ui);
-    color: var(--accent-ui);
-  }
   /* Toggles sorties OBS (stream/record) : pastille + label accentués quand
-     la sortie est active — même recette que .action.small.actif. */
+     la sortie est active — recouvre la recette .action.actif globale
+     (anneau --btn-border + texte accentués). border-color posé aussi :
+     le toggle Just Chatting est un .header.output-btn dont la bordure
+     est une vraie propriété border (pas l'anneau .action). */
   .output-btn {
     display: flex;
     align-items: center;
     gap: 0.45rem;
   }
   .output-btn.actif {
+    --btn-border: linear-gradient(var(--accent-ui), var(--accent-ui));
     border-color: var(--accent-ui);
     color: var(--accent-ui);
   }

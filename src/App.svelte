@@ -909,14 +909,14 @@
   /* Logo StreamOS : PNG officiel (fond transparent). L'artwork n'occupe
      que ~le tiers central du PNG (lignes 116–241/369) ; les marges
      négatives recentrent l'artwork sur la barre — le haut rogné par le
-     bord du webview est transparent. Boîte de layout ~32px : le header
+     bord du webview est transparent. Boîte de layout ~2 rem : le header
      garde sa hauteur. pointer-events: none : la zone transparente qui
      déborde sous la barre ne doit pas avaler les clics du panneau. */
   .logo-img {
-    height: 84px;
+    height: 5.25rem;
     width: auto;
-    margin-top: -24px;
-    margin-bottom: -28px;
+    margin-top: -1.5rem;
+    margin-bottom: -1.75rem;
     flex-shrink: 0;
     display: block;
     position: relative;
@@ -942,7 +942,7 @@
     display: inline-flex;
     align-items: center;
     gap: 0.4rem;
-    height: 32px;
+    height: 2rem;
     padding: 0 0.75rem;
     background: var(--btn-surface);
     box-shadow: var(--btn-inset);
@@ -989,10 +989,10 @@
   .indicateur.plat-diffusion.on {
     border-color: var(--plat-diffusion);
   }
-  /* Bouton icône seule permanent 32×32 : Kick/YouTube/TikTok/OBS/Diffusion
+  /* Bouton icône seule permanent 2×2 rem : Kick/YouTube/TikTok/OBS/Diffusion
      — l'état vit dans la bordure plateforme, le nom dans le title. */
   .indicateur.tb-ico {
-    width: 32px;
+    width: 2rem;
     padding: 0;
     justify-content: center;
   }
@@ -1014,7 +1014,7 @@
     box-shadow: var(--btn-inset);
     color: var(--texte);
     border: 1px solid var(--bordure-ui-active);
-    height: 32px;
+    height: 2rem;
     padding: 0 0.75rem;
     font: inherit;
     font-size: 0.8rem;
@@ -1038,7 +1038,7 @@
      ancrage absolu sous le bouton à la place du fixed. */
   .langues-dropdown {
     position: absolute;
-    top: calc(100% + 4px);
+    top: calc(100% + 0.25rem);
     right: 0;
   }
   .langue-item {
@@ -1053,7 +1053,7 @@
     font-weight: 600;
     color: var(--accent-ui);
   }
-  /* Boutons contrôle app (stop/restart/refresh OBS) : carrés 32px, icônes
+  /* Boutons contrôle app (stop/restart/refresh OBS) : carrés 2 rem, icônes
      SVG neutres au repos — la couleur --ctrl-* n'apparaît qu'au survol
      (icône + teinte du verre + bordure + glow assorti), comme sur la
      maquette. Spécificité .ctrl-btn.ctrl-X:hover (0,3,0) > .ctrl-btn:hover
@@ -1063,8 +1063,8 @@
     box-shadow: var(--btn-inset);
     color: var(--gris);
     border: 1px solid var(--bordure-ui-active);
-    width: 32px;
-    height: 32px;
+    width: 2rem;
+    height: 2rem;
     padding: 0;
     font: inherit;
     line-height: 1;
@@ -1105,7 +1105,7 @@
     border-color: var(--ctrl-refresh);
     box-shadow: var(--btn-inset-hover), 0 0 8px color-mix(in srgb, var(--ctrl-refresh) 40%, transparent);
   }
-  /* Select de taille des polices : compact 32 px aligné sur les boutons du
+  /* Select de taille des polices : compact 2 rem aligné sur les boutons du
      header (surface/bordure/hover viennent de la recette select globale).
      Le wrap porte la loupe en absolu ; le padding-left du select dégage le
      texte de l'icône (pointer-events:none → les clics passent au select). */
@@ -1124,7 +1124,7 @@
     pointer-events: none;
   }
   .taille-ui-select {
-    height: 32px;
+    height: 2rem;
     padding: 0 0.4rem 0 1.5rem;
     font-size: 0.8rem;
     flex-shrink: 0;
@@ -1140,8 +1140,8 @@
     color: var(--message-ok-color);
     border: 1px solid var(--message-ok-color);
     border-radius: var(--rayon-petit);
-    width: 32px;
-    height: 32px;
+    width: 2rem;
+    height: 2rem;
     padding: 0;
     font: inherit;
     font-size: 0.8rem;
@@ -1198,7 +1198,7 @@
       padding: 0 0.4rem;
     }
     .tb-action {
-      width: 32px;
+      width: 2rem;
       padding: 0;
       justify-content: center;
     }
@@ -1206,7 +1206,7 @@
       display: none;
     }
     .langue-btn {
-      width: 32px;
+      width: 2rem;
       padding: 0;
       text-align: center;
     }
@@ -1234,7 +1234,7 @@
     flex-direction: column;
     min-height: 0;
     min-width: 0;
-    width: 240px;
+    width: 15rem;
     flex-shrink: 0;
     padding: 0.5rem;
     gap: 0.5rem;

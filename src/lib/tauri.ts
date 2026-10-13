@@ -429,8 +429,13 @@ export interface CadreConfig {
 }
 
 /// Identifiants des modules HUD (singletons par scène).
-export type ModuleId = "horloge" | "musique" | "objectifs";
-export const MODULE_IDS: ModuleId[] = ["horloge", "musique", "objectifs"];
+export type ModuleId = "horloge" | "musique" | "objectifs" | "equaliseur";
+export const MODULE_IDS: ModuleId[] = [
+  "horloge",
+  "musique",
+  "objectifs",
+  "equaliseur",
+];
 
 /// Ligne d'un module « Objectifs du stream » : métrique mesurée
 /// (`plateforme` + `metrique` — mêmes valeurs que le widget goal, frames
@@ -474,6 +479,11 @@ export interface ModuleHud {
   /// Objectifs : titre du bloc + lignes dans l'ordre.
   titre?: string;
   lignes?: LigneObjectif[];
+  /// Équaliseur : inclure le micro par défaut dans le spectre (défaut true
+  /// — la voix n'est pas dans le loopback sauf monitoring OBS).
+  eqMicro?: boolean;
+  /// Équaliseur : bulles animées au-dessus des barres (défaut true).
+  eqBulles?: boolean;
 }
 
 /// Modules HUD d'une scène — un emplacement par module. undefined =
@@ -482,6 +492,9 @@ export interface ScenesModules {
   horloge?: ModuleHud;
   musique?: ModuleHud;
   objectifs?: ModuleHud;
+  /// Overlay spectre audio (rendu en diffusion uniquement, sous les
+  /// widgets) — les options visuelles (cadre/opacité/fond) y sont ignorées.
+  equaliseur?: ModuleHud;
 }
 
 export interface Scene {

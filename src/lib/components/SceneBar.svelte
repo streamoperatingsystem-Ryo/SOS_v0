@@ -358,7 +358,7 @@
     color: oklch(from var(--vos-scenes) clamp(0, (0.72 - l) * 100, 0.95) 0 0);
     border: 1px solid color-mix(in srgb, var(--vos-scenes) 55%, var(--fond));
     border-radius: var(--rayon-petit);
-    height: 32px;
+    height: 2rem;
     padding: 0 0.6rem;
     font: inherit;
     font-size: 0.8rem;
@@ -528,7 +528,7 @@
   /* <1000px : bouton « Vos scènes » en icône seule (title conservé). */
   @media (max-width: 999px) {
     .vos-scenes-btn {
-      width: 32px;
+      width: 2rem;
       padding: 0;
       justify-content: center;
     }

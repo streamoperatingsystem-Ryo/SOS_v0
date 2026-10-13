@@ -457,12 +457,14 @@
     "nom": {
       "horloge": "Reloj",
       "musique": "Música en curso",
-      "objectifs": "Objetivos del stream"
+      "objectifs": "Objetivos del stream",
+      "equaliseur": "Ecualizador"
     },
     "hint": {
       "horloge": "Fecha y hora separadas por una línea, en píxeles del canvas. También se puede mover/redimensionar directamente en el canvas.",
       "musique": "Tarjeta «sonando ahora» + pastilla de tiempo/progreso — alimentada por la cola de música (!rs).",
-      "objectifs": "Líneas «métrica — valor / objetivo» con barra de progreso. Cada línea = una métrica medida o un objetivo de Twitch vinculado."
+      "objectifs": "Líneas «métrica — valor / objetivo» con barra de progreso. Cada línea = una métrica medida o un objetivo de Twitch vinculado.",
+      "equaliseur": "Overlay de espectro de audio en la parte inferior de la difusión: barras de neón translúcidas + burbujas, bajo los widgets. Se renderiza solo en la difusión (OBS) — aquí como marcador posicionable."
     },
     "horloge": {
       "date": "Mostrar la fecha (DD / MM / AA)",
@@ -484,6 +486,12 @@
       "descendre": "Bajar",
       "lier": "Vincular un objetivo de Twitch",
       "vide": "Añade objetivos en la ventana Módulos"
+    },
+    "equaliseur": {
+      "micro": "Incluir el micrófono predeterminado (voz)",
+      "bulles": "Burbujas animadas sobre las barras",
+      "hintMicro": "El espectro proviene de la salida de audio predeterminada de Windows (≈ «Desktop Audio» de OBS); la voz no aparece sin monitoreo de OBS — de ahí la captura de micrófono dedicada.",
+      "placeholder": "Ecualizador — se renderiza en la difusión"
     }
   },
   "app": {

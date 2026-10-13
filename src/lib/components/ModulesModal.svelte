@@ -40,7 +40,12 @@
     { id: "kick", label: "Kick" },
     { id: "tiktok", label: "TikTok" },
   ];
-  const ICONES: Record<ModuleId, string> = { horloge: "🕒", musique: "♫", objectifs: "🎯" };
+  const ICONES: Record<ModuleId, string> = {
+    horloge: "🕒",
+    musique: "♫",
+    objectifs: "🎯",
+    equaliseur: "🎚",
+  };
 
   // Module sélectionné dans le master-detail (l'ouverture porte déjà
   // l'id — clic depuis le canvas, ou "horloge" via le lanceur Toolbar).
@@ -103,9 +108,9 @@
   }
 </script>
 
-<Modal title={$t("modules.titre")} onClose={onFermer} maxWidth="860px" crochet="var(--crochet-bleu)">
+<Modal title={$t("modules.titre")} onClose={onFermer} maxWidth="54rem" crochet="var(--crochet-bleu)">
   <div class="mod-layout">
-    <!-- Colonne gauche : les 3 modules (icône + nom + badge ON/OFF). -->
+    <!-- Colonne gauche : les 4 modules (icône + nom + badge ON/OFF). -->
     <div class="mod-liste">
       {#each MODULE_IDS as id (id)}
         {@const mm = $sceneStore.modules?.[id]}
@@ -129,7 +134,7 @@
 
     <!-- Panneau droit : config du module sélectionné. -->
     <div class="mod-detail">
-      <div class="bloc">
+      <div class="modal-bloc">
         <div class="bloc-titre">{$t("modules.nom." + sel)}</div>
         <label class="toggle">
           <input type="checkbox" checked={m?.actif ?? false} onchange={(e) => patch({ actif: e.currentTarget.checked })} />
@@ -139,7 +144,7 @@
       </div>
 
       <!-- Position/taille — complément précis du drag/resize canvas. -->
-      <div class="bloc">
+      <div class="modal-bloc">
         <div class="bloc-titre">{$t("modules.position")}</div>
         <div class="pos-grid">
           <label class="pos-field"><span class="field-label">X</span>
@@ -153,8 +158,11 @@
         </div>
       </div>
 
-      <!-- Style : police / taille / fond / cadre. -->
-      <div class="bloc">
+      <!-- Style : police / taille / fond / cadre. Masqué pour l'équaliseur :
+           overlay diffusion sans texte ni cadre, translucide par nature —
+           ces réglages n'y ont aucun effet. -->
+      {#if sel !== "equaliseur"}
+      <div class="modal-bloc">
         <div class="bloc-titre">{$t("modules.style")}</div>
         <div class="pos-grid">
           <label class="pos-field"><span class="field-label">{$t("commun.police")}</span>
@@ -177,9 +185,10 @@
             <span>{$t("modules.cadre")}</span></label>
         </div>
       </div>
+      {/if}
 
       <!-- Options spécifiques au module. -->
-      <div class="bloc">
+      <div class="modal-bloc">
         <div class="bloc-titre">{$t("modules.options")}</div>
         {#if sel === "horloge"}
           <label class="toggle"><input type="checkbox" checked={cfg.afficherDate !== false}
@@ -195,6 +204,14 @@
           <label class="toggle"><input type="checkbox" checked={cfg.afficherTemps !== false}
               onchange={(e) => patch({ afficherTemps: e.currentTarget.checked })} />
             <span>{$t("modules.musique.temps")}</span></label>
+        {:else if sel === "equaliseur"}
+          <label class="toggle"><input type="checkbox" checked={cfg.eqMicro !== false}
+              onchange={(e) => patch({ eqMicro: e.currentTarget.checked })} />
+            <span>{$t("modules.equaliseur.micro")}</span></label>
+          <label class="toggle"><input type="checkbox" checked={cfg.eqBulles !== false}
+              onchange={(e) => patch({ eqBulles: e.currentTarget.checked })} />
+            <span>{$t("modules.equaliseur.bulles")}</span></label>
+          <p class="hint">{$t("modules.equaliseur.hintMicro")}</p>
         {:else}
           <label class="pos-field"><span class="field-label">{$t("modules.objectifs.titre")}</span>
             <input type="text" value={cfg.titre ?? ""} placeholder={$t("modules.objectifs.titrePh")}
@@ -223,7 +240,7 @@
                       {/if}
                     </span>
                     {#if gl}<span class="ligne-lie-val">{gl.actuel.toLocaleString($localeTag)} / {gl.cible.toLocaleString($localeTag)}</span>{/if}
-                    <button class="modal-action" onclick={() => onDelier(l.id)}>{$t("carteEdition.goalDelier")}</button>
+                    <button class="action" onclick={() => onDelier(l.id)}>{$t("carteEdition.goalDelier")}</button>
                   </div>
                 {:else}
                   <div class="ligne-champs">
@@ -240,12 +257,12 @@
                     <input class="ligne-cible" type="number" min="1" step="1" value={l.cible ?? ""}
                       placeholder={$t("carteEdition.cible")}
                       onchange={(e) => { const v = Math.max(1, Math.round(+(e.target as HTMLInputElement).value || 0)); void setLigneObjectif(l.id, { cible: v }); }} />
-                    <button class="modal-action" disabled={sug === undefined}
+                    <button class="action" disabled={sug === undefined}
                       onclick={() => sug !== undefined && void setLigneObjectif(l.id, { cible: sug })}>
                       {$t("carteEdition.suggerer", { v: sug === undefined ? "N/A" : sug.toLocaleString($localeTag) })}
                     </button>
                     {#if (l.plateforme ?? "twitch") === "twitch"}
-                      <button class="modal-action" class:active={lienLigneId === l.id}
+                      <button class="action" class:actif={lienLigneId === l.id}
                         onclick={() => (lienLigneId = lienLigneId === l.id ? null : l.id)}>
                         {$t("modules.objectifs.lier")}
                       </button>
@@ -255,7 +272,7 @@
               </div>
             {/each}
           </div>
-          <button class="modal-action" onclick={() => void ajouterLigneObjectif()}>{$t("modules.objectifs.ajouter")}</button>
+          <button class="action" onclick={() => void ajouterLigneObjectif()}>{$t("modules.objectifs.ajouter")}</button>
 
           {#if lienLigneId !== null}
             <!-- Liste des Creator Goals Twitch pour la ligne en liaison —
@@ -268,10 +285,10 @@
                 <p class="hint">{$t("carteEdition.goalsChargement")}</p>
               {:else if goalsErreur === "need_reauth"}
                 <p class="hint">{$t("carteEdition.goalsReauth")}</p>
-                <button class="modal-action" onclick={() => void connecterTwitch()}>{$t("carteEdition.reconnecterTwitch")}</button>
+                <button class="action" onclick={() => void connecterTwitch()}>{$t("carteEdition.reconnecterTwitch")}</button>
               {:else if goalsErreur}
                 <p class="hint">{goalsErreur}</p>
-                <button class="modal-action" onclick={() => void chargerGoalsTwitch()}>{$t("carteEdition.goalsRecharger")}</button>
+                <button class="action" onclick={() => void chargerGoalsTwitch()}>{$t("carteEdition.goalsRecharger")}</button>
               {:else if goalsTwitchListe !== null && goalsTwitchListe.length === 0}
                 <p class="hint">{$t("carteEdition.goalsVide")}</p>
               {:else if goalsTwitchListe !== null}
@@ -300,7 +317,7 @@
 <style>
   .mod-layout { display: flex; flex: 1; min-height: 0; }
   .mod-liste {
-    width: 200px;
+    width: 12.5rem;
     flex-shrink: 0;
     border-right: 1px solid var(--bordure-ui);
     padding: 0.6rem;
@@ -366,11 +383,8 @@
   }
   .mod-detail { flex: 1; min-width: 0; overflow-y: auto; padding: 0.8rem 1rem; display: flex; flex-direction: column; gap: 0.7rem; }
 
-  .bloc { border: 1px solid var(--bordure-ui); border-radius: var(--rayon); padding: 0.6rem 0.8rem; display: flex; flex-direction: column; gap: 0.45rem; }
   .bloc-titre { font-size: 0.75rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; opacity: 0.8; }
   .toggle { display: flex; align-items: center; gap: 0.45rem; font-size: 0.82rem; cursor: pointer; }
-  .hint { font-size: 0.72rem; opacity: 0.7; margin: 0; line-height: 1.35; }
-  .field-label { font-size: 0.72rem; opacity: 0.75; }
   .fit-group { display: flex; flex-direction: column; gap: 0.4rem; }
 
   .pos-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0.5rem; }
@@ -394,12 +408,8 @@
     outline: none;
     border-color: var(--accent-ui);
   }
-  /* Bouton « Lier » en mode liaison — recette actif (bordure + texte
-     accent, même convention que .chip.actif / .action.small.actif). */
-  .modal-action.active {
-    border-color: var(--accent-ui);
-    color: var(--accent-ui);
-  }
+  /* Bouton « Lier » en mode liaison : .action.actif (recette globale
+     app.css — bordure + texte accent, même convention que .chip.actif). */
 
   .lignes { display: flex; flex-direction: column; gap: 0.45rem; }
   .ligne { border: 1px solid var(--bordure-ui); border-radius: var(--rayon); padding: 0.45rem 0.55rem; display: flex; flex-direction: column; gap: 0.4rem; }
@@ -448,6 +458,6 @@
   .goal-item-nom { flex: 1; min-width: 0; font-size: 0.78rem; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .goal-item-badge { font-size: 0.6rem; font-weight: 700; padding: 0.08rem 0.35rem; border-radius: 999px; background: color-mix(in srgb, var(--accent-ui) 25%, transparent); }
   .goal-item-chiffres { font-size: 0.7rem; opacity: 0.75; font-variant-numeric: tabular-nums; }
-  .goal-item-bar { height: 4px; border-radius: 999px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
+  .goal-item-bar { height: 0.25rem; border-radius: 999px; background: rgba(255, 255, 255, 0.12); overflow: hidden; }
   .goal-item-fill { display: block; height: 100%; background: var(--accent-ui); }
 </style>

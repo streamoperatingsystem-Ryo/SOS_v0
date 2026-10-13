@@ -116,7 +116,7 @@
     title={$t("titreModal.titreWidget")}
     onClose={onAnnuler}
     crochet="var(--message-error-color)"
-    maxWidth="560px"
+    maxWidth="35rem"
     hint={$t("titreModal.hintWidget")}
   >
     <div class="titre-modal-body">
@@ -140,10 +140,10 @@
       />
       <div class="modal-actions">
         {#if titreExistant}
-          <button class="modal-action danger" onclick={onSupprimer}>{$t("commun.toutSupprimer")}</button>
+          <button class="action danger" onclick={onSupprimer}>{$t("commun.toutSupprimer")}</button>
         {/if}
-        <button class="modal-action" onclick={onAnnuler}>{$t("commun.annuler")}</button>
-        <button class="modal-action primary" onclick={onValider}>{$t("commun.valider")}</button>
+        <button class="action" onclick={onAnnuler}>{$t("commun.annuler")}</button>
+        <button class="action primary" onclick={onValider}>{$t("commun.valider")}</button>
       </div>
     </div>
   </Modal>
@@ -156,8 +156,5 @@
     flex-direction: column;
     gap: 0.6rem;
     overflow-y: auto;
-  }
-  .modal-actions {
-    justify-content: flex-end;
   }
 </style>

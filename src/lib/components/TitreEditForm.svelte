@@ -372,8 +372,8 @@
     text-align: right;
   }
   .couleur-input {
-    width: 28px;
-    height: 24px;
+    width: 1.75rem;
+    height: 1.5rem;
     border: 1px solid var(--bordure-ui);
     background: transparent;
     cursor: pointer;
@@ -438,26 +438,26 @@
     text-overflow: ellipsis;
   }
   .apercu-txt.pos-haut {
-    top: 4px;
+    top: 0.25rem;
     left: 50%;
     transform: translateX(-50%);
     max-width: 90%;
   }
   .apercu-txt.pos-bas {
-    bottom: 4px;
+    bottom: 0.25rem;
     left: 50%;
     transform: translateX(-50%);
     max-width: 90%;
   }
   .apercu-txt.pos-gauche {
-    left: 4px;
+    left: 0.25rem;
     top: 50%;
     transform: translateY(-50%);
     writing-mode: vertical-rl;
     max-height: 90%;
   }
   .apercu-txt.pos-droite {
-    right: 4px;
+    right: 0.25rem;
     top: 50%;
     transform: translateY(-50%);
     writing-mode: vertical-rl;

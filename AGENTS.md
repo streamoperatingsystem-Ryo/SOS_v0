@@ -3122,7 +3122,7 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 | `src/App.svelte` | `initFenetre()` au boot + `emit("frontend:pret")` en fin d'onMount |
 | `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `toolbar.mode.{fenetre,maximise,fullscreen}` + `toolbar.demarrageHint` |
 
-## Taille d'interface — base adaptative à l'écran (2026-10-07)
+## Taille d'interface — base adaptative à l'écran (2026-10-07, 2K/4K 2026-10-13)
 
 > La police de base du dashboard s'adapte à la résolution de l'écran où se
 > trouve la fenêtre `main` ; le select topbar (80–125 %) reste un réglage
@@ -3130,11 +3130,19 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 
 - **Formule** : `font-size` sur `<html>` = `16 px × tailleUi/100 ×
   tailleEcran/100`. `tailleEcran` = proportion de la **GRANDE DIMENSION
-  physique** du moniteur courant (`max(largeur, hauteur)` — invariante à
+  LOGIQUE** du moniteur courant (`max(largeur, hauteur)` — invariante à
   la rotation : un écran portrait garde la base de sa hauteur, sa longue
-  dimension), ancrée `80 % × dim/1080` (≡ 1366 px → ~100 %), arrondie au
-  pas de 5, bornée **55–125 %** (portrait 768×1366 → ~100 %, 720p paysage
-  → 95 %, ≥ ~1690 px dont 1080p/4K paysage → 125 %).
+  dimension ; physique ÷ `scaleFactor`, sinon le zoom Windows est
+  double-compté), arrondie au pas de 5, en **2 segments** :
+  - `dim ≤ 1920` : ancrée `80 % × dim/1080` (≡ 1366 px → ~100 %),
+    saturée à 125 % dès ~1690 (portrait 768×1366 → ~100 %, 720p paysage
+    → 95 %, 1080p → 125 %) ;
+  - `dim > 1920` : proportion stricte `125 % × dim/1920` — la
+    **proportion chrome/écran est IDENTIQUE sur 1080p, 2K et 4K**
+    (2560 → 165 %, 3440 → 225 %, 3840 → 250 %).
+  Bornes globales **55–250 %** (plafond 250 = 4K @ scaling 100 % ; un 4K
+  à 150 % est logiquement un 2560 → 165 %, même proportion physique
+  qu'un 2K à 100 %).
   ⚠️ Ne PAS revenir à la hauteur seule : en portrait la hauteur devient
   la longue dimension → un petit écran portrait obtiendrait une base plus
   grande qu'un paysage 1080p (régression mesurée 2026-10-07 : portrait
@@ -3145,7 +3153,7 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
   `onMoved`/`onScaleChanged`) puis recalcule sur `onMoved`/
   `onScaleChanged` debouncés 150 ms — couvre le drag de la fenêtre ET le
   saut via le sélecteur Ergonomie (les deux émettent des events de
-  déplacement). Fallbacks : `window.screen × devicePixelRatio` →
+  déplacement). Fallbacks : `window.screen` (déjà logique) →
   1920×1080. Runtime-only pour `tailleEcran`, zéro Rust.
 - **Réglage utilisateur persisté PAR RÉSOLUTION** : `sos-taille-ui`
   contient un objet `{ "768x1366": 100, … }` — le select mémorise un
@@ -3154,12 +3162,11 @@ même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
   1re écriture) = repli pour les écrans jamais réglés. À chaque
   changement de moniteur, `initTailleUi` ré-applique le niveau persisté
   de la résolution courante dans `tailleUi`.
-- ⚠️ Dimensions **physiques** volontaires (choix utilisateur : « la
-  résolution de l'écran ») — sur un écran avec scaling Windows > 100 %, la
-  base
-  s'AJOUTE au grossissement OS. Bascule possible sur
-  `Math.max(size.width, size.height) / scaleFactor` (dimension logique)
-  si trop grand.
+- ⚠️ La BASE (`tailleEcran`) est calculée en dimensions **logiques**
+  (physique ÷ `scaleFactor`) — sur un écran avec scaling Windows
+  > 100 %, le grossissement OS n'est PAS re-compté. En revanche la clé de
+  persistance `sos-taille-ui` reste la résolution **physique** `WxH` :
+  l'identité du moniteur ne change pas quand le scaling bouge.
 
 ## Bandeau premier message — teinte cadre + mascotte animée (2026-10-04)
 
@@ -3349,3 +3356,150 @@ appelés au boot dans `App.svelte`), wrappers `tauri.ts`. i18n
 | `src/App.svelte` | Montage `{#if $modulesModalOpen}` |
 | `src-tauri/resources/diffusion.html` | CSS `.module`/`.mh-*`/`.mm-*`/`.mo-*` + `renderModules`/`majModule*`/`assurerTick*` |
 | `src/lib/i18n/{fr,en,de,es,it,ru,zh,ja}.json` | `modules.*` + `toolbar.modules*` + `commun.hauteur` |
+
+## Module Équaliseur — overlay spectre audio sous les widgets (2026-XX)
+
+> Quatrième module (`modules.equaliseur`, même `ModuleHud` + config/drag/
+> resize que les 3 autres) MAIS rendu différemment : ce n'est **pas** un
+> module HUD au-dessus des widgets — c'est un **overlay translucide en
+> bas de la diffusion, SOUS les widgets et au-dessus du fond**, uniquement
+> en diffusion (le dashboard n'affiche qu'un placeholder statique
+> positionnable). Spectre audio système calculé en Rust, poussé par WS.
+>
+> ⚠️ **Le spectre n'est PAS le mix OBS** — obs-websocket n'expose aucun
+> niveau audio. La source est la capture WASAPI Windows :
+> **loopback du périphérique de sortie par défaut** (≈ « Desktop Audio »
+> d'OBS) **+ périphérique d'entrée par défaut** (la voix — absente du
+> loopback sauf monitoring OBS), fusionnés par bande (max).
+
+- **`equaliseur.rs`** : `EqualiseurState` (champ de `ScenesState`, pas
+  `app.manage` — vit avec `chat_tx` comme input_viewer). `sync(module)`
+  appelée par `scenes::push_snapshot` (point unique des mutations, après
+  libération des locks) + une fois au boot dans `lib.rs`. Démarre 1–2
+  threads capture WASAPI (sortie Render→loopback + micro optionnel
+  `eqMicro`), FFT 2048 (rustfft, fenêtre Hann) → 24 bandes log 32 Hz–16 kHz
+  normalisées dB (−55..0 dBFS → 0..1) → frame `{"type":"eq-spectrum",
+  "bandes":[24]}` ~30 Hz sur `chat_tx`. **Zéro thread quand inactif**
+  (invariant input_viewer) ; config changée → cancel + respawn (threads
+  détachés, ~150 ms max via `wait_for_event`). Échec device → eprintln! +
+  thread mort, jamais de panic. Stubs no-op hors Windows ; `wasapi` +
+  `rustfft` sous `[target.'cfg(windows)'.dependencies]` (wasapi 0.24 —
+  0.25 exige Rust 1.85 > MSRV 1.77).
+- **Options** (`ModuleHud.eqMicro`/`eqBulles`, camelCase, défauts ON) :
+  micro dans le spectre / bulles animées. Bloc Style de la modale masqué
+  pour ce module (pas de texte/fond/cadre — ignorés).
+- **Diffusion** : `#eq-root` inséré dans le DOM **juste après `#bg`**
+  (même `z-index:0` → l'ordre DOM départage : au-dessus du fond, sous
+  tous les widgets z ≥ 0 et `.bg-titre` z 1), canvas plein stage,
+  `pointer-events:none`. `renderModuleEqualiseur` dans `renderScene`
+  sync rect/options + boucle rAF (aucune rAF si inactif). `eq-spectrum`
+  → `eqCible` ; `eqDessiner` fait le lissage attack ~70 ms / decay ~220 ms,
+  barres néon arrondies en gradient primaire→secondaire de
+  `bpmResoudreCouleurs` (couleurs du cadre de scène) + bulles néon
+  translucides qui montent au-dessus du bandeau (`eqBulles`), spawn
+  proportionnel à l'énergie. Frames plates dédupliquées côté Rust.
+  ⚠️ Bug corrigé 2026-10-10 : `#eq-root` porte `display:none` en feuille de
+  style — l'affichage DOIT être `style.display = "block"` (`""` ne retire
+  que l'inline → couche jamais visible + rAF tournant à vide). Garde
+  `!eqCanvasCtx` dans `renderModuleEqualiseur` : un throw y figerait la
+  couche widgets (appel au milieu de renderScene).
+  ⚠️ **Bug corrigé 2026-10-13 — collision `var eqCtx`** : le spectre
+  MUSIQUE (audio ombre Winamp) déclare aussi `var eqCtx` (AudioContext)
+  plus bas dans le MÊME scope script — le dernier déclaré gagnait, le
+  contexte 2d du module valait `null` → garde `!eqCtx` toujours vraie →
+  **module jamais affiché** (frames `eq-spectrum` bien reçues, jamais
+  dessinées ; si la musique joue, l'AudioContext truthy faisait passer
+  la garde puis `clearRect` sur un AudioContext → TypeError → rAF morte).
+  Correctif : le contexte canvas du module s'appelle `eqCanvasCtx`
+  (le bloc musique garde `eqCtx`). Même classe de bug que la collision
+  `eqTick` documentée dans diffusion.html — **toute nouvelle variable
+  du module doit vérifier qu'aucun bloc plus bas ne la redéclare**.
+  + garde de lisibilité dans `eqDessiner` : les deux extrémités du cadre
+  trop sombres (luminance < 70, ex. `#4c0606`→`#000000` sur fond sombre)
+  → fallback `BPM_COULEURS_DEFAUT` (gris clair).
+- **Dashboard** : placeholder statique dans `ModuleHud.svelte` (barres
+  figées + label « rendu en diffusion »), drag/resize inchangé.
+
+| Fichier | Rôle |
+|---|---|
+| `src-tauri/src/equaliseur.rs` | Capture WASAPI + FFT + frames `eq-spectrum` |
+| `src-tauri/src/scenes.rs` | `ScenesState.eq` + sync dans `push_snapshot` |
+| `src-tauri/src/lib.rs` | `mod equaliseur` + init + sync boot |
+| `src-tauri/resources/diffusion.html` | `#eq-root` + `renderModuleEqualiseur`/`eqDessiner` + handler WS |
+| `src/lib/components/ModuleHud.svelte` | Placeholder statique drag/resize |
+| `src/lib/components/ModulesModal.svelte` | Toggles micro/bulles (bloc Style masqué) |
+
+## Système CSS unifié + scale rem (2026-XX) — convention et annulation
+
+> Chantier « chrome responsive » : tout le chrome dashboard (topbar, sidebar,
+> modales, onglets) est dimensionné en **rem** ; le canvas WYSIWYG (px/cqw)
+> et les pages OBS (`diffusion.html`, `raccourcis.html`, `chat-popout.html`)
+> restent en px — ce sont des contrats figés avec OBS/CEF, ne pas convertir.
+
+### Échelle d'UI — `tailleUi × tailleEcran`
+
+- `src/lib/stores/tailleUi.ts` : `tailleUi` = choix utilisateur (80–125 %,
+  persistant **par moniteur physique**, clé `"WxH"` en px physiques —
+  l'identité du moniteur, ne pas passer en logique) ; `tailleEcran` =
+  pourcentage calculé sur les dimensions **logiques**
+  (physique ÷ `scaleFactor` — sinon le zoom Windows est double-compté),
+  arrondi par pas de 5, borné 55–250 % (2 segments : ≤ 1920 saturé à
+  125, > 1920 proportion stricte 125 × dim/1920 — cf. section « Taille
+  d'interface »).
+- `App.svelte` pose `html { font-size } = 16 × tailleUi × tailleEcran / 10000`
+  → **1 rem = taille logique du chrome**. Tout `px` structurel du chrome est
+  une erreur ; les filets (1–2 px), ombres/glows et breakpoints `@media`
+  (le rem y vaut 16 px, jamais le font-size root — garder px) restent en px.
+
+### Recette `.action` — bouton canonique unique (app.css)
+
+Un seul bouton pour tout le chrome : `class="action"`. Recette anneau
+dégradé `--btn-border` + surface verre `--btn-surface` (décision IDEA02 :
+l'identité vit en bordure/glow, jamais en fill teinté). **Ne jamais
+re-copier le bloc dans un composant** — poser la classe + variantes :
+
+| Variante | Rôle |
+|---|---|
+| `.small` | padding/font réduits (boutons inline, « Tester »…) |
+| `.primary` | action principale (ring accent faible + fond légèrement teinté) |
+| `.danger` | action destructive (ring/texte `--message-error-color`) |
+| `.ghost` | bouton invisible (Annuler) — hover = apparition |
+| `.centre` | texte centré (grid de choix de type) |
+| `.actif` | état « toggle on » (ring + texte accent) — `.active` alias accepté |
+
+Variantes locales autorisées **par-dessus** `.action` (taille/couleur sans
+re-copier la recette) : `.btn-mod` (ModerationModal), `.alerte-toggle`,
+`.alerte-test`, `.tab` (barres d'onglets), `.chip`, `.fit-btn`,
+`.setting-toggle`, `.etat-chip`, `.ligne-btn`, `.mini-btn`, `.wbtn`/`.pl-btn`
+(skin Winamp), `.ea-*` (Écran d'attente), `.mode-btn`/`.pos-btn`/`.pad-*`
+(sélecteurs IVM). Leurs états restent `.selected` / `.on` / `.active` locaux.
+
+### Autres recettes globales (app.css — ne pas re-copier)
+
+- `.modal-bloc` / `.modal-bloc-titre` : carte bordurée + titre de section.
+- `.modal-actions` : footer de boutons de modale.
+- `.hint` (+`.msg-ok`/`.msg-err`/`.msg-warn`) : texte d'aide discret.
+- `.field` / `.field-label` : conteneur label+contrôle / label secondaire.
+- `.modal-list` + `.action.list-row` : liste scrollable de lignes cliquables.
+- `.md-layout` / `.md-liste` / `.md-select` / `.md-detail` : master-detail
+  (unifie les ex-`.alertes-*` d'IVM et `.mod-*` de ModerationModal —
+  `.md-select.selected` = entrée active).
+- `.modal-range`, `.modal-field-label`, `select` : recettes existantes.
+
+### Procédure d'annulation du chantier (test utilisateur NOK)
+
+L'arbre contient des modifications **non commitées pré-existantes** (module
+équaliseur + correctifs) — `git checkout -- .` les détruirait aussi.
+États pré-chantier sauvegardés **hors dépôt** dans
+`..\annulation-chantier-rem\` (`C:\Users\Ryo\Desktop\Rust-SOS\annulation-chantier-rem` :
+`AGENTS.md`, `lib.rs`, `ModulesModal.svelte` — seuls fichiers déjà
+modifiés avant ce chantier).
+
+1. `git status` → repérer les fichiers touchés par le chantier (liste :
+   `src/app.css`, `src/App.svelte`, `src/lib/stores/tailleUi.ts`,
+   `src-tauri/src/lib.rs`, `src/lib/components/*.svelte` modifiés ci-dessus).
+2. Fichiers **sans modif pré-existante** : `git checkout -- <fichier>`.
+3. `src-tauri/src/lib.rs`, `ModulesModal.svelte`, `AGENTS.md` : **restaurer
+   depuis `..\annulation-chantier-rem\`** (pas git checkout — tuerait
+   l'équaliseur).
+4. Re-vérifier : `npm run check` + `cd src-tauri && cargo check`.

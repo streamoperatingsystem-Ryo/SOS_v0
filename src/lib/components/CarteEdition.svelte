@@ -688,7 +688,7 @@
             {#if tabWidget === "contenu"}
               {#if !isCameraWidget}
                 <div class="section-titre">{$t("carteEdition.sectionMedia")}</div>
-                <button class="action primaire" onclick={importMedia}>{selectedWidget?.media ? $t("carteEdition.remplacerMedia") : $t("carteEdition.importerMedia")}</button>
+                <button class="action primary" onclick={importMedia}>{selectedWidget?.media ? $t("carteEdition.remplacerMedia") : $t("carteEdition.importerMedia")}</button>
                 {#if selectedWidget?.media}
                   <button class="action danger" onclick={onClearMedia}>{$t("carteEdition.supprimerMedia")}</button>
                 {/if}
@@ -956,7 +956,7 @@
               {hasBgTitre ? $t("carteEdition.titreFondModifier") : $t("carteEdition.titreFondAjouter")}
             </button>
           {:else if !hasFond}
-            <button class="action primaire" onclick={importFond}>{$t("carteEdition.importerFond")}</button>
+            <button class="action primary" onclick={importFond}>{$t("carteEdition.importerFond")}</button>
             <button class="action" onclick={onAjouterSlidesFond}>{$t("carteEdition.carrouselCreer")}</button>
             <button class="action" onclick={() => (obsFondDialogOpen = true)}>{$t("carteEdition.appEnFond")}</button>
             <p class="hint">{$t("carteEdition.aucunFond")}</p>
@@ -972,7 +972,7 @@
 
             {#if tabFond === "contenu"}
               <div class="section-titre">{$t("carteEdition.sectionMedia")}</div>
-              <button class="action primaire" onclick={importFond}>{$t("carteEdition.remplacerFond")}</button>
+              <button class="action primary" onclick={importFond}>{$t("carteEdition.remplacerFond")}</button>
               <button class="action danger" onclick={() => clearFond()}>{$t("carteEdition.supprimerFond")}</button>
               <button class="action" onclick={() => (obsFondDialogOpen = true)}>{$t("carteEdition.appEnFond")}</button>
               <button class="action" onclick={() => titreFondModalOpen.set(true)}>
@@ -1251,8 +1251,8 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    width: 18px;
-    height: 18px;
+    width: 1.125rem;
+    height: 1.125rem;
     flex-shrink: 0;
     align-self: center;
     border: 1px solid color-mix(in srgb, var(--accent-carte) 50%, transparent);
@@ -1417,8 +1417,8 @@
   .tabs {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
-    gap: 2px;
-    padding: 2px;
+    gap: 0.125rem;
+    padding: 0.125rem;
     margin-bottom: 0.2rem;
     background: color-mix(in srgb, var(--fond-controle) 65%, transparent);
     border: 1px solid var(--bordure-ui);
@@ -1538,121 +1538,6 @@
     border-top: 1px solid var(--bordure-ui);
   }
 
-  .action {
-    /* Recette « glace » — fill neutre commun. Changement IDEA02 vs avant :
-       la bordure au repos est NEUTRE (--bordure) — l'ancienne bordure
-       --accent-carte sur CHAQUE bouton noyait la hiérarchie dans le bruit.
-       L'accent ne vit plus que dans les états (hover/actif) et dans la
-       variante .primaire. Les états sémantiques .speedrun-start/.stop
-       gardent leur surcharge --btn-tint/--btn-border colorée. */
-    --btn-border: linear-gradient(var(--bordure), var(--bordure));
-    background:
-      var(--btn-surface) padding-box,
-      var(--btn-border) border-box border-area;
-    color: var(--texte);
-    border: 1px solid transparent;
-    box-shadow: var(--btn-inset);
-    padding: 0.35rem 0.6rem;
-    font: inherit;
-    cursor: pointer;
-    text-align: left;
-    /* flex-shrink: 0 — les .action sont des enfants de .carte-corps (flex
-       column, max-height: 45vh). Le global button { overflow: hidden }
-       (app.css) fait que min-height: auto se résout à 0 (spec Flexbox :
-       overflow != visible → min-size: auto = 0). Sans flex-shrink: 0, les
-       boutons pleine largeur s'écrasent verticalement quand le contenu
-       dépasse 45vh. */
-    flex-shrink: 0;
-    transition: box-shadow 0.2s ease, background 0.2s ease;
-  }
-  .action:hover {
-    /* Hover : bordure + glow couleur contextuelle de la carte. */
-    --btn-border: linear-gradient(var(--accent-carte), var(--accent-carte));
-    background:
-      var(--btn-surface-hover) padding-box,
-      var(--btn-border) border-box border-area;
-    box-shadow: var(--btn-inset-hover), 0 0 8px var(--accent-carte-glow);
-  }
-  .action:active {
-    background:
-      var(--btn-surface-active) padding-box,
-      var(--btn-border) border-box border-area;
-    box-shadow: var(--btn-inset-active);
-  }
-  .action:disabled {
-    /* Bordure neutre figée même au survol (le --btn-border accent de
-       .action:hover ne doit pas « réveiller » un bouton désactivé). */
-    --btn-border: linear-gradient(var(--bordure), var(--bordure));
-    opacity: 0.35;
-    cursor: not-allowed;
-    box-shadow: none;
-  }
-  .action:disabled:hover {
-    background:
-      var(--btn-surface) padding-box,
-      var(--btn-border) border-box border-area;
-    box-shadow: none;
-  }
-  /* Action primaire (Importer/Remplacer un média, un fond) : centrée,
-     semi-gras, teintée accent — le point d'entrée de l'onglet Contenu. */
-  .action.primaire {
-    --btn-border: linear-gradient(
-      color-mix(in srgb, var(--accent-carte) 55%, transparent),
-      color-mix(in srgb, var(--accent-carte) 55%, transparent)
-    );
-    text-align: center;
-    font-weight: 600;
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--accent-carte) 16%, var(--btn-surface)) 0%,
-        color-mix(in srgb, var(--accent-carte) 7%, var(--btn-surface)) 100%
-      ) padding-box,
-      var(--btn-border) border-box border-area;
-  }
-  .action.primaire:hover {
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--accent-carte) 24%, var(--btn-surface-hover)) 0%,
-        color-mix(in srgb, var(--accent-carte) 12%, var(--btn-surface-hover)) 100%
-      ) padding-box,
-      var(--btn-border) border-box border-area;
-    box-shadow: var(--btn-inset-hover), 0 0 8px var(--accent-carte-glow);
-  }
-  /* Action destructive (Supprimer le média/le fond, Vider la liste…) :
-     rouge discret au repos, renforcé au survol — enfin différenciable des
-     boutons anodins. */
-  .action.danger {
-    --btn-border: linear-gradient(
-      color-mix(in srgb, var(--message-error-color) 35%, transparent),
-      color-mix(in srgb, var(--message-error-color) 35%, transparent)
-    );
-    color: var(--message-error-color);
-  }
-  .action.danger:hover {
-    --btn-border: linear-gradient(var(--message-error-color), var(--message-error-color));
-    background:
-      color-mix(in srgb, var(--message-error-color) 14%, var(--btn-surface)) padding-box,
-      var(--btn-border) border-box border-area;
-    box-shadow: var(--btn-inset-hover);
-  }
-
-  .hint {
-    font-size: 0.8rem;
-    opacity: 0.6;
-    line-height: 1.3;
-  }
-  .field {
-    display: flex;
-    flex-direction: column;
-    gap: 0.15rem;
-  }
-  .field-label {
-    font-size: 0.7rem;
-    opacity: 0.6;
-  }
-
   /* ===== Widget goal : liste des Creator Goals Twitch ===== */
   .goal-liste {
     display: flex;
@@ -1709,7 +1594,7 @@
     font-variant-numeric: tabular-nums;
   }
   .goal-item-bar {
-    height: 4px;
+    height: 0.25rem;
     background: var(--fond-controle);
     overflow: hidden;
   }
@@ -1806,7 +1691,7 @@
   /* ===== Speedrun ===== */
   .speedrun-ctrl-row {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(58px, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(3.625rem, 1fr));
     gap: 0.25rem;
   }
   .speedrun-ctrl-row .action {
@@ -1834,15 +1719,15 @@
   }
   .speedrun-toggles {
     display: flex;
-    gap: 4px;
+    gap: 0.25rem;
     justify-content: center;
     flex-wrap: wrap;
   }
   .setting-toggle {
     display: flex;
     align-items: center;
-    gap: 4px;
-    padding: 2px 6px;
+    gap: 0.25rem;
+    padding: 0.125rem 0.375rem;
     border-radius: var(--rayon-petit);
     border: 1px solid var(--bordure-ui);
     background: var(--btn-surface);

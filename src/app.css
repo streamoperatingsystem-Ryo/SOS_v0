@@ -327,10 +327,11 @@ input[type="radio"] {
   color: var(--texte);
 }
 
-/* Scrollbars sombres discrètes (webview Chromium). */
+/* Scrollbars sombres discrètes (webview Chromium) — en rem : suit le
+   zoom d'interface comme le reste du chrome. */
 ::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
+  width: 0.625rem;
+  height: 0.625rem;
 }
 ::-webkit-scrollbar-track {
   background: transparent;
@@ -369,48 +370,138 @@ input[type="radio"] {
    composants non-modaux. Les modales utilisent ces classes dans le slot
    body du wrapper sans redéfinir le CSS. */
 
-/* Bouton d'action standard — recette « glace » (surface neutre givrée +
-   relief interne, cf. theme/roles.css). Le violet --accent-violet vit en
-   bordure/glow/hover seulement (décision IDEA02 : pas de fill teinté). */
-.modal-action {
-  background: var(--btn-surface);
+/* Bouton d'action — RECETTE CANONIQUE UNIQUE (sidebar + modales).
+   Ne jamais re-copier ce bloc dans un composant : poser la classe.
+   Anneau dégradé (--btn-border) sous une surface verre (--btn-surface) :
+   la couleur vit dans la bordure/glow/hover, jamais dans un fill teinté
+   (décision IDEA02). La 1re déclaration `background` (border-box) est le
+   repli universel ; la 2e (border-area, Chromium ≥145 — WebView2
+   evergreen) borne le dégradé à l'anneau pour un intérieur non teinté.
+   ⚠️ --accent-carte / --accent-carte-glow ne sont définis QUE dans les
+   contextes .cible-* / .sec-* : les fallbacks --accent-ui / --glow-ui
+   sont OBLIGATOIRES (sinon `background` invalide → bouton sans fond). */
+.action {
+  --btn-border: linear-gradient(var(--bordure), var(--bordure));
+  --action-accent: var(--accent-carte, var(--accent-ui));
+  --action-glow: var(--accent-carte-glow, var(--glow-ui));
+  background:
+    var(--btn-surface) padding-box,
+    var(--btn-border) border-box;
+  background:
+    var(--btn-surface) padding-box,
+    var(--btn-border) border-box border-area;
   color: var(--texte);
-  border: 1px solid var(--bordure-ui);
+  border: 1px solid transparent;
   box-shadow: var(--btn-inset);
-  padding: 0.4rem 0.8rem;
+  padding: 0.35rem 0.6rem;
   font: inherit;
   font-size: 0.85rem;
   cursor: pointer;
-  text-align: center;
+  text-align: left;
+  flex-shrink: 0;
+  transition: box-shadow 0.15s ease, background 0.15s ease;
 }
-.modal-action:hover:not(:disabled) {
-  background: var(--btn-surface-hover);
-  border-color: var(--accent-ui);
-  box-shadow: var(--btn-inset-hover), var(--glow-ui);
+.action:hover:not(:disabled) {
+  --btn-border: linear-gradient(var(--action-accent), var(--action-accent));
+  background:
+    var(--btn-surface-hover) padding-box,
+    var(--btn-border) border-box;
+  background:
+    var(--btn-surface-hover) padding-box,
+    var(--btn-border) border-box border-area;
+  box-shadow: var(--btn-inset-hover), 0 0 8px var(--action-glow);
 }
-.modal-action:active:not(:disabled) {
-  /* Pressed : recette partagée (theme/roles.css). */
-  background: var(--btn-surface-active);
+.action:active:not(:disabled) {
+  background:
+    var(--btn-surface-active) padding-box,
+    var(--btn-border) border-box;
+  background:
+    var(--btn-surface-active) padding-box,
+    var(--btn-border) border-box border-area;
   box-shadow: var(--btn-inset-active);
 }
-.modal-action:disabled {
-  opacity: 0.4;
-  cursor: default;
+.action:disabled {
+  --btn-border: linear-gradient(var(--bordure), var(--bordure));
+  opacity: 0.35;
+  cursor: not-allowed;
   box-shadow: none;
 }
-.modal-action.primary {
-  border-color: var(--accent-ui);
-  background: var(--btn-surface);
+.action:disabled:hover {
+  background:
+    var(--btn-surface) padding-box,
+    var(--btn-border) border-box;
+  background:
+    var(--btn-surface) padding-box,
+    var(--btn-border) border-box border-area;
+  box-shadow: none;
 }
-.modal-action.primary:hover {
-  box-shadow: var(--btn-inset-hover), var(--glow-ui);
+.action.small { padding: 0.15rem 0.4rem; font-size: 0.78rem; }
+.action.centre { text-align: center; }
+.action.actif,
+.action.active {
+  --btn-border: linear-gradient(var(--action-accent), var(--action-accent));
+  color: var(--action-accent);
 }
-.modal-action.danger:hover {
-  --btn-tint: var(--message-error-color);
-  background: var(--message-error-color);
-  color: #fff;
-  border-color: var(--message-error-color);
+.action.primary {
+  --btn-border: linear-gradient(
+    color-mix(in srgb, var(--action-accent) 55%, transparent),
+    color-mix(in srgb, var(--action-accent) 55%, transparent));
+  text-align: center;
+  font-weight: 600;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--action-accent) 16%, var(--btn-base)) 0%,
+      color-mix(in srgb, var(--action-accent) 7%, var(--btn-base)) 100%
+    ) padding-box,
+    var(--btn-border) border-box;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--action-accent) 16%, var(--btn-base)) 0%,
+      color-mix(in srgb, var(--action-accent) 7%, var(--btn-base)) 100%
+    ) padding-box,
+    var(--btn-border) border-box border-area;
+}
+.action.primary:hover:not(:disabled) {
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--action-accent) 24%, var(--btn-base)) 0%,
+      color-mix(in srgb, var(--action-accent) 12%, var(--btn-base)) 100%
+    ) padding-box,
+    var(--btn-border) border-box;
+  background:
+    linear-gradient(180deg,
+      color-mix(in srgb, var(--action-accent) 24%, var(--btn-base)) 0%,
+      color-mix(in srgb, var(--action-accent) 12%, var(--btn-base)) 100%
+    ) padding-box,
+    var(--btn-border) border-box border-area;
+  box-shadow: var(--btn-inset-hover), 0 0 8px var(--action-glow);
+}
+.action.danger {
+  --btn-border: linear-gradient(
+    color-mix(in srgb, var(--message-error-color) 35%, transparent),
+    color-mix(in srgb, var(--message-error-color) 35%, transparent));
+  color: var(--message-error-color);
+}
+.action.danger:hover:not(:disabled) {
+  --btn-border: linear-gradient(var(--message-error-color), var(--message-error-color));
+  background:
+    color-mix(in srgb, var(--message-error-color) 14%, var(--btn-base)) padding-box,
+    var(--btn-border) border-box;
+  background:
+    color-mix(in srgb, var(--message-error-color) 14%, var(--btn-base)) padding-box,
+    var(--btn-border) border-box border-area;
   box-shadow: var(--btn-inset-hover);
+}
+.action.ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+  opacity: 0.6;
+}
+.action.ghost:hover:not(:disabled) {
+  opacity: 1;
+  background: transparent;
+  box-shadow: none;
 }
 
 /* Container de boutons d'action (footer de modale). */
@@ -446,10 +537,100 @@ input[type="radio"] {
   opacity: 0.6;
 }
 
+/* Texte d'aide discret (unifie les copies locales .hint/.note des
+   composants — ne pas re-copier). Variantes sémantiques msg-ok/msg-err. */
+.hint {
+  font-size: 0.8rem;
+  opacity: 0.6;
+  line-height: 1.3;
+}
+.hint.msg-ok { opacity: 1; color: var(--message-ok-color); }
+.hint.msg-err { opacity: 1; color: var(--message-error-color); }
+.hint.msg-warn { opacity: 1; color: var(--message-user-action-color); }
+
+/* Champ : conteneur label + contrôle (unifie les .field/.field-label
+   locaux — les deux noms cohabitent, .modal-field-label = alias
+   historique conservé). */
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.field-label {
+  font-size: 0.7rem;
+  opacity: 0.6;
+}
+
+/* Liste scrollable de lignes cliquables (recette ex-ObsSourceDialog —
+   la hauteur suit le chrome en rem). .list-row = ligne pleine largeur,
+   à combiner avec .action : class="action list-row". */
+.modal-list {
+  overflow-y: auto;
+  max-height: 20rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.list-row {
+  width: 100%;
+  word-break: break-word;
+}
+
+/* Master-detail partagé (unifie .alertes-* + .mod-* des modales) :
+   colonne de sélection + panneau de détail. .md-select.selected =
+   l'entrée active ; .actif est réservé aux toggles d'action. */
+.md-layout {
+  display: grid;
+  grid-template-columns: 10.6rem 1fr;
+  gap: 0.5rem;
+  align-items: start;
+}
+.md-liste {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.md-select {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  background: var(--btn-surface);
+  box-shadow: var(--btn-inset);
+  color: var(--texte);
+  border: 1px solid var(--bordure-ui);
+  border-radius: var(--rayon-petit);
+  padding: 0.3rem 0.45rem;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+}
+.md-select:hover {
+  background: var(--btn-surface-hover);
+  box-shadow: var(--btn-inset-hover);
+  border-color: var(--accent-ui);
+}
+.md-select.selected {
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+    color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%);
+  border-color: var(--accent-ui);
+}
+.md-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  min-width: 0;
+}
+
 /* Slider (range) — accent violet néon de l'app. */
 .modal-range {
   width: 100%;
-  height: 14px;
+  height: 0.875rem;
   cursor: pointer;
   accent-color: var(--accent-ui);
   background: var(--fond);

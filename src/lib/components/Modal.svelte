@@ -17,7 +17,7 @@
   let {
     title,
     onClose,
-    maxWidth = "900px",
+    maxWidth = "56rem",
     hint = "",
     headerExtra = null,
     crochet = "var(--accent-ui)",

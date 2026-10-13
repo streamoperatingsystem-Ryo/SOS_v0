@@ -457,12 +457,14 @@
     "nom": {
       "horloge": "Horloge",
       "musique": "Musique en cours",
-      "objectifs": "Objectifs du stream"
+      "objectifs": "Objectifs du stream",
+      "equaliseur": "Équaliseur"
     },
     "hint": {
       "horloge": "Date et heure séparées par un trait, en pixels du canvas. Déplacer/redimensionner aussi directement sur le canvas.",
       "musique": "Carte « titre en cours » + pastille temps/progression — alimentée par la file musique (!rs).",
-      "objectifs": "Lignes « métrique — valeur / cible » avec trait de progression. Une ligne = une métrique mesurée ou un objectif Twitch lié."
+      "objectifs": "Lignes « métrique — valeur / cible » avec trait de progression. Une ligne = une métrique mesurée ou un objectif Twitch lié.",
+      "equaliseur": "Overlay spectre audio en bas de la diffusion : barres néon translucides + bulles, sous les widgets. Rendu uniquement en diffusion (OBS) — ici, un placeholder positionnable."
     },
     "horloge": {
       "date": "Afficher la date (JJ / MM / AA)",
@@ -484,6 +486,12 @@
       "descendre": "Descendre",
       "lier": "Lier un objectif Twitch",
       "vide": "Ajoute des objectifs dans la modale Modules"
+    },
+    "equaliseur": {
+      "micro": "Inclure le micro par défaut (voix)",
+      "bulles": "Bulles animées au-dessus des barres",
+      "hintMicro": "Le spectre vient de la sortie audio par défaut de Windows (≈ « Desktop Audio » d'OBS) ; la voix n'y figure pas sans monitoring OBS — d'où la capture micro dédiée.",
+      "placeholder": "Équaliseur — rendu en diffusion"
     }
   },
   "app": {

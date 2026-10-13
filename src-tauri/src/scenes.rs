@@ -44,6 +44,10 @@ pub struct ScenesState {
     /// Canal broadcast pour les messages chat (IRC Twitch → diffusion :4321).
     /// Le handler WS s'y abonne et forward `{"type":"chat","message":...}`.
     pub chat_tx: broadcast::Sender<String>,
+    /// Module équaliseur : capture WASAPI (loopback sortie + micro optionnel)
+    /// → frames eq-spectrum sur chat_tx → overlay diffusion. Zéro thread tant
+    /// que le module n'est pas actif ; sync() appelée par push_snapshot.
+    pub eq: crate::equaliseur::EqualiseurState,
 }
 
 /// Sérialise la scène en message snapshot WS. `sceneId` permet à la
@@ -63,11 +67,19 @@ pub fn push_snapshot(state: &ScenesState) {
     // ⚠️ Ordre des locks : scene PUIS current_id — même convention que
     // ouvrir/creer/supprimer/save_current (push_snapshot est appelé depuis
     // plusieurs threads UI + serveur :4321, l'ordre inverse = deadlock).
-    let scene = state.scene.lock().unwrap();
-    let id = state.current_id.lock().unwrap();
-    let json = snapshot_json(&id, &scene);
-    // send_err = aucun client connecté, c'est OK
-    let _ = state.snapshot_tx.send(json);
+    let eq_config;
+    {
+        let scene = state.scene.lock().unwrap();
+        let id = state.current_id.lock().unwrap();
+        let json = snapshot_json(&id, &scene);
+        // send_err = aucun client connecté, c'est OK
+        let _ = state.snapshot_tx.send(json);
+        eq_config = scene.modules.as_ref().and_then(|m| m.equaliseur.clone());
+    }
+    // Synchronisation équaliseur APRÈS la libération des locks : la capture
+    // démarre/arrête ses threads selon modules.equaliseur — démarrer un thread
+    // sous les mutex de scène ralentirait le chemin de commit.
+    state.eq.sync(eq_config.as_ref());
 }
 
 // ===== Chemins disque =====

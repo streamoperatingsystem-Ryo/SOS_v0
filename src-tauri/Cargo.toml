@@ -51,6 +51,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 boa_engine = "0.20"
 
 [target.'cfg(windows)'.dependencies]
+# Module équaliseur — capture WASAPI loopback (sortie par défaut ≈ « Desktop
+# Audio » OBS) + micro, FFT → frames eq-spectrum vers diffusion :4321.
+# wasapi = API Windows-only ; rustfft = FFT des échantillons capturés.
+wasapi = "0.24.0"
+rustfft = "6.4.1"
 windows = { version = "0.58", features = [
     "Win32_Foundation",
     "Win32_UI_WindowsAndMessaging",

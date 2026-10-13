@@ -98,11 +98,11 @@
 
 <div class="player">
   <div class="player-row">
-    <button class="action" onclick={onMinus5}>−5 s</button>
-    <button class="action" onclick={onTogglePlay}>
+    <button class="action small centre" onclick={onMinus5}>−5 s</button>
+    <button class="action small centre" onclick={onTogglePlay}>
       {mediaPaused ? $t("commun.lecture") : $t("commun.pause")}
     </button>
-    <button class="action" onclick={onPlus5}>+5 s</button>
+    <button class="action small centre" onclick={onPlus5}>+5 s</button>
   </div>
   <input
     class="range"
@@ -116,9 +116,9 @@
   />
   <span class="player-time">{fmt(mediaTime)} / {fmt(duration)}</span>
   <div class="player-row">
-    <button class="action" class:active={loopA !== null} onclick={onMarqueA}>A</button>
-    <button class="action" class:active={loopB !== null} onclick={onMarqueB}>B</button>
-    <button class="action" onclick={onEffaceLoop}>{$t("carteEdition.boucleEffacer")}</button>
+    <button class="action small centre" class:actif={loopA !== null} onclick={onMarqueA}>A</button>
+    <button class="action small centre" class:actif={loopB !== null} onclick={onMarqueB}>B</button>
+    <button class="action small centre" onclick={onEffaceLoop}>{$t("carteEdition.boucleEffacer")}</button>
   </div>
   <span class="player-time">
     {#if loopA !== null && loopB !== null}
@@ -141,34 +141,6 @@
     display: grid;
     grid-template-columns: 1fr 1fr 1fr;
     gap: 0.25rem;
-  }
-  .action {
-    /* Recette « glace » (theme/roles.css) — fill neutre partout. */
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    padding: 0.3rem 0.4rem;
-    font: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-    text-align: center;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .action:hover {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--bordure-ui-active);
-  }
-  .action:active {
-    background: var(--btn-surface-active);
-    box-shadow: var(--btn-inset-active);
-  }
-  /* Borne de boucle posée (A ou B) : bordure accentuée, même recette que
-     l'état actif des fit-btn de la carte. */
-  .action.active {
-    border-color: var(--accent-ui);
-    color: var(--accent-ui);
   }
   .player-time {
     font-size: 0.75rem;

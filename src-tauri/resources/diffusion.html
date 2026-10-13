@@ -200,6 +200,26 @@
         z-index: 0;
         pointer-events: none;
       }
+      /* Overlay équaliseur (module scene.modules.equaliseur) — couche
+         dédiée SOUS les widgets : z-index 0 comme #bg mais placée juste
+         après lui dans le DOM → peinte au-dessus du fond, sous tous les
+         widgets (z ≥ 0, insérés après dans #stage) et sous .bg-titre (z 1).
+         Canvas plein stage, pointer-events:none, translucide — le fond de
+         l'application reste visible à travers les barres/bulles. */
+      #eq-root {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        z-index: 0;
+        pointer-events: none;
+        display: none;
+      }
+      #eq-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+      }
       /* Canvas qui affiche le fond avec les trous (destination-out).
          L'img/video source est display:none, sert uniquement de source
          pour drawImage. */
@@ -3098,6 +3118,10 @@
       <div id="bg">
         <canvas id="bg-canvas"></canvas>
       </div>
+      <!-- Overlay équaliseur — inséré dans le DOM immédiatement après #bg :
+           même z-index 0 → l'ordre DOM le départage, il peint au-dessus du
+           fond et sous tous les widgets (ajoutés après, z ≥ 0). -->
+      <div id="eq-root"><canvas id="eq-canvas"></canvas></div>
       <!-- Voile noir pour le fondu de changement de scène (fade to black).
            Transparent par défaut, passe à opacity 1 au changement de scène,
            puis revient à 0 une fois la nouvelle scène rendue sous le voile.
@@ -4338,10 +4362,14 @@
       function startBgLoop() {
         if (rafId) return;
         function tick() {
+          // JC : percer les trous de la scène DÉRIVÉE (caméra + chat seuls),
+          // pas ceux de la scène réelle — sinon les captures OBS réapparaissent
+          // sous les anciens rects pendant JC.
+          var sceneTick = jcDeriverScene(currentScene);
           var v = bgState.mediaEl;
           if (bgState.kind === "video" && v && v.currentTime !== bgDernierT) {
             bgDernierT = v.currentTime;
-            peindreFond(currentScene);
+            peindreFond(sceneTick);
           }
           // Carrousel de fond : avance à nextAt (image suivante déjà chargée)
           // + repeint chaque frame pendant la fenêtre de fondu.
@@ -4359,12 +4387,12 @@
                 // Fondu borné à la moitié de l'intervalle.
                 bgState.fadeDur = Math.min(SLIDES_FADE_MS, secBg * 500);
                 bgState.nextAt = now + secBg * 1000;
-                peindreFond(currentScene);
+                peindreFond(sceneTick);
               } else {
                 bgState.nextAt = now + 500; // image pas prête → re-tester
               }
             } else if (inFade) {
-              peindreFond(currentScene);
+              peindreFond(sceneTick);
             }
           }
           rafId = requestAnimationFrame(tick);
@@ -4503,7 +4531,7 @@
               if (img0.complete && img0.naturalWidth > 0) {
                 peindreFond(scene);
               } else {
-                img0.addEventListener("load", function () { peindreFond(currentScene); });
+                img0.addEventListener("load", function () { peindreFond(jcDeriverScene(currentScene)); });
               }
             }
             startBgLoop();
@@ -5858,6 +5886,11 @@
         }
         var copieScene = Object.assign({}, scene);
         copieScene.widgets = widgets;
+        // JC = caméra + chat SEULS : modules HUD (horloge/musique/objectifs/
+        // équaliseur) et capture OBS de fond neutralisés — parité avec
+        // sceneDerivee (justChatting.ts). Scène persistée intacte : copie.
+        copieScene.modules = {};
+        copieScene.bgObsSource = undefined;
         return copieScene;
       }
 
@@ -5883,6 +5916,11 @@
         // Titre du fond de l'application (intérieur haut/bas) — un élément
         // global sur #stage, sous les widgets.
         applyTitreFond(scene);
+
+        // Équaliseur — overlay spectre dans #eq-root (z 0, juste après #bg
+        // dans le DOM → sous tous les widgets). Ne fait que synchroniser
+        // rect/options + boucle rAF ; le spectre arrive par eq-spectrum.
+        renderModuleEqualiseur(scene);
 
         // Modules HUD (couche séparée des widgets, #modules-root z 9000).
         renderModules(scene);
@@ -8149,6 +8187,166 @@
         }
       }
 
+      // ===== Module « Équaliseur » — overlay spectre audio sous les widgets =====
+      // Le spectre est calculé côté Rust : capture WASAPI loopback du
+      // périphérique de sortie par défaut (≈ « Desktop Audio » OBS) + micro
+      // optionnel → FFT → 24 bandes normalisées 0..1 → frames `eq-spectrum`
+      // (~30 Hz sur le canal chat). Ici : rendu canvas néon dans #eq-root
+      // (z 0, juste après #bg dans le DOM → au-dessus du fond, sous tous
+      // les widgets). rAF actif SEULEMENT quand le module est actif —
+      // aucun texte, aucun élément DOM supplémentaire.
+      var eqRoot = document.getElementById("eq-root");
+      var eqCanvas = document.getElementById("eq-canvas");
+      // ⚠️ Nom DÉDIÉ (eqCanvasCtx) : le spectre MUSIQUE déclare aussi un
+      // `var eqCtx` plus bas (AudioContext, ~ligne 10239) — même scope
+      // script, le dernier déclaré gagnerait et écraserait ce contexte 2d
+      // par null → module Égaliseur jamais affiché (bug corrigé 2026-10-13,
+      // même classe que la collision eqTick documentée plus bas).
+      var eqCanvasCtx = eqCanvas.getContext("2d");
+      var EQ_NB = 24;
+      var eqCible = null;   // bandes cibles (dernière frame eq-spectrum)
+      var eqBandes = null;  // bandes lissées affichées
+      var eqCfg = null;     // { x, y, largeur, hauteur, bulles } — null = off
+      var eqBulles = [];    // bulles en vie { x, y, r, vx, vy, a, ph }
+      var eqRaf = null;
+      var eqT0 = 0;
+
+      /// Sync config depuis le snapshot (chaque renderScene) : rect du
+      /// module + options + démarrage/arrêt de la boucle rAF. Zéro rAF
+      /// quand le module est inactif.
+      function renderModuleEqualiseur(scene) {
+        var m = scene && scene.modules && scene.modules.equaliseur;
+        // !eqCanvasCtx : contexte 2d indisponible (CEF dégradé) — no-op
+        // gracieux, jamais d'exception ici : renderModuleEqualiseur est
+        // appelé au milieu de renderScene, un throw figerait la couche
+        // widgets.
+        if (!m || !m.actif || !eqCanvasCtx) {
+          eqCfg = null;
+          eqCible = null;
+          eqBulles = [];
+          if (eqRaf) { cancelAnimationFrame(eqRaf); eqRaf = null; }
+          eqRoot.style.display = "none";
+          if (eqCanvasCtx) eqCanvasCtx.clearRect(0, 0, eqCanvas.width, eqCanvas.height);
+          return;
+        }
+        var cw = scene.canvasW || 1920;
+        var ch = scene.canvasH || 1080;
+        if (eqCanvas.width !== cw || eqCanvas.height !== ch) {
+          eqCanvas.width = cw;
+          eqCanvas.height = ch;
+        }
+        // "block" OBLIGATOIRE : la feuille de style porte display:none sur
+        // #eq-root — "" ne retirerait que le style inline et la couche
+        // resterait invisible même avec le module actif.
+        eqRoot.style.display = "block";
+        eqCfg = {
+          x: m.x, y: m.y,
+          largeur: m.largeur, hauteur: m.hauteur,
+          bulles: m.eqBulles !== false,
+        };
+        if (!eqRaf) {
+          eqT0 = performance.now();
+          eqRaf = requestAnimationFrame(eqOverlayTick);
+        }
+      }
+
+      // Nom dédié : le tick spectre MUSIQUE s'appelle aussi eqTick plus bas
+      // (eqTimer = setInterval(eqTick, 66)) — même scope script, le dernier
+      // déclaré gagnerait et cette boucle rAF ne dessinerait jamais.
+      function eqOverlayTick(t) {
+        eqRaf = null;
+        if (!eqCfg) return;
+        var dt = Math.min(0.1, Math.max(0.001, (t - eqT0) / 1000));
+        eqT0 = t;
+        eqDessiner(dt);
+        eqRaf = requestAnimationFrame(eqOverlayTick);
+      }
+
+      /// Frame de rendu : lissage attack/decay des bandes → barres néon
+      /// dégradées (couleurs du cadre de scène) + bulles optionnelles qui
+      /// montent au-dessus du bandeau proportionnellement à l'énergie.
+      function eqDessiner(dt) {
+        var ctx = eqCanvasCtx;
+        var cfg = eqCfg;
+        ctx.clearRect(0, 0, eqCanvas.width, eqCanvas.height);
+        if (!eqBandes) eqBandes = new Array(EQ_NB).fill(0);
+        // Montée rapide, retombée douce (constantes par seconde).
+        var attaque = Math.min(1, dt * 14);
+        var relache = Math.min(1, dt * 4.5);
+        var maxV = 0;
+        for (var i = 0; i < EQ_NB; i++) {
+          var v = eqCible && typeof eqCible[i] === "number"
+            ? Math.min(1, Math.max(0, eqCible[i])) : 0;
+          var b = eqBandes[i];
+          b += (v - b) * (v > b ? attaque : relache);
+          eqBandes[i] = Math.max(0, b);
+          if (b > maxV) maxV = b;
+        }
+        // Couleurs du cadre de scène : barres en gradient primaire→secondaire.
+        var col = bpmResoudreCouleurs();
+        // Garde de lisibilité : un cadre très sombre (ex. #4c0606 → #000000)
+        // rend les barres invisibles sur un fond sombre → fallback gris clair.
+        if (bpmLuminance(col.p) < 70 && bpmLuminance(col.s) < 70) col = BPM_COULEURS_DEFAUT;
+        var x0 = cfg.x, y0 = cfg.y, W = cfg.largeur, H = cfg.hauteur;
+        var padX = W * 0.012;
+        var pas = (W - padX * 2) / EQ_NB;
+        var bw = Math.max(2, pas * 0.62);
+        var grad = ctx.createLinearGradient(0, y0 + H, 0, y0);
+        grad.addColorStop(0, col.p);
+        grad.addColorStop(1, col.s);
+        ctx.save();
+        ctx.fillStyle = grad;
+        ctx.shadowColor = col.p;
+        var rCoin = Math.min(6, bw / 2);
+        for (var i = 0; i < EQ_NB; i++) {
+          var vb = eqBandes[i];
+          var h = Math.max(2, vb * H * 0.94);
+          var x = x0 + padX + i * pas + (pas - bw) / 2;
+          ctx.globalAlpha = 0.45 + vb * 0.5;
+          ctx.shadowBlur = 10 + vb * 20;
+          ctx.beginPath();
+          if (ctx.roundRect) ctx.roundRect(x, y0 + H - h, bw, h, [rCoin, rCoin, 0, 0]);
+          else ctx.rect(x, y0 + H - h, bw, h);
+          ctx.fill();
+        }
+        // Bulles — cercles néon translucides qui montent depuis les barres
+        // et s'estompent vers le plafond (~1,6× la hauteur du module).
+        if (cfg.bulles) {
+          if (maxV > 0.12 && eqBulles.length < 80 &&
+              Math.random() < dt * (2 + maxV * 20)) {
+            eqBulles.push({
+              x: x0 + padX + Math.random() * (W - padX * 2),
+              y: y0 + H - Math.random() * 12,
+              r: 1.5 + Math.random() * 4.5,
+              vy: 26 + Math.random() * 55 + maxV * 45,
+              vx: (Math.random() - 0.5) * 16,
+              a: 0.3 + Math.random() * 0.45,
+              ph: Math.random() * 6.2832,
+            });
+          }
+          var plafond = y0 - H * 1.6;
+          ctx.strokeStyle = col.p;
+          ctx.lineWidth = 1.2;
+          ctx.shadowBlur = 8;
+          for (var i = eqBulles.length - 1; i >= 0; i--) {
+            var bu = eqBulles[i];
+            bu.y -= bu.vy * dt;
+            bu.x += bu.vx * dt;
+            bu.ph += dt * 2.2;
+            if (bu.y + bu.r < plafond || bu.y - bu.r > y0 + H) {
+              eqBulles.splice(i, 1);
+              continue;
+            }
+            var fondu = Math.min(1, Math.max(0, (bu.y - plafond) / (H * 0.5)));
+            ctx.globalAlpha = bu.a * fondu;
+            ctx.beginPath();
+            ctx.arc(bu.x + Math.sin(bu.ph) * 7, bu.y, bu.r, 0, 6.2832);
+            ctx.stroke();
+          }
+        }
+        ctx.restore();
+      }
+
       // Appliquer un snapshot reçu : met à jour currentScene, les dims canvas,
       // rend la scène, et rafraîchit les overlays (bandeau, alerte, welcome).
       // Extraite du handler WS pour être réutilisée par le fondu (rendu différé
@@ -8354,6 +8552,11 @@
               pauseMusique(!!msg.pause);
             } else if (msg.type === "musique-volume") {
               musiqueAppliquerVolume(msg.volume);
+            } else if (msg.type === "eq-spectrum") {
+              // Spectre audio système (capture WASAPI Rust → FFT → 24 bandes
+              // 0..1, ~30 Hz). Consommé par la boucle rAF de l'équaliseur —
+              // ignoré si le module n'est pas actif (eqCfg null).
+              if (Array.isArray(msg.bandes)) eqCible = msg.bandes;
             } else if (msg.type === "input-viewer-etat") {
               // État des entrées (capture globale Rust → WS direct, throttle
               // 30Hz). Maj DOM directe des keycaps/boutons (pas de re-render).

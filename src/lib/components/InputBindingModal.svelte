@@ -162,7 +162,7 @@
 
     <div class="dpad-section">
       <h3>{$t("inputBinding.dpadAxes")}</h3>
-      <p class="note">{$t("inputBinding.dpadNote")}</p>
+      <p class="hint">{$t("inputBinding.dpadNote")}</p>
       <label class="toggle-row">
         <input type="checkbox" checked={dpadInvertY} onchange={(e) => (dpadInvertY = (e.target as HTMLInputElement).checked)} />
         <span>{$t("inputBinding.inverserY")}</span>
@@ -174,9 +174,9 @@
     </div>
 
     <div class="modal-actions">
-      <button class="modal-action" onclick={resetAll}>{$t("inputBinding.reinitialiserTout")}</button>
-      <button class="modal-action" onclick={onCancel}>{$t("commun.annuler")}</button>
-      <button class="modal-action primary" onclick={onSave}>{$t("commun.enregistrer")}</button>
+      <button class="action" onclick={resetAll}>{$t("inputBinding.reinitialiserTout")}</button>
+      <button class="action" onclick={onCancel}>{$t("commun.annuler")}</button>
+      <button class="action primary" onclick={onSave}>{$t("commun.enregistrer")}</button>
     </div>
   </div>
 </Modal>
@@ -186,11 +186,6 @@
     font-size: 0.85rem;
     margin: 0;
     opacity: 0.85;
-  }
-  .note {
-    font-size: 0.78rem;
-    opacity: 0.6;
-    line-height: 1.3;
   }
   .warn {
     font-size: 0.75rem;

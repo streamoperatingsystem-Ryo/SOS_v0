@@ -810,7 +810,7 @@
   }
 </script>
 
-<Modal title={$t("interactions.titre")} onClose={onFermer} maxWidth="1200px" crochet="var(--crochet-rose)">
+<Modal title={$t("interactions.titre")} onClose={onFermer} maxWidth="75rem" crochet="var(--crochet-rose)">
   <div class="tabs">
     <button class="tab" class:active={tab === "bienvenue"} onclick={() => (tab = "bienvenue")}>
       {$t("interactions.tabBienvenue")}
@@ -855,25 +855,25 @@
 
     {#if tab === "bienvenue"}
       <div class="tab-body">
-        <div class="alertes-layout">
+        <div class="md-layout">
           <!-- Colonne gauche : sections de l'onglet -->
-          <div class="alertes-liste">
+          <div class="md-liste">
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secBienvenue === "general"}
               onclick={() => (secBienvenue = "general")}
             >
               <span class="alerte-nom">{$t("commun.general")}</span>
             </button>
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secBienvenue === "file"}
               onclick={() => (secBienvenue = "file")}
             >
               <span class="alerte-nom">{$t("interactions.bienvenue.secFile")}</span>
             </button>
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secBienvenue === "attribution"}
               onclick={() => (secBienvenue = "attribution")}
             >
@@ -882,11 +882,11 @@
           </div>
 
           <!-- Panneau droit : contenu de la section sélectionnée -->
-          <div class="alerte-detail">
+          <div class="md-detail">
             {#if secBienvenue === "general"}
               <!-- Config globale + overlay -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("commun.general")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.general")}</div>
                 <label class="toggle">
                   <input
                     type="checkbox"
@@ -927,8 +927,8 @@
 
             {#if secBienvenue === "file"}
               <!-- File d'attente -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.bienvenue.fileTitre", { n: queue.length })}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.bienvenue.fileTitre", { n: queue.length })}</div>
 
                 {#if current}
                   <div class="current">
@@ -985,8 +985,8 @@
 
             {#if secBienvenue === "attribution"}
               <!-- Attribution followers → clips -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.bienvenue.attributionTitre")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.bienvenue.attributionTitre")}</div>
           <div class="actions-bar">
             <button
               class="action"
@@ -1073,7 +1073,7 @@
                           </button>
                           {#if testingClipId === clip.id}
                             <button
-                              class="test-btn stop"
+                              class="action small danger"
                               title={get(t)("interactions.bienvenue.arreterClip")}
                               onclick={onStopperTest}
                             >
@@ -1081,7 +1081,7 @@
                             </button>
                           {:else}
                             <button
-                              class="test-btn"
+                              class="action small"
                               title={get(t)("interactions.bienvenue.testerTitle")}
                               onclick={() => onTesterClip(clip)}
                               disabled={!!testingClipId}
@@ -1106,39 +1106,39 @@
 
     {#if tab === "bandeau"}
       <div class="tab-body">
-        <div class="alertes-layout">
+        <div class="md-layout">
           <!-- Colonne gauche : sections de l'onglet -->
-          <div class="alertes-liste">
+          <div class="md-liste">
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secBandeau === "general"}
               onclick={() => (secBandeau = "general")}
             >
               <span class="alerte-nom">{$t("commun.general")}</span>
             </button>
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secBandeau === "duree"}
               onclick={() => (secBandeau = "duree")}
             >
               <span class="alerte-nom">{$t("commun.duree")}</span>
             </button>
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secBandeau === "position"}
               onclick={() => (secBandeau = "position")}
             >
               <span class="alerte-nom">{$t("interactions.bandeau.secPosition")}</span>
             </button>
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secBandeau === "test"}
               onclick={() => (secBandeau = "test")}
             >
               <span class="alerte-nom">{$t("interactions.bandeau.secTest")}</span>
             </button>
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secBandeau === "apparence"}
               onclick={() => (secBandeau = "apparence")}
             >
@@ -1147,10 +1147,10 @@
           </div>
 
           <!-- Panneau droit : contenu de la section -->
-          <div class="alerte-detail">
+          <div class="md-detail">
             {#if secBandeau === "general"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("commun.general")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.general")}</div>
                 <label class="toggle">
                   <input
                     type="checkbox"
@@ -1164,8 +1164,8 @@
                 </p>
               </div>
             {:else if secBandeau === "duree"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.bandeau.dureeAffichage")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.bandeau.dureeAffichage")}</div>
                 <div class="duree-row">
                   <span class="field-label">{$t("commun.duree")}</span>
                   <span class="duree-val">{bDureeSec}s</span>
@@ -1182,8 +1182,8 @@
                 <p class="hint">{$t("interactions.bandeau.dureeHint")}</p>
               </div>
             {:else if secBandeau === "position"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.bandeau.position")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.bandeau.position")}</div>
                 <div class="position-row">
                   <button
                     class="pos-btn"
@@ -1202,8 +1202,8 @@
                 </div>
               </div>
             {:else if secBandeau === "test"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.bandeau.secTest")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.bandeau.secTest")}</div>
                 <div class="queue-actions">
                   <button onclick={onBandeauTester} disabled={!bActif}>
                     {$t("interactions.bandeau.tester")}
@@ -1217,14 +1217,14 @@
                 </p>
               </div>
             {:else}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.bandeau.apparenceTitre")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.bandeau.apparenceTitre")}</div>
                 <p class="hint">
                   {$t("interactions.bandeau.apparenceHint")}
                 </p>
               </div>
-              <div class="bloc">
-                <div class="bloc-titre">{$t("commun.police")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.police")}</div>
                 <!-- Sélection persistée au change (set_config → disque + WS). -->
                 <select
                   class="police-select"
@@ -1249,14 +1249,14 @@
           {$t("interactions.alertes.hintIntro")}
         </p>
 
-        <div class="alertes-layout">
+        <div class="md-layout">
           <!-- Colonne gauche : liste des types (nom + ON/OFF) -->
-          <div class="alertes-liste">
+          <div class="md-liste">
             {#each TYPES_ALERTE as ty (ty)}
               {@const c = cfgType(ty)}
               <div class="alerte-item" class:selected={typeActif === ty}>
                 <button
-                  class="alerte-select"
+                  class="md-select"
                   class:selected={typeActif === ty}
                   onclick={() => (typeActif = ty)}
                 >
@@ -1273,9 +1273,9 @@
           </div>
 
           <!-- Panneau droit : config du type sélectionné -->
-          <div class="alerte-detail">
-            <div class="bloc">
-              <div class="bloc-titre">{$t("commun.media")}</div>
+          <div class="md-detail">
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("commun.media")}</div>
               <div class="media-modes">
                 <button
                   class="mode-btn"
@@ -1324,8 +1324,8 @@
               </p>
             </div>
 
-            <div class="bloc">
-              <div class="bloc-titre">{$t("commun.texte")}</div>
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("commun.texte")}</div>
               <label class="alerte-field">
                 <span class="field-label">{$t("commun.texte")}</span>
                 <input
@@ -1354,8 +1354,8 @@
               </label>
             </div>
 
-            <div class="bloc">
-              <div class="bloc-titre">{$t("commun.comportement")}</div>
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("commun.comportement")}</div>
               <div class="alerte-2col">
                 <label class="alerte-field">
                   <span class="field-label">{$t("commun.dureeS")}</span>
@@ -1390,8 +1390,8 @@
               </label>
             </div>
 
-            <div class="bloc">
-              <div class="bloc-titre">{$t("commun.test")}</div>
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("commun.test")}</div>
               <button class="alerte-test" onclick={() => testerAlerte(typeActif)} disabled={!cfgSel.actif}>
                 {$t("interactions.alertes.testerBouton")}
               </button>
@@ -1410,13 +1410,13 @@
           {$t("interactions.commandes.hintIntro")}
         </p>
 
-        <div class="alertes-layout">
+        <div class="md-layout">
           <!-- Colonne gauche : liste des commandes + ajout -->
-          <div class="alertes-liste">
+          <div class="md-liste">
             {#each $commandesStore as c (c.id)}
               <div class="alerte-item" class:selected={cmdSelId === c.id}>
                 <button
-                  class="alerte-select"
+                  class="md-select"
                   class:selected={cmdSelId === c.id}
                   onclick={() => (cmdSelId = c.id)}
                 >
@@ -1436,10 +1436,10 @@
           </div>
 
           <!-- Panneau droit : config de la commande sélectionnée -->
-          <div class="alerte-detail">
+          <div class="md-detail">
             {#if cmdSel}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.commandes.titreBloc")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.commandes.titreBloc")}</div>
                 <label class="alerte-field">
                   <span class="field-label">{$t("interactions.commandes.label")}</span>
                   <input
@@ -1462,8 +1462,8 @@
                 </p>
               </div>
 
-              <div class="bloc">
-                <div class="bloc-titre">{$t("commun.media")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.media")}</div>
                 <div class="media-modes">
                   <button
                     class="mode-btn"
@@ -1512,8 +1512,8 @@
                 </p>
               </div>
 
-              <div class="bloc">
-                <div class="bloc-titre">{$t("commun.texte")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.texte")}</div>
                 <label class="alerte-field">
                   <span class="field-label">{$t("commun.texte")}</span>
                   <input
@@ -1542,8 +1542,8 @@
                 </label>
               </div>
 
-              <div class="bloc">
-                <div class="bloc-titre">{$t("commun.comportement")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.comportement")}</div>
                 <div class="alerte-2col">
                   <label class="alerte-field">
                     <span class="field-label">{$t("commun.dureeS")}</span>
@@ -1578,8 +1578,8 @@
                 </label>
               </div>
 
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.testSuppression")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.testSuppression")}</div>
                 <div class="queue-actions">
                   <button class="alerte-test" onclick={() => testerCommande(cmdSel.id)} disabled={!cmdSel.actif}>
                     {$t("interactions.commandes.tester")}
@@ -1595,7 +1595,7 @@
                 </p>
               </div>
             {:else}
-              <div class="bloc">
+              <div class="modal-bloc">
                 <p class="hint">{$t("interactions.commandes.aucuneSelection")}</p>
               </div>
           {/if}
@@ -1614,11 +1614,11 @@
           <div class="pad-erreur">⚠ {padErr}</div>
         {/if}
 
-        <div class="alertes-layout">
+        <div class="md-layout">
           <!-- Colonne gauche : activation + plages + grille 4×4 -->
-          <div class="alertes-liste">
-            <div class="bloc">
-              <div class="bloc-titre">{$t("interactions.pad.activation")}</div>
+          <div class="md-liste">
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("interactions.pad.activation")}</div>
               <button
                 class="alerte-toggle"
                 class:on={padActif}
@@ -1632,8 +1632,8 @@
               </p>
             </div>
 
-            <div class="bloc">
-              <div class="bloc-titre">{$t("interactions.pad.plages")}</div>
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("interactions.pad.plages")}</div>
               <div class="pad-plages">
                 {#each Array(NB_PLAGES) as _, i}
                   <button
@@ -1648,8 +1648,8 @@
               </p>
             </div>
 
-            <div class="bloc">
-              <div class="bloc-titre">{$t("interactions.pad.touches", { n: padPlage + 1 })}</div>
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("interactions.pad.touches", { n: padPlage + 1 })}</div>
               <div class="pad-grille">
                 {#each DISPOSITION_PAD as ligne}
                   {#each ligne as code}
@@ -1680,17 +1680,17 @@
           </div>
 
           <!-- Panneau droit : config de la touche sélectionnée -->
-          <div class="alerte-detail">
+          <div class="md-detail">
             {#if padSelCode && padSel}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.pad.toucheTitre", { touche: NOMS_AFFICHAGE[padSelCode] ?? padSelCode, plage: padPlage + 1 })}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.pad.toucheTitre", { touche: NOMS_AFFICHAGE[padSelCode] ?? padSelCode, plage: padPlage + 1 })}</div>
                 <p class="hint">
                   {$t("interactions.pad.hintTouche")}
                 </p>
               </div>
 
-              <div class="bloc">
-                <div class="bloc-titre">{$t("commun.media")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.media")}</div>
                 <div class="media-modes">
                   <button
                     class="mode-btn"
@@ -1747,8 +1747,8 @@
                 </p>
               </div>
 
-              <div class="bloc">
-                <div class="bloc-titre">{$t("commun.comportement")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.comportement")}</div>
                 <div class="alerte-2col">
                   <label class="alerte-field">
                     <span class="field-label">{$t("commun.dureeS")}</span>
@@ -1795,8 +1795,8 @@
                 {/if}
               </div>
 
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.testSuppression")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.testSuppression")}</div>
                 <div class="queue-actions">
                   <button class="alerte-test" onclick={onTesterTouchePad} disabled={!padActif && modeMediaPad(padSel) === "aucun"}>
                     {$t("interactions.pad.tester")}
@@ -1812,7 +1812,7 @@
                 </p>
               </div>
             {:else}
-              <div class="bloc">
+              <div class="modal-bloc">
                 <p class="hint">
                   {$t("interactions.pad.hintSelection")}
                 </p>
@@ -1825,25 +1825,25 @@
 
     {#if tab === "presentation"}
       <div class="tab-body">
-        <div class="alertes-layout">
+        <div class="md-layout">
           <!-- Colonne gauche : sections de l'onglet -->
-          <div class="alertes-liste">
+          <div class="md-liste">
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secPresentation === "recherche"}
               onclick={() => (secPresentation = "recherche")}
             >
               <span class="alerte-nom">{$t("interactions.presentation.secRecherche")}</span>
             </button>
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secPresentation === "favoris"}
               onclick={() => (secPresentation = "favoris")}
             >
               <span class="alerte-nom">{$t("interactions.presentation.secFavoris")}</span>
             </button>
             <button
-              class="alerte-select"
+              class="md-select"
               class:selected={secPresentation === "diffusion"}
               onclick={() => (secPresentation = "diffusion")}
               disabled={!presVisible}
@@ -1853,15 +1853,15 @@
           </div>
 
           <!-- Panneau droit : contenu de la section sélectionnée -->
-          <div class="alerte-detail">
+          <div class="md-detail">
             {#if presErreur}
               <p class="hint pres-erreur">{presErreur}</p>
             {/if}
 
             {#if secPresentation === "recherche"}
               <!-- Recherche de chaîne Twitch -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("interactions.presentation.rechercheTitre")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.presentation.rechercheTitre")}</div>
                 <div class="pres-search-row">
                   <input
                     class="search-input"
@@ -2031,9 +2031,9 @@
 
             {#if secPresentation === "diffusion"}
               <!-- Contrôles de la présentation en cours -->
-              <div class="bloc">
+              <div class="modal-bloc">
                 {#if presCourant}
-                  <div class="bloc-titre">{$t("interactions.presentation.enCoursTitre", { nom: presCourant.display_name })}</div>
+                  <div class="modal-bloc-titre">{$t("interactions.presentation.enCoursTitre", { nom: presCourant.display_name })}</div>
 
                   <div class="actions-bar">
                     <button class="action" onclick={onPresFermer}>
@@ -2069,7 +2069,7 @@
                     <div class="actions-bar">
                       {#if presFavCourant.son_voix}
                         <button
-                          class="test-btn"
+                          class="action small"
                           onclick={() =>
                             presentationAudioJouer("voix", presFavCourant.son_voix as string)
                           }
@@ -2079,7 +2079,7 @@
                       {/if}
                       {#if presFavCourant.son_musique}
                         <button
-                          class="test-btn"
+                          class="action small"
                           onclick={() =>
                             presentationAudioJouer("musique", presFavCourant.son_musique as string)
                           }
@@ -2088,7 +2088,7 @@
                         </button>
                       {/if}
                       <button
-                        class="test-btn stop"
+                        class="action small danger"
                         onclick={() => presentationAudioStopper("toutes")}
                       >
                         ⏹ {$t("interactions.presentation.stopSons")}
@@ -2115,7 +2115,7 @@
                           </div>
                           <div class="clip-actions">
                             <button
-                              class="test-btn"
+                              class="action small"
                               title={$t("interactions.presentation.jouerClip")}
                               onclick={() => onPresClipJouer(clip.id)}
                               disabled={presClipEnCours !== null}
@@ -2139,7 +2139,7 @@
 
     {#if tab === "planning"}
       <!-- Pleine largeur : la grille semaine + colonne jeux remplissent les
-           1200px de la modale (le max-width:680px de .tab-body est levé). -->
+           75rem de la modale (le max-width:42.5rem de .tab-body est levé). -->
       <div class="tab-body tab-body-planning">
         <PlanningTab />
       </div>
@@ -2157,8 +2157,8 @@
           {$t("interactions.position.hintIntro")}
         </p>
 
-        <div class="bloc">
-          <div class="bloc-titre">{$t("interactions.tabPosition")}</div>
+        <div class="modal-bloc">
+          <div class="modal-bloc-titre">{$t("interactions.tabPosition")}</div>
           <div class="alerte-presets">
             {#each Object.entries(PRESETS_OVERLAY) as [pos, label] (pos)}
               <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetOverlay(pos)}>{label}</button>
@@ -2231,61 +2231,12 @@
 </Modal>
 
 <style>
-  /* ===== Onglet Alertes (master-detail : liste gauche + détail droite) ===== */
-  .alertes-layout {
-    display: grid;
-    grid-template-columns: 170px 1fr;
-    gap: 0.5rem;
-    align-items: start;
-  }
-  .alertes-liste {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
+  /* ===== Master-detail (liste gauche + détail droite) : recette partagée
+     .md-* (app.css) — .alerte-item reste le wrapper ligne [select+toggle]. */
   .alerte-item {
     display: flex;
     align-items: center;
     gap: 0.25rem;
-  }
-  .alerte-select {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    min-width: 0;
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon-petit);
-    padding: 0.3rem 0.45rem;
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-    text-align: left;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .alerte-select:hover {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-ui);
-  }
-  .alerte-select.selected {
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
-      );
-    color: var(--texte);
-    border-color: var(--accent-ui);
-  }
-  .alerte-detail {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    min-width: 0;
   }
   .cmd-ajouter {
     margin-top: 0.25rem;
@@ -2420,7 +2371,7 @@
     padding: 0.6rem 0.9rem;
     background: color-mix(in srgb, var(--message-error-color) 15%, transparent);
     border: 1px solid color-mix(in srgb, var(--message-error-color) 60%, transparent);
-    border-radius: 8px;
+    border-radius: var(--rayon);
     color: var(--message-user-action-color);
     font-size: 0.85rem;
     font-weight: 600;
@@ -2537,7 +2488,7 @@
   }
 
   /* Corps : scroll, colonne de contenu contenue et centrée (pas étirée sur
-     les 900px de la modale) */
+     les 75rem de la modale) */
   .tab-body {
     flex: 1;
     overflow-y: auto;
@@ -2545,31 +2496,14 @@
     flex-direction: column;
     gap: 0.8rem;
     padding: 1rem;
-    max-width: 680px;
+    max-width: 42.5rem;
     width: 100%;
     margin: 0 auto;
   }
   /* Onglet Planning : la grille semaine + colonne jeux remplissent toute la
-     largeur de la modale (1200px) — pas de centrage à 680px. */
+     largeur de la modale (75rem) — pas de centrage à 42.5rem. */
   .tab-body-planning {
     max-width: none;
-  }
-  /* Bloc = carte visuelle (bordure + radius + padding) — structure claire. */
-  .bloc {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon);
-    padding: 0.6rem 0.9rem;
-    background: var(--fond-panneau);
-  }
-  .bloc-titre {
-    font-size: 0.85rem;
-    font-weight: 600;
-    opacity: 0.85;
-    border-bottom: 1px solid var(--bordure-ui);
-    padding-bottom: 0.2rem;
   }
   /* Le select police utilise la recette globale (app.css — select). */
   .police-select {
@@ -2600,7 +2534,7 @@
   }
   .range {
     width: 100%;
-    height: 14px;
+    height: 0.875rem;
     cursor: pointer;
     accent-color: var(--accent-ui);
     background: var(--fond);
@@ -2636,15 +2570,6 @@
     border-color: var(--accent-ui);
     font-weight: 600;
   }
-  .hint {
-    font-size: 0.75rem;
-    opacity: 0.5;
-  }
-  .field-label {
-    font-size: 0.7rem;
-    opacity: 0.6;
-  }
-
   /* Mini-canvas overlay : drag/resize du squelette */
   .mini-canvas {
     position: relative;
@@ -2738,8 +2663,8 @@
     border: 1px solid var(--bordure-ui);
   }
   .avatar {
-    width: 24px;
-    height: 24px;
+    width: 1.5rem;
+    height: 1.5rem;
     object-fit: cover;
     flex-shrink: 0;
   }
@@ -2806,7 +2731,7 @@
   .followers-list {
     flex: 1;
     overflow-y: auto;
-    max-height: 240px;
+    max-height: 15rem;
     border-right: 1px solid var(--bordure-ui);
     padding-right: 0.6rem;
   }
@@ -2905,7 +2830,7 @@
   .clip-picker {
     flex: 1;
     overflow-y: auto;
-    max-height: 240px;
+    max-height: 15rem;
     padding-left: 0.4rem;
   }
   .clip-picker h3 {
@@ -2938,8 +2863,8 @@
     flex-shrink: 0;
   }
   .thumb {
-    width: 80px;
-    height: 45px;
+    width: 5rem;
+    height: 2.8125rem;
     object-fit: cover;
     flex-shrink: 0;
   }
@@ -3012,55 +2937,6 @@
     opacity: 0.6;
   }
 
-  /* Boutons d'action — recette Aero */
-  .action {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    padding: 0.4rem 0.8rem;
-    cursor: pointer;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .action:hover {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover), var(--glow-ui);
-    border-color: var(--accent-ui);
-  }
-  .action:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-
-  /* Bouton "Tester" / "Stop" */
-  .test-btn {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    padding: 0.2rem 0.5rem;
-    cursor: pointer;
-    font-size: 0.75rem;
-    flex-shrink: 0;
-    margin-left: 0.3rem;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .test-btn:hover {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-ui);
-  }
-  .test-btn:disabled {
-    opacity: 0.4;
-    cursor: default;
-  }
-  .test-btn.stop {
-    background: var(--message-error-color);
-    color: #fff;
-    border-color: var(--message-error-color);
-    font-weight: 600;
-  }
-
   /* Scrollbars (variables CSS HUD de l'app).
      Appliquées aux 3 zones scrollables : .tab-body, .followers-list, .clip-picker. */
   .tab-body,
@@ -3072,7 +2948,7 @@
   .tab-body::-webkit-scrollbar,
   .followers-list::-webkit-scrollbar,
   .clip-picker::-webkit-scrollbar {
-    width: 8px;
+    width: 0.5rem;
   }
   .tab-body::-webkit-scrollbar-track,
   .followers-list::-webkit-scrollbar-track,

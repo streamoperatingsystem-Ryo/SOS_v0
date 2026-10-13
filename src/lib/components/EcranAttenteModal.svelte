@@ -325,7 +325,7 @@
     title={$t("ecranAttenteModal.titre")}
     onClose={onFermer}
     crochet="var(--crochet-cyan)"
-    maxWidth="560px"
+    maxWidth="35rem"
     hint={$t("ecranAttenteModal.hint")}
   >
     <div class="ea-modal-body">
@@ -351,11 +351,11 @@
           <p class="ea-info">{$t("ecranAttenteModal.aucunMedia")}</p>
         {/if}
         <div class="ea-boutons">
-          <button class="modal-action" disabled={enCours} onclick={onImporter}>
+          <button class="action" disabled={enCours} onclick={onImporter}>
             {mediaNom ? $t("ecranAttenteModal.remplacer") : $t("ecranAttenteModal.importerMedia")}
           </button>
           {#if mediaNom}
-            <button class="modal-action danger" disabled={enCours} onclick={onRetirerMedia}>
+            <button class="action danger" disabled={enCours} onclick={onRetirerMedia}>
               {$t("commun.retirer")}
             </button>
           {/if}
@@ -439,7 +439,7 @@
           <p class="ea-info">
             {$t("ecranAttenteModal.glisserInfo")}
           </p>
-          <button class="modal-action ea-btn-centrer" onclick={eaResetPos}>{$t("ecranAttenteModal.resetPos")}</button>
+          <button class="action ea-btn-centrer" onclick={eaResetPos}>{$t("ecranAttenteModal.resetPos")}</button>
         </div>
       </div>
 
@@ -505,7 +505,7 @@
             {/each}
           </select>
           <button
-            class="modal-action ea-btn-refresh"
+            class="action ea-btn-refresh"
             title={$t("ecranAttenteModal.rechargerSources")}
             onclick={() => void refreshSourcesAudio()}
           >↻</button>
@@ -524,17 +524,17 @@
       <!-- Contrôles -->
       <div class="modal-actions">
         {#if actif}
-          <button class="modal-action" disabled={enCours} onclick={onPauseToggle}>
+          <button class="action" disabled={enCours} onclick={onPauseToggle}>
             {enPause ? $t("ecranAttenteModal.reprendre") : $t("commun.pause")}
           </button>
-          <button class="modal-action danger" disabled={enCours} onclick={onArreter}>
+          <button class="action danger" disabled={enCours} onclick={onArreter}>
             {$t("commun.arreter")}
           </button>
-          <button class="modal-action primary" disabled={enCours} onclick={onLancer}>
+          <button class="action primary" disabled={enCours} onclick={onLancer}>
             {$t("ecranAttenteModal.relancer")}
           </button>
         {:else}
-          <button class="modal-action primary" disabled={enCours} onclick={onLancer}>
+          <button class="action primary" disabled={enCours} onclick={onLancer}>
             {$t("ecranAttenteModal.lancer")}
           </button>
         {/if}
@@ -610,7 +610,7 @@
     display: flex;
     gap: 0.4rem;
   }
-  .ea-boutons .modal-action {
+  .ea-boutons .action {
     flex: 1;
   }
   .ea-duree-row {
@@ -619,7 +619,7 @@
     gap: 0.5rem;
   }
   .ea-num {
-    width: 70px;
+    width: 4.375rem;
     padding: 0.4rem 0.5rem;
     background: var(--fond-controle);
     color: var(--texte);
@@ -674,7 +674,7 @@
     font-size: 0.8rem;
     opacity: 0.8;
     font-variant-numeric: tabular-nums;
-    width: 40px;
+    width: 2.5rem;
     text-align: right;
   }
   .ea-source-row {
@@ -754,8 +754,5 @@
     padding: 0.4rem 0.6rem;
     border: 1px solid var(--message-error-color);
     border-radius: var(--rayon-petit);
-  }
-  .modal-actions {
-    justify-content: flex-end;
   }
 </style>

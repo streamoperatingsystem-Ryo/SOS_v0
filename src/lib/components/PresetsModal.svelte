@@ -104,7 +104,7 @@
   title={mode === "onboarding" ? $t("presetsModal.titreOnboarding") : $t("presetsModal.titreCreation")}
   onClose={mode === "onboarding" ? fermerOnboarding : fermer}
   crochet="var(--accent-rose)"
-  maxWidth="760px"
+  maxWidth="48rem"
   hint={mode === "onboarding"
     ? $t("presetsModal.hintOnboarding")
     : $t("presetsModal.hintCreation")}
@@ -153,7 +153,7 @@
 
   {#if mode === "onboarding"}
     <div class="onboarding-footer">
-      <button class="modal-action" onclick={fermerOnboarding} disabled={occupe}>
+      <button class="action" onclick={fermerOnboarding} disabled={occupe}>
         {$t("presetsModal.partirVierge")}
       </button>
     </div>
@@ -188,13 +188,13 @@
   }
   .grille {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(13.4375rem, 1fr));
     gap: 0.7rem;
     padding: 0.8rem 1rem 1rem;
     overflow-y: auto;
   }
   /* Card preset : recette « verre sombre » (btn-surface + inset) — la couleur
-     d'identité vit en bordure/glow au survol (pattern .modal-action). */
+     d'identité vit en bordure/glow au survol (pattern .action). */
   .preset-card {
     display: flex;
     flex-direction: column;
@@ -224,8 +224,8 @@
     cursor: default;
   }
   .preset-ico {
-    width: 26px;
-    height: 26px;
+    width: 1.625rem;
+    height: 1.625rem;
     color: var(--accent-ui);
     margin-bottom: 0.2rem;
     flex-shrink: 0;

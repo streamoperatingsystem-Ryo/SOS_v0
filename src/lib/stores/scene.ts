@@ -609,7 +609,8 @@ export async function setMusiqueConfig(
 
 /// Défauts à la première activation d'un module — positions reprises de la
 /// maquette de référence (1920×1080 : horloge bas-centre, musique bas-droite,
-/// objectifs bas-gauche), mises à l'échelle du canvas courant.
+/// objectifs bas-gauche, équaliseur bandeau pleine largeur tout en bas),
+/// mises à l'échelle du canvas courant.
 export function moduleDefaut(id: ModuleId, canvasW: number, canvasH: number): ModuleHud {
   const sx = canvasW / 1920;
   const sy = canvasH / 1080;
@@ -621,6 +622,12 @@ export function moduleDefaut(id: ModuleId, canvasW: number, canvasH: number): Mo
   if (id === "musique") {
     return { ...base, x: 1320 * sx, y: 830 * sy, largeur: 540 * sx, hauteur: 90 * sy,
       afficherTemps: true };
+  }
+  if (id === "equaliseur") {
+    // Bandeau pleine largeur tout en bas — overlay translucide rendu en
+    // diffusion sous les widgets (le cadre/l'opacité n'y ont pas d'effet).
+    return { ...base, x: 0, y: 950 * sy, largeur: 1920 * sx, hauteur: 130 * sy,
+      eqMicro: true, eqBulles: true };
   }
   return { ...base, x: 70 * sx, y: 720 * sy, largeur: 300 * sx, hauteur: 170 * sy,
     titre: "", lignes: [] };

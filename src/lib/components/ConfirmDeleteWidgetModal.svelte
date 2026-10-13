@@ -38,8 +38,8 @@
   <Modal title={$t("confirmSupprWidget.titre")} onClose={onCancel} maxWidth="24rem" hint={$t("confirmSupprWidget.hint")} crochet="var(--message-error-color)">
     <div class="confirm-body">
       <div class="modal-actions confirm-actions">
-        <button class="modal-action danger" onclick={onConfirm}>{$t("commun.oui")}</button>
-        <button class="modal-action" onclick={onCancel}>{$t("commun.non")}</button>
+        <button class="action danger" onclick={onConfirm}>{$t("commun.oui")}</button>
+        <button class="action" onclick={onCancel}>{$t("commun.non")}</button>
       </div>
     </div>
   </Modal>

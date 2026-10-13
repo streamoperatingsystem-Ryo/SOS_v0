@@ -7,6 +7,7 @@
 mod imp {
     use serde::Serialize;
     use std::collections::HashMap;
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
     use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
     use windows::Win32::System::Diagnostics::ToolHelp::{
@@ -37,6 +38,10 @@ mod imp {
     /// Fallback WMI si Get-PnpDevice indisponible (Windows 7/8).
     pub fn enumerate_cameras() -> Vec<String> {
         // Essayer Get-PnpDevice (Windows 10+), fallback WMI.
+        // CREATE_NO_WINDOW : powershell est un exe console — sans ce flag,
+        // Windows crée une console visible à chaque spawn en build GUI
+        // installée (flash + vol de focus toutes les 3 s via le watch
+        // hot-plug caméra — invisible en dev, console partagée).
         let output = Command::new("powershell")
             .args([
                 "-NoProfile",
@@ -44,6 +49,7 @@ mod imp {
                 "-Command",
                 "try { Get-PnpDevice -Class Camera,Image -Status OK | Select-Object -ExpandProperty FriendlyName } catch { Get-WmiObject Win32_PnPEntity | Where-Object { $_.PNPClass -eq 'Camera' -or $_.PNPClass -eq 'Image' } | Where-Object { $_.Status -eq 'OK' } | Select-Object -ExpandProperty Name }",
             ])
+            .creation_flags(0x08000000) // CREATE_NO_WINDOW
             .output();
 
         let cameras = match output {

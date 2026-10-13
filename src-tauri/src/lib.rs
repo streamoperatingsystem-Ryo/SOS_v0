@@ -7,6 +7,7 @@ mod fenetre;
 mod just_chatting;
 mod pad_numerique;
 mod input_viewer;
+mod equaliseur;
 mod kick;
 mod mask_png;
 mod musique;
@@ -347,7 +348,16 @@ fn remux_to_mp4(app: &AppHandle, src: &std::path::Path, dest: &std::path::Path) 
         .shell()
         .sidecar("ffmpeg")
         .map_err(|e| format!("ffmpeg sidecar indisponible: {}", e))?;
-    let out = std::process::Command::from(sidecar)
+    let mut cmd = std::process::Command::from(sidecar);
+    // CREATE_NO_WINDOW : ffmpeg est un exe console — sans ce flag, Windows
+    // crée une console visible à chaque remux en build GUI installée
+    // (flash + vol de focus, même classe de bug que le watch caméra).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        cmd.creation_flags(0x08000000);
+    }
+    let out = cmd
         .arg("-y")
         .arg("-i")
         .arg(src)
@@ -3750,8 +3760,19 @@ pub fn run() {
                 current_id: current_id.clone(),
                 snapshot_tx: snapshot_tx.clone(),
                 chat_tx: chat_tx.clone(),
+                eq: equaliseur::EqualiseurState::new(chat_tx.clone()),
             };
             app.manage(state.clone());
+
+            // État Équaliseur — sync initiale au boot : si la scène chargée a
+            // le module déjà actif (persisté), la capture démarre dès
+            // maintenant (push_snapshot ne rejoue que sur mutation de scène).
+            {
+                let s = state.scene.lock().unwrap();
+                state
+                    .eq
+                    .sync(s.modules.as_ref().and_then(|m| m.equaliseur.as_ref()));
+            }
 
             // État Squelette de position unifié (source de vérité unique pour
             // la position/taille des overlays "clip de bienvenue" et "alertes").

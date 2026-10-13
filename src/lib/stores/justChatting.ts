@@ -11,7 +11,8 @@
 // laisse la source SOS-Trou-* visible si le fond est transparent ou si le
 // fond EST une capture (SOS-Fond-* plein canvas). Le toggle appelle donc
 // `scene_sync_captures` avec une SCÈNE DÉRIVÉE en mémoire (copie complète :
-// caméra + chats aux rects JC, autres widgets absents, bgObsSource vidé) —
+// caméra + chats aux rects JC, autres widgets absents, bgObsSource vidé,
+// modules HUD vidés) —
 // le contrat unique obs_trou::sync_scene_captures désactive alors les items
 // orphelins (jamais RemoveInput). La copie n'est jamais écrite : ni
 // state.scene, ni disque.
@@ -98,9 +99,11 @@ function layoutCourant(scene: Scene): JcLayout | null {
 /// Scène DÉRIVÉE complète (copie en mémoire, jamais persistée) : caméra et
 /// chat(s) repositionnés aux rects JC en pixels canvas, autres widgets
 /// absents, bgObsSource vidé (sinon la capture plein canvas resterait
-/// affichée). canvasW/H inchangés — le contrat serde est celui d'une scène
-/// complète, pas un patch. Même résultat que la dérivation de
-/// diffusion.html (jcDeriverScene) — ici elle sert à la sync OBS.
+/// affichée), modules HUD vidés (parité avec la dérivation diffusion —
+/// horloge/musique/objectifs/équaliseur masqués pendant JC). canvasW/H
+/// inchangés — le contrat serde est celui d'une scène complète, pas un
+/// patch. Même résultat que la dérivation de diffusion.html
+/// (jcDeriverScene) — ici elle sert à la sync OBS.
 export function sceneDerivee(scene: Scene): Scene | null {
   const l = layoutCourant(scene);
   if (!l) return null;
@@ -118,7 +121,7 @@ export function sceneDerivee(scene: Scene): Scene | null {
         hauteur: r.h * ch,
       };
     });
-  return { ...scene, widgets, bgObsSource: undefined };
+  return { ...scene, widgets, bgObsSource: undefined, modules: {} };
 }
 
 /// Sync OBS du mode actif : scène dérivée (sync_scene_captures désactive

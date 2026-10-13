@@ -567,7 +567,7 @@
   }
 </script>
 
-<Modal title={$t("moderationModal.titre")} onClose={onFermer} maxWidth="900px" crochet="var(--crochet-indigo)">
+<Modal title={$t("moderationModal.titre")} onClose={onFermer} maxWidth="56rem" crochet="var(--crochet-indigo)">
   <div class="tabs">
     <button class="tab" class:active={tab === "twitch"} onclick={() => (tab = "twitch")}>
       Twitch
@@ -596,60 +596,60 @@
       </div>
     {:else}
       <div class="tab-body">
-        <div class="mod-layout">
+        <div class="md-layout">
           <!-- Colonne gauche : sections -->
-          <div class="mod-sections">
+          <div class="md-liste">
             <button
-              class="mod-select"
+              class="md-select"
               class:selected={sec === "communaute"}
               onclick={() => (sec = "communaute")}
             >
               <span class="mod-nom">{$t("moderationModal.secCommunaute")}</span>
             </button>
             <button
-              class="mod-select"
+              class="md-select"
               class:selected={sec === "direct"}
               onclick={() => (sec = "direct")}
             >
               <span class="mod-nom">{$t("moderationModal.enDirect")}</span>
             </button>
             <button
-              class="mod-select"
+              class="md-select"
               class:selected={sec === "viewers"}
               onclick={() => (sec = "viewers")}
             >
               <span class="mod-nom">{$t("moderationModal.secViewers")}</span>
             </button>
             <button
-              class="mod-select"
+              class="md-select"
               class:selected={sec === "vips"}
               onclick={() => (sec = "vips")}
             >
               <span class="mod-nom">{$t("moderationModal.secVips")} ({vipsData?.length ?? "…"})</span>
             </button>
             <button
-              class="mod-select"
+              class="md-select"
               class:selected={sec === "mods"}
               onclick={() => (sec = "mods")}
             >
               <span class="mod-nom">{$t("moderationModal.secMods")} ({modsData?.length ?? "…"})</span>
             </button>
             <button
-              class="mod-select"
+              class="md-select"
               class:selected={sec === "bannis"}
               onclick={() => (sec = "bannis")}
             >
               <span class="mod-nom">{$t("moderationModal.secBannis")} ({bannisData?.length ?? "…"})</span>
             </button>
             <button
-              class="mod-select"
+              class="md-select"
               class:selected={sec === "messages"}
               onclick={() => (sec = "messages")}
             >
               <span class="mod-nom">{$t("moderationModal.secMessages")}</span>
             </button>
             <button
-              class="mod-select"
+              class="md-select"
               class:selected={sec === "unfollows"}
               onclick={() => (sec = "unfollows")}
             >
@@ -658,12 +658,12 @@
           </div>
 
           <!-- Panneau droit : contenu de la section -->
-          <div class="mod-detail">
+          <div class="md-detail">
             {#if sec === "communaute"}
               <!-- Broadcaster -->
               {#if broadcasterData}
-                <div class="bloc">
-                  <div class="bloc-titre">{$t("moderationModal.chaine")}</div>
+                <div class="modal-bloc">
+                  <div class="modal-bloc-titre">{$t("moderationModal.chaine")}</div>
                   <div class="broadcaster">
                     {#if broadcasterData.profile_image_url}
                       <img
@@ -681,8 +681,8 @@
               {/if}
 
               <!-- Viewers live -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.viewersLive")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.viewersLive")}</div>
                 <div class="communaute-row">
                   <span class="field-label">{$t("moderationModal.enDirect")}</span>
                   <span class="communaute-val">
@@ -696,8 +696,8 @@
               </div>
 
               <!-- Followers -->
-              <div class="bloc">
-                <div class="bloc-titre">Followers ({followersData?.total ?? "…"})</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">Followers ({followersData?.total ?? "…"})</div>
                 {#if followersData}
                   <div class="liste-scroll">
                     {#each followersData.liste as f}
@@ -718,8 +718,8 @@
               </div>
 
               <!-- Subs -->
-              <div class="bloc">
-                <div class="bloc-titre">
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">
                   Subs ({subsData?.total ?? "…"} · {subsData?.points ?? "…"} pts)
                 </div>
                 {#if subsData && subsData.liste.length > 0}
@@ -749,8 +749,8 @@
               </button>
             {:else if sec === "direct"}
               <!-- Mode Bouclier -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.live.shield")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.live.shield")}</div>
                 <div class="communaute-row">
                   <span class="field-label">{$t("moderationModal.live.shieldStatut")}</span>
                   <span class="communaute-val">
@@ -781,11 +781,11 @@
                     <p class="confirm-texte">{$t("moderationModal.live.shieldAvertissement")}</p>
                     <div class="confirm-actions">
                       <button
-                        class="btn-mod ban"
+                        class="action btn-mod ban"
                         onclick={onShieldConfirmer}
                         disabled={actionEnCours === "shield"}
                       >{$t("moderationModal.live.shieldConfirmer")}</button>
-                      <button class="btn-mod" onclick={() => (shieldConfirm = false)}>
+                      <button class="action btn-mod" onclick={() => (shieldConfirm = false)}>
                         {$t("moderationModal.live.shieldAnnuler")}
                       </button>
                     </div>
@@ -794,8 +794,8 @@
               </div>
 
               <!-- Infos du stream (titre, catégorie, tags) -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.live.infos")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.live.infos")}</div>
                 <label class="field-label" for="live-titre">{$t("moderationModal.live.titreStream")}</label>
                 <input id="live-titre" type="text" maxlength="140" bind:value={liveTitre} />
                 <label class="field-label" for="live-cat">{$t("moderationModal.live.categorie")}</label>
@@ -846,8 +846,8 @@
               </div>
 
               <!-- Modes du chat -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.live.modes")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.live.modes")}</div>
                 {#if chatSet === null}
                   <p class="hint">{$t("commun.chargement")}</p>
                 {:else}
@@ -866,7 +866,7 @@
                       <input type="number" min="3" max="120" bind:value={slowTime} />
                       <span class="hint-inline">{$t("moderationModal.live.delaiLent")}</span>
                       <button
-                        class="btn-mod"
+                        class="action btn-mod"
                         onclick={onDelaiLent}
                         disabled={actionEnCours === "slow_time"}
                       >✓</button>
@@ -908,7 +908,7 @@
                       <input type="number" min="0" max="129600" bind:value={followerDur} />
                       <span class="hint-inline">{$t("moderationModal.live.dureeFollowers")}</span>
                       <button
-                        class="btn-mod"
+                        class="action btn-mod"
                         onclick={onDureeFollowers}
                         disabled={actionEnCours === "follower_dur"}
                       >✓</button>
@@ -918,8 +918,8 @@
               </div>
 
               <!-- Annonces colorées -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.live.annonces")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.live.annonces")}</div>
                 <div class="recherche-row">
                   <input
                     type="text"
@@ -946,8 +946,8 @@
               </div>
 
               <!-- Actions en direct : marqueur, pub, raid -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.live.actions")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.live.actions")}</div>
                 <div class="recherche-row">
                   <input
                     type="text"
@@ -981,7 +981,7 @@
                   />
                   {#if raidData}
                     <button
-                      class="btn-mod danger"
+                      class="action btn-mod danger"
                       onclick={onAnnulerRaid}
                       disabled={actionEnCours === "raid-cancel"}
                     >{$t("moderationModal.live.raidAnnuler")}</button>
@@ -1010,8 +1010,8 @@
               </div>
 
               <!-- File AutoMod (EventSub automod.message.hold) -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.live.automod", { n: automodData.length })}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.live.automod", { n: automodData.length })}</div>
                 {#if automodData.length === 0}
                   <p class="hint">{$t("moderationModal.live.automodVide")}</p>
                 {:else}
@@ -1027,12 +1027,12 @@
                         </div>
                         <div class="viewer-actions">
                           <button
-                            class="btn-mod mod"
+                            class="action btn-mod mod"
                             disabled={actionEnCours === `automod-${m.msg_id}`}
                             onclick={() => onAutomodResoudre(m.msg_id, true)}
                           >{$t("moderationModal.live.autoriser")}</button>
                           <button
-                            class="btn-mod danger"
+                            class="action btn-mod danger"
                             disabled={actionEnCours === `automod-${m.msg_id}`}
                             onclick={() => onAutomodResoudre(m.msg_id, false)}
                           >{$t("moderationModal.live.refuser")}</button>
@@ -1044,8 +1044,8 @@
               </div>
 
               <!-- Demandes d'unban -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.live.unban")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.live.unban")}</div>
                 {#if unbanData === null}
                   <p class="hint">{$t("commun.chargement")}</p>
                 {:else if unbanData.length === 0}
@@ -1063,12 +1063,12 @@
                         </div>
                         <div class="viewer-actions">
                           <button
-                            class="btn-mod debannir"
+                            class="action btn-mod debannir"
                             disabled={actionEnCours === `unbanreq-${u.id}`}
                             onclick={() => onUnbanResoudre(u.id, true)}
                           >{$t("moderationModal.live.approuver")}</button>
                           <button
-                            class="btn-mod danger"
+                            class="action btn-mod danger"
                             disabled={actionEnCours === `unbanreq-${u.id}`}
                             onclick={() => onUnbanResoudre(u.id, false)}
                           >{$t("moderationModal.live.refuser")}</button>
@@ -1085,8 +1085,8 @@
               {/if}
             {:else if sec === "viewers"}
               <!-- Recherche par pseudo -->
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.rechercherViewer")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.rechercherViewer")}</div>
                 <div class="recherche-row">
                   <input
                     type="text"
@@ -1099,7 +1099,7 @@
                   </button>
                 </div>
                 {#if rechercheErreur}
-                  <p class="hint-erreur">{rechercheErreur}</p>
+                  <p class="hint msg-err">{rechercheErreur}</p>
                 {/if}
                 {#if resultatRecherche}
                   {@const r = resultatRecherche}
@@ -1107,22 +1107,22 @@
                     <span class="viewer-login">{r.display_name}</span>
                     <div class="viewer-actions">
                       <button
-                        class="btn-mod ban"
+                        class="action btn-mod ban"
                         disabled={actionEnCours === `ban-${r.user_id}`}
                         onclick={() => onBan(r.user_id)}
                       >Ban</button>
                       <button
-                        class="btn-mod timeout"
+                        class="action btn-mod timeout"
                         disabled={actionEnCours === `timeout-${r.user_id}`}
                         onclick={() => onTimeout(r.user_id, 600)}
                       >10min</button>
                       <button
-                        class="btn-mod vip"
+                        class="action btn-mod vip"
                         disabled={actionEnCours === `addvip-${r.user_id}`}
                         onclick={() => onAjouterVip(r.user_id)}
                       >+VIP</button>
                       <button
-                        class="btn-mod mod"
+                        class="action btn-mod mod"
                         disabled={actionEnCours === `addmod-${r.user_id}`}
                         onclick={() => onAjouterModerateur(r.user_id)}
                       >+Mod</button>
@@ -1132,8 +1132,8 @@
               </div>
 
               <!-- Liste followers existante (réutilisée de communaute.ts) -->
-              <div class="bloc">
-                <div class="bloc-titre">Followers ({followersData?.total ?? "…"})</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">Followers ({followersData?.total ?? "…"})</div>
                 {#if followersData}
                   <div class="liste-scroll">
                     {#each followersFiltres as f}
@@ -1146,22 +1146,22 @@
                         </div>
                         <div class="viewer-actions">
                           <button
-                            class="btn-mod ban"
+                            class="action btn-mod ban"
                             disabled={actionEnCours === `ban-${f.user_id}`}
                             onclick={() => onBan(f.user_id)}
                           >Ban</button>
                           <button
-                            class="btn-mod timeout"
+                            class="action btn-mod timeout"
                             disabled={actionEnCours === `timeout-${f.user_id}`}
                             onclick={() => onTimeout(f.user_id, 600)}
                           >10min</button>
                           <button
-                            class="btn-mod vip"
+                            class="action btn-mod vip"
                             disabled={actionEnCours === `addvip-${f.user_id}`}
                             onclick={() => onAjouterVip(f.user_id)}
                           >+VIP</button>
                           <button
-                            class="btn-mod mod"
+                            class="action btn-mod mod"
                             disabled={actionEnCours === `addmod-${f.user_id}`}
                             onclick={() => onAjouterModerateur(f.user_id)}
                           >+Mod</button>
@@ -1176,8 +1176,8 @@
 
               <!-- Liste subs existante -->
               {#if subsData && subsData.liste.length > 0}
-                <div class="bloc">
-                  <div class="bloc-titre">Subs ({subsData.total})</div>
+                <div class="modal-bloc">
+                  <div class="modal-bloc-titre">Subs ({subsData.total})</div>
                   <div class="liste-scroll">
                     {#each subsData.liste as s}
                       <div class="viewer-row">
@@ -1192,22 +1192,22 @@
                         </span>
                         <div class="viewer-actions">
                           <button
-                            class="btn-mod ban"
+                            class="action btn-mod ban"
                             disabled={actionEnCours === `ban-${s.user_id}`}
                             onclick={() => onBan(s.user_id)}
                           >Ban</button>
                           <button
-                            class="btn-mod timeout"
+                            class="action btn-mod timeout"
                             disabled={actionEnCours === `timeout-${s.user_id}`}
                             onclick={() => onTimeout(s.user_id, 600)}
                           >10min</button>
                           <button
-                            class="btn-mod vip"
+                            class="action btn-mod vip"
                             disabled={actionEnCours === `addvip-${s.user_id}`}
                             onclick={() => onAjouterVip(s.user_id)}
                           >+VIP</button>
                           <button
-                            class="btn-mod mod"
+                            class="action btn-mod mod"
                             disabled={actionEnCours === `addmod-${s.user_id}`}
                             onclick={() => onAjouterModerateur(s.user_id)}
                           >+Mod</button>
@@ -1218,8 +1218,8 @@
                 </div>
               {/if}
             {:else if sec === "vips"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.vipsActuels")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.vipsActuels")}</div>
                 {#if vipsData === null}
                   <p class="hint">{$t("commun.chargement")}</p>
                 {:else if vipsData.length === 0}
@@ -1236,7 +1236,7 @@
                         </div>
                         <div class="viewer-actions">
                           <button
-                            class="btn-mod retirer"
+                            class="action btn-mod retirer"
                             disabled={actionEnCours === `rmvip-${v.user_id}`}
                             onclick={() => onRetirerVip(v.user_id)}
                           >{$t("moderationModal.retirerVip")}</button>
@@ -1247,8 +1247,8 @@
                 {/if}
               </div>
             {:else if sec === "mods"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.modsActuels")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.modsActuels")}</div>
                 {#if modsData === null}
                   <p class="hint">{$t("commun.chargement")}</p>
                 {:else if modsData.length === 0}
@@ -1265,7 +1265,7 @@
                         </div>
                         <div class="viewer-actions">
                           <button
-                            class="btn-mod retirer"
+                            class="action btn-mod retirer"
                             disabled={actionEnCours === `rmmod-${m.user_id}`}
                             onclick={() => onRetirerMod(m.user_id)}
                           >{$t("moderationModal.retirerMod")}</button>
@@ -1276,8 +1276,8 @@
                 {/if}
               </div>
             {:else if sec === "bannis"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.bannisTimeouts")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.bannisTimeouts")}</div>
                 {#if bannisData === null}
                   <p class="hint">{$t("commun.chargement")}</p>
                 {:else if bannisData.length === 0}
@@ -1302,7 +1302,7 @@
                         </div>
                         <div class="viewer-actions">
                           <button
-                            class="btn-mod debannir"
+                            class="action btn-mod debannir"
                             disabled={actionEnCours === `unban-${b.user_id}`}
                             onclick={() => onUnban(b.user_id)}
                           >{$t("moderationModal.debannir")}</button>
@@ -1313,8 +1313,8 @@
                 {/if}
               </div>
             {:else if sec === "messages"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.messagesRecents")}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.messagesRecents")}</div>
                 <p class="hint">{$t("moderationModal.messagesHint")}</p>
                 {#if messagesTwitch.length === 0}
                   <p class="hint">{$t("moderationModal.aucunMessage")}</p>
@@ -1325,7 +1325,7 @@
                         <span class="msg-pseudo">{m.pseudo}</span>
                         <span class="msg-texte">{m.texte}</span>
                         <button
-                          class="btn-mod suppr-msg"
+                          class="action btn-mod suppr-msg"
                           disabled={actionEnCours === `delmsg-${m.message_id}`}
                           onclick={() => onSupprimerMessage(m.message_id!)}
                           title={$t("moderationModal.supprimerMessageTitle")}
@@ -1336,8 +1336,8 @@
                 {/if}
               </div>
             {:else if sec === "unfollows"}
-              <div class="bloc">
-                <div class="bloc-titre">{$t("moderationModal.unfollowsDetectes", { n: unfollowsData?.length ?? "…" })}</div>
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("moderationModal.unfollowsDetectes", { n: unfollowsData?.length ?? "…" })}</div>
                 <p class="hint">
                   {$t("moderationModal.unfollowsHint")}
                 </p>
@@ -1367,7 +1367,7 @@
 
         <!-- Barre d'actions globales -->
         <div class="mod-actions-globales">
-          <button class="btn-mod danger" onclick={() => void onClearChat()} disabled={actionEnCours === "clear"}>
+          <button class="action btn-mod danger" onclick={() => void onClearChat()} disabled={actionEnCours === "clear"}>
             {$t("moderationModal.viderChat")}
           </button>
           <button class="action btn-mod" onclick={() => void chargerToutMod()}>
@@ -1383,8 +1383,8 @@
       {:else}
         <!-- Channel info -->
         {#if ytChannel}
-          <div class="bloc">
-            <div class="bloc-titre">{$t("moderationModal.chaine")}</div>
+          <div class="modal-bloc">
+            <div class="modal-bloc-titre">{$t("moderationModal.chaine")}</div>
             <div class="broadcaster">
               {#if ytChannel.profile_image_url}
                 <img
@@ -1402,8 +1402,8 @@
         {/if}
 
         <!-- Viewers live -->
-        <div class="bloc">
-          <div class="bloc-titre">{$t("moderationModal.viewersLive")}</div>
+        <div class="modal-bloc">
+          <div class="modal-bloc-titre">{$t("moderationModal.viewersLive")}</div>
           <div class="communaute-row">
             <span class="field-label">{$t("moderationModal.enDirect")}</span>
             <span class="communaute-val">
@@ -1417,8 +1417,8 @@
         </div>
 
         <!-- Stats -->
-        <div class="bloc">
-          <div class="bloc-titre">{$t("moderationModal.statistiques")}</div>
+        <div class="modal-bloc">
+          <div class="modal-bloc-titre">{$t("moderationModal.statistiques")}</div>
           <div class="communaute-row">
             <span class="field-label">{$t("moderationModal.vuesTotales")}</span>
             <span class="communaute-val">{ytChannel?.view_count ?? "…"}</span>
@@ -1430,8 +1430,8 @@
         </div>
 
         <!-- Members -->
-        <div class="bloc">
-          <div class="bloc-titre">{$t("moderationModal.membersTitre", { n: ytMembers?.total ?? "…" })}</div>
+        <div class="modal-bloc">
+          <div class="modal-bloc-titre">{$t("moderationModal.membersTitre", { n: ytMembers?.total ?? "…" })}</div>
           {#if ytMembers && ytMembers.liste.length > 0}
             <div class="liste-scroll">
               {#each ytMembers.liste as m}
@@ -1502,80 +1502,13 @@
     flex-direction: column;
     gap: 0.8rem;
     padding: 1rem;
-    max-width: 760px;
+    max-width: 47.5rem;
     width: 100%;
     margin: 0 auto;
   }
 
-  /* Layout master-detail */
-  .mod-layout {
-    display: grid;
-    grid-template-columns: 170px 1fr;
-    gap: 0.5rem;
-    align-items: start;
-  }
-  .mod-sections {
-    display: flex;
-    flex-direction: column;
-    gap: 0.25rem;
-  }
-  .mod-select {
-    flex: 1;
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    min-width: 0;
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon-petit);
-    padding: 0.3rem 0.45rem;
-    font: inherit;
-    font-size: 0.85rem;
-    cursor: pointer;
-    text-align: left;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .mod-select:hover {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-ui);
-  }
-  .mod-select.selected {
-    background:
-      linear-gradient(
-        180deg,
-        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
-        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
-      );
-    color: var(--texte);
-    border-color: var(--accent-ui);
-  }
-  .mod-detail {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    min-width: 0;
-  }
-
-  /* Bloc = carte visuelle */
-  .bloc {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon);
-    padding: 0.6rem 0.9rem;
-    background: var(--fond-panneau);
-  }
-  .bloc-titre {
-    font-size: 0.85rem;
-    font-weight: 600;
-    opacity: 0.85;
-    border-bottom: 1px solid var(--bordure-ui);
-    padding-bottom: 0.2rem;
-  }
+  /* Layout master-detail + blocs : recettes partagées .md-* / .modal-bloc
+     (app.css). Les champs du détail gardent un resserrage local. */
 
   /* Recherche */
   .recherche-row {
@@ -1585,8 +1518,8 @@
   .recherche-row input {
     flex: 1;
   }
-  .mod-detail input[type="text"],
-  .mod-detail input[type="number"] {
+  .md-detail input[type="text"],
+  .md-detail input[type="number"] {
     background: var(--fond-controle);
     color: var(--texte);
     border: 1px solid var(--bordure-ui);
@@ -1594,15 +1527,10 @@
     font: inherit;
     font-size: 0.85rem;
   }
-  .mod-detail input[type="text"]:focus,
-  .mod-detail input[type="number"]:focus {
+  .md-detail input[type="text"]:focus,
+  .md-detail input[type="number"]:focus {
     outline: none;
     border-color: var(--accent-ui);
-  }
-  .hint-erreur {
-    font-size: 0.8rem;
-    color: var(--message-error-color);
-    margin: 0;
   }
 
   /* Ligne viewer */
@@ -1656,28 +1584,14 @@
     flex-shrink: 0;
   }
 
-  /* Boutons d'action */
+  /* Boutons d'action compacts : base = recette .action globale (app.css),
+     posée via class="action btn-mod". Ici : taille compacte + variantes
+     couleur uniquement. */
   .btn-mod {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon-petit);
     padding: 0.15rem 0.4rem;
-    font: inherit;
     font-size: 0.72rem;
-    cursor: pointer;
     white-space: nowrap;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .btn-mod:hover:not(:disabled) {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-ui);
-  }
-  .btn-mod:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
+    text-align: center;
   }
   .btn-mod.ban {
     border-color: color-mix(in srgb, var(--message-error-color) 40%, var(--bordure-ui));
@@ -1715,7 +1629,7 @@
 
   /* Liste scrollable */
   .liste-scroll {
-    max-height: 300px;
+    max-height: 18.75rem;
     overflow-y: auto;
     display: flex;
     flex-direction: column;
@@ -1736,7 +1650,7 @@
     font-size: 0.8rem;
     font-weight: 600;
     flex-shrink: 0;
-    max-width: 120px;
+    max-width: 7.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -1760,12 +1674,7 @@
     border-top: 1px solid var(--bordure-ui);
   }
 
-  /* Hints */
-  .hint {
-    font-size: 0.8rem;
-    opacity: 0.6;
-    margin: 0;
-  }
+  /* Hints : .hint = recette globale (app.css) */
   .hint-centre {
     font-size: 0.9rem;
     opacity: 0.6;
@@ -1789,7 +1698,7 @@
   /* Scrollbar (même style que InteractionViewerModal) */
   .tab-body::-webkit-scrollbar,
   .liste-scroll::-webkit-scrollbar {
-    width: 6px;
+    width: 0.375rem;
   }
   .tab-body::-webkit-scrollbar-track,
   .liste-scroll::-webkit-scrollbar-track {
@@ -1979,8 +1888,8 @@
   }
   /* Aperçu de la jaquette du jeu choisi, à côté du champ Catégorie. */
   .jacquette {
-    width: 52px;
-    height: 72px;
+    width: 3.25rem;
+    height: 4.5rem;
     object-fit: cover;
     border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);

@@ -150,7 +150,7 @@
 <Modal
   title={$t("speedrunConfig.titre")}
   crochet="var(--message-error-color)"
-  maxWidth="700px"
+  maxWidth="44rem"
   hint={$t("speedrunConfig.hint")}
   onClose={onFermer}
 >
@@ -284,7 +284,7 @@
     scrollbar-width: thin;
     scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
   }
-  .asl-liste::-webkit-scrollbar { width: 5px; }
+  .asl-liste::-webkit-scrollbar { width: 0.3125rem; }
   .asl-liste::-webkit-scrollbar-thumb {
     background: rgba(255, 255, 255, 0.2);
     border-radius: 999px;

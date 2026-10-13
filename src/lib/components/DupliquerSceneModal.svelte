@@ -64,7 +64,7 @@
     title={$t("dupliquerModal.titre")}
     onClose={fermer}
     crochet="var(--accent-rose)"
-    maxWidth="420px"
+    maxWidth="26rem"
     hint={source
       ? $t("dupliquerModal.hintNom", { nom: source.nom })
       : $t("dupliquerModal.hintGenerique")}
@@ -89,10 +89,10 @@
         />
       </div>
       <div class="modal-actions">
-        <button class="modal-action" onclick={fermer} disabled={occupe}>
+        <button class="action" onclick={fermer} disabled={occupe}>
           {$t("commun.annuler")}
         </button>
-        <button class="modal-action primary" onclick={() => void onValider()} disabled={occupe}>
+        <button class="action primary" onclick={() => void onValider()} disabled={occupe}>
           {$t("commun.dupliquer")}
         </button>
       </div>

@@ -43,8 +43,8 @@
       <div class="code-box">
         <span class="code">{device?.user_code || ytDevice?.user_code}</span>
       </div>
-      <button class="modal-action" onclick={onOuvrirLien}>{$t("twitchDevice.ouvrirLien")}</button>
-      <button class="modal-action" onclick={onAnnuler}>{$t("commun.annuler")}</button>
+      <button class="action" onclick={onOuvrirLien}>{$t("twitchDevice.ouvrirLien")}</button>
+      <button class="action" onclick={onAnnuler}>{$t("commun.annuler")}</button>
     </div>
   </Modal>
 {/if}

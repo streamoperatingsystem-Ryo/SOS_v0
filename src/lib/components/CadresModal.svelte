@@ -82,7 +82,7 @@
     title={$t("cadresModal.titre")}
     onClose={fermer}
     crochet="var(--crochet-violet)"
-    maxWidth="720px"
+    maxWidth="45rem"
     hint={$t("cadresModal.hint")}
   >
     {#snippet headerExtra()}
@@ -225,7 +225,7 @@
     overflow-y: auto;
     padding: 0.5rem;
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(8.75rem, 1fr));
     gap: 0.4rem;
     align-content: start;
   }
@@ -258,8 +258,8 @@
     border-color: var(--accent-ui);
   }
   .thumb-vignette {
-    width: 120px;
-    height: 68px;
+    width: 7.5rem;
+    height: 4.25rem;
     position: relative;
     overflow: hidden;
     background: var(--fond);
@@ -267,14 +267,14 @@
   .thumb-nom {
     font-size: 0.7rem;
     text-align: center;
-    max-width: 120px;
+    max-width: 7.5rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
   /* Panneau config */
   .config {
-    width: 220px;
+    width: 13.75rem;
     flex-shrink: 0;
     padding: 0.5rem;
     border-left: 1px solid var(--bordure-ui);
@@ -345,8 +345,8 @@
     text-align: right;
   }
   .color {
-    width: 28px;
-    height: 24px;
+    width: 1.75rem;
+    height: 1.5rem;
     border: 1px solid var(--bordure-ui);
     background: transparent;
     cursor: pointer;
@@ -363,8 +363,8 @@
     font-family: monospace;
   }
   .apercu {
-    width: 200px;
-    height: 112px;
+    width: 12.5rem;
+    height: 7rem;
     position: relative;
     overflow: hidden;
     background: var(--fond);

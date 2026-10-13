@@ -608,7 +608,7 @@
 {:else if err === "need_reauth"}
   <div class="need-reauth">
     <span>{$t("planning.scopesManquants")}</span>
-    <button class="btn" onclick={onReconnecter}>
+    <button class="action" onclick={onReconnecter}>
       {$t("planning.reconnecter")}
     </button>
   </div>
@@ -618,24 +618,24 @@
     <div class="planning-main">
       <div class="planning-header">
         <div class="nav-groupe">
-          <button class="btn" onclick={() => nav(-1)} aria-label={$t("planning.precedent")}>‹</button>
-          <button class="btn" onclick={aujourdhui}>{$t("planning.aujourdhui")}</button>
-          <button class="btn" onclick={() => nav(1)} aria-label={$t("planning.suivant")}>›</button>
+          <button class="action" onclick={() => nav(-1)} aria-label={$t("planning.precedent")}>‹</button>
+          <button class="action" onclick={aujourdhui}>{$t("planning.aujourdhui")}</button>
+          <button class="action" onclick={() => nav(1)} aria-label={$t("planning.suivant")}>›</button>
           <span class="periode">{titrePeriode}</span>
         </div>
         <div class="vues">
-          <button class="btn" class:active={vue === "semaine"} onclick={() => changerVue("semaine")}>
+          <button class="action" class:actif={vue === "semaine"} onclick={() => changerVue("semaine")}>
             {$t("planning.vueSemaine")}
           </button>
-          <button class="btn" class:active={vue === "mois"} onclick={() => changerVue("mois")}>
+          <button class="action" class:actif={vue === "mois"} onclick={() => changerVue("mois")}>
             {$t("planning.vueMois")}
           </button>
-          <button class="btn" class:active={vue === "liste"} onclick={() => changerVue("liste")}>
+          <button class="action" class:actif={vue === "liste"} onclick={() => changerVue("liste")}>
             {$t("planning.vueListe")}
           </button>
           <button
-            class="btn vac"
-            class:active={vacOuvert || vacances !== null}
+            class="action vac"
+            class:actif={vacOuvert || vacances !== null}
             onclick={onToggleVacances}
             title={$t("planning.vacancesHint")}
           >{$t("planning.vacances")}</button>
@@ -649,8 +649,8 @@
       {/if}
 
       {#if vacOuvert}
-        <div class="bloc vac-bloc">
-          <div class="bloc-titre">{$t("planning.vacances")}</div>
+        <div class="modal-bloc vac-bloc">
+          <div class="modal-bloc-titre">{$t("planning.vacances")}</div>
           <div class="vac-row">
             <label class="field-label" for="vac-debut">{$t("planning.vacancesDu")}</label>
             <input id="vac-debut" type="date" bind:value={vacDebut} />
@@ -659,13 +659,13 @@
           </div>
           <div class="vac-actions">
             <button
-              class="btn"
+              class="action"
               onclick={onVacancesAppliquer}
               disabled={!vacDebut || !vacFin || actionEnCours === "vac"}
             >{$t("planning.vacancesActiver")}</button>
             {#if vacances}
               <button
-                class="btn danger"
+                class="action danger"
                 onclick={onVacancesDesactiver}
                 disabled={actionEnCours === "vac"}
               >{$t("planning.vacancesDesactiver")}</button>
@@ -679,11 +679,11 @@
         <div class="confirm-bloc">
           <p class="confirm-texte">{confirm.texte}</p>
           <div class="confirm-actions">
-            <button class="btn" onclick={() => (confirm = null)}>
+            <button class="action" onclick={() => (confirm = null)}>
               {$t("planning.annuler")}
             </button>
             <button
-              class="btn danger"
+              class="action danger"
               onclick={onConfirmer}
               disabled={actionEnCours === "confirm"}
             >{$t("planning.confirmer")}</button>
@@ -818,8 +818,8 @@
     <div class="planning-side">
       {#if segSel}
         {@const s = segSel}
-        <div class="bloc">
-          <div class="bloc-titre">
+        <div class="modal-bloc">
+          <div class="modal-bloc-titre">
             {$t("planning.segment")}
             {#if s.is_recurring}
               <span class="badge-rec">{$t("planning.toutesLesSemaines")}</span>
@@ -859,13 +859,13 @@
             <p class="hint">{$t("planning.serieHint")}</p>
           {/if}
           <button
-            class="btn"
+            class="action"
             onclick={onAppliquerSeg}
             disabled={actionEnCours === "seg-apply"}
           >{$t("planning.appliquer")}</button>
           <div class="seg-actions">
             <button
-              class="btn"
+              class="action"
               onclick={() => void onToggleAnnule(s)}
               disabled={actionEnCours === "seg-cancel"}
             >
@@ -873,27 +873,27 @@
             </button>
             {#if !s.is_recurring}
               <button
-                class="btn"
+                class="action"
                 onclick={() => onConvertir(s, true)}
                 disabled={actionEnCours === "confirm"}
               >{$t("planning.rendreRecurrent")}</button>
             {:else}
               <button
-                class="btn"
+                class="action"
                 onclick={() => onConvertir(s, false)}
                 disabled={!peutPonctuel || actionEnCours === "confirm"}
                 title={peutPonctuel ? "" : $t("planning.nonAffilieHint")}
               >{$t("planning.rendrePonctuel")}</button>
             {/if}
-            <button class="btn danger" onclick={() => onSupprimer(s)}>
+            <button class="action danger" onclick={() => onSupprimer(s)}>
               {$t("planning.supprimer")}
             </button>
           </div>
-          <button class="btn" onclick={() => (segSel = null)}>{$t("planning.retour")}</button>
+          <button class="action" onclick={() => (segSel = null)}>{$t("planning.retour")}</button>
         </div>
       {:else}
-        <div class="bloc">
-          <div class="bloc-titre">{$t("planning.jeux")}</div>
+        <div class="modal-bloc">
+          <div class="modal-bloc-titre">{$t("planning.jeux")}</div>
           <input
             type="text"
             placeholder={$t("planning.rechercherJeu")}
@@ -937,7 +937,7 @@
   /* Layout 2 colonnes : planning large + colonne jeux/édition. */
   .planning-layout {
     display: grid;
-    grid-template-columns: 1fr 210px;
+    grid-template-columns: 1fr 13.125rem;
     gap: 0.8rem;
     flex: 1;
     min-height: 0;
@@ -984,66 +984,13 @@
     color: var(--message-user-action-color);
   }
 
-  /* Boutons génériques de l'onglet (recette glace commune). */
-  .btn {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon-petit);
-    padding: 0.3rem 0.55rem;
-    font: inherit;
-    font-size: 0.8rem;
-    cursor: pointer;
-    white-space: nowrap;
-    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
-  }
-  .btn:hover:not(:disabled) {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    border-color: var(--accent-ui);
-  }
-  .btn:disabled {
-    opacity: 0.4;
-    cursor: not-allowed;
-  }
-  .btn.active {
-    border-color: var(--accent-ui);
-    font-weight: 600;
-  }
-  .btn.danger {
-    border-color: color-mix(in srgb, var(--message-error-color) 40%, var(--bordure-ui));
-    color: var(--message-error-color);
-  }
+  /* Boutons : recette .action globale (app.css) — .actif pour les toggles. */
 
-  /* Bloc = carte visuelle (même recette que les autres onglets). */
-  .bloc {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    border: 1px solid var(--bordure-ui);
-    border-radius: var(--rayon);
-    padding: 0.6rem 0.9rem;
-    background: var(--fond-panneau);
-  }
-  .bloc-titre {
-    font-size: 0.85rem;
-    font-weight: 600;
-    opacity: 0.85;
-    border-bottom: 1px solid var(--bordure-ui);
-    padding-bottom: 0.2rem;
+  /* Bloc = carte visuelle (recette .modal-bloc globale — app.css). */
+  .modal-bloc-titre {
     display: flex;
     align-items: center;
     gap: 0.4rem;
-  }
-  .field-label {
-    font-size: 0.7rem;
-    opacity: 0.6;
-  }
-  .hint {
-    font-size: 0.75rem;
-    opacity: 0.5;
-    margin: 0;
   }
   .hint-centre {
     font-size: 0.9rem;
@@ -1455,7 +1402,7 @@
   .planning-side::-webkit-scrollbar,
   .jour-corps::-webkit-scrollbar,
   .jeux-liste::-webkit-scrollbar {
-    width: 6px;
+    width: 0.375rem;
   }
   .planning-side::-webkit-scrollbar-track,
   .jour-corps::-webkit-scrollbar-track,
