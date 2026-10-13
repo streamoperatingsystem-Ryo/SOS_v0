@@ -1,9 +1,10 @@
 # SYNTHÈSE — StreamOS v0
 
-**Date :** samedi 19 septembre 2026
+**Date :** mardi 13 octobre 2026
 **Destinataire :** Agent Manager (nouvelle fenêtre de contexte)
-**Rédigé par :** Devin (session du 19/09/2026 — resynchronisation documentaire)
-**Commit de référence :** `a755b4a` — feat: barre de raccourcis topmost + v0.1.3 (setup-base0004)
+**Rédigé par :** Devin (session du 13/10/2026 — bilan de clôture + exécution)
+**Commit de référence :** état de clôture du 2026-10-13 (bilan + lots de
+clôture commités ce jour — voir `git log`)
 
 ---
 
@@ -33,18 +34,20 @@ En cas de contradiction entre ce fichier et `AGENTS.md` sur un point technique,
 
 ---
 
-## 3. CE QUI RESTE À FAIRE (roadmap)
+## 3. ROADMAP — CLÔTURÉE (2026-10-13)
 
-### Interactions viewers
-- **Emojis géants** : un viewer envoie un emoji → l'emoji apparaît en grand et
-  danse à l'écran (effet CSS dans `diffusion.html` + détection côté Rust).
-  **Recommandation historique :** commencer par celui-là — effet visible
-  immédiat, périmètre restreint, pose les fondations de l'overlay d'effets que
-  les autres réutiliseront. La décision appartient à l'utilisateur.
-- **Barres de progression** : avec pseudos/personnages.
-- Autres effets d'interaction à définir.
+> **Décision utilisateur : le périmètre de fonctionnalités est FIGÉ.** Le
+> bilan de clôture (Devin, 13/10/2026) n'a trouvé aucune feature à moitié
+> implémentée — l'application est fonctionnellement complète. Les sujets
+> ci-dessous restent archivés comme PISTES SI RÉOUVERTURE un jour ; ils ne
+> sont PAS à faire et ne doivent pas être relancés sans décision explicite.
 
-### Hors scope actuel
+- **Emojis géants** (viewer envoie un emoji → apparaît en grand et danse à
+  l'écran) — ancienne recommandation, jamais démarré.
+- **Barres de progression** avec pseudos/personnages — jamais démarré.
+- Sujets documentés « non implémentés » dans AGENTS.md : sauvegarde des
+  splits proposée à la sortie du jeu (speedrun), rotation mensuelle de la
+  télémétrie.
 - Lecteur musical sans son (ancien repo, en pause).
 
 *Retirés de la roadmap car faits depuis la v0.17 : commandes viewer `!cmd`,
@@ -74,6 +77,15 @@ détail dans `AGENTS.md` + `git log`.*
    d'exécution ajouté dans `AGENTS.md`, création `.windsurf/rules/agents-md.md`,
    refonte de ce fichier (roadmap + relais uniquement), archivage de
    l'historique brut dans `Agent Manager/archives/`.
+5. **Devin** (13/10/2026) : **bilan de clôture** (audit complet lecture
+   seule, 4 lots exécutés après validation utilisateur) — commit de la
+   feature « Lire la sélection musicale » trouvée non commitée, retrait du
+   résidu legacy welcome-clip (TS + i18n), double garde locale sur l'API
+   Stream Deck (CORS retiré de /api/* + Host anti-DNS-rebinding),
+   resynchronisation AGENTS.md (api_deck, pad numérique, cadres
+   arena/tribal, persistance complète, dates, speedrun 11 commandes) +
+   TRADUCTIONS.md (phases faites) + ce fichier. Chantier « rem » :
+   verdict utilisateur PENDANT (section annulation d'AGENTS.md conservée).
 
 ### Leçons apprises
 - **keyring v3** : les features par défaut ont sauté vs v2 — sans
@@ -87,19 +99,22 @@ détail dans `AGENTS.md` + `git log`.*
   technique et a dérivé (chemin APPDATA faux, roadmap obsolète). Désormais :
   technique → `AGENTS.md`, roadmap/relais → ici.
 
-### État du git
+### État du git (13/10/2026, après les lots de clôture)
 ```
-a755b4a (HEAD -> master) feat: barre de raccourcis topmost + v0.1.3 (setup-base0004)
-9187bff (origin/master) feat: effets visuels du fond sur le dashboard
+master : docs AGENTS.md resynchronisé (bilan de clôture) + 3 commits
+        d'exécution (musique non commitée, welcome-clip, api_deck)
+origin/master : 1718b55 (ui: pastilles .msg-pill, 2026-09-16)
 ```
-- `master` ahead of `origin/master` by 1 commit (pas de push effectué).
-- Working tree : `AGENTS.md` + `.gitignore` modifiés, `.windsurf/` et
-  `Agent Manager/` nouveaux non trackés (ajout prévu), `src-tauri/Cargo.lock`
-  modifié (antérieur à cette session).
-- `SETUP/` + `Agent Manager/archives/` ignorés (docs de travail, hors repo).
+- `master` ahead of `origin/master` by 28+ commits (pas de push effectué).
+- Working tree : propre (docs `PLAN-*.md` / `TRADUCTIONS.md` trackés à
+  partir de la clôture ; `image.png` / `message-a-manu.html` = artefacts
+  locaux non trackés, à la main de l'utilisateur).
+- `SETUP/` + `Agent Manager/archives/` + `IDEE/` ignorés (docs de travail,
+  hors repo).
 
 ---
 
 *Document de synthèse — roadmap + relais uniquement. Le détail technique vit
-dans `AGENTS.md` (racine), mis à jour à chaque feature. Le commit `a755b4a` est
-le point de retour sûr.*
+dans `AGENTS.md` (racine), mis à jour à chaque feature. Point de retour sûr
+avant les lots de clôture : `acec456` (couleurs de l'équaliseur, état du
+2026-10-13 au matin).*
