@@ -2780,13 +2780,23 @@ frontend et à :4321 exactement comme avant — le tap est un abonné de plus.
 ### Contrats
 
 - **Non énergivore** : 1 snapshot processus + 1 snapshot threads + 1
-  collecte PDH par seconde. Historique roulant **300 pts en mémoire**
-  (`TAILLE_HISTORIQUE`), jamais sur disque.
+  collecte PDH par seconde — **UNIQUEMENT pendant que la modale est
+  affichée** (correctif 2026-10-13 de l'omission : le thread samplait
+  1/s à vie dès le boot). Gating : chaque poll `conso_etat` repousse une
+  auto-expiration de 3 s (`DEMANDE_MS`/`demande_recente` — pas de commande
+  stop, rien à faire si la modale ferme brutalement) ; reprise après
+  dormance = baselines rafraîchies (sémantique `premier_tick`) +
+  historique vidé (échantillons périmés). Historique roulant **300 pts en
+  mémoire** (`TAILLE_HISTORIQUE`), jamais sur disque.
 - **Commande `conso_etat()` → `ConsoEtat { nb_coeurs, historique }`** :
   le frontend la pole **uniquement** quand la modale est ouverte (store
-  `conso.ts` : `demarrerPollingConso`/`arreterPollingConso`, 1 Hz).
+  `conso.ts` : `demarrerPollingConso`/`arreterPollingConso`, 1 Hz) — et
+  depuis le correctif, la boucle Rust ne samble que pendant ces polls.
+  Le tap passif `chat_tx` (compteurs d'activité + nom du jeu), lui,
+  reste permanent : event-driven, coût nul.
 - **Init** : `conso::demarrer(chat_tx.clone())` dans `lib.rs` setup
-  (après la télémétrie, avant les auto-resume).
+  (après la télémétrie, avant les auto-resume) — démarre le tap + le
+  thread échantillonneur (qui dort jusqu'au premier poll).
 
 ### Fichiers
 

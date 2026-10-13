@@ -14,9 +14,14 @@
 //!
 //! Contraintes :
 //!   - NON énergivore : 1 échantillon/s = 1 snapshot processus + 1 snapshot
-//!     threads (à comparer aux ~600 snapshots/s du bug d'origine). Le
-//!     frontend ne pole la commande QUE quand la modale est ouverte.
+//!     threads (à comparer aux ~600 snapshots/s du bug d'origine) — et
+//!     UNIQUEMENT pendant que la modale pole `conso_etat` : la boucle dort
+//!     tant que la dernière demande date de plus de 3 s (auto-expiration ;
+//!     correctif 2026-10-13 de l'omission : avant, le thread samplait 1/s
+//!     à vie dès le boot alors que l'affichage était déjà à la demande).
 //!   - Historique roulant en mémoire : 300 points (5 min), jamais sur disque.
+//!     Vidé à la reprise après dormance (les échantillons de la session
+//!     d'affichage précédente sont périmés).
 //!   - Threads identifiés par registre TID→label (rempli au spawn via
 //!     `nommer_thread`) — pas de GetThreadDescription, robuste.
 //!   - Toute mesure qui échoue vaut 0 — le diagnostic ne crash jamais l'app.
@@ -41,6 +46,39 @@ const LABEL_AUTRES: &str = "App + runtime (chat, WS, serveur)";
 static MSGS_CHAT: AtomicU64 = AtomicU64::new(0);
 static EVENTS_SPEEDRUN: AtomicU64 = AtomicU64::new(0);
 static PUBS_INPUT_VIEWER: AtomicU64 = AtomicU64::new(0);
+
+// =============================================================================
+// DEMANDE — gating de l'échantillonneur (2026-10-13 : ne sampler QUE pendant
+// que la modale Diagnostic est affichée ; avant, la boucle samplait à vie)
+// =============================================================================
+
+/// Millis epoch de l'appel le plus récent à `conso_etat` (0 = jamais appelé).
+static DEMANDE_MS: AtomicU64 = AtomicU64::new(0);
+
+/// Fenêtre de validité d'une demande : le frontend pole à 1 Hz → 3 s tolère
+/// un poll perdu sans jamais laisser la boucle sampler à vide quand la
+/// modale est fermée.
+const DEMANDE_EXPIRE_MS: u64 = 3_000;
+
+/// Un écart mesuré > ce seuil signale une reprise après dormance : les taux
+/// seraient moyensés sur toute la période d'inactivité → ce tick ne sert
+/// qu'à rafraîchir les baselines (même sémantique que premier_tick).
+#[cfg(windows)]
+const SEUIL_REPRISE_MS: f64 = 2_500.0;
+
+fn maintenant_epoch_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis() as u64)
+        .unwrap_or(0)
+}
+
+/// True ssi la modale Diagnostic est considérée ouverte (dernier poll
+/// `conso_etat` de moins de DEMANDE_EXPIRE_MS).
+fn demande_recente() -> bool {
+    let derniere = DEMANDE_MS.load(Ordering::Relaxed);
+    derniere > 0 && maintenant_epoch_ms().saturating_sub(derniere) < DEMANDE_EXPIRE_MS
+}
 
 /// Nom du processus jeu connecté au splitter (extrait des events speedrun
 /// « connected »/« disconnected » du tap chat_tx — zéro couplage moteur).
@@ -206,9 +244,12 @@ fn compter_frame(raw: &str) {
 // =============================================================================
 
 /// État courant du diagnostic (historique complet + nb cœurs). Le frontend
-/// ne pole QUE quand la modale Diagnostic est ouverte (1 invoke/s max).
+/// ne pole QUE quand la modale Diagnostic est ouverte (1 invoke/s max) —
+/// chaque poll repousse l'auto-expiration de la boucle d'échantillonnage
+/// (voir `demande_recente`) : sampler seulement pendant qu'on est lu.
 #[tauri::command]
 pub fn conso_etat() -> ConsoEtat {
+    DEMANDE_MS.store(maintenant_epoch_ms(), Ordering::Relaxed);
     let etat = etat_slot().lock().unwrap();
     ConsoEtat {
         nb_coeurs: etat.nb_coeurs,
@@ -237,11 +278,26 @@ fn boucle_echantillonnage() {
 
     loop {
         std::thread::sleep(Duration::from_secs(1));
+        // Gating : dormant tant que la modale n'est pas affichée — zéro
+        // snapshot, zéro requête PDH, zéro verrou. `precedent` n'est PAS
+        // touché en dormant : l'écart accumulé sert à détecter la reprise.
+        if !demande_recente() {
+            continue;
+        }
         let maintenant = Instant::now();
         let ecoule_ms = maintenant.duration_since(precedent).as_millis() as f64;
         precedent = maintenant;
         if ecoule_ms <= 0.0 {
             continue;
+        }
+        // Reprise après dormance : l'écart couvre la période d'inactivité →
+        // taux moyensés sans signification ET historique mémoire périmé
+        // (il date de la session d'affichage précédente). Ce tick ne sert
+        // qu'à rafraîchir les baselines (premier_tick = true saute le push)
+        // et l'historique repart vide.
+        if ecoule_ms > SEUIL_REPRISE_MS {
+            premier_tick = true;
+            etat_slot().lock().unwrap().historique.clear();
         }
         let coeurs = etat_slot().lock().unwrap().nb_coeurs as f64;
 
@@ -783,5 +839,23 @@ mod tests {
         );
         compter_frame(r#"{"type":"speedrun-etat","etat":{"type":"disconnected"}}"#);
         assert!(processus_jeu_slot().lock().unwrap().is_none());
+    }
+
+    /// Gating de la boucle : jamais demandé → false ; demande de 10 s →
+    /// false (modale fermée) ; poll courant → true. Remis à 0 en fin de
+    /// test pour ne pas activer la boucle des autres tests.
+    #[test]
+    fn test_demande_recente() {
+        let _g = test_lock();
+        DEMANDE_MS.store(0, Ordering::Relaxed);
+        assert!(!demande_recente());
+        DEMANDE_MS.store(
+            maintenant_epoch_ms().saturating_sub(10_000),
+            Ordering::Relaxed,
+        );
+        assert!(!demande_recente());
+        DEMANDE_MS.store(maintenant_epoch_ms(), Ordering::Relaxed);
+        assert!(demande_recente());
+        DEMANDE_MS.store(0, Ordering::Relaxed);
     }
 }
