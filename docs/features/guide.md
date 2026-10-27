@@ -8,7 +8,7 @@
 > Guide utilisateur en langage simple, rendu comme un livre ouvert dont
 > les feuilles basculent en 3D autour de la reliure (référence : carnet
 > Tomb Raider). **Dashboard uniquement** — jamais dans `diffusion.html`
-> ni aucune page OBS. Plan complet : `PLAN-GUIDE-STREAMER.md`.
+> ni aucune page OBS.
 
 ### Lanceur & montage
 
