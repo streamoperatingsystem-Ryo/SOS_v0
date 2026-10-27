@@ -6,6 +6,7 @@
 //! toute mesure P0.
 
 pub mod detect;
+pub mod ffmpeg;
 pub mod mft;
 
 use std::fmt;
@@ -51,6 +52,8 @@ pub enum ErreurEncodage {
     Conversion(String),
     /// Device / gestionnaire D3D11 indisponible.
     Gpu(String),
+    /// Sortie (sidecar FFmpeg, fichier, processus).
+    Sortie(String),
     /// Plateforme non supportée.
     NonSupporte,
 }
@@ -63,6 +66,7 @@ impl fmt::Display for ErreurEncodage {
             ErreurEncodage::Mft(m) => write!(f, "MFT : {m}"),
             ErreurEncodage::Conversion(m) => write!(f, "conversion : {m}"),
             ErreurEncodage::Gpu(m) => write!(f, "GPU : {m}"),
+            ErreurEncodage::Sortie(m) => write!(f, "sortie : {m}"),
             ErreurEncodage::NonSupporte => write!(f, "plateforme non supportée"),
         }
     }
