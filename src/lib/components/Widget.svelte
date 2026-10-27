@@ -8,6 +8,7 @@
     computeSnap,
     sceneStore,
     mettreWidgetPlan,
+    setCameraCachee,
     type SnapTarget,
   } from "../stores/scene";
   import { afficherGuidesDrag, masquerGuides } from "../stores/guides";
@@ -20,6 +21,8 @@
   import { get } from "svelte/store";
   import CadreSVG from "./CadreSVG.svelte";
   import { genererClipPathCadre, gradientCadre } from "../cadres/registre";
+  import { pathCercle } from "../cadres/points";
+  import { stopsLiseres } from "../cadres/couleurs";
   import { titreModalOpen, type PositionTitre } from "../stores/ui";
   import { POLICE_TITRE_DEFAUT, TAILLE_TITRE_DEFAUT, ESPACEMENT_TITRE_DEFAUT } from "../fonts";
   import { valeursGoals, goalsTwitch } from "../stores/objectifs";
@@ -33,6 +36,10 @@
   let widgetType = $derived(w.type ?? "media");
   let isChat = $derived(widgetType === "chat");
   let isCamera = $derived(widgetType === "camera");
+  // Caméra masquée en diffusion (bouton œil) : items OBS désactivés +
+  // widget ignoré par diffusion.html. Le placeholder dashboard reflète
+  // l'état (label « masquée » + bouton œil visible en permanence).
+  let cameraCachee = $derived(isCamera && w.cameraCachee === true);
   let isInputViewer = $derived(widgetType === "input-viewer");
   let isSpeedrun = $derived(widgetType === "speedrun");
   let isGoal = $derived(widgetType === "goal");
@@ -170,6 +177,27 @@
       ? genererClipPathCadre(cadre.style, w.largeur, w.hauteur, cadreStroke) ?? ""
       : ""
   );
+
+  // ===== Forme caméra dédiée (cameraForme) =====
+  // "cercle" (cercle inscrit, clip-path = pathCercle — même générateur que
+  // le trou diffusion et le masque OBS) / "carre" (rect, pas de clip) /
+  // absent = cadre de scène (comportement historique). Découplée du cadre
+  // de scène ET de sansCadre. Anneau optionnel (cameraBord) aux couleurs
+  // du cadre — miroir de svgAnneauCamera (diffusion.html).
+  let cameraFormeActive = $derived(
+    isCamera && (w.cameraForme === "cercle" || w.cameraForme === "carre")
+  );
+  let cameraBordOn = $derived(cameraFormeActive && w.cameraBord === true);
+  let cameraEpAnneau = $derived(Math.max(1.5, Math.min(cadre?.strokeWidth || 4, 12)));
+  let cameraClipCorps = $derived(
+    cameraFormeActive && w.cameraForme === "cercle"
+      ? `path('${pathCercle(w.largeur, w.hauteur)}')`
+      : ""
+  );
+  // Le clip-path effectif du corps : forme caméra DÉDIÉE prioritaire et
+  // EXCLUSIVE (carre = aucun clip, même si le cadre de scène est actif —
+  // la forme dédiée remplace le cadre, parité diffusion appliquerFormeCamera).
+  let clipCorps = $derived(cameraFormeActive ? cameraClipCorps : clipPathCorps);
 
   // ===== Titres du widget (haut/bas/gauche/droite) =====
   // Jusqu'à 4 titres simultanés (un texte par position, champ vide = aucun),
@@ -462,6 +490,26 @@
     !$sceneStore.widgets.some((x) => x.type !== "camera" && x.z > w.z)
   );
 
+  // ===== Placement adaptatif des badges de survol (z-controls + œil cam) =====
+  // Le badge est contre-scalé (taille écran constante) → l'espace requis
+  // en unités canvas = px écran / scale. Ordre : haut → bas → droite →
+  // gauche → dedans (overlay interne — dernier recours, toujours visible).
+  // Le widget peut être à moitié sorti du canvas (clamp ±w/2) : chaque
+  // bord est testé. Réactif : move/resize/zoom recalculent la position.
+  let badgePos = $derived.by(() => {
+    const cw = $sceneStore.canvasW ?? 1920;
+    const ch = $sceneStore.canvasH ?? 1080;
+    const s = scale > 0 ? scale : 1;
+    const nb = isCamera ? 1 : 2; // œil seul (cam) vs −/+ (autres widgets)
+    const ligH = 36 / s;         // ligne : 1 bouton 30px + écart 6px
+    const colH = (nb * 36 + 6) / s; // colonne : N boutons + gaps + écart
+    if (w.y >= ligH) return "haut";
+    if (ch - w.y - w.hauteur >= ligH) return "bas";
+    if (cw - w.x - w.largeur >= ligH && ch - w.y >= colH) return "droite";
+    if (w.x >= ligH && ch - w.y >= colH) return "gauche";
+    return "dedans";
+  });
+
   // Double-clic sur le widget → ouvre la modale titres, focus sur le champ
   // du bord le plus proche du clic (haut/bas/gauche/droite).
   function ondblclick(e: MouseEvent) {
@@ -532,11 +580,11 @@
   <div
     class="widget-3d"
     class:selected
-    class:avec-cadre={cadreActif}
+    class:avec-cadre={cadreActif || cameraFormeActive}
     class:input-viewer={isInputViewer}
     class:speedrun={isSpeedrun}
     class:sans-cadre={w.sansCadre === true}
-    style="transform: perspective(800px) rotateX({rx}deg) rotateY({ry}deg);{clipPathCorps ? ` clip-path: ${clipPathCorps}; -webkit-clip-path: ${clipPathCorps};` : ''}"
+    style="transform: perspective(800px) rotateX({rx}deg) rotateY({ry}deg);{clipCorps ? ` clip-path: ${clipCorps}; -webkit-clip-path: ${clipCorps};` : ''}"
   >
     {#if isChat}
       <!-- Widget chat (dashboard) : « Chat actif » centré seulement.
@@ -549,8 +597,8 @@
            la source OBS "SOS-Caméra" (dshow_input sous SOS-Diffusion) qui
            apparaît à travers le trou du widget dans diffusion.html. Le
            dashboard est une config, pas un player. -->
-      <div class="camera-actif">
-        <span>{$t("widget.camera")}</span>
+      <div class="camera-actif" class:cachee={cameraCachee}>
+        <span>{$t(cameraCachee ? "widget.cameraCachee" : "widget.camera")}</span>
       </div>
     {:else if isInputViewer}
       <!-- Widget input viewer (dashboard) : badge "affiché dans OBS" seulement.
@@ -682,8 +730,52 @@
     <!-- Cadre de scène (overlay SVG) — visible en dashboard ET en diffusion.
          Ne capture pas les événements (pointer-events: none) pour ne pas
          bloquer le drag/sélection. Appliqué sur tous les widgets y compris
-         les widgets trou (le cadre encadre le trou). -->
-    {#if cadreActif && cadre}
+         les widgets trou (le cadre encadre le trou).
+         Caméra avec forme DÉDIÉE (cameraForme) : le cadre de scène ne
+         s'applique PAS — anneau optionnel aux couleurs du cadre à la place. -->
+    {#if cameraFormeActive && cameraBordOn}
+      <!-- Anneau de la forme caméra dédiée : cercle inscrit ou rect, gradient
+           des couleurs du cadre de scène (fallback blanc→gris), épaisseur
+           bornée 1.5..12 (un cadre de scène épais ne doit pas engloutir un
+           cercle caméra). Miroir dashboard de svgAnneauCamera
+           (diffusion.html) : la moitié extérieure du trait est rognée par
+           overflow:hidden + clip-path du parent. -->
+      <div class="widget-cadre">
+        <svg
+          width={w.largeur + cameraEpAnneau}
+          height={w.hauteur + cameraEpAnneau}
+          viewBox="{-cameraEpAnneau / 2} {-cameraEpAnneau / 2} {w.largeur + cameraEpAnneau} {w.hauteur + cameraEpAnneau}"
+          preserveAspectRatio="none"
+          style="position:absolute; top:{-cameraEpAnneau / 2}px; left:{-cameraEpAnneau / 2}px; pointer-events:none;"
+        >
+          <defs>
+            <linearGradient id="grad-cam-{w.id}" x1="0%" y1="0%" x2="100%" y2="100%">
+              {@html stopsLiseres(cadreGradient.from, cadreGradient.to)}
+            </linearGradient>
+          </defs>
+          {#if w.cameraForme === "cercle"}
+            <circle
+              cx={w.largeur / 2}
+              cy={w.hauteur / 2}
+              r={Math.min(w.largeur, w.hauteur) / 2}
+              fill="none"
+              stroke="url(#grad-cam-{w.id})"
+              stroke-width={cameraEpAnneau}
+            />
+          {:else}
+            <rect
+              x="0"
+              y="0"
+              width={w.largeur}
+              height={w.hauteur}
+              fill="none"
+              stroke="url(#grad-cam-{w.id})"
+              stroke-width={cameraEpAnneau}
+            />
+          {/if}
+        </svg>
+      </div>
+    {:else if cadreActif && cadre && !cameraFormeActive}
       <div class="widget-cadre">
         <CadreSVG
           style={cadre.style}
@@ -725,37 +817,6 @@
   <div class="titre-zone titre-zone-gauche"><span>Titre (double-clic)</span></div>
   <div class="titre-zone titre-zone-droite"><span>Titre (double-clic)</span></div>
 
-  <!-- Boutons -/+ de plan : visibles au survol du widget (dashboard
-       uniquement — jamais en diffusion). pointerdown/dblclick stoppés : un
-       clic ne doit ni sélectionner, ni démarrer un drag, ni déposer un
-       morph, ni ouvrir la modale titres. -->
-  {#if !isCamera}
-    <!-- Contre-scale : taille CONSTANTE à l'écran quel que soit le zoom du
-         canvas (le badge est enfant du widget, il subirait le scale sinon).
-         padding-bottom dans la boîte → l'écart visuel reste constant lui
-         aussi. -->
-    <div class="z-controls" style="transform: scale({scale > 0 ? 1 / scale : 1});">
-      <button
-        class="z-btn"
-        title={$t("carteEdition.arrierePlan")}
-        aria-label={$t("carteEdition.arrierePlan")}
-        disabled={estDerriere}
-        onpointerdown={(e) => e.stopPropagation()}
-        ondblclick={(e) => e.stopPropagation()}
-        onclick={() => void mettreWidgetPlan(w.id, "arriere")}
-      >−</button>
-      <button
-        class="z-btn"
-        title={$t("carteEdition.premierPlan")}
-        aria-label={$t("carteEdition.premierPlan")}
-        disabled={estDevant}
-        onpointerdown={(e) => e.stopPropagation()}
-        ondblclick={(e) => e.stopPropagation()}
-        onclick={() => void mettreWidgetPlan(w.id, "avant")}
-      >+</button>
-    </div>
-  {/if}
-
   <!-- Overlay trou : cadre pointillé par-dessus le widget quand trou activé.
        Le widget reste sélectionnable (l'outer hit-box est intact).
        Tilté avec la même perspective que .widget-3d → correspond au trou :4321. -->
@@ -773,6 +834,67 @@
       class="morph-curseur"
       style="left:{morphCx}px; top:{morphCy}px; width:{morphDiam}px; height:{morphDiam}px;"
     ></div>
+  {/if}
+</div>
+
+<!-- Badge de survol (−/+ de plan, œil caméra) : FRÈRE de .widget, pas un
+     descendant — enfant du widget il était avalé par son stacking context
+     (z-index:{w.z}) : un voisin à z supérieur ou un module HUD (8000) le
+     recouvrait. L'ancre épouse le rect du widget (z 9400 : au-dessus des
+     widgets ≤5000, des modules 8000 et des aides 9000 ; sous les poignées
+     sel-overlay 9500 qui gardent la priorité). pointer-events:none : la
+     zone ne capture rien sauf les boutons quand le badge est affiché.
+     pointerdown/dblclick stoppés : un clic ne doit ni désélectionner, ni
+     démarrer un drag, ni déposer un morph, ni ouvrir la modale titres.
+     data-widget-id : clic droit sur le badge → menu contextuel widget
+     (closest('[data-widget-id]'), Canvas.svelte). -->
+<div
+  class="wbadge"
+  data-widget-id={w.id}
+  style="left:{w.x}px; top:{w.y}px; width:{w.largeur}px; height:{w.hauteur}px;"
+  onpointerdown={(e) => e.stopPropagation()}
+  ondblclick={(e) => e.stopPropagation()}
+  role="presentation"
+>
+  {#if isCamera}
+    <!-- Bouton œil caméra : masque/réaffiche la caméra en DIFFUSION (items
+         OBS désactivés + widget ignoré par diffusion.html — setCameraCachee,
+         scene.ts). Même recette .z-controls (badge contre-scalé, visible au
+         survol) ; affiché en permanence quand la caméra est masquée —
+         état lisible sans chercher le widget. -->
+    <div
+      class="z-controls cam-vis {badgePos}"
+      class:visible={cameraCachee}
+      style="transform: scale({scale > 0 ? 1 / scale : 1});"
+    >
+      <button
+        class="z-btn"
+        title={$t(cameraCachee ? "widget.cameraAfficher" : "widget.cameraMasquer")}
+        aria-label={$t(cameraCachee ? "widget.cameraAfficher" : "widget.cameraMasquer")}
+        onclick={() => void setCameraCachee(w.id, !cameraCachee)}
+      >{cameraCachee ? "🚫" : "👁"}</button>
+    </div>
+  {:else}
+    <!-- Boutons -/+ de plan : « − » tout en arrière-plan, « + » tout au
+         premier plan (mettreWidgetPlan, scene.ts). Contre-scale : taille
+         CONSTANTE à l'écran quel que soit le zoom du canvas. Disabled aux
+         extrémités de la bande non-caméra. -->
+    <div class="z-controls {badgePos}" style="transform: scale({scale > 0 ? 1 / scale : 1});">
+      <button
+        class="z-btn"
+        title={$t("carteEdition.arrierePlan")}
+        aria-label={$t("carteEdition.arrierePlan")}
+        disabled={estDerriere}
+        onclick={() => void mettreWidgetPlan(w.id, "arriere")}
+      >−</button>
+      <button
+        class="z-btn"
+        title={$t("carteEdition.premierPlan")}
+        aria-label={$t("carteEdition.premierPlan")}
+        disabled={estDevant}
+        onclick={() => void mettreWidgetPlan(w.id, "avant")}
+      >+</button>
+    </div>
   {/if}
 </div>
 
@@ -1074,32 +1196,80 @@
   }
   .widget:hover .titre-zone { opacity: 1; }
 
-  /* ===== Boutons -/+ de plan ===== */
-  /* Badge flottant AU-DESSUS du coin supérieur droit du widget (ne recouvre
-     pas le contenu), visible au survol — dashboard uniquement. Le bloc est
-     contre-scalé inline (transform 1/scale) : tout ce qui suit est en px
-     ÉCRAN constants, pas en px canvas. Ambre --message-user-action-color
-     (sémantique « action », famille des titre-zones) — voyant sans casser
-     le thème. pointer-events:none au repos → la zone invisible ne mange
-     pas les clics ; masqué pendant le drag/resize. */
+  /* ===== Badges de survol (−/+ de plan, œil caméra) ===== */
+  /* Ancre frère de .widget plaquée sur son rect : le badge n'est plus dans
+     le stacking context du widget → jamais recouvert par un voisin à z
+     supérieur ni par un module HUD (8000). z 9400 : au-dessus de tout le
+     canvas sauf sel-overlay (9500, poignées resize prioritaires).
+     pointer-events:none : la zone invisible ne mange aucun clic. */
+  .wbadge {
+    position: absolute;
+    pointer-events: none;
+    z-index: 9400;
+  }
+  /* Badge flottant contre-scalé inline (transform 1/scale) : tout ce qui
+     suit est en px ÉCRAN constants, pas en px canvas. Ambre
+     --message-user-action-color (sémantique « action », famille des
+     titre-zones) — voyant sans casser le thème. pointer-events:none au
+     repos ; masqué pendant le drag/resize. */
   .z-controls {
     position: absolute;
-    bottom: 100%;
-    right: 0;
-    transform-origin: bottom right;
     display: flex;
     gap: 6px;
-    padding: 0 0 6px 0;
     opacity: 0;
     pointer-events: none;
     transition: opacity 0.15s ease;
     z-index: 30;
   }
-  .widget:hover .z-controls {
+  /* Placement adaptatif (badgePos) : chaque variante pose le badge sur le
+     bord du widget qui a de la place, avec le transform-origin du coin
+     collé (le contre-scale inline agrandit depuis ce coin — le badge
+     reste attaché au widget quelle que soit l'échelle) et l'écart du
+     côté concerné. droite/gauche = colonne verticale (1 bouton de large
+     suffit là où une ligne n'entrerait pas). */
+  .z-controls.haut {
+    bottom: 100%;
+    right: 0;
+    transform-origin: bottom right;
+    padding-bottom: 6px;
+  }
+  .z-controls.bas {
+    top: 100%;
+    right: 0;
+    transform-origin: top right;
+    padding-top: 6px;
+  }
+  .z-controls.droite {
+    left: 100%;
+    top: 0;
+    transform-origin: top left;
+    padding-left: 6px;
+    flex-direction: column;
+  }
+  .z-controls.gauche {
+    right: 100%;
+    top: 0;
+    transform-origin: top right;
+    padding-right: 6px;
+    flex-direction: column;
+  }
+  .z-controls.dedans {
+    top: 0;
+    right: 0;
+    transform-origin: top right;
+    padding: 4px;
+  }
+  /* Affichage : survol du widget (.widget:hover + frère adjacent .wbadge)
+     OU du badge lui-même — il déborde du rect du widget, le :hover de
+     .widget seul le masquerait en le quittant (.wbadge:hover tient via le
+     bouton/la zone, pointer-events:auto déjà posé). Masqué pendant le
+     drag : même spécificité que la règle :hover → ordre source décide. */
+  .widget:hover + .wbadge .z-controls,
+  .wbadge:hover .z-controls {
     opacity: 1;
     pointer-events: auto;
   }
-  .widget.dragging .z-controls {
+  .widget.dragging + .wbadge .z-controls {
     opacity: 0;
     pointer-events: none;
   }
@@ -1132,5 +1302,17 @@
   .z-btn:disabled {
     opacity: 0.35;
     cursor: default;
+  }
+  /* Bouton œil caméra : affiché en permanence quand la caméra est masquée
+     (l'état doit rester lisible sans survol). .widget.dragging + .wbadge
+     .z-controls (spécificité supérieure) le masque quand même au drag. */
+  .cam-vis.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  /* Placeholder caméra masquée : atténué — le flux n'est plus en diffusion
+     (le widget reste éditable : position, forme, device). */
+  .camera-actif.cachee {
+    opacity: 0.35;
   }
 </style>

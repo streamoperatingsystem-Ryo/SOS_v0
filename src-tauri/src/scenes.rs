@@ -20,9 +20,9 @@ use tauri::AppHandle;
 use tokio::sync::broadcast;
 
 /// Entrée de l'index des scènes (id + nom seulement, jamais le contenu).
-/// `nomMasque` : titre masqué dans la pastille de la barre « Vos scènes »
-/// (œil) — l'onglet devient orange. Rétro-compat : ancien index.json sans
-/// le champ → false.
+/// `nomMasque` : scène marquée « masquée » — titre coloré orange dans sa
+/// pastille « Vos scènes » + confirmation avant ouverture. Rétro-compat :
+/// ancien index.json sans le champ → false.
 /// NB : champ camelCase VOLONTAIRE — contrat JSON direct avec le frontend
 /// (même convention que scene.rs). D'où le allow(non_snake_case).
 #[allow(non_snake_case)]
@@ -34,12 +34,34 @@ pub struct SceneIndex {
     pub nomMasque: bool,
 }
 
+/// Override couleur posé par la commande chat « !cadres <couleur> ».
+/// ÉPHÉMÈRE : RAM uniquement, JAMAIS écrit dans scenes/<id>.json — la
+/// couleur du streamer prime au redémarrage (contrat : la commande viewer
+/// change le direct, pas la sauvegarde). Injecté dans les snapshots WS à
+/// la sérialisation (snapshot_json). `scene_id` interdit qu'un override
+/// survive à une bascule de scène, et l'override est aussi purgé à chaque
+/// remplacement de scène (purge_cadres_chat) + à toute édition du cadre
+/// par le streamer (update_scene).
+#[derive(Debug, Clone)]
+pub struct CadresChatOverride {
+    /// Scène visée — l'override ne s'applique qu'à elle.
+    pub scene_id: String,
+    /// Base du cadre — NOIR (#000000), le « trait principal atténué » du
+    /// rendu par défaut (cadres_cmd::signature_couleurs).
+    pub couleur: String,
+    /// Vive du cadre — couleur viewer brute.
+    pub couleur_fin: String,
+}
+
 /// État partagé scènes : scène unique en RAM + id courant + canal snapshot.
 /// Clonable (Arc internes) — passé aux commandes Tauri et au serveur :4321.
 #[derive(Clone)]
 pub struct ScenesState {
     pub scene: Arc<Mutex<Scene>>,
     pub current_id: Arc<Mutex<String>>,
+    /// Override « !cadres » courant — None la plupart du temps. Jamais
+    /// persisté : voir CadresChatOverride.
+    pub cadres_chat: Arc<Mutex<Option<CadresChatOverride>>>,
     pub snapshot_tx: broadcast::Sender<String>,
     /// Canal broadcast pour les messages chat (IRC Twitch → diffusion :4321).
     /// Le handler WS s'y abonne et forward `{"type":"chat","message":...}`.
@@ -53,7 +75,22 @@ pub struct ScenesState {
 /// Sérialise la scène en message snapshot WS. `sceneId` permet à la
 /// diffusion :4321 de distinguer un CHANGEMENT de scène (fondu au noir)
 /// d'une simple édition de widgets (même scène, rendu direct).
-fn snapshot_json(id: &str, scene: &Scene) -> String {
+/// `cadres_chat` : override couleur « !cadres » injecté ICI seulement,
+/// sur une copie — state.scene et le fichier sur disque gardent les
+/// couleurs du streamer.
+fn snapshot_json(id: &str, scene: &Scene, cadres_chat: Option<&CadresChatOverride>) -> String {
+    let mut scene_override;
+    let scene = match cadres_chat {
+        Some(ov) if ov.scene_id == id => {
+            scene_override = scene.clone();
+            if let Some(c) = scene_override.cadreWidget.as_mut() {
+                c.couleur = ov.couleur.clone();
+                c.couleurFin = ov.couleur_fin.clone();
+            }
+            &scene_override
+        }
+        _ => scene,
+    };
     serde_json::json!({
         "type": "snapshot",
         "sceneId": id,
@@ -62,16 +99,38 @@ fn snapshot_json(id: &str, scene: &Scene) -> String {
     .to_string()
 }
 
+/// Snapshot courant sérialisé (override « !cadres » injecté s'il vise la
+/// scène courante). Locks internes : scene → current_id → cadres_chat —
+/// ne JAMAIS appeler avec un mutex de scène déjà tenu (Mutex non
+/// réentrant). Utilisé par push_snapshot et le snapshot initial du
+/// serveur :4321.
+pub fn snapshot_courant(state: &ScenesState) -> String {
+    let scene = state.scene.lock().unwrap();
+    let id = state.current_id.lock().unwrap();
+    let ov = state.cadres_chat.lock().unwrap();
+    snapshot_json(&id, &scene, ov.as_ref())
+}
+
+/// Purge l'override couleur « !cadres » — à appeler à chaque REMPLACEMENT
+/// de la scène courante (ouvrir / creer_avec / supprimer / importer /
+/// preset / restauration zip) : la couleur viewer ne survit jamais à un
+/// changement de scène.
+fn purge_cadres_chat(state: &ScenesState) {
+    *state.cadres_chat.lock().unwrap() = None;
+}
+
 /// Pousse le snapshot courant vers tous les clients WS connectés.
 pub fn push_snapshot(state: &ScenesState) {
-    // ⚠️ Ordre des locks : scene PUIS current_id — même convention que
-    // ouvrir/creer/supprimer/save_current (push_snapshot est appelé depuis
-    // plusieurs threads UI + serveur :4321, l'ordre inverse = deadlock).
+    // ⚠️ Ordre des locks : scene PUIS current_id PUIS cadres_chat — même
+    // convention que ouvrir/creer/supprimer/save_current (push_snapshot
+    // est appelé depuis plusieurs threads UI + serveur :4321, l'ordre
+    // inverse = deadlock).
     let eq_config;
     {
         let scene = state.scene.lock().unwrap();
         let id = state.current_id.lock().unwrap();
-        let json = snapshot_json(&id, &scene);
+        let ov = state.cadres_chat.lock().unwrap();
+        let json = snapshot_json(&id, &scene, ov.as_ref());
         // send_err = aucun client connecté, c'est OK
         let _ = state.snapshot_tx.send(json);
         eq_config = scene.modules.as_ref().and_then(|m| m.equaliseur.clone());
@@ -369,6 +428,7 @@ pub fn creer_avec(
         let mut cid = state.current_id.lock().unwrap();
         *cid = id.clone();
     }
+    purge_cadres_chat(state);
     push_snapshot(state);
 
     log::info!("Scène créée : « {} » (id={})", nom, id);
@@ -433,6 +493,7 @@ pub fn initialiser_depuis_preset(
         *s = scene;
         state.current_id.lock().unwrap().clone()
     };
+    purge_cadres_chat(state);
 
     // 2. Persister le contenu + renommer l'entrée d'index au nom du preset
     save_current(app, state)?;
@@ -516,6 +577,41 @@ mod tests {
         assert!(!scene_vierge(&s), "modules HUD = pas vierge");
     }
 
+    /// La racine d'une sauvegarde zip est repérée par le suffixe
+    /// « scenes/index.json » : avec dossier racine (notre format),
+    /// sans racine (vieux zips), et rejet d'une archive sans index.
+    #[test]
+    fn detecter_racine_zip_variantes() {
+        use crate::zip_store::{ZipEcrivain, ZipLecteur};
+        use std::io::BufWriter;
+
+        let faire_zip = |noms: &[&str]| -> PathBuf {
+            let path = std::env::temp_dir()
+                .join(format!("sos_racine_{}.zip", uuid::Uuid::new_v4().simple()));
+            let mut zip = ZipEcrivain::new(BufWriter::new(fs::File::create(&path).unwrap()));
+            for n in noms {
+                zip.ajouter_octets(n, b"[]").unwrap();
+            }
+            zip.terminer().unwrap();
+            path
+        };
+
+        let p = faire_zip(&["ma-sauvegarde/scenes/index.json", "ma-sauvegarde/scenes/a1.json"]);
+        let l = ZipLecteur::ouvrir(&p).unwrap();
+        assert_eq!(detecter_racine_zip(&l).unwrap(), "ma-sauvegarde/");
+        let _ = fs::remove_file(&p);
+
+        let p = faire_zip(&["scenes/index.json", "medias/x.png"]);
+        let l = ZipLecteur::ouvrir(&p).unwrap();
+        assert_eq!(detecter_racine_zip(&l).unwrap(), "");
+        let _ = fs::remove_file(&p);
+
+        let p = faire_zip(&["readme.txt"]);
+        let l = ZipLecteur::ouvrir(&p).unwrap();
+        assert!(detecter_racine_zip(&l).is_err());
+        let _ = fs::remove_file(&p);
+    }
+
     /// Migration titres multi-positions : legacy `titre`+`titrePosition` →
     /// `titreHaut`/`titreBas` (idem fond), champs legacy vidés, nouveau
     /// champ déjà présent gagne.
@@ -580,6 +676,7 @@ pub fn ouvrir(app: &AppHandle, state: &ScenesState, id: &str) -> Result<SceneInd
         *cid = id.to_string();
     }
     save_current_id_config(app, id)?;
+    purge_cadres_chat(state);
     push_snapshot(state);
 
     log::info!("Scène ouverte : « {} » (id={})", entry.nom, id);
@@ -611,8 +708,8 @@ pub fn deplacer(app: &AppHandle, id: &str, position: usize) -> Result<(), String
     Ok(())
 }
 
-/// Masque/affiche le titre d'une scène dans sa pastille de la barre
-/// « Vos scènes » (œil). L'onglet devient orange quand le titre est masqué.
+/// Marque/démarque une scène « masquée » dans sa pastille de la barre
+/// « Vos scènes » : titre orange + confirmation avant ouverture.
 pub fn masquer_nom(app: &AppHandle, id: &str, masque: bool) -> Result<(), String> {
     let mut idx = load_index(app)?;
     let entry = idx.iter_mut().find(|s| s.id == id)
@@ -621,6 +718,120 @@ pub fn masquer_nom(app: &AppHandle, id: &str, masque: bool) -> Result<(), String
     save_index(app, &idx)?;
     log::info!("Scène {} : titre {} dans la barre", id, if masque { "masqué" } else { "affiché" });
     Ok(())
+}
+
+// ===== Résumé des scènes (tableau « Vos scènes ») =====
+
+/// Résumé d'une scène pour le tableau « Vos scènes » : nb widgets, types
+/// présents, modules HUD configurés, présence d'un fond, dims du canvas et
+/// mini-rects des widgets — alimente la mini-map procédurale (aperçu de
+/// layout façon OBS, pas de capture d'écran). Relu à chaque ouverture du
+/// tableau : la vérité disque, zéro cache.
+/// NB : champs camelCase VOLONTAIRES — contrat JSON direct avec le frontend
+/// (même convention que SceneIndex/scene.rs). D'où le allow(non_snake_case).
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize)]
+pub struct SceneResume {
+    pub id: String,
+    /// false = <id>.json absent ou illisible → résumé vide (la pastille
+    /// reste affichée via l'index).
+    pub ok: bool,
+    pub nbWidgets: usize,
+    /// Types de widgets dédupliqués (ordre alphabétique).
+    pub types: Vec<String>,
+    pub nbTrous: usize,
+    /// Modules HUD configurés : "horloge" | "musique" | "objectifs" | "equaliseur".
+    pub modules: Vec<String>,
+    /// Un fond est affiché : média, carrousel d'images ou source OBS liée.
+    pub aFond: bool,
+    pub canvasW: u32,
+    pub canvasH: u32,
+    pub widgets: Vec<WidgetResume>,
+}
+
+/// Rect d'un widget pour la mini-map : position/taille en pixels du canvas
+/// de la scène (le frontend ramène en % via canvasW/canvasH), z pour
+/// l'ordre d'empilement, trou = fenêtre de capture OBS (contour pointillé).
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize)]
+pub struct WidgetResume {
+    #[serde(rename = "type")]
+    pub widget_type: String,
+    pub x: f64,
+    pub y: f64,
+    pub largeur: f64,
+    pub hauteur: f64,
+    pub z: i32,
+    pub trou: bool,
+}
+
+/// Lit chaque <id>.json de l'index et agrège son résumé. Fichiers petits
+/// (~Ko) → coût négligeable même à chaque ouverture du tableau. Une scène
+/// illisible → ok:false, le reste de l'index n'est pas affecté.
+pub fn resumer(app: &AppHandle) -> Result<Vec<SceneResume>, String> {
+    let idx = load_index(app)?;
+    let mut out = Vec::with_capacity(idx.len());
+    for entry in idx {
+        let mut resume = SceneResume {
+            id: entry.id.clone(),
+            ok: false,
+            nbWidgets: 0,
+            types: Vec::new(),
+            nbTrous: 0,
+            modules: Vec::new(),
+            aFond: false,
+            canvasW: 1920,
+            canvasH: 1080,
+            widgets: Vec::new(),
+        };
+        if let Ok(scene) = load_scene_file(app, &entry.id) {
+            resume.ok = true;
+            resume.nbWidgets = scene.widgets.len();
+            resume.nbTrous = scene.widgets.iter().filter(|w| w.trou).count();
+            resume.aFond = !scene.bgMedia.is_empty()
+                || scene.bgObsSource.is_some()
+                || scene.bgSlides.as_ref().is_some_and(|s| !s.is_empty());
+            resume.canvasW = scene.canvasW;
+            resume.canvasH = scene.canvasH;
+            let mut types: Vec<String> =
+                scene.widgets.iter().map(|w| w.widget_type.clone()).collect();
+            types.sort();
+            types.dedup();
+            resume.types = types;
+            if let Some(m) = &scene.modules {
+                if m.horloge.is_some() {
+                    resume.modules.push("horloge".into());
+                }
+                if m.musique.is_some() {
+                    resume.modules.push("musique".into());
+                }
+                if m.objectifs.is_some() {
+                    resume.modules.push("objectifs".into());
+                }
+                if m.equaliseur.is_some() {
+                    resume.modules.push("equaliseur".into());
+                }
+                if m.spots.is_some() {
+                    resume.modules.push("spots".into());
+                }
+            }
+            resume.widgets = scene
+                .widgets
+                .iter()
+                .map(|w| WidgetResume {
+                    widget_type: w.widget_type.clone(),
+                    x: w.x,
+                    y: w.y,
+                    largeur: w.largeur,
+                    hauteur: w.hauteur,
+                    z: w.z,
+                    trou: w.trou,
+                })
+                .collect();
+        }
+        out.push(resume);
+    }
+    Ok(out)
 }
 
 /// Supprime une scène : retire <id>.json + entrée index. Si la scène supprimée
@@ -658,6 +869,7 @@ pub fn supprimer(app: &AppHandle, state: &ScenesState, id: &str) -> Result<(), S
             *cid = new_id.clone();
         }
         save_current_id_config(app, &new_id)?;
+        purge_cadres_chat(state);
         push_snapshot(state);
     }
 
@@ -905,6 +1117,7 @@ pub fn importer(app: &AppHandle, state: &ScenesState) -> Result<Option<SceneInde
         let mut cid = state.current_id.lock().unwrap();
         *cid = id.clone();
     }
+    purge_cadres_chat(state);
     push_snapshot(state);
 
     log::info!(
@@ -912,4 +1125,499 @@ pub fn importer(app: &AppHandle, state: &ScenesState) -> Result<Option<SceneInde
         nom, id, copies, manquants
     );
     Ok(Some(entry))
+}
+
+// ===== Export « tout en .zip » (toutes les scènes + tous les médias) =====
+
+/// Exporte TOUTES les scènes + TOUS les médias dans un seul .zip.
+///
+/// Structure de l'archive — UN dossier racine = UN nom de sauvegarde
+/// (= le nom du fichier choisi, sans .zip) :
+/// ```text
+/// <sauvegarde>/
+/// ├── scenes/index.json + scenes/<id>.json   (miroir brut — restauré tel quel
+/// │                                           par l'import « Archive .zip »)
+/// ├── medias/…                               (TOUS les médias, récursif —
+/// │                                           musique/ incluse, référencés ou non)
+/// └── packs/<nom-scène>/scene.json + medias/ (un pack par scène, format de
+///                                             l'export unitaire → réimportable
+///                                             via Importer après dézip)
+/// ```
+///
+/// Dialog « Enregistrer sous » : dossier + nom de fichier choisis par
+/// l'utilisateur ; un .zip existant est écrasé (« si les scènes existent
+/// déjà dans le dossier, on les remplace »).
+/// La scène courante est sauvée d'abord (le miroir reflète l'état RAM).
+/// Un fichier illisible est sauté (log warn) ; une erreur en cours
+/// d'écriture est fatale — le .zip partiel est supprimé (jamais d'archive
+/// corrompue laissée sur disque).
+/// Retourne Some(chemin du zip) si exporté, None si dialog annulé.
+pub fn exporter_tout_zip(app: &AppHandle, state: &ScenesState) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    // 0. Sauver la courante d'abord : le miroir disque reflète l'état RAM.
+    save_current(app, state)?;
+
+    // 1. Dialog « Enregistrer sous » (filtre .zip + nom par défaut daté).
+    let nom_defaut = format!(
+        "streamos-scenes-{}.zip",
+        chrono::Local::now().format("%Y%m%d-%H%M")
+    );
+    let file = app
+        .dialog()
+        .file()
+        .add_filter("Archive ZIP", &["zip"])
+        .set_file_name(&nom_defaut)
+        .blocking_save_file();
+    let Some(file) = file else {
+        return Ok(None); // dialog annulé
+    };
+    let mut dest: PathBuf = file.into_path().map_err(|e| format!("Chemin invalide: {}", e))?;
+    // .zip forcé si l'utilisateur a retiré l'extension dans le dialog.
+    let ext_zip = dest
+        .extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| e.eq_ignore_ascii_case("zip"));
+    if !ext_zip {
+        dest.set_extension("zip");
+    }
+
+    // 2. Nom de la sauvegarde = nom du fichier choisi (sans .zip) → il
+    //    devient le dossier racine de l'archive (« un dossier = une
+    //    sauvegarde »). Défaut si stem illisible : "streamos".
+    let racine = dest
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("streamos")
+        .to_string();
+
+    // 3. Écriture de l'archive ; sur erreur le .zip partiel est supprimé.
+    ecrire_zip_export(app, &dest, &racine).inspect_err(|_| {
+        let _ = fs::remove_file(&dest);
+    })?;
+
+    Ok(Some(dest.display().to_string()))
+}
+
+/// Corps de `exporter_tout_zip` : écrit toute l'archive dans `dest` sous
+/// le dossier racine `racine/` (File::create écrase un .zip existant —
+/// écrasement voulu).
+fn ecrire_zip_export(app: &AppHandle, dest: &std::path::Path, racine: &str) -> Result<(), String> {
+    use crate::zip_store::ZipEcrivain;
+    use std::io::BufWriter;
+
+    let f = fs::File::create(dest)
+        .map_err(|e| format!("Création {}: {}", dest.display(), e))?;
+    let mut zip = ZipEcrivain::new(BufWriter::new(f));
+    // Préfixe commun de toutes les entrées : « <sauvegarde>/ ».
+    let r = format!("{}/", racine);
+
+    // 1. Miroir scenes/ : index.json + <id>.json (l'index est la source de
+    //    vérité — il est toujours écrit, même si le fichier disque manquait).
+    let idx = load_index(app)?;
+    let index_json = serde_json::to_string_pretty(&idx)
+        .map_err(|e| format!("Sérialisation index: {}", e))?;
+    zip.ajouter_octets(&format!("{}scenes/index.json", r), index_json.as_bytes())
+        .map_err(|e| format!("ZIP scenes/index.json: {}", e))?;
+    let dir_scenes = scenes_dir(app)?;
+    let mut nb_scenes = 0u32;
+    for entry in &idx {
+        let p = dir_scenes.join(format!("{}.json", entry.id));
+        match zip.ajouter_fichier(&format!("{}scenes/{}.json", r, entry.id), &p) {
+            Ok(true) => nb_scenes += 1,
+            Ok(false) => {
+                log::warn!("Export ZIP : scène {} illisible, absente du miroir", entry.id)
+            }
+            Err(e) => return Err(format!("ZIP scenes/{}.json: {}", entry.id, e)),
+        }
+    }
+
+    // 2. Miroir medias/ : TOUS les fichiers, récursif (musique/ incluse,
+    //    médias référencés ou non).
+    let medias_root = data_dir(app)?.join("medias");
+    let mut nb_medias = 0u32;
+    ajouter_dossier_zip(&mut zip, &medias_root, &format!("{}medias", r), &mut nb_medias)?;
+
+    // 3. Packs par scène : packs/<nom>/scene.json + medias/ — même format
+    //    que l'export unitaire (importer() le lit après dézip).
+    let mut utilises = std::collections::HashSet::new();
+    let mut nb_packs = 0u32;
+    let mut medias_manquants = 0u32;
+    for entry in &idx {
+        let scene = match load_scene_file(app, &entry.id) {
+            Ok(s) => s,
+            Err(e) => {
+                log::warn!("Export ZIP : scène {} illisible ({}), pack sauté", entry.id, e);
+                continue;
+            }
+        };
+        let nom_pack = nom_pack_unique(&sanitiser_nom_pack(&entry.nom), &mut utilises);
+        let base = format!("{}packs/{}", r, nom_pack);
+        let mut v = serde_json::to_value(&scene).map_err(|e| format!("Sérialisation: {}", e))?;
+        if let Some(obj) = v.as_object_mut() {
+            obj.insert("nom".to_string(), serde_json::Value::String(entry.nom.clone()));
+        }
+        let content =
+            serde_json::to_string_pretty(&v).map_err(|e| format!("Sérialisation: {}", e))?;
+        zip.ajouter_octets(&format!("{}/scene.json", base), content.as_bytes())
+            .map_err(|e| format!("ZIP {}/scene.json: {}", base, e))?;
+        let refs = collecter_medias(&scene);
+        for rel in &refs {
+            let file_name = rel.strip_prefix("medias/").unwrap_or(rel);
+            let src = medias_root.join(file_name);
+            if !src.exists() {
+                medias_manquants += 1;
+                log::warn!(
+                    "Export ZIP : média manquant ({}), chemin gardé dans {}",
+                    rel, base
+                );
+                continue;
+            }
+            match zip.ajouter_fichier(&format!("{}/medias/{}", base, file_name), &src) {
+                Ok(true) => {}
+                Ok(false) => {
+                    log::warn!("Export ZIP : média illisible, ignoré : {}", src.display())
+                }
+                Err(e) => return Err(format!("ZIP {}/medias/{}: {}", base, file_name, e)),
+            }
+        }
+        nb_packs += 1;
+    }
+
+    zip.terminer().map_err(|e| format!("Finalisation ZIP: {}", e))?;
+    log::info!(
+        "Export ZIP terminé : {} ({} scènes, {} médias, {} packs, {} médias pack manquants)",
+        dest.display(),
+        nb_scenes,
+        nb_medias,
+        nb_packs,
+        medias_manquants
+    );
+    Ok(())
+}
+
+/// Ajoute récursivement tout un dossier au zip sous `prefixe` (séparateur
+/// `/` exigé par le format ZIP). Un fichier illisible est sauté (log warn) ;
+/// une erreur en cours d'écriture remonte — l'archive serait corrompue.
+fn ajouter_dossier_zip<W: std::io::Write>(
+    zip: &mut crate::zip_store::ZipEcrivain<W>,
+    dir: &std::path::Path,
+    prefixe: &str,
+    nb: &mut u32,
+) -> Result<(), String> {
+    if !dir.exists() {
+        return Ok(()); // pas de dossier medias/ → rien à ajouter
+    }
+    let rd = fs::read_dir(dir).map_err(|e| format!("Lecture {}: {}", dir.display(), e))?;
+    for e in rd.flatten() {
+        let p = e.path();
+        let nom = e.file_name().to_string_lossy().into_owned();
+        let chemin_zip = format!("{}/{}", prefixe, nom);
+        if p.is_dir() {
+            ajouter_dossier_zip(zip, &p, &chemin_zip, nb)?;
+        } else if p.is_file() {
+            match zip.ajouter_fichier(&chemin_zip, &p) {
+                Ok(true) => *nb += 1,
+                Ok(false) => {
+                    log::warn!("Export ZIP : fichier illisible, ignoré : {}", p.display())
+                }
+                Err(e) => return Err(format!("ZIP {}: {}", chemin_zip, e)),
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Sanitize un nom de scène en nom de dossier de pack : caractères interdits
+/// Windows remplacés par '-', espaces/points de bord retirés (trailing
+/// dot/space = nom invalide Windows), vide → "scene". UTF-8 conservé —
+/// le flag d'entrée zip est posé dans zip_store.
+fn sanitiser_nom_pack(nom: &str) -> String {
+    let s: String = nom
+        .chars()
+        .map(|c| match c {
+            '/' | '\\' | '?' | '%' | '*' | ':' | '|' | '"' | '<' | '>' => '-',
+            c if c.is_control() => '-',
+            c => c,
+        })
+        .collect();
+    let s = s.trim().trim_end_matches(['.', ' ']);
+    if s.is_empty() {
+        "scene".to_string()
+    } else {
+        s.to_string()
+    }
+}
+
+/// Déduplique un nom de pack (deux scènes peuvent porter le même nom) :
+/// « nom », puis « nom-2 », « nom-3 »…
+fn nom_pack_unique(base: &str, utilises: &mut std::collections::HashSet<String>) -> String {
+    let mut candidat = base.to_string();
+    let mut n = 2u32;
+    while !utilises.insert(candidat.clone()) {
+        candidat = format!("{}-{}", base, n);
+        n += 1;
+    }
+    candidat
+}
+
+// ===== Import « tout en .zip » (restauration complète d'une sauvegarde) =====
+//
+// Protocole en 2 phases — même recette que l'import de commandes
+// (commandes.rs) : la phase 1 ANALYSE sans rien écrire et remonte les
+// conflits ; le frontend demande « remplacer ou passer ? » pour chacun,
+// puis la phase 2 APPLIQUE avec la liste des ids acceptés.
+//
+// Compatibilité « pour tout le monde » : la racine de la sauvegarde est
+// repérée par le suffixe « scenes/index.json » — un zip extrait puis
+// re-zippé à la main dans un sous-dossier (ou notre format racine
+// « <sauvegarde>/ », ou un vieux zip sans racine) est lu pareil.
+// Scènes absentes localement → importées direct. Id déjà présent →
+// tranché par l'UI. Scènes locales absentes du zip → conservées (fusion,
+// jamais de réinitialisation). Médias <racine>medias/** restaurés en
+// écrasant les fichiers du même nom (les noms étant des uuid, un même
+// nom = le même fichier).
+
+/// Conflit détecté par l'analyse : l'id existe déjà dans l'index local.
+/// `nomLocal`/`nomArchive` permettent à l'UI de nommer la scène dans la
+/// question « remplacer ou passer ? ».
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize)]
+pub struct ConflitZip {
+    pub id: String,
+    pub nomArchive: String,
+    pub nomLocal: String,
+}
+
+/// Résultat de la phase 1 d'import .zip (dialog + analyse — AUCUNE
+/// écriture à ce stade). camelCase = contrat JSON direct frontend.
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize)]
+pub struct AnalyseZipImport {
+    /// Chemin du zip choisi — repassé tel quel à l'étape « appliquer ».
+    pub zipPath: String,
+    /// Scènes déclarées dans l'archive (fichier <id>.json présent).
+    pub scenes: Vec<SceneIndex>,
+    /// Ids déjà présents localement → conflits à trancher par l'UI.
+    pub conflits: Vec<ConflitZip>,
+}
+
+/// Bilan retourné par appliquer_zip_import (affiche dans l'alerte succès).
+#[allow(non_snake_case)]
+#[derive(Debug, Clone, Serialize)]
+pub struct BilanImportZip {
+    /// Scènes écrites (nouvelles + remplacées).
+    pub scenesImportees: u32,
+    /// Fichiers médias restaurés sous medias/.
+    pub mediasRestaures: u32,
+    /// Scènes du zip passées (conflit décliné ou fichier illisible).
+    pub scenesSautees: u32,
+}
+
+/// Repère la racine de la sauvegarde dans l'archive : le préfixe commun
+/// devant « scenes/index.json ». « <r>/scenes/index.json » → « <r>/ » ;
+/// « scenes/index.json » (vieux zips sans racine) → « ». Le préfixe le
+/// plus court gagne si plusieurs candidats (zip avec des fichiers en plus).
+/// Erreur si aucun index — l'archive n'est pas une sauvegarde StreamOS.
+fn detecter_racine_zip(lecteur: &crate::zip_store::ZipLecteur) -> Result<String, String> {
+    let mut candidats: Vec<String> = lecteur
+        .entrees()
+        .filter_map(|e| e.strip_suffix("scenes/index.json").map(str::to_string))
+        .collect();
+    candidats.sort_by_key(|c| c.len());
+    candidats.into_iter().next().ok_or_else(|| {
+        "Archive invalide : aucune sauvegarde (scenes/index.json introuvable)".to_string()
+    })
+}
+
+/// Ouvre le zip, repère la racine et lit l'index des scènes qu'il déclare.
+/// Commun aux deux phases (l'archive est re-ouverte en phase 2 — coût
+/// négligeable, le central directory fait quelques Ko).
+fn lire_index_zip(
+    zip_path: &std::path::Path,
+) -> Result<(crate::zip_store::ZipLecteur, String, Vec<SceneIndex>), String> {
+    let mut lecteur = crate::zip_store::ZipLecteur::ouvrir(zip_path)
+        .map_err(|e| format!("Lecture du .zip : {}", e))?;
+    let racine = detecter_racine_zip(&lecteur)?;
+    let brut = lecteur
+        .lire_bytes(&format!("{}scenes/index.json", racine))
+        .map_err(|e| format!("Lecture scenes/index.json dans le .zip : {}", e))?;
+    let idx: Vec<SceneIndex> = serde_json::from_slice(&brut)
+        .map_err(|e| format!("scenes/index.json invalide dans le .zip : {}", e))?;
+    Ok((lecteur, racine, idx))
+}
+
+/// Phase 1 — dialog « Ouvrir » .zip + analyse SANS écriture.
+/// Retourne le chemin du zip (repassé tel quel à appliquer_zip_import) +
+/// les scènes importables + les conflits à trancher par l'UI, ou None si
+/// dialog annulé.
+pub fn choisir_et_analyser_zip(
+    app: &AppHandle,
+) -> Result<Option<AnalyseZipImport>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let file = app
+        .dialog()
+        .file()
+        .add_filter("Archive ZIP", &["zip"])
+        .blocking_pick_file();
+    let Some(file) = file else {
+        return Ok(None); // dialog annulé
+    };
+    let zip_path = file.into_path().map_err(|e| format!("Chemin invalide: {}", e))?;
+
+    let (lecteur, racine, idx_zip) = lire_index_zip(&zip_path)?;
+    // Une scène déclarée sans fichier <id>.json dans l'archive est signalée
+    // (index corrompu) — elle n'est pas proposée à l'import.
+    let scenes: Vec<SceneIndex> = idx_zip
+        .into_iter()
+        .filter(|e| {
+            let ok = lecteur
+                .entrees()
+                .any(|n| n == format!("{}scenes/{}.json", racine, e.id).as_str());
+            if !ok {
+                log::warn!("Import ZIP : scène {} déclarée mais absente de l'archive", e.id);
+            }
+            ok
+        })
+        .collect();
+
+    let idx_local = load_index(app)?;
+    let conflits: Vec<ConflitZip> = scenes
+        .iter()
+        .filter_map(|e| {
+            idx_local
+                .iter()
+                .find(|l| l.id == e.id)
+                .map(|l| ConflitZip {
+                    id: e.id.clone(),
+                    nomArchive: e.nom.clone(),
+                    nomLocal: l.nom.clone(),
+                })
+        })
+        .collect();
+
+    Ok(Some(AnalyseZipImport {
+        zipPath: zip_path.display().to_string(),
+        scenes,
+        conflits,
+    }))
+}
+
+/// Phase 2 — applique l'import décidé par l'UI.
+/// `remplacer` = ids de scènes locales que l'utilisateur accepte d'écraser
+/// (les conflits non listés sont passés). Restaure <racine>medias/** en
+/// écrasant les mêmes noms, écrit les <id>.json des scènes acceptées ou
+/// nouvelles, met à jour index.json (noms + nomMasque repris de
+/// l'archive), puis recharge la scène courante en RAM (elle a pu être
+/// remplacée) + snapshot. Scènes locales absentes du zip : intactes.
+pub fn appliquer_zip_import(
+    app: &AppHandle,
+    state: &ScenesState,
+    zip_path: &std::path::Path,
+    remplacer: &[String],
+) -> Result<BilanImportZip, String> {
+    // 0. Sauver la courante d'abord — les fichiers remplacés ensuite sont
+    //    la vérité de l'archive ; la scène RAM est rechargée en fin.
+    save_current(app, state)?;
+
+    let (mut lecteur, racine, idx_zip) = lire_index_zip(zip_path)?;
+    let remplacer: std::collections::HashSet<&str> =
+        remplacer.iter().map(String::as_str).collect();
+    let mut idx_local = load_index(app)?;
+    let mut bilan = BilanImportZip {
+        scenesImportees: 0,
+        mediasRestaures: 0,
+        scenesSautees: 0,
+    };
+
+    // 1. Médias : <racine>medias/** → data/medias/** (écrasement des mêmes
+    //    noms — les noms sont des uuid, même nom = même fichier). Un nom
+    //    malveillant a déjà été écarté par le lecteur (anti zip-slip) ;
+    //    une entrée corrompue est sautée (log warn) sans bloquer le reste.
+    let prefixe_medias = format!("{}medias/", racine);
+    let medias_root = data_dir(app)?.join("medias");
+    let noms: Vec<String> = lecteur.entrees().map(str::to_string).collect();
+    for nom in noms.iter().filter(|n| n.starts_with(&prefixe_medias)) {
+        let rel = &nom[prefixe_medias.len()..];
+        let dest = medias_root.join(rel);
+        match lecteur.lire_bytes(nom) {
+            Ok(bytes) => {
+                if let Some(parent) = dest.parent() {
+                    if let Err(e) = fs::create_dir_all(parent) {
+                        log::warn!("Import ZIP : création {}: {}", parent.display(), e);
+                        continue;
+                    }
+                }
+                match fs::write(&dest, &bytes) {
+                    Ok(()) => bilan.mediasRestaures += 1,
+                    Err(e) => log::warn!("Import ZIP : écriture {}: {}", dest.display(), e),
+                }
+            }
+            Err(e) => log::warn!("Import ZIP : média illisible dans l'archive ({}): {}", nom, e),
+        }
+    }
+
+    // 2. Scènes : nouvelle → fichier + index ; conflit accepté → fichier
+    //    écrasé + nom/nomMasque repris de l'archive ; conflit décliné →
+    //    passé. Un <id>.json dont le schéma ne parse pas n'est JAMAIS
+    //    écrit (on ne casse pas une scène locale saine).
+    for entry in &idx_zip {
+        let existe = idx_local.iter().position(|s| s.id == entry.id);
+        if existe.is_some() && !remplacer.contains(entry.id.as_str()) {
+            bilan.scenesSautees += 1;
+            continue; // conflit décliné par l'utilisateur
+        }
+        let chemin = format!("{}scenes/{}.json", racine, entry.id);
+        let bytes = match lecteur.lire_bytes(&chemin) {
+            Ok(b) => b,
+            Err(e) => {
+                log::warn!("Import ZIP : scène {} illisible ({}), sautée", entry.id, e);
+                bilan.scenesSautees += 1;
+                continue;
+            }
+        };
+        if let Err(e) = serde_json::from_slice::<Scene>(&bytes) {
+            log::warn!("Import ZIP : scène {} schéma invalide ({}), sautée", entry.id, e);
+            bilan.scenesSautees += 1;
+            continue;
+        }
+        let dest = scene_file_path(app, &entry.id)?;
+        fs::write(&dest, &bytes).map_err(|e| format!("Écriture {}: {}", dest.display(), e))?;
+        match existe {
+            Some(pos) => {
+                idx_local[pos].nom = entry.nom.clone();
+                idx_local[pos].nomMasque = entry.nomMasque;
+            }
+            None => idx_local.push(entry.clone()),
+        }
+        bilan.scenesImportees += 1;
+    }
+    save_index(app, &idx_local)?;
+
+    // 3. Recharger la scène courante depuis le disque : si son id a été
+    //    remplacé, la RAM doit refléter la version importée (sinon la
+    //    prochaine sauvegarde réécrirait l'ancienne par-dessus).
+    let current_id = state.current_id.lock().unwrap().clone();
+    let mut scene = load_scene_file(app, &current_id).unwrap_or_else(|e| {
+        log::warn!("Import ZIP : rechargement scène courante {}: {}", current_id, e);
+        Scene::new()
+    });
+    appliquer_canvas_obs(app, &mut scene);
+    {
+        let mut s = state.scene.lock().unwrap();
+        *s = scene;
+    }
+    purge_cadres_chat(state);
+    push_snapshot(state);
+
+    log::info!(
+        "Import ZIP terminé : {} ({} scènes, {} médias, {} sautées)",
+        zip_path.display(),
+        bilan.scenesImportees,
+        bilan.mediasRestaures,
+        bilan.scenesSautees
+    );
+    Ok(bilan)
 }

@@ -67,17 +67,31 @@ export const confirmDeleteWidget = writable(false);
 /// 2026-09-26 (widgets + bord du canvas) — plus d'onglets widget/app.
 export const cadreModalOpen = writable(false);
 
-/// Modale Interactions chat : true = ouverte (onglets Clip de bienvenue /
-/// Bandeau premier message / Alertes).
+/// Modale Interactions : true = ouverte (onglets Alertes / Bienvenue /
+/// Commandes / Présentation / Musique + outil Position des overlays).
 export const interactionModalOpen = writable(false);
 
 /// Modale Modération & Rôles : true = ouverte (onglets par plateforme).
-/// Seul l'onglet Twitch est fonctionnel ; les autres affichent "Bientôt disponible".
+/// Seuls les onglets des plateformes fonctionnelles sont affichés.
 export const moderationModalOpen = writable(false);
 
-/// Modale Diagnostic (consommation) : true = ouverte. Le polling 1 Hz de
-/// `conso_etat` ne tourne que pendant qu'elle est montée (ConsoModal).
+/// Modale Planning (planning Twitch Helix, ex-onglet de la modale
+/// Interactions) : true = ouverte. Lanceur « Ma chaîne » de la Toolbar.
+export const planningModalOpen = writable(false);
+
+/// Modale Statistiques (audience, ex-onglet « Audience » du Diagnostic) :
+/// true = ouverte. Lanceur « Ma chaîne » de la Toolbar.
+export const statistiquesModalOpen = writable(false);
+
+/// Modale Performances (consommation, ex-« Diagnostic ») : true = ouverte.
+/// Le polling 1 Hz de `conso_etat` ne tourne que pendant qu'elle est montée
+/// (ConsoModal).
 export const consoModalOpen = writable(false);
+
+/// Modale « Connexion OBS » (WebSocket) : true = ouverte. Inventaire des
+/// fonctionnalités qui transitent par le WebSocket OBS (état réel) +
+/// options de connexion (lanceur : section OBS de la Toolbar).
+export const obsWebSocketModalOpen = writable(false);
 
 /// Position d'un titre — vocabulaire unifié widget + fond. Pour un widget,
 /// le titre est affiché HORS du widget (au-dessus/en dessous/à côté) ; pour
@@ -101,6 +115,11 @@ export const titreFondModalOpen = writable(false);
 /// comme dans LiveSplit, avec auto-mapping depuis les segments LSS.
 export const speedrunConfigModalOpen = writable(false);
 
+/// Modale « Créer votre layout » du splitter speedrun (Layout Editor façon
+/// LiveSplit) : true = ouverte. Ouverte par le bouton de la carte d'édition
+/// du widget speedrun — édite les champs srXxx du widget sélectionné.
+export const speedrunLayoutModalOpen = writable(false);
+
 /// Modale galerie de presets de scènes : null = fermée, "creation" = choix
 /// d'un modèle au bouton « + Scène » (crée une NOUVELLE scène), "onboarding" =
 /// choix de la scène de départ au premier lancement (initialise la courante
@@ -111,6 +130,18 @@ export const presetsModalOpen = writable<"creation" | "onboarding" | null>(null)
 /// source (clic droit pastille → « Dupliquer »). Même pattern que
 /// titreModalOpen (cible portée par la valeur).
 export const dupliquerSceneModalOpen = writable<string | null>(null);
+
+/// Modale de confirmation d'ouverture d'une scène masquée : null = fermée,
+/// sinon id de la scène à ouvrir (clic gauche sur une pastille au titre
+/// orange de la barre « Vos scènes »). Même pattern que
+/// dupliquerSceneModalOpen (cible portée par la valeur).
+export const confirmOuvrirSceneModalOpen = writable<string | null>(null);
+
+/// Modale de confirmation des sorties OBS (stream / record) : null = fermée,
+/// sinon la sortie concernée. Posée par les 3 lanceurs (Toolbar, topbar,
+/// barre de raccourcis) AVANT le toggle — démarrer ET arrêter sont confirmés.
+/// Même pattern que confirmOuvrirSceneModalOpen (cible portée par la valeur).
+export const confirmObsOutputOpen = writable<"stream" | "record" | null>(null);
 
 /// Modale Écran d'attente (BRB) : true = ouverte. Config (média, durée,
 /// titre, son, source audio) + contrôles (lancer/pause/arrêter). Le média

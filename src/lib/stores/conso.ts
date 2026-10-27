@@ -4,13 +4,28 @@
 // le backend échantillonne déjà à 1 Hz, le frontend lit l'historique complet
 // et le ré-affiche (les nouvelles secondes arrivent naturellement).
 import { writable } from "svelte/store";
-import { tauri, type ConsoEtat } from "../tauri";
+import { tauri, type BoiteNoireEtat, type ConsoEtat } from "../tauri";
 
 /// Dernier état connu (historique roulant côté Rust, ≤300 pts ≈ 5 min).
 export const consoEtat = writable<ConsoEtat | null>(null);
 
 /// true quand le dernier invoke a échoué (backend joignable ?).
 export const consoErreur = writable(false);
+
+/// Journal PERSISTANT (boîte noire) : 1 point / 5 s écrit sur disque, il
+/// survit à un gel ou à une coupure. Lu à la demande — jamais pollé (le
+/// fichier fait jusqu'à 2 Mio).
+export const boiteNoire = writable<BoiteNoireEtat | null>(null);
+
+/// Charge les `limite` derniers points du journal persistant (1 h par défaut).
+export async function chargerBoiteNoire(limite = 720): Promise<void> {
+  try {
+    boiteNoire.set(await tauri.boiteNoireEtat(limite));
+  } catch {
+    // Non-fatal : la section affiche « aucun point enregistré ».
+    boiteNoire.set(null);
+  }
+}
 
 let timer: ReturnType<typeof setInterval> | null = null;
 

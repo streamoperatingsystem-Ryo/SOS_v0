@@ -25,8 +25,9 @@
 //!   - Threads identifiés par registre TID→label (rempli au spawn via
 //!     `nommer_thread`) — pas de GetThreadDescription, robuste.
 //!   - Toute mesure qui échoue vaut 0 — le diagnostic ne crash jamais l'app.
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, VecDeque};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -188,13 +189,274 @@ fn etat_slot() -> &'static Mutex<EtatInterne> {
 }
 
 // =============================================================================
+// BOÎTE NOIRE — journal persistant (5 s) qui survit à un gel / coupure
+// =============================================================================
+//
+// Différence avec la boucle 1 Hz ci-dessous : elle DORT quand la modale
+// Diagnostic est fermée (contrat « non énergivore », 2026-10-13). La boîte
+// noire tourne EN PERMANENCE — c'est la seule trace qui reste après un gel
+// total de la machine. Constat 2026-10-27 : `events.jsonl` s'arrêtait à la
+// seconde du gel, sans rien sur les secondes précédentes, et la modale était
+// fermée → zéro échantillon existait.
+//
+// Coût volontairement minimal : UN snapshot pour soi (CPU + RSS) + UN
+// snapshot pour chercher obs64.exe + `GlobalMemoryStatusEx`. Pas de PDH/GPU,
+// pas de snapshot threads. `sync_data()` à chaque ligne : sans lui la
+// dernière écriture resterait dans le cache de l'OS et disparaîtrait avec la
+// coupure secteur — c'est précisément ce qu'on veut éviter.
+
+/// Cadence de la boîte noire (permanente, modale fermée comprise).
+#[cfg(windows)]
+const BOITE_NOIRE_INTERVALLE: Duration = Duration::from_secs(5);
+
+/// Borne de rotation : au-delà, le fichier devient `boite_noire.1.jsonl`
+/// (UNE seule génération conservée → 2 fichiers max). ~2 Mio ≈ 1 jour à 5 s.
+#[cfg(windows)]
+const BOITE_NOIRE_MAX_OCTETS: u64 = 2 * 1024 * 1024;
+
+/// Millis epoch du dernier RPC OBS réussi (tous appelants confondus, via
+/// `obs::rpc`). 0 = aucun depuis le boot. C'est ce qui révèle un décrochage
+/// OBS silencieux : le 2026-10-27, OBS n'a plus rien loggé à 15:18 alors que
+/// l'app vivait encore à 15:55 — sans ce champ, indétectable.
+static OBS_DERNIER_OK_MS: AtomicU64 = AtomicU64::new(0);
+
+/// À appeler sur CHAQUE RPC OBS réussi (`obs::rpc` — point de passage
+/// unique de tous les appels obs-websocket, y compris obs_trou).
+pub fn marquer_obs_ok() {
+    OBS_DERNIER_OK_MS.store(maintenant_epoch_ms(), Ordering::Relaxed);
+}
+
+/// Nombre d'appels à la commande `obs_connect` depuis le boot + origine du
+/// dernier appel. Sert à coincer un appelant en boucle : `obs_connect` force
+/// `SetCurrentProgramScene("SOS")`, donc chaque appel bascule la scène OBS
+/// (constat 2026-10-27 : 24 bascules sur un live où l'utilisateur n'a rien
+/// touché). Le compteur + l'origine sont écrits dans la boîte noire.
+static OBS_CONNECT_N: AtomicU64 = AtomicU64::new(0);
+
+fn obs_origine_slot() -> &'static Mutex<Option<String>> {
+    static O: OnceLock<Mutex<Option<String>>> = OnceLock::new();
+    O.get_or_init(|| Mutex::new(None))
+}
+
+/// À appeler au début de la commande `obs_connect`. `origine` vient du
+/// frontend : "boot" (auto-connect), "bouton" (section OBS), "raccourci"
+/// (Stream Deck / barre de raccourcis).
+pub fn marquer_obs_connect(origine: &str) {
+    OBS_CONNECT_N.fetch_add(1, Ordering::Relaxed);
+    *obs_origine_slot().lock().unwrap() = Some(origine.to_string());
+}
+
+/// Une ligne de `boite_noire.jsonl`. Volontairement pauvre : écrivable en
+/// quelques microsecondes toutes les 5 s. Pas de `cfg(windows)` : la commande
+/// de lecture doit exister sur toutes les plateformes (elle renvoie vide).
+#[derive(Serialize, Deserialize)]
+pub struct EchantillonBoiteNoire {
+    v: u8,
+    /// Epoch millisecondes.
+    ts: u64,
+    /// Mémoire de travail de StreamOS, Mo.
+    ram_mo: f64,
+    /// % du CPU total (tous cœurs) consommé par StreamOS.
+    cpu_pct: f64,
+    /// RAM système OCCUPÉE, Mo (croissance = fuite ou charge).
+    ram_systeme_mo: f64,
+    /// `obs64.exe`/`obs32.exe` présent. ⚠️ Ne dit RIEN de l'état websocket :
+    /// `obs.rs` n'a aucun état persistant (chaque RPC = connect→close).
+    obs_present: bool,
+    /// Secondes écoulées depuis le dernier RPC OBS réussi. `None` = aucun
+    /// depuis le boot. Une valeur qui grimpe = OBS ne répond plus.
+    obs_silence_s: Option<u64>,
+    /// Nombre d'appels à `obs_connect` depuis le boot (chaque appel bascule
+    /// la scène OBS sur "SOS" si aucun stream ne tourne).
+    obs_connect_n: u64,
+    /// Origine du dernier `obs_connect` ("boot" / "bouton" / "raccourci").
+    obs_connect_origine: Option<String>,
+}
+
+/// Chemin de la boîte noire — crée `telemetrie/` si besoin.
+pub fn chemin_boite_noire(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let dir = crate::config::data_dir(app)?.join("telemetrie");
+    if !dir.exists() {
+        std::fs::create_dir_all(&dir).map_err(|e| format!("Créer telemetrie/: {}", e))?;
+    }
+    Ok(dir.join("boite_noire.jsonl"))
+}
+
+/// Chemin retenu au boot (rempli par `demarrer`) — lu par la commande de
+/// lecture, qui n'a pas d'`AppHandle`.
+static CHEMIN_BOITE_NOIRE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Réponse de `boite_noire_etat`.
+#[derive(Serialize)]
+pub struct BoiteNoireEtat {
+    /// Du plus ancien au plus récent.
+    pub echantillons: Vec<EchantillonBoiteNoire>,
+    /// Lignes illisibles ignorées. ⚠️ Non nul est NORMAL : une coupure
+    /// secteur laisse une ligne partielle en fin de fichier.
+    pub ignorees: usize,
+}
+
+/// Journal persistant de la boîte noire : `limite` derniers points
+/// (défaut 720 = 1 h à 5 s). Lecture bornée — le fichier fait ≤ 2 Mio.
+/// Ne polle pas : à appeler à l'ouverture de la section.
+#[tauri::command]
+pub fn boite_noire_etat(limite: Option<usize>) -> BoiteNoireEtat {
+    let mut etat = BoiteNoireEtat {
+        echantillons: Vec::new(),
+        ignorees: 0,
+    };
+    let Some(chemin) = CHEMIN_BOITE_NOIRE.get() else {
+        return etat;
+    };
+    let Ok(texte) = std::fs::read_to_string(chemin) else {
+        return etat;
+    };
+    let mut tous: Vec<EchantillonBoiteNoire> = Vec::new();
+    for ligne in texte.lines() {
+        if ligne.trim().is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<EchantillonBoiteNoire>(ligne) {
+            Ok(e) => tous.push(e),
+            Err(_) => etat.ignorees += 1,
+        }
+    }
+    let debut = tous.len().saturating_sub(limite.unwrap_or(720));
+    etat.echantillons = tous.split_off(debut);
+    etat
+}
+
+/// Ouvre le journal en append, rotation faite si la borne est dépassée.
+/// None = écriture impossible (dégradé : la boucle continue de mesurer).
+#[cfg(windows)]
+fn ouvrir_boite_noire(chemin: &std::path::Path) -> Option<std::fs::File> {
+    if let Ok(m) = std::fs::metadata(chemin) {
+        if m.len() > BOITE_NOIRE_MAX_OCTETS {
+            let ancien = chemin.with_extension("1.jsonl");
+            let _ = std::fs::remove_file(&ancien);
+            let _ = std::fs::rename(chemin, &ancien);
+        }
+    }
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(chemin)
+        .ok()
+}
+
+/// Écrit UNE ligne et force le disque. `flush` seul ne suffit pas : les
+/// octets resteraient dans le cache de l'OS, perdus à la coupure.
+#[cfg(windows)]
+fn ecrire_boite_noire(f: &mut std::fs::File, ligne: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    writeln!(f, "{}", ligne)?;
+    f.flush()?;
+    f.sync_data()
+}
+
+/// `obs64.exe`/`obs32.exe` dans la liste des processus. Snapshot dédié : ne
+/// partage AUCUNE map `prev` avec la boucle 1 Hz (sinon les deux
+/// échantillonneurs se voleraient mutuellement leurs deltas CPU).
+#[cfg(windows)]
+fn obs_present() -> bool {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
+        TH32CS_SNAPPROCESS,
+    };
+    let Ok(snap) = (unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }) else {
+        return false;
+    };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
+    let mut trouve = false;
+    if unsafe { Process32FirstW(snap, &mut entry) }.is_ok() {
+        loop {
+            let nom = String::from_utf16_lossy(&entry.szExeFile)
+                .trim_end_matches('\0')
+                .to_lowercase();
+            if nom == "obs64.exe" || nom == "obs32.exe" {
+                trouve = true;
+                break;
+            }
+            if unsafe { Process32NextW(snap, &mut entry) }.is_err() {
+                break;
+            }
+        }
+    }
+    let _ = unsafe { CloseHandle(snap) };
+    trouve
+}
+
+/// Boucle permanente (5 s) — ne dort jamais : c'est le but.
+#[cfg(windows)]
+fn boucle_boite_noire(chemin: PathBuf) {
+    use windows::Win32::System::Threading::GetCurrentProcess;
+    // Visible dans la modale Diagnostic (registre TID→label).
+    nommer_thread("Boîte noire (écriture)");
+    let coeurs = nb_coeurs() as f64;
+    let mut fichier = ouvrir_boite_noire(&chemin);
+    let mut precedent = Instant::now();
+    let mut prev_cpu: Option<u64> = None;
+    loop {
+        std::thread::sleep(BOITE_NOIRE_INTERVALLE);
+        let maintenant = Instant::now();
+        let ecoule_ms = maintenant.duration_since(precedent).as_millis() as f64;
+        precedent = maintenant;
+        let h = unsafe { GetCurrentProcess() };
+        let cpu = temps_cpu_processus(h);
+        let cpu_pct = match (prev_cpu, cpu) {
+            (Some(p), Some(c)) if ecoule_ms > 0.0 => {
+                ((c.saturating_sub(p) as f64) / (ecoule_ms * coeurs) * 100.0).min(100.0)
+            }
+            _ => 0.0,
+        };
+        prev_cpu = cpu;
+        let echantillon = EchantillonBoiteNoire {
+            v: 1,
+            ts: maintenant_epoch_ms(),
+            ram_mo: ram_processus_mo(h),
+            cpu_pct,
+            ram_systeme_mo: ram_systeme_mo(),
+            obs_present: obs_present(),
+            obs_silence_s: {
+                let dernier = OBS_DERNIER_OK_MS.load(Ordering::Relaxed);
+                (dernier > 0)
+                    .then(|| maintenant_epoch_ms().saturating_sub(dernier) / 1000)
+            },
+            obs_connect_n: OBS_CONNECT_N.load(Ordering::Relaxed),
+            obs_connect_origine: obs_origine_slot().lock().unwrap().clone(),
+        };
+        let Ok(ligne) = serde_json::to_string(&echantillon) else {
+            continue;
+        };
+        // Réouverture paresseuse : fichier supprimé/roté à la main, ou
+        // première ouverture ratée (disque occupé) — on retente au tick.
+        if fichier.is_none() {
+            fichier = ouvrir_boite_noire(&chemin);
+        }
+        if let Some(f) = fichier.as_mut() {
+            if ecrire_boite_noire(f, &ligne).is_err() {
+                fichier = None;
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn boucle_boite_noire(_chemin: PathBuf) {}
+
+// =============================================================================
 // DÉMARRAGE (setup) — tap chat_tx + thread échantillonneur
 // =============================================================================
 
 /// Démarre le diagnostic. Appelé UNE fois au boot (lib.rs setup).
 /// `chat_tx` : même canal broadcast que le WS :4321 — tap passif pour les
 /// compteurs d'activité et le nom du processus jeu (pattern télémétrie).
-pub fn demarrer(chat_tx: broadcast::Sender<String>) {
+/// `chemin_boite_noire` : journal persistant 5 s (voir `chemin_boite_noire`).
+pub fn demarrer(chat_tx: broadcast::Sender<String>, chemin_boite_noire: PathBuf) {
     // 1. Tap passif : compter les frames par type. Détection par sous-chaîne
     //    (serde_json ne garantit PAS l'ordre des clés — jamais de préfixe).
     let mut rx = chat_tx.subscribe();
@@ -212,6 +474,12 @@ pub fn demarrer(chat_tx: broadcast::Sender<String>) {
 
     // 2. Thread échantillonneur 1Hz (détaché — vit autant que l'app).
     std::thread::spawn(boucle_echantillonnage);
+
+    // 3. Boîte noire — journal persistant, INDÉPENDANT du gating de la modale
+    //    (contrairement à la boucle ci-dessus) : c'est la seule trace qui
+    //    survit à un gel ou à une coupure secteur.
+    let _ = CHEMIN_BOITE_NOIRE.set(chemin_boite_noire.clone());
+    std::thread::spawn(move || boucle_boite_noire(chemin_boite_noire));
 }
 
 /// Compte une frame chat_tx vers les compteurs d'activité + suit le nom du

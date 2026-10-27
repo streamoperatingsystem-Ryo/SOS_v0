@@ -14,6 +14,10 @@
 //! Publication : `{"type":"viewers","plateforme":p,"count":n|null}` sur chat_tx
 //! (diffusion :4321) + app.emit("viewers:update"). Envoyé seulement quand le
 //! chiffre change (dedup) ou qu'une plateforme passe hors-ligne / déconnectée.
+//! Les derniers counts sont aussi gardés dans `derniers_counts` pour `reemit`
+//! — un client WS arrivé en cours de live (pop-out chat, reload OBS) demande
+//! l'état via {"type":"viewers-resync"} au lieu d'attendre le prochain
+//! changement de count.
 //!
 //! + Communauté (objectifs de stream) : compteurs réels poussés par frames
 //!   `{"type":"communaute","plateforme":p,...}` — même cadence, même dedup :
@@ -210,6 +214,7 @@ fn publier(
         return;
     }
     *dernier = count;
+    noter_count(plat, count.map(|n| n as i64));
     let msg = json!({"type": "viewers", "plateforme": plat, "count": count}).to_string();
     let _ = chat_tx.send(msg);
     let _ = app.emit("viewers:update", json!({"plateforme": plat, "count": count}));
@@ -277,6 +282,7 @@ fn deconnecte(
 ) {
     if let Some(p) = plats.remove(nom) {
         if p.dernier.is_some() {
+            noter_count(nom, None);
             let msg = json!({"type": "viewers", "plateforme": nom, "count": null}).to_string();
             let _ = chat_tx.send(msg);
             let _ = app.emit("viewers:update", json!({"plateforme": nom, "count": null}));
@@ -285,6 +291,42 @@ fn deconnecte(
     if contextes.remove(nom).map(|c| c.0).unwrap_or(false) {
         let msg = json!({"type": "stream-info", "plateforme": nom, "en_live": false,
             "titre": "", "jeu": "", "jeu_id": "", "debut": "", "tags": []});
+        let _ = chat_tx.send(msg.to_string());
+    }
+}
+
+/// Derniers counts viewers publiés par plateforme — servis par `reemit`
+/// aux clients WS qui demandent l'état courant ("viewers-resync" :
+/// pop-out chat ouvert en plein live, reload OBS). Dedup'd = sans ça,
+/// leur barre viewers resterait vide jusqu'au prochain changement.
+fn derniers_counts() -> &'static Mutex<HashMap<&'static str, i64>> {
+    static S: OnceLock<Mutex<HashMap<&'static str, i64>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Enregistre le dernier count publié d'une plateforme (Some) ou l'efface
+/// (None = hors-ligne / déconnectée). Appelé par `publier`/`deconnecte`
+/// (twitch/youtube/kick) et par tiktok_chat (RoomUserSeq — même contrat).
+pub fn noter_count(plat: &'static str, count: Option<i64>) {
+    let mut m = derniers_counts().lock().unwrap();
+    match count {
+        Some(n) => {
+            m.insert(plat, n);
+        }
+        None => {
+            m.remove(plat);
+        }
+    }
+}
+
+/// Ré-émet les derniers counts connus sur chat_tx — appelé par server.rs
+/// quand un client WS envoie {"type":"viewers-resync"} à la connexion.
+/// Pas de emit frontend : le dashboard a déjà les counts via
+/// viewers:update (il est la source des frames).
+pub fn reemit(chat_tx: &broadcast::Sender<String>) {
+    let counts = derniers_counts().lock().unwrap().clone();
+    for (plat, count) in counts {
+        let msg = json!({"type": "viewers", "plateforme": plat, "count": count});
         let _ = chat_tx.send(msg.to_string());
     }
 }

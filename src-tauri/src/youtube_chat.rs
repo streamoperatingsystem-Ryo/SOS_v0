@@ -116,18 +116,29 @@ async fn run_polling(
                 );
             }
             // Commandes chat : "!commande" → overlay diffusion.
+            // Accusé ignoré — pas de canal de réponse sur YouTube.
             if let Some(commandes) = app.try_state::<crate::commandes::CommandesState>() {
-                commandes.on_message(&msg.pseudo, &msg.pseudo, &msg.texte);
+                let _ = commandes.on_message("youtube", &msg.pseudo, &msg.pseudo, &msg.texte);
             }
-            // Musique : "!rs <titre>" → bibliothèque locale. est_mod : badges
-            // déjà normalisés à la source ("moderator"/"broadcaster").
+            // est_mod : badges déjà normalisés à la source
+            // ("moderator"/"broadcaster") — partagé musique + arène.
+            let est_mod = msg
+                .badges
+                .as_deref()
+                .map(|b| b.contains("moderator") || b.contains("broadcaster"))
+                .unwrap_or(false);
+            // Musique : "!rs <titre>" → bibliothèque locale.
             if let Some(musique) = app.try_state::<crate::musique::MusiqueState>() {
-                let est_mod = msg
-                    .badges
-                    .as_deref()
-                    .map(|b| b.contains("moderator") || b.contains("broadcaster"))
-                    .unwrap_or(false);
                 musique.on_message("youtube", &msg.pseudo, &msg.texte, est_mod);
+            }
+            // Emoji Arena : "!fight"/coups → combat côté diffusion (retour
+            // ignoré — pas de canal de réponse chat sur YouTube ici).
+            if let Some(fight) = app.try_state::<crate::fight::FightState>() {
+                fight.on_message("youtube", &msg.pseudo, &msg.texte, est_mod);
+            }
+            // Cadres : "!cadres <couleur>" → couleur du cadre (retour ignoré).
+            if let Some(cadres) = app.try_state::<crate::cadres_cmd::CadresChatState>() {
+                let _ = cadres.on_message(&msg.pseudo, &msg.texte);
             }
         }
 

@@ -9,7 +9,12 @@ mod imp {
     use std::collections::HashMap;
     use std::os::windows::process::CommandExt;
     use std::process::Command;
-    use windows::Win32::Foundation::{BOOL, HWND, LPARAM};
+    use windows::core::PCWSTR;
+    use windows::Win32::Foundation::{BOOL, HWND, LPARAM, RECT};
+    use windows::Win32::Graphics::Gdi::{
+        EnumDisplayDevicesW, EnumDisplayMonitors, GetMonitorInfoW, DISPLAY_DEVICEW,
+        HDC, HMONITOR, MONITORINFO, MONITORINFOEXW,
+    };
     use windows::Win32::System::Diagnostics::ToolHelp::{
         CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
         TH32CS_SNAPPROCESS,
@@ -20,15 +25,32 @@ mod imp {
     };
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetClassNameW, GetWindowTextLengthW, GetWindowTextW,
-        GetWindowThreadProcessId, IsWindowVisible,
+        GetWindowThreadProcessId, IsWindowVisible, EDD_GET_DEVICE_INTERFACE_NAME,
+        MONITORINFOF_PRIMARY,
     };
 
-    /// Fenêtre visible : titre + exe + valeur OBS ("title:class:exe").
+    /// Fenêtre visible : titre + exe + valeur OBS ("title:class:exe") +
+    /// hwnd (sert à la miniature WGC à la demande — pc_thumb).
     #[derive(Debug, Clone, Serialize)]
     pub struct WindowEntry {
         pub title: String,
         pub exe: String,
         pub obs_value: String,
+        pub hwnd: isize,
+    }
+
+    /// Moniteur : nom device ("\\.\DISPLAYn"), `monitor_id` au format OBS
+    /// ("\\?\DISPLAY#…#{guid}" — la propriété monitor_id de monitor_capture),
+    /// handle HMONITOR pour la miniature WGC, géométrie + flag primaire.
+    #[derive(Debug, Clone, Serialize)]
+    pub struct MonitorEntry {
+        pub index: usize,
+        pub name: String,
+        pub monitor_id: String,
+        pub hmon: isize,
+        pub primary: bool,
+        pub w: i32,
+        pub h: i32,
     }
 
     /// Énumère les caméras du PC via PowerShell (Get-PnpDevice -Class Camera,Image).
@@ -165,7 +187,12 @@ mod imp {
         // Format OBS window property : "title:class:exe"
         let obs_value = format!("{}:{}:{}", title, class, exe);
 
-        list.push(WindowEntry { title, exe, obs_value });
+        list.push(WindowEntry {
+            title,
+            exe,
+            obs_value,
+            hwnd: hwnd.0 as isize,
+        });
         BOOL(1)
     }
 
@@ -200,6 +227,79 @@ mod imp {
         log::info!("[PC] jeux/fenêtres → {} entrée(s)", list.len());
         list
     }
+
+    /// Résout le `monitor_id` OBS d'un moniteur depuis son nom device
+    /// ("\\.\DISPLAYn") : EnumDisplayDevices + EDD_GET_DEVICE_INTERFACE_NAME
+    /// → "\\?\DISPLAY#…#{guid}" — la propriété monitor_id de monitor_capture.
+    unsafe fn interface_moniteur(device_name: PCWSTR) -> String {
+        let mut dd = DISPLAY_DEVICEW {
+            cb: std::mem::size_of::<DISPLAY_DEVICEW>() as u32,
+            ..Default::default()
+        };
+        if EnumDisplayDevicesW(device_name, 0, &mut dd, EDD_GET_DEVICE_INTERFACE_NAME)
+            .as_bool()
+        {
+            let len = dd
+                .DeviceID
+                .iter()
+                .position(|&c| c == 0)
+                .unwrap_or(dd.DeviceID.len());
+            String::from_utf16_lossy(&dd.DeviceID[..len])
+        } else {
+            String::new()
+        }
+    }
+
+    /// Callback EnumDisplayMonitors : collecte nom + monitor_id + géométrie.
+    /// LPARAM = *mut Vec<MonitorEntry>.
+    unsafe extern "system" fn enum_monitors_proc(
+        hmon: HMONITOR,
+        _hdc: HDC,
+        _rect: *mut RECT,
+        lparam: LPARAM,
+    ) -> BOOL {
+        let list = &mut *(lparam.0 as *mut Vec<MonitorEntry>);
+        let mut info = MONITORINFOEXW::default();
+        info.monitorInfo.cbSize = std::mem::size_of::<MONITORINFOEXW>() as u32;
+        if !GetMonitorInfoW(hmon, &mut info as *mut MONITORINFOEXW as *mut MONITORINFO)
+            .as_bool()
+        {
+            return BOOL(1);
+        }
+        let len = info
+            .szDevice
+            .iter()
+            .position(|&c| c == 0)
+            .unwrap_or(info.szDevice.len());
+        let name = String::from_utf16_lossy(&info.szDevice[..len]);
+        let r = info.monitorInfo.rcMonitor;
+        list.push(MonitorEntry {
+            index: list.len(),
+            name,
+            monitor_id: interface_moniteur(PCWSTR(info.szDevice.as_ptr())),
+            hmon: hmon.0 as isize,
+            primary: info.monitorInfo.dwFlags & MONITORINFOF_PRIMARY != 0,
+            w: r.right - r.left,
+            h: r.bottom - r.top,
+        });
+        BOOL(1)
+    }
+
+    /// Énumère les moniteurs du PC (EnumDisplayMonitors) — type « Écran » du
+    /// sélecteur de capture (monitor_capture OBS, propriété monitor_id).
+    pub fn enumerate_monitors() -> Vec<MonitorEntry> {
+        let mut list: Vec<MonitorEntry> = Vec::new();
+        unsafe {
+            let _ = EnumDisplayMonitors(
+                HDC::default(),
+                None,
+                Some(enum_monitors_proc),
+                LPARAM(&mut list as *mut _ as isize),
+            );
+        }
+        log::info!("[PC] moniteurs → {}", list.len());
+        list
+    }
 }
 
 #[cfg(not(windows))]
@@ -211,6 +311,18 @@ mod imp {
         pub title: String,
         pub exe: String,
         pub obs_value: String,
+        pub hwnd: isize,
+    }
+
+    #[derive(Debug, Clone, Serialize)]
+    pub struct MonitorEntry {
+        pub index: usize,
+        pub name: String,
+        pub monitor_id: String,
+        pub hmon: isize,
+        pub primary: bool,
+        pub w: i32,
+        pub h: i32,
     }
 
     pub fn enumerate_cameras() -> Vec<String> {
@@ -220,6 +332,9 @@ mod imp {
         Vec::new()
     }
     pub fn enumerate_games() -> Vec<WindowEntry> {
+        Vec::new()
+    }
+    pub fn enumerate_monitors() -> Vec<MonitorEntry> {
         Vec::new()
     }
 }

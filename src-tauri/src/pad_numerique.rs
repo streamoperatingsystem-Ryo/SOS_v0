@@ -9,6 +9,13 @@
 ///   - NumpadAdd / NumpadSubtract : touches réservées (navigation plages).
 ///   - Émission WS sur chat_tx : `pad-play` + `pad-stop` → diffusion.html
 ///     (overlay z 9995, même squelette de position que welcome/alertes/commandes).
+///   - Chrono 2 (media_type "chrono") : chronomètre INDÉPENDANT démarrant à
+///     zéro à la pression de la touche — tick 10 Hz, frames WS `chrono2-etat`
+///     auto-réparatrices (état complet + position du squelette DÉDIÉ
+///     `position_chrono.json` à chaque frame), event Tauri miroir
+///     `chrono2:etat`, arrêt automatique à `chrono_duree_s` (frame fin +
+///     sons). Un seul chrono à la fois : une nouvelle pression le remplace
+///     (compteur de génération). Pas d'annulation croisée avec pad-stop.
 ///   - Émission event Tauri `pad:touche` → dashboard joue l'audio local
 ///     (le user entend sur son PC, en plus de la diffusion captée par OBS).
 ///
@@ -91,6 +98,27 @@ pub struct ToucheConfig {
     /// Effet zoom activé (image/video).
     #[serde(default)]
     pub zoom: bool,
+    /// Affichage plein écran (image/video) : le média couvre tout le canvas
+    /// de diffusion — position d'overlay ignorée, pas de cadre SVG.
+    #[serde(default)]
+    pub plein_ecran: bool,
+    /// Transparence (superposition) : opacité réduite du média plein écran
+    /// pour laisser la scène visible derrière.
+    #[serde(default)]
+    pub transparence: bool,
+    /// Niveau d'opacité de la transparence (0.0-1.0). Défaut 0.5.
+    #[serde(default = "default_transparence_opacite")]
+    pub transparence_opacite: f32,
+    /// Durée cible préprogrammée du chrono en secondes (media_type "chrono").
+    /// Le chrono démarre à zéro et s'arrête automatiquement à cette durée.
+    #[serde(default = "default_chrono_duree_s")]
+    pub chrono_duree_s: u64,
+    /// Son de départ du chrono ("medias/<uuid>.<ext>"). None = silence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chrono_son_depart: Option<String>,
+    /// Son d'alerte de fin du chrono ("medias/<uuid>.<ext>"). None = silence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub chrono_son_fin: Option<String>,
 }
 
 fn default_duree_ms() -> u64 {
@@ -98,6 +126,12 @@ fn default_duree_ms() -> u64 {
 }
 fn default_volume() -> f32 {
     1.0
+}
+fn default_transparence_opacite() -> f32 {
+    0.5
+}
+fn default_chrono_duree_s() -> u64 {
+    60
 }
 
 impl Default for ToucheConfig {
@@ -111,6 +145,12 @@ impl Default for ToucheConfig {
             volume: default_volume(),
             bounce: false,
             zoom: false,
+            plein_ecran: false,
+            transparence: false,
+            transparence_opacite: default_transparence_opacite(),
+            chrono_duree_s: default_chrono_duree_s(),
+            chrono_son_depart: None,
+            chrono_son_fin: None,
         }
     }
 }
@@ -164,6 +204,10 @@ pub struct PadNumeriqueState {
     /// Évite la race condition OFF→ON rapide où l'ancien thread n'a pas eu
     /// le temps de sortir avant que le nouveau démarre.
     generation: Arc<AtomicU32>,
+    /// Génération du chrono 2 : une nouvelle pression de touche chrono
+    /// invalide la tâche tick précédente — un seul chrono à la fois,
+    /// une nouvelle pression = reset à zéro.
+    chrono_generation: Arc<AtomicU32>,
     /// Jeton d'annulation du timer courant (pad-stop).
     timer_cancel: Arc<Mutex<Arc<AtomicBool>>>,
 }
@@ -178,6 +222,7 @@ impl PadNumeriqueState {
             config: Arc::new(Mutex::new(config)),
             actif_flag: Arc::new(AtomicBool::new(false)),
             generation: Arc::new(AtomicU32::new(0)),
+            chrono_generation: Arc::new(AtomicU32::new(0)),
             timer_cancel: Arc::new(Mutex::new(Arc::new(AtomicBool::new(false)))),
         };
         let c = state.config.lock().unwrap().clone();
@@ -259,6 +304,14 @@ impl PadNumeriqueState {
         Ok(())
     }
 
+    /// Test manuel du chrono 2 (bouton « Tester le rendu » de l'onglet
+    /// Squelette de position) : démarre un chrono factice de 10 s,
+    /// silencieux — les frames `chrono2-etat` empruntent le pipeline réel,
+    /// position du squelette dédié relue à chaque frame incluse.
+    pub fn tester_chrono(&self) {
+        self.declencher_chrono(10, None, None, 1.0);
+    }
+
     // ===== Déclenchement =====
 
     /// Logique commune (capture + test) : lit la config touche, émet WS + event.
@@ -270,6 +323,20 @@ impl PadNumeriqueState {
         };
         let Some(touche) = touche else { return };
         let Some(media_type) = &touche.media_type else { return };
+
+        // Chrono 2 (media_type "chrono") : action INDÉPENDANTE des médias —
+        // pas de carte pad, pas d'annulation du timer média courant (une
+        // image/vidéo peut jouer pendant que le chrono tourne, et une
+        // pression média ne coupe pas le chrono — pas de pad-stop croisé).
+        if media_type == "chrono" {
+            self.declencher_chrono(
+                touche.chrono_duree_s,
+                touche.chrono_son_depart.clone(),
+                touche.chrono_son_fin.clone(),
+                touche.volume,
+            );
+            return;
+        }
 
         // Annuler le timer courant (si une touche était en cours).
         {
@@ -304,6 +371,9 @@ impl PadNumeriqueState {
                     "duree_ms": touche.duree_ms,
                     "bounce": touche.bounce,
                     "zoom": touche.zoom,
+                    "plein_ecran": touche.plein_ecran,
+                    "transparence": touche.transparence,
+                    "transparence_opacite": touche.transparence_opacite,
                 },
             });
             let _ = self.chat_tx.send(msg.to_string());
@@ -321,6 +391,9 @@ impl PadNumeriqueState {
                     "duree_ms": touche.duree_ms,
                     "bounce": false,
                     "zoom": false,
+                    "plein_ecran": false,
+                    "transparence": false,
+                    "transparence_opacite": 1.0,
                 },
             });
             let _ = self.chat_tx.send(msg.to_string());
@@ -346,6 +419,94 @@ impl PadNumeriqueState {
                     }
                 }
                 _ = await_timer_cancel(&new_cancel) => {}
+            }
+        });
+    }
+
+    // ===== Chrono 2 =====
+
+    /// Démarre le chrono 2 : tick 10 Hz (tâche tokio), frames WS
+    /// `chrono2-etat` auto-réparatrices — état COMPLET (actif, fin, écoulé,
+    /// durée, sons, volume) + position du squelette dédié à CHAQUE frame :
+    /// un client WS reconnecté se réaligne à la frame suivante, un
+    /// déplacement du squelette pendant que le chrono tourne est suivi live.
+    /// Event Tauri miroir `chrono2:etat` (pillule dashboard + sons locaux,
+    /// double face comme les sons pad).
+    ///
+    /// Arrêt automatique à `duree_s` : dernière frame `actif:false, fin:true`
+    /// → la diffusion fade-out + joue `son_fin`, le dashboard joue `son_fin`.
+    ///
+    /// Génération : une nouvelle pression de touche chrono invalide la tâche
+    /// précédente (un seul chrono à la fois, reset à zéro).
+    fn declencher_chrono(
+        &self,
+        duree_s: u64,
+        son_depart: Option<String>,
+        son_fin: Option<String>,
+        volume: f32,
+    ) {
+        let ma_generation = self.chrono_generation.fetch_add(1, Ordering::Relaxed) + 1;
+        let state = self.clone();
+        tauri::async_runtime::spawn(async move {
+            let start = std::time::Instant::now();
+            let duree_ms = (duree_s.max(1)).saturating_mul(1000) as u128;
+            // u128::MAX force l'émission immédiate de la 1re frame (dixième 0
+            // ≠ MAX) — le chrono apparaît sans attendre le 1er tick.
+            let mut dernier_dixieme: u128 = u128::MAX;
+            loop {
+                if state.chrono_generation.load(Ordering::Relaxed) != ma_generation {
+                    return;
+                }
+                let mut ecoule_ms = start.elapsed().as_millis();
+                let fin = ecoule_ms >= duree_ms;
+                if fin {
+                    ecoule_ms = duree_ms;
+                }
+                // Throttle WS : une frame par changement de dixième (10 Hz max),
+                // pattern du splitter (skip si signature identique).
+                let dixieme = ecoule_ms / 100;
+                if dixieme != dernier_dixieme || fin {
+                    dernier_dixieme = dixieme;
+                    // Position relue à chaque frame (une seule lecture lock →
+                    // clone — règle Mutex non réentrant).
+                    let position =
+                        crate::position_overlay::PositionOverlayState::from_app(&state.app)
+                            .map(|s| s.etat_chrono())
+                            .unwrap_or_else(crate::position_overlay::defaut_chrono);
+                    let frame = serde_json::json!({
+                        "type": "chrono2-etat",
+                        "actif": !fin,
+                        "fin": fin,
+                        "run_id": ma_generation,
+                        "ecoule_ms": ecoule_ms,
+                        "duree_s": duree_s,
+                        "son_depart": &son_depart,
+                        "son_fin": &son_fin,
+                        "volume": volume,
+                        "config": {
+                            "x": position.x,
+                            "y": position.y,
+                            "largeur": position.largeur,
+                            "hauteur": position.hauteur,
+                        },
+                    });
+                    let _ = state.chat_tx.send(frame.to_string());
+                    let evt = serde_json::json!({
+                        "actif": !fin,
+                        "fin": fin,
+                        "run_id": ma_generation,
+                        "ecoule_ms": ecoule_ms,
+                        "duree_s": duree_s,
+                        "son_depart": &son_depart,
+                        "son_fin": &son_fin,
+                        "volume": volume,
+                    });
+                    let _ = state.app.emit("chrono2:etat", &evt);
+                    if fin {
+                        return;
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
             }
         });
     }

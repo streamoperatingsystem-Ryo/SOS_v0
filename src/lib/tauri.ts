@@ -72,6 +72,19 @@ export interface Widget {
   /// FriendlyName PnP (pc_enumerate_cameras) = valeur video_device_id de la
   /// source OBS dshow_input "SOS-Caméra". undefined = device par défaut.
   cameraDeviceId?: string;
+  /// Forme DÉDIÉE du widget caméra : "cercle" | "carre" — découplée du
+  /// cadre de scène. undefined = suit le cadre de scène (historique).
+  cameraForme?: "cercle" | "carre";
+  /// Anneau autour de la caméra quand cameraForme est définie (couleurs du
+  /// cadre de scène). undefined/false = découpe nue.
+  cameraBord?: boolean;
+  /// Incrustation « fond vert virtuel » (filtre plugin OBS
+  /// background_removal sur SOS-Caméra). undefined/false = inactif.
+  cameraFondVert?: boolean;
+  /// Caméra masquée côté diffusion (bouton œil au survol du widget
+  /// dashboard) : items OBS désactivés + widget ignoré par diffusion.html.
+  /// undefined/false = visible (défaut).
+  cameraCachee?: boolean;
   /// Mode d'affichage des widgets type "input-viewer" : "clavier" (défaut),
   /// "souris", "numpad" ou "manette".
   inputMode?: string;
@@ -106,6 +119,75 @@ export interface Widget {
   /// "auto"/undefined = splits en ligne si la hauteur passe sous
   /// ~4×srTaillePolice (façon LiveSplit horizontal), colonne sinon.
   srLayout?: string;
+  /// ===== Options de layout du splitter (modale SpeedrunLayout) =====
+  /// undefined = défaut actuel (rendu identique).
+  /// Éléments visibles : titre du jeu / catégorie / pastille statut /
+  /// timer / pastille de phase / compteur « x / total » / barre de
+  /// progression. undefined = visible.
+  srVoirTitre?: boolean;
+  srVoirCategorie?: boolean;
+  srVoirStatut?: boolean;
+  srVoirTimer?: boolean;
+  srVoirPhase?: boolean;
+  srVoirCompteur?: boolean;
+  srVoirBarre?: boolean;
+  /// Colonne « temps » des lignes de split : "cumul" (défaut — split time
+  /// façon LiveSplit) | "segment" (durée de segment).
+  srModeTemps?: string;
+  /// Colonne « delta » : "cumul" (défaut — run vs PB cumulé) | "segment"
+  /// (temps gagné/perdu sur CE segment vs sa durée PB) | "off" (masquée).
+  srModeDelta?: string;
+  /// Précision du delta : "dixieme" (défaut) | "centieme" | "seconde".
+  srDeltaPrecision?: string;
+  /// Drop des décimales du delta au-delà d'1 min (LiveSplit
+  /// with_decimal_dropping). undefined = true.
+  srDeltaDrop?: boolean;
+  /// Précision du timer principal : "centieme" (défaut) | "dixieme" |
+  /// "seconde".
+  srTimerPrecision?: string;
+  /// Méthode de temps du timer : "auto" (défaut — game si dispo, sinon
+  /// real) | "real" | "game".
+  srTimerMethode?: string;
+  /// Couleur custom du timer (hex). undefined/vide = --sr-grad-from.
+  srCouleurTimer?: string;
+  /// Bordures colorées des lignes de split. undefined = visibles.
+  srSegBordure?: boolean;
+  /// Épaisseur des bordures de split (px). undefined = 1.
+  srSegBordureEpaisseur?: number;
+  /// Rayon des bordures de split (px). undefined = var(--rayon-petit).
+  srSegBordureRayon?: number;
+  /// Couleurs custom bordures/delta (hex). undefined/vide = variables
+  /// sémantiques (ok/error) ou --sr-grad-from pour l'actif.
+  srCouleurAhead?: string;
+  srCouleurBehind?: string;
+  srCouleurActif?: string;
+  /// Nombre de lignes de split visibles (visual_split_count LiveSplit).
+  /// undefined/0 = toutes.
+  srNbLignes?: number;
+  /// Scroll auto vers le split actif. undefined = activé.
+  srScrollAuto?: boolean;
+  /// Hauteur des lignes de split (px). undefined/0 = auto.
+  srHauteurLigne?: number;
+  /// ===== Points de validation (bandeau par-dessus le splitter) =====
+  /// Afficher les points numérotés de validation des splits. undefined = visible.
+  srVoirPoints?: boolean;
+  /// Durée du gros pop à l'activation d'un point, en secondes. undefined = 3.
+  srPointsDureePop?: number;
+  /// Son joué côté diffusion à l'activation d'un point
+  /// ("medias/<uuid>.<ext>"). undefined = silence.
+  srPointsSon?: string;
+  /// Volume du son des points (0.0-1.0). undefined = 1.0.
+  srPointsSonVolume?: number;
+  /// ===== Métronome du splitter (dashboard SEUL) =====
+  /// Battement BPM joué pendant la run (start ASL/manuel → il joue ;
+  /// pause/reset/fin → il s'arrête). Interprété par stores/metronome.ts
+  /// (Web Audio) — JAMAIS envoyé à la diffusion.
+  /// Activer/désactiver. undefined = désactivé.
+  srMetronomeActif?: boolean;
+  /// Tempo du battement (1-400). undefined = 120.
+  srMetronomeBpm?: number;
+  /// Volume du battement (0.0-1.0). undefined = 0.5.
+  srMetronomeVolume?: number;
   /// Plateforme suivie par un widget type "goal" :
   /// "twitch" | "youtube" | "kick" | "tiktok". undefined = non configuré.
   goalPlateforme?: GoalPlateforme;
@@ -318,6 +400,9 @@ export interface SpeedrunConfig {
   /// Settings ASL individuels (120+ pour MGS) persistés entre sessions.
   /// Map : code-signature → bool (coché/décoché).
   settings_asl?: Record<string, boolean>;
+  /// Compteur de tentatives de run (« Partie n°N » de l'export splits) —
+  /// incrémenté à chaque event `started`, jamais décrémenté.
+  nb_tentatives?: number;
 }
 
 /// Segment LSS (un split du fichier LiveSplit).
@@ -429,12 +514,13 @@ export interface CadreConfig {
 }
 
 /// Identifiants des modules HUD (singletons par scène).
-export type ModuleId = "horloge" | "musique" | "objectifs" | "equaliseur";
+export type ModuleId = "horloge" | "musique" | "objectifs" | "equaliseur" | "spots";
 export const MODULE_IDS: ModuleId[] = [
   "horloge",
   "musique",
   "objectifs",
   "equaliseur",
+  "spots",
 ];
 
 /// Ligne d'un module « Objectifs du stream » : métrique mesurée
@@ -490,6 +576,13 @@ export interface ModuleHud {
   /// Équaliseur : couleur de fin du dégradé (haut). undefined = dérivée
   /// de eqCouleur (assombrie 25 %) si posée, sinon résolution auto.
   eqCouleurFin?: string;
+  /// Spots : multiplicateur de vitesse d'animation (balayage des
+  /// faisceaux + cycle des couleurs). undefined = 1.
+  spotsVitesse?: number;
+  /// Spots : pulser l'intensité sur le spectre audio (frames eq-spectrum
+  /// — sans module équaliseur actif, balayage d'ambiance normal).
+  /// undefined = true.
+  spotsReagir?: boolean;
 }
 
 /// Modules HUD d'une scène — un emplacement par module. undefined =
@@ -501,6 +594,10 @@ export interface ScenesModules {
   /// Overlay spectre audio (rendu en diffusion uniquement, sous les
   /// widgets) — les options visuelles (cadre/opacité/fond) y sont ignorées.
   equaliseur?: ModuleHud;
+  /// Deux faisceaux « moving head » sur le fond (rendu en diffusion
+  /// uniquement, sous les widgets, trous évidés). Effet plein canvas :
+  /// x/y/largeur/hauteur inutilisés ; `opacite` = intensité lumineuse.
+  spots?: ModuleHud;
 }
 
 export interface Scene {
@@ -620,6 +717,62 @@ export interface SceneIndex {
   /// Titre masqué dans la pastille de la barre « Vos scènes » (œil) —
   /// l'onglet devient orange. Absent des anciens index.json → false.
   nomMasque?: boolean;
+}
+
+/// Conflit détecté par l'analyse d'un .zip de sauvegarde : la scène portée
+/// par l'archive possède un id déjà présent dans l'index local — l'UI
+/// demande « remplacer ou passer ? » pour chacun.
+export interface ConflitZip {
+  id: string;
+  nomArchive: string;
+  nomLocal: string;
+}
+
+/// Résultat de la phase 1 d'import « tout en .zip » (dialog Ouvrir +
+/// analyse — AUCUNE écriture faite à ce stade).
+export interface AnalyseZipImport {
+  /// Chemin du zip choisi — repassé tel quel à l'étape « appliquer ».
+  zipPath: string;
+  /// Scènes déclarées dans l'archive (hors conflits déjà connus).
+  scenes: SceneIndex[];
+  /// Ids déjà présents localement → à trancher par l'UI.
+  conflits: ConflitZip[];
+}
+
+/// Bilan de l'import .zip après application des décisions de l'UI.
+export interface BilanImportZip {
+  scenesImportees: number;
+  mediasRestaures: number;
+  scenesSautees: number;
+}
+
+/// Rect d'un widget pour la mini-map du tableau « Vos scènes » : position et
+/// taille en pixels du canvas de la scène (le frontend ramène en % via
+/// canvasW/canvasH). trou = fenêtre de capture OBS (contour pointillé).
+export interface WidgetResume {
+  type: string;
+  x: number;
+  y: number;
+  largeur: number;
+  hauteur: number;
+  z: number;
+  trou: boolean;
+}
+
+/// Résumé d'une scène pour le tableau enrichi « Vos scènes » : nb widgets,
+/// types présents, modules HUD configurés, fond, dims canvas + mini-rects.
+/// ok=false = fichier <id>.json absent ou illisible (résumé vide).
+export interface SceneResume {
+  id: string;
+  ok: boolean;
+  nbWidgets: number;
+  types: string[];
+  nbTrous: number;
+  modules: string[];
+  aFond: boolean;
+  canvasW: number;
+  canvasH: number;
+  widgets: WidgetResume[];
 }
 
 /// Métadonnées d'un preset de scène embarqué (galerie — sans le contenu).
@@ -746,12 +899,62 @@ export interface CommandeConfig {
   taille_px: number;
   cooldown_viewer_s: number;
   cooldown_global_s: number;
-  /// Chemin relatif du son importé ("medias/<uuid>.<ext>"). Mode image.
+  /// Chemin relatif du son importé ("medias/<uuid>.<ext>"). Joué par-dessus
+  /// dans tous les modes (texte seul, image, vidéo — audio non coupé).
   son?: string;
   /// Média ("medias/<uuid>.<ext>") : image (avec son séparé) ou vidéo (son
   /// inclus). undefined = icône + texte.
   media?: string;
   media_kind?: string;
+  /// Audio de la vidéo (mode video) : false = vidéo muette. Défaut true.
+  video_son?: boolean;
+  /// Police Google embarquée (id woff2, ex: "BebasNeue"). "" = système.
+  police?: string;
+  gras?: boolean;
+  italique?: boolean;
+  souligne?: boolean;
+  /// Couleur personnalisée du texte (hex). undefined = auto (cadre / blanc).
+  couleur?: string;
+  /// false = aucun accusé chat (Twitch peut répondre — même règle que
+  /// musique/fight). Défaut true.
+  reponses_chat?: boolean;
+}
+
+/// Résultat de l'import d'un pack de commandes (commande_importer).
+/// Les `conflits` gardent leurs chemins médias d'origine (relatifs au pack) —
+/// repassés à commandeImporterEcraser avec packDir si « écraser » est choisi.
+export interface ImportCommandesResultat {
+  /// true = dialog dossier annulé (rien lu).
+  annule: boolean;
+  /// Dossier pack choisi — repassé tel quel à commandeImporterEcraser.
+  pack_dir?: string;
+  /// Nb de commandes importées directement (sans conflit de nom).
+  importees: number;
+  /// Commandes du pack dont le nom existe déjà → l'UI tranche chacune.
+  conflits: CommandeConfig[];
+  /// Noms réservés à la musique (!rs, !skip…) ignorés à l'import.
+  reserves: string[];
+}
+
+// ===== Types Cadres chat (!cadres <couleur> → couleur vive du cadre) =====
+
+/// Config de la commande cadres (miroir de CadresChatConfig Rust —
+/// cadres_chat.json).
+export interface CadresChatConfig {
+  /// false = !cadres ignoré silencieusement.
+  actif: boolean;
+  /// Mot de commande SANS le "!" (défaut "cadres"). Renommable ; collisions
+  /// refusées avec les commandes chat, la musique et l'arène.
+  commande: string;
+  /// false = aucun accusé chat (Twitch peut répondre). Défaut true.
+  reponses_chat: boolean;
+}
+
+/// Une couleur de la palette fermée (nom anglais → hex) — affichée dans
+/// l'onglet Cadres pour connaître les noms valides en chat.
+export interface PaletteCouleur {
+  nom: string;
+  hex: string;
 }
 
 // ===== Types Musique (!rs → bibliothèque locale → diffusion) =====
@@ -825,11 +1028,73 @@ export interface MusiqueEtat {
   cooldowns_actifs: MusiqueCooldown[];
 }
 
+// ===== Types Emoji Arena (combat d'emojis 1v1 — miroir fight.rs) =====
+
+/// Config de l'arène (miroir de FightConfig Rust — fight_config.json).
+export interface FightConfig {
+  /// false = toutes les commandes ignorées silencieusement.
+  actif: boolean;
+  /// "!fight [@pseudo|bot] [emoji]" — défi ouvert / ciblé / vs CPU.
+  commande_fight: string;
+  /// Accepter un défi ("!accept [emoji]").
+  commande_accept: string;
+  /// Refuser un défi ciblé.
+  commande_refuse: string;
+  /// Coups du tour actif : rapide (sûr) / lourd (risqué) / spécial (vol de vie).
+  commande_a: string;
+  commande_b: string;
+  commande_c: string;
+  /// Abandonner le combat en cours.
+  commande_ff: string;
+  /// Arrêt forcé — mods/broadcaster.
+  commande_stop: string;
+  /// Points de vie de départ des deux combattants.
+  vie_max: number;
+  /// Durée d'attente d'un adversaire avant expiration du défi (s).
+  duree_lobby_s: number;
+  /// Temps alloué par tour ; timeout = tour sauté (anti-AFK).
+  duree_tour_s: number;
+  /// Durée max du match (s) — le plus haut en PV gagne à l'échéance.
+  duree_match_s: number;
+  /// Cooldown par viewer entre deux combats (s, 0 = off).
+  cooldown_combat_s: number;
+  /// false = aucun accusé chat (Twitch seul peut répondre).
+  reponses_chat: boolean;
+  /// true = annonce chaque tour humain dans le chat Twitch.
+  annonce_tour: boolean;
+  /// true = rappel « 5 s » avant la fin du tour (Twitch).
+  rappel_tour: boolean;
+  /// true = FX réduits (impacts, secousses) côté diffusion.
+  animations_reduites: boolean;
+}
+
+/// Cooldown de combat actif — clé "plateforme:pseudo" + restant (figé à
+/// l'emit, décrément local côté UI).
+export interface FightCooldown {
+  joueur: string;
+  restant_s: number;
+}
+
+/// Snapshot de la partie (payload `fight-state.combat` — forme variable
+/// selon `phase` : "idle" | "lobby" | "combat" | "fin", voir fight.rs).
+/// Typage lâche assumé : la diffusion est la référence, le dashboard ne
+/// fait qu'un affichage récapitulatif.
+export type FightPartie = Record<string, unknown>;
+
+/// État complet retourné par fight_etat / l'event "fight:update".
+export interface FightEtat {
+  config: FightConfig;
+  partie: FightPartie;
+  cooldowns: FightCooldown[];
+}
+
 // ===== Types Pad numérique (mirroir des structs Rust pad_numerique.rs) =====
 
 /// Configuration d'une touche du pad (16 touches × 3 plages).
 export interface ToucheConfig {
-  /// Type de média : "audio" | "image" | "video". undefined = touche vide.
+  /// Type de média : "audio" | "image" | "video" | "chrono" (chrono 2 :
+  /// chronomètre indépendant, démarre à zéro, arrêt auto à chrono_duree_s).
+  /// undefined = touche vide.
   media_type?: string;
   /// Chemin relatif du média ("medias/<uuid>.<ext>"). undefined = pas de média.
   media?: string;
@@ -846,6 +1111,20 @@ export interface ToucheConfig {
   bounce: boolean;
   /// Effet zoom activé (image/video).
   zoom: boolean;
+  /// Affichage plein écran (image/video) : couvre tout le canvas de diffusion,
+  /// position d'overlay ignorée, pas de cadre.
+  plein_ecran: boolean;
+  /// Transparence plein écran (superposition) : la scène reste visible derrière.
+  transparence: boolean;
+  /// Niveau d'opacité de la transparence (0.0-1.0). Défaut 0.5.
+  transparence_opacite: number;
+  /// Durée cible préprogrammée du chrono en secondes (media_type "chrono").
+  /// Défaut 60.
+  chrono_duree_s: number;
+  /// Son de départ du chrono ("medias/<uuid>.<ext>"). undefined = silence.
+  chrono_son_depart?: string;
+  /// Son d'alerte de fin du chrono ("medias/<uuid>.<ext>"). undefined = silence.
+  chrono_son_fin?: string;
 }
 
 /// Config globale du pad (persistée dans pad_numerique.json).
@@ -880,6 +1159,10 @@ export interface EcranAttenteConfig {
   /// Source audio OBS (wasapi_output_capture) choisie — undefined = créer
   /// « SOS Audio Écran d'attente ».
   source_audio?: string;
+  /// Couper les sources audio « bureau » pendant l'écran d'attente.
+  /// Défaut true (serde default côté Rust — absente des vieux JSON).
+  /// Option de la modale « Connexion OBS » (ObsWebSocketModal).
+  muter_bureau: boolean;
   /// Centre horizontal de la carte minuteur (px canvas diffusion).
   /// Défaut 960. Positionné par drag dans la modale.
   minuteur_x: number;
@@ -981,6 +1264,37 @@ export interface ConsoEchantillon {
 export interface ConsoEtat {
   nb_coeurs: number;
   historique: ConsoEchantillon[];
+}
+
+// ===== Boîte noire (modale Performances) — miroir conso.rs =====
+
+/// Un point du journal PERSISTANT (1 point / 5 s, écrit sur disque).
+export interface BoiteNoireEchantillon {
+  v: number;
+  /// Epoch millisecondes.
+  ts: number;
+  /// Mémoire de travail de StreamOS, Mo.
+  ram_mo: number;
+  /// % du CPU total consommé par StreamOS.
+  cpu_pct: number;
+  /// RAM système occupée, Mo.
+  ram_systeme_mo: number;
+  /// `obs64.exe`/`obs32.exe` présent.
+  obs_present: boolean;
+  /// Secondes depuis le dernier RPC OBS réussi (null = aucun depuis le boot).
+  obs_silence_s: number | null;
+  /// Nombre d'appels à `obs_connect` depuis le boot.
+  obs_connect_n: number;
+  /// Origine du dernier `obs_connect` ("boot" / "bouton" / "raccourci").
+  obs_connect_origine: string | null;
+}
+
+/// Réponse de `boite_noire_etat`.
+export interface BoiteNoireEtat {
+  echantillons: BoiteNoireEchantillon[];
+  /// Lignes illisibles ignorées (une ligne partielle en fin de fichier après
+  /// une coupure est NORMALE).
+  ignorees: number;
 }
 
 // ===== Onglet Audience (modale Diagnostic) — mirroir telemetrie/analyse.rs =====
@@ -1154,8 +1468,13 @@ export const tauri = {
   /// (GetVideoSettings → baseWidth/baseHeight, fallback 1920×1080), s'assure
   /// que la scène "SOS" + source navigateur "SOS-Diffusion" (dims = résolution
   /// OBS, URL :4321) existent sans doublon, puis mute la scène + save + snapshot.
-  async obsConnect(host: string, port: number, password: string): Promise<void> {
-    await invoke("obs_connect", { host, port, password });
+  async obsConnect(
+    host: string,
+    port: number,
+    password: string,
+    origine?: string,
+  ): Promise<void> {
+    await invoke("obs_connect", { host, port, password, origine });
   },
 
   /// Refresh standalone de la source navigateur "SOS-Diffusion" (refreshnocache).
@@ -1164,14 +1483,15 @@ export const tauri = {
     await invoke("obs_refresh_diffusion", { host, port, password });
   },
 
-  /// Bascule le streaming OBS (ToggleStream). Retourne le nouvel état.
-  async obsToggleStream(host: string, port: number, password: string): Promise<boolean> {
-    return await invoke<boolean>("obs_toggle_stream", { host, port, password });
+  /// Met le streaming OBS dans l'état demandé (Start/StopStream explicite,
+  /// idempotent). Retourne l'état réel relu dans OBS.
+  async obsSetStream(host: string, port: number, password: string, actif: boolean): Promise<boolean> {
+    return await invoke<boolean>("obs_set_stream", { host, port, password, actif });
   },
 
-  /// Bascule l'enregistrement OBS (ToggleRecord). Retourne le nouvel état.
-  async obsToggleRecord(host: string, port: number, password: string): Promise<boolean> {
-    return await invoke<boolean>("obs_toggle_record", { host, port, password });
+  /// Met l'enregistrement OBS dans l'état demandé. Même contrat que obsSetStream.
+  async obsSetRecord(host: string, port: number, password: string, actif: boolean): Promise<boolean> {
+    return await invoke<boolean>("obs_set_record", { host, port, password, actif });
   },
 
   /// État des sorties OBS (stream + record, une connexion). Pas de polling :
@@ -1231,6 +1551,19 @@ export const tauri = {
   /// Ferme explicitement la fenêtre pop-out chat. Non-fatal si déjà fermée.
   async chatPopoutFermer(): Promise<void> {
     await invoke("chat_popout_fermer");
+  },
+
+  /// Toggle fenêtre pop-out speedrun (always_on_top, 420×640, AVEC contrôles
+  /// de run). Ouvre si fermée, ferme si ouverte. Retourne true si maintenant
+  /// ouverte. Fermer ≠ arrêter le moteur (l'affichage dashboard/diffusion
+  /// continue). Event "speedrun-popout-closed" à la fermeture par la croix.
+  async speedrunPopoutToggle(): Promise<boolean> {
+    return await invoke<boolean>("speedrun_popout_toggle");
+  },
+
+  /// Ferme explicitement la fenêtre pop-out speedrun. Non-fatal si déjà fermée.
+  async speedrunPopoutFermer(): Promise<void> {
+    await invoke("speedrun_popout_fermer");
   },
 
   // ===== Barre de raccourcis (fenêtre TOPMOST dockée) =====
@@ -1320,6 +1653,13 @@ export const tauri = {
     return invoke<SceneIndex[]>("scenes_lister");
   },
 
+  /// Résumé de toutes les scènes (nb widgets, types, modules, mini-rects) —
+  /// alimente le tableau enrichi « Vos scènes » (mini-map procédurale).
+  /// Relit chaque <id>.json à chaque appel : la vérité disque, zéro cache.
+  async scenesResumer(): Promise<SceneResume[]> {
+    return invoke<SceneResume[]>("scenes_resumer");
+  },
+
   /// Crée une nouvelle scène vide (1920×1080, 0 widget, pas de fond), bascule
   /// dessus. Sauve la courante d'abord. Retourne l'entrée créée.
   async sceneCreer(nom: string): Promise<SceneIndex> {
@@ -1377,6 +1717,32 @@ export const tauri = {
     return invoke<SceneIndex | null>("scene_importer");
   },
 
+  /// Exporte TOUTES les scènes + TOUS les médias dans un seul .zip
+  /// (dialog « Enregistrer sous » — un .zip existant est écrasé).
+  /// Retourne le chemin du zip écrit, null si annulé.
+  async scenesExporterZip(): Promise<string | null> {
+    return invoke<string | null>("scenes_exporter_zip");
+  },
+
+  /// Phase 1 de l'import .zip : dialog « Ouvrir » + analyse SANS écriture.
+  /// Retourne les scènes de l'archive + les conflits à trancher par l'UI,
+  /// null si dialog annulé.
+  async scenesImporterZip(): Promise<AnalyseZipImport | null> {
+    return invoke<AnalyseZipImport | null>("scenes_importer_zip");
+  },
+
+  /// Phase 2 : applique les décisions de l'UI — `remplacer` = ids de
+  /// scènes locales acceptées à l'écrasement (autres conflits passés).
+  async scenesImporterZipAppliquer(
+    zipPath: string,
+    remplacer: string[]
+  ): Promise<BilanImportZip> {
+    return invoke<BilanImportZip>("scenes_importer_zip_appliquer", {
+      zipPath,
+      remplacer,
+    });
+  },
+
   // ===== Presets de scènes embarqués =====
 
   /// Liste les métadonnées des presets embarqués (galerie). Parse non-fatal
@@ -1429,7 +1795,7 @@ export const tauri = {
     host: string,
     port: number,
     password: string,
-    kind: "camera" | "window" | "game"
+    kind: "camera" | "window" | "game" | "monitor"
   ): Promise<string[]> {
     return invoke<string[]>("obs_enumerate_targets", { host, port, password, kind });
   },
@@ -1441,7 +1807,7 @@ export const tauri = {
     port: number,
     password: string,
     sourceName: string,
-    kind: "camera" | "window" | "game",
+    kind: "camera" | "window" | "game" | "monitor",
     target: string | null,
     x: number,
     y: number,
@@ -1482,7 +1848,7 @@ export const tauri = {
     host: string,
     port: number,
     password: string,
-    kind: "camera" | "window" | "game"
+    kind: "camera" | "window" | "game" | "monitor"
   ): Promise<{ inputName: string; inputKind: string }[]> {
     return invoke("obs_enumerate_inputs_by_kind", { host, port, password, kind });
   },
@@ -1509,9 +1875,10 @@ export const tauri = {
   /// Crée / met à jour la source "SOS-Caméra" (dshow_input) dans la scène
   /// « SOS », sous SOS-Diffusion, calée sur le widget (centre + cover).
   /// device = FriendlyName PnP (= video_device_id dshow) ou null (device
-  /// par défaut d'OBS). Appelée à la création du widget et au changement
-  /// de device. Non-fatal si OBS offline (auto-guérison au prochain
-  /// scene_sync_captures : boot / openScene / connexion OBS).
+  /// par défaut d'OBS). Appelée à la création du widget, au changement
+  /// de device et au toggle œil (visible = inverse de cameraCachee :
+  /// false → items désactivés). Non-fatal si OBS offline (auto-guérison
+  /// au prochain scene_sync_captures : boot / openScene / connexion OBS).
   async cameraSync(
     host: string,
     port: number,
@@ -1520,9 +1887,11 @@ export const tauri = {
     x: number,
     y: number,
     w: number,
-    h: number
+    h: number,
+    fondVert: boolean,
+    visible: boolean
   ): Promise<void> {
-    await invoke("camera_sync", { host, port, password, device, x, y, w, h });
+    await invoke("camera_sync", { host, port, password, device, x, y, w, h, fondVert, visible });
   },
 
   /// Cache l'item de scène "SOS-Caméra" (SetSceneItemEnabled false) à la
@@ -1551,6 +1920,27 @@ export const tauri = {
     zoom: number
   ): Promise<boolean> {
     return invoke<boolean>("camera_mask_sync", { host, port, password, points, w, h, fit, zoom });
+  },
+
+  /// Active/désactive l'incrustation « fond vert virtuel » : filtre plugin
+  /// OBS background_removal (occ-ai/obs-backgroundremoval, 100% local) sur
+  /// SOS-Caméra + plaque SOS-Caméra-Fond masquée (item disabled, JAMAIS
+  /// RemoveInput) pour que la scène apparaisse derrière la personne.
+  /// Plugin absent → INSTALLATION AUTOMATIQUE (GitHub, SHA256 vérifié,
+  /// extraction per-user, aucun exe/admin). Retour = statut :
+  /// "applique" | "desactive" | "redemarrer-obs" (plugin posé sur disque,
+  /// OBS doit redémarrer pour le charger — l'état persisté s'applique à la
+  /// reconnexion). Erreur = message brut (OBS offline, réseau KO…).
+  /// visible = inverse de cameraCachee : la plaque reste masquée tant que
+  /// le widget caméra est caché, quel que soit `actif`.
+  async cameraFondVertSync(
+    host: string,
+    port: number,
+    password: string,
+    actif: boolean,
+    visible: boolean
+  ): Promise<string> {
+    return invoke<string>("camera_fond_vert", { host, port, password, actif, visible });
   },
 
   // ===== Alertes (follow/raid/sub/resub/subgift/bits) =====
@@ -1587,6 +1977,44 @@ export const tauri = {
   /// diffusion (applique aux deux overlays en live).
   async positionOverlaySet(config: PositionOverlayConfig): Promise<void> {
     await invoke("position_overlay_set", { config });
+  },
+
+  /// Retourne la config du squelette DÉDIÉ du chrono 2 (persistée
+  /// position_chrono.json — indépendante du squelette partagé).
+  async positionChronoEtat(): Promise<PositionOverlayConfig> {
+    return invoke<PositionOverlayConfig>("position_chrono_etat");
+  },
+
+  /// Remplace la config du squelette chrono 2 + persiste
+  /// (position_chrono.json) + push WS `chrono2-pos` vers la diffusion
+  /// (repositionnement live, même pendant que le chrono tourne).
+  async positionChronoSet(config: PositionOverlayConfig): Promise<void> {
+    await invoke("position_chrono_set", { config });
+  },
+
+  /// Retourne la config du squelette DÉDIÉ du pop de validation des splits
+  /// (persistée position_splitpop.json — indépendante du squelette partagé).
+  async positionSplitpopEtat(): Promise<PositionOverlayConfig> {
+    return invoke<PositionOverlayConfig>("position_splitpop_etat");
+  },
+
+  /// Remplace la config du squelette splitpop + persiste
+  /// (position_splitpop.json) + push WS `splitpop-pos` vers la diffusion
+  /// (repositionnement live, pop visible ou non).
+  async positionSplitpopSet(config: PositionOverlayConfig): Promise<void> {
+    await invoke("position_splitpop_set", { config });
+  },
+
+  /// Test manuel du rendu du pop des splits : la diffusion affiche un pop
+  /// factice au squelette dédié (même pipeline visuel qu'un vrai split).
+  async positionSplitpopTest(): Promise<void> {
+    await invoke("position_splitpop_test");
+  },
+
+  /// Test manuel du rendu du chrono 2 : démarre un chrono factice de 10 s
+  /// au squelette dédié (frames `chrono2-etat` réelles).
+  async positionChronoTest(): Promise<void> {
+    await invoke("position_chrono_test");
   },
 
   /// Test manuel : déclenche une alerte avec données factices (bypass cooldowns).
@@ -1637,6 +2065,45 @@ export const tauri = {
   /// Test manuel : déclenche une commande côté diffusion (bypass cooldowns).
   async commandeTester(id: string): Promise<void> {
     await invoke("commande_tester", { id });
+  },
+
+  /// Exporte les commandes chat comme pack dossier portable (commandes.json +
+  /// medias/). Dialog = dossier PARENT. Retourne true si exporté, false si annulé.
+  async commandeExporter(nomPack: string): Promise<boolean> {
+    return invoke<boolean>("commande_exporter", { nomPack });
+  },
+
+  /// Importe les commandes depuis un dossier pack (dialog dossier). Importe
+  /// directement les noms sans conflit ; retourne conflits + réservés à trancher
+  /// côté UI (écraser / ignorer → commandeImporterEcraser).
+  async commandeImporter(): Promise<ImportCommandesResultat> {
+    return invoke<ImportCommandesResultat>("commande_importer");
+  },
+
+  /// Phase conflits de l'import : les commandes acceptées remplacent les
+  /// existantes de même nom. Retourne le nb remplacé.
+  async commandeImporterEcraser(
+    packDir: string,
+    commandes: CommandeConfig[]
+  ): Promise<number> {
+    return invoke<number>("commande_importer_ecraser", { packDir, commandes });
+  },
+
+  // ===== Cadres chat (!cadres <couleur> → couleurFin du cadre unifié) =====
+
+  /// Config de la commande cadres.
+  async cadresChatEtat(): Promise<CadresChatConfig> {
+    return invoke<CadresChatConfig>("cadres_chat_etat");
+  },
+
+  /// Sauvegarde la config (nom normalisé + collisions refusées côté Rust).
+  async cadresChatSetConfig(config: CadresChatConfig): Promise<CadresChatConfig> {
+    return invoke<CadresChatConfig>("cadres_chat_set_config", { config });
+  },
+
+  /// Palette fermée de couleurs nommées (grille affichée onglet Cadres).
+  async cadresChatPalette(): Promise<PaletteCouleur[]> {
+    return invoke<PaletteCouleur[]>("cadres_chat_palette");
   },
 
   // ===== Musique (!rs → bibliothèque locale → diffusion) =====
@@ -1706,6 +2173,33 @@ export const tauri = {
   /// Change le volume de lecture côté diffusion (persisté).
   async musiqueVolume(volume: number): Promise<void> {
     await invoke("musique_volume", { volume });
+  },
+
+  // ===== Emoji Arena (combat d'emojis 1v1 piloté par le chat) =====
+
+  /// État complet : config + partie courante + cooldowns actifs.
+  async fightEtat(): Promise<FightEtat> {
+    return invoke<FightEtat>("fight_etat");
+  },
+
+  /// Sauvegarde la config (noms normalisés + collisions refusées côté Rust).
+  async fightSetConfig(config: FightConfig): Promise<FightConfig> {
+    return invoke<FightConfig>("fight_set_config", { config });
+  },
+
+  /// Test manuel : lance « Streamy » vs BOT sur la diffusion.
+  async fightTester(): Promise<void> {
+    await invoke("fight_tester");
+  },
+
+  /// Force l'arrêt du combat / du lobby en cours.
+  async fightStop(): Promise<void> {
+    await invoke("fight_stop");
+  },
+
+  /// Prévisualise la carte d'aide de l'arène sur la diffusion.
+  async fightPrevisualiserAide(): Promise<void> {
+    await invoke("fight_previsualiser_aide");
   },
 
   // ===== Input Viewer (capture globale clavier + souris → overlay diffusion) =====
@@ -1826,13 +2320,35 @@ export const tauri = {
   },
 
   /// Énumère les fenêtres visibles du PC (EnumWindows, SANS OBS).
-  async pcEnumerateWindows(): Promise<{ title: string; exe: string; obs_value: string }[]> {
+  /// hwnd sert à la miniature WGC à la demande (pcWindowThumbnail).
+  async pcEnumerateWindows(): Promise<{ title: string; exe: string; obs_value: string; hwnd: number }[]> {
     return invoke("pc_enumerate_windows");
   },
 
   /// Énumère les jeux/fenêtres du PC (EnumWindows, SANS OBS).
-  async pcEnumerateGames(): Promise<{ title: string; exe: string; obs_value: string }[]> {
+  async pcEnumerateGames(): Promise<{ title: string; exe: string; obs_value: string; hwnd: number }[]> {
     return invoke("pc_enumerate_games");
+  },
+
+  /// Énumère les moniteurs du PC (EnumDisplayMonitors, SANS OBS).
+  /// monitor_id = propriété monitor_id de monitor_capture ; hmon sert à la
+  /// miniature WGC à la demande (pcMonitorThumbnail).
+  async pcEnumerateMonitors(): Promise<
+    { index: number; name: string; monitor_id: string; hmon: number; primary: boolean; w: number; h: number }[]
+  > {
+    return invoke("pc_enumerate_monitors");
+  },
+
+  /// Miniature WGC d'une fenêtre (data URL PNG, fallback icône) — à la
+  /// demande, un invoke par carte de la grille du sélecteur de capture.
+  /// null → le front affiche l'emoji générique.
+  async pcWindowThumbnail(hwnd: number): Promise<string | null> {
+    return invoke("pc_window_thumbnail", { hwnd });
+  },
+
+  /// Miniature WGC d'un écran (data URL PNG). null → emoji côté front.
+  async pcMonitorThumbnail(hmon: number): Promise<string | null> {
+    return invoke("pc_monitor_thumbnail", { hmon });
   },
 
   /// Crée une source OBS de capture depuis une cible PC (caméra/fenêtre/jeu)
@@ -1843,7 +2359,7 @@ export const tauri = {
     port: number,
     password: string,
     sourceName: string,
-    kind: "camera" | "window" | "game",
+    kind: "camera" | "window" | "game" | "monitor",
     target: string | null,
     x: number,
     y: number,
@@ -2682,6 +3198,13 @@ export const tauri = {
     await invoke("speedrun_maj_settings_asl", { valeurs });
   },
 
+  /// Exporte les splits : dialog « Enregistrer sous » (dossier + nom choisis
+  /// par l'utilisateur) puis écrit le HTML autonome fourni. Retourne le
+  /// chemin écrit, ou null si le dialog a été annulé.
+  async speedrunExporterSplits(html: string, nomFichier: string): Promise<string | null> {
+    return invoke<string | null>("speedrun_exporter_splits", { html, nomFichier });
+  },
+
   /// Clic sur une ligne de split : arme l'index si le timer est arrêté
   /// (le prochain start ASL/manuel part de là), sinon saute à l'index en
   /// retry de segment (tous les temps de la tentative effacés).
@@ -2695,6 +3218,13 @@ export const tauri = {
   /// nb cœurs. À poller UNIQUEMENT quand la modale Diagnostic est ouverte.
   async consoEtat(): Promise<ConsoEtat> {
     return invoke<ConsoEtat>("conso_etat");
+  },
+
+  /// Journal persistant de la boîte noire : `limite` derniers points
+  /// (défaut backend 720 = 1 h à 5 s). Pas de polling — à appeler à
+  /// l'ouverture de la section (lecture bornée ≤ 2 Mio).
+  async boiteNoireEtat(limite?: number): Promise<BoiteNoireEtat> {
+    return invoke<BoiteNoireEtat>("boite_noire_etat", { limite: limite ?? null });
   },
 
   // ===== Diagnostic — onglet Audience (analyse telemetrie/events.jsonl) =====

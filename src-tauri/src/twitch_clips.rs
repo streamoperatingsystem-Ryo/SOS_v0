@@ -3,8 +3,10 @@
 /// Deux fonctions publiques :
 ///   - `liste_clips(broadcaster_id, access)` → GET /clips?broadcaster_id= (Helix).
 ///     Scopes existants suffisants (aucun nouveau scope requis).
-///   - `resoudre_mp4(slug)` → URL MP4 signée via GQL Twitch (VideoAccessToken_Clip).
-///     Cache en mémoire (slug → URL signée, TTL 10 min).
+///   - `resoudre_mp4(slug, qualite_cible)` → URL MP4 signée via GQL Twitch
+///     (VideoAccessToken_Clip). Cache en mémoire (slug → clip_data GQL, TTL
+///     10 min) : le même playbackAccessToken signe TOUTES les qualités, le
+///     choix de la qualité se fait donc à l'extraction, sans second appel.
 ///
 /// La résolution MP4 utilise la même technique que l'ancienne app (Streamlabs) :
 ///   1. Fallback regex `thumbnailToMp4` pour les clips anciens (format -preview-WxH.jpg).
@@ -78,7 +80,9 @@ pub struct StreamerFavori {
 // ===== Cache URL signée =====
 
 struct CacheEntry {
-    url: String,
+    /// clip_data GQL complet (videoQualities + playbackAccessToken) — le
+    /// token couvre toutes les sourceURL, la qualité se choisit à l'usage.
+    clip: serde_json::Value,
     expires: Instant,
 }
 
@@ -175,19 +179,22 @@ pub fn thumbnail_to_mp4(thumbnail_url: &str) -> Option<String> {
 }
 
 /// Résout l'URL MP4 signée d'un clip Twitch via GQL (VideoAccessToken_Clip).
-/// D'abord tente le cache, puis le fallback regex (clips anciens), puis GQL.
-/// Retourne l'URL signée ou Err si tout échoue.
-pub async fn resoudre_mp4(slug: &str) -> Result<String, String> {
+/// `qualite_cible` = hauteur vidéo visée en px (360, 480, 720, 1080…) :
+/// la plus petite qualité ≥ cible est choisie (la plus haute dispo sinon) —
+/// adapter à la taille d'affichage (carte ~320 px → 360/480, plein écran →
+/// 1080) plutôt que de payer le burst 1080 partout.
+/// D'abord tente le cache, puis GQL. Retourne l'URL signée ou Err.
+pub async fn resoudre_mp4(slug: &str, qualite_cible: u32) -> Result<String, String> {
     if slug.is_empty() {
         return Err("slug vide".to_string());
     }
 
-    // 1. Cache
+    // 1. Cache (clip_data GQL — le token signe toutes les qualités).
     {
         let cache = url_cache().lock().unwrap();
         if let Some(entry) = cache.get(slug) {
             if entry.expires > Instant::now() {
-                return Ok(entry.url.clone());
+                return extraire_url_signee(&entry.clip, qualite_cible);
             }
         }
     }
@@ -195,19 +202,19 @@ pub async fn resoudre_mp4(slug: &str) -> Result<String, String> {
     // 2. GQL (résout aussi les clips anciens — pas besoin du fallback regex
     //    en première intention, GQL couvre tous les formats).
     match gql_clip_mp4(slug).await {
-        Ok(url) => {
+        Ok(clip_data) => {
             // Stocker dans le cache.
             {
                 let mut cache = url_cache().lock().unwrap();
                 cache.insert(
                     slug.to_string(),
                     CacheEntry {
-                        url: url.clone(),
+                        clip: clip_data.clone(),
                         expires: Instant::now() + CACHE_TTL,
                     },
                 );
             }
-            Ok(url)
+            extraire_url_signee(&clip_data, qualite_cible)
         }
         Err(e) => {
             Err(format!("Résolution MP4 échouée pour {}: {}", slug, e))
@@ -221,6 +228,7 @@ pub async fn resoudre_mp4(slug: &str) -> Result<String, String> {
 pub async fn clip_aleatoire_resolu(
     broadcaster_id: &str,
     access: &str,
+    qualite_cible: u32,
 ) -> Result<Option<ClipResolu>, String> {
     let clips = liste_clips(broadcaster_id, access, 20).await?;
     if clips.is_empty() {
@@ -229,7 +237,7 @@ pub async fn clip_aleatoire_resolu(
     // Clip aléatoire parmi la liste.
     let idx = (uuid::Uuid::new_v4().as_u128() as usize) % clips.len();
     let clip = clips[idx].clone();
-    let mp4_url = resoudre_mp4(&clip.id).await?;
+    let mp4_url = resoudre_mp4(&clip.id, qualite_cible).await?;
     let duree_ms = (clip.duration * 1000.0).round() as u64;
     Ok(Some(ClipResolu {
         info: clip,
@@ -325,9 +333,8 @@ async fn gql_streamer_shelf(login: &str, max: u32) -> Result<Vec<StreamerFavori>
 
 // ===== GQL interne =====
 
-/// Appel GQL VideoAccessToken_Clip → URL MP4 signée.
-/// Retourne sourceURL?sig=...&token=... (qualité 1080 ou 720, sinon la 1ère).
-async fn gql_clip_mp4(slug: &str) -> Result<String, String> {
+/// Appel GQL VideoAccessToken_Clip → clip_data (videoQualities + token).
+async fn gql_clip_mp4(slug: &str) -> Result<serde_json::Value, String> {
     let client = shared_client();
 
     // 1er essai : persisted query (hash).
@@ -380,7 +387,7 @@ async fn gql_clip_mp4(slug: &str) -> Result<String, String> {
         return Err("clip null dans la réponse GQL".to_string());
     }
 
-    extraire_url_signee(&clip_data)
+    Ok(clip_data)
 }
 
 /// Retry GQL avec query inline (si persisted query non trouvée).
@@ -420,8 +427,11 @@ async fn gql_clip_mp4_inline(slug: &str) -> Result<serde_json::Value, String> {
 }
 
 /// Extrait l'URL signée depuis les données GQL d'un clip.
-/// Choisit la qualité 1080 ou 720, sinon la 1ère disponible.
-fn extraire_url_signee(clip: &serde_json::Value) -> Result<String, String> {
+/// Choisit la plus petite qualité ≥ `cible` (hauteur en px) ; si aucune
+/// n'atteint la cible, prend la plus haute disponible — jamais en dessous
+/// du besoin, jamais plus haut que nécessaire. Le playbackAccessToken
+/// signe toutes les sourceURL de videoQualities indifféremment.
+fn extraire_url_signee(clip: &serde_json::Value, cible: u32) -> Result<String, String> {
     let token = clip["playbackAccessToken"]
         .as_object()
         .ok_or_else(|| "playbackAccessToken absent".to_string())?;
@@ -439,15 +449,24 @@ fn extraire_url_signee(clip: &serde_json::Value) -> Result<String, String> {
         return Err("videoQualities vide".to_string());
     }
 
-    // Préférer 1080, sinon 720, sinon la 1ère.
-    let best = qualities
+    // Trier les qualités par hauteur croissante : la 1ère ≥ cible est la
+    // plus petite qui couvre l'affichage ; à défaut la plus haute dispo ;
+    // à défaut de qualité parsable, la 1ère entrée brute.
+    let mut parsees: Vec<(u32, &serde_json::Value)> = qualities
         .iter()
-        .find(|q| q["quality"].as_str() == Some("1080"))
-        .or_else(|| {
-            qualities
-                .iter()
-                .find(|q| q["quality"].as_str() == Some("720"))
+        .filter_map(|q| {
+            q["quality"]
+                .as_str()
+                .and_then(|s| s.parse::<u32>().ok())
+                .map(|h| (h, q))
         })
+        .collect();
+    parsees.sort_by_key(|(h, _)| *h);
+    let best = parsees
+        .iter()
+        .find(|(h, _)| *h >= cible)
+        .or_else(|| parsees.last())
+        .map(|(_, q)| *q)
         .unwrap_or(&qualities[0]);
 
     let source_url = best["sourceURL"]

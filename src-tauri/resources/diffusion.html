@@ -220,6 +220,21 @@
         width: 100%;
         height: 100%;
       }
+      /* Overlay « Spots lumineux » (module scene.modules.spots) — canvas
+         ESPACE ÉCRAN, sibling direct de #stage juste après #bg : peint
+         au-dessus du fond, SOUS tous les widgets. Pas enfant de #bg :
+         le transform tilt/zoom du fond pousserait les sources hors cadre.
+         Les trous y sont évidés en coords écran (peindreTrous partagé)
+         → jamais sur caméra/captures. Backing réduit : l'upscale CSS
+         fait office de flou. */
+      #spots-canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: none;
+        display: none;
+      }
       /* Canvas qui affiche le fond avec les trous (destination-out).
          L'img/video source est display:none, sert uniquement de source
          pour drawImage. */
@@ -584,6 +599,50 @@
         pointer-events: none;
       }
       .welcome-clip-voile.visible { opacity: 1; }
+      /* Fond « image de chaîne » (spotlight) : la bannière Twitch du viewer
+         (ou son avatar fortement flouté en repli) couvre tout l'écran.
+         Premier enfant du voile → la carte reste au-dessus ; ::after = scrim
+         sombre pour la lisibilité (même recette que .pres-fond). Le voile
+         garde son #000 en dessous : pas d'image = noir comme avant. */
+      .welcome-clip-fond {
+        position: absolute;
+        inset: 0;
+        overflow: hidden;
+        pointer-events: none;
+      }
+      .welcome-clip-fond img {
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        transition:
+          transform 1600ms cubic-bezier(0.16, 1, 0.3, 1),
+          filter 900ms ease;
+      }
+      /* Entrée spotlight : l'image démarre zoomée + floutée puis se stabilise
+         (reveal) — classe .enter retirée au rAF suivant le display. */
+      .welcome-clip-fond.enter img {
+        transform: scale(1.12);
+        filter: blur(24px) brightness(0.75);
+      }
+      /* Repli avatar : image ~300 px → blur fort + scale pour masquer les
+         bords ramollis. */
+      .welcome-clip-fond.flou img {
+        filter: blur(70px) brightness(0.55) saturate(1.2);
+        transform: scale(1.25);
+      }
+      .welcome-clip-fond.flou.enter img {
+        transform: scale(1.42);
+        filter: blur(95px) brightness(0.4) saturate(1.2);
+      }
+      .welcome-clip-fond::after {
+        content: "";
+        position: absolute;
+        inset: 0;
+        background: linear-gradient(180deg,
+          rgba(5, 5, 10, 0.55) 0%,
+          rgba(5, 5, 10, 0.32) 45%,
+          rgba(5, 5, 10, 0.72) 100%);
+      }
       /* Message de bienvenue (msg.message) — rendu en spotlight seulement ;
          la carte squelette garde son rendu historique. */
       .welcome-clip-message { display: none; }
@@ -598,7 +657,25 @@
         align-items: center;
         gap: 2.5cqw;
         padding: 3cqw;
-        background: transparent;
+        /* Panneau glass neutre en remplacement du cadre SVG de scène (le
+           spotlight n'applique pas appliquerCadreOverlay) : discret et
+           passe-partout quel que soit le fond image derrière. */
+        background: rgba(12, 14, 22, 0.55);
+        -webkit-backdrop-filter: blur(14px) saturate(140%);
+        backdrop-filter: blur(14px) saturate(140%);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        border-radius: 18px;
+        box-shadow: 0 24px 80px rgba(0, 0, 0, 0.55);
+        /* Entrée : léger délai pour laisser le fond se révéler d'abord. */
+        transition:
+          opacity 550ms ease 120ms,
+          transform 550ms cubic-bezier(0.16, 1, 0.3, 1) 120ms;
+      }
+      /* État de départ de l'entrée spotlight (classe retirée au rAF suivant
+         le display → la carte pop en fondu + slide + scale). */
+      .welcome-clip-root.spot.enter .widget.welcome-clip {
+        opacity: 0;
+        transform: translateY(26px) scale(0.94);
       }
       .welcome-clip-root.spot .welcome-clip-entete {
         flex: 0 0 42%;
@@ -856,14 +933,14 @@
         font-variant-numeric: tabular-nums;
         letter-spacing: 0.04em;
         line-height: 1;
-        color: var(--sr-grad-from, #e0e0e0);
+        color: var(--sr-timer-couleur, var(--sr-grad-from, #e0e0e0));
         text-shadow: 0 2px 4px var(--sr-ombre, #000);
       }
       .sr-timer.sr-running .sr-timer-valeur {
-        filter: drop-shadow(0 0 0.4em color-mix(in srgb, var(--sr-grad-from, #e0e0e0) 40%, transparent));
+        filter: drop-shadow(0 0 0.4em color-mix(in srgb, var(--sr-timer-couleur, var(--sr-grad-from, #e0e0e0)) 40%, transparent));
       }
       .sr-timer.sr-ended .sr-timer-valeur {
-        filter: drop-shadow(0 0 0.5em color-mix(in srgb, var(--sr-grad-from, #e0e0e0) 50%, transparent));
+        filter: drop-shadow(0 0 0.5em color-mix(in srgb, var(--sr-timer-couleur, var(--sr-grad-from, #e0e0e0)) 50%, transparent));
       }
       /* Phase pill + compteur */
       .sr-meta {
@@ -930,8 +1007,13 @@
         gap: 0.4em;
         padding: 0.4em;
         font-size: 0.78em;
-        border: 1px solid transparent;
-        border-radius: var(--rayon-petit);
+        /* Bordure paramétrable (modale SpeedrunLayout) : épaisseur/rayon
+           via variables posées sur .widget.speedrun ; 0px = masquées. */
+        border: var(--sr-seg-bw, 1px) solid transparent;
+        border-radius: var(--sr-seg-br, var(--rayon-petit));
+        /* Hauteur de ligne custom (srHauteurLigne) ; 0px = auto. */
+        min-height: var(--sr-seg-lh, 0px);
+        box-sizing: border-box;
         /* BG gradient : on garde la couleur du user (variable) mais on remplace
            la couleur claire par du noir profond → dégradé couleur user → noir.
            Teinte assombrie (35% sur noir) pour les splits non actifs afin que
@@ -941,12 +1023,13 @@
       }
       .sr-seg-actif {
         /* Split en cours : dégradé couleur user pleine → noir + cadre fluo
-           lumineux de la couleur variable (glow externe + interne). */
+           lumineux de la couleur variable (glow externe + interne).
+           Surchargeable via --sr-couleur-actif (modale layout). */
         background: linear-gradient(135deg, var(--sr-grad-from, #e0e0e0), #000000);
-        border-color: var(--sr-grad-from, #e0e0e0);
+        border-color: var(--sr-couleur-actif, var(--sr-grad-from, #e0e0e0));
         box-shadow:
-          0 0 0.6em 0.15em var(--sr-grad-from, #e0e0e0),
-          inset 0 0 0.5em color-mix(in srgb, var(--sr-grad-from, #e0e0e0) 25%, transparent);
+          0 0 0.6em 0.15em var(--sr-couleur-actif, var(--sr-grad-from, #e0e0e0)),
+          inset 0 0 0.5em color-mix(in srgb, var(--sr-couleur-actif, var(--sr-grad-from, #e0e0e0)) 25%, transparent);
         color: var(--texte);
       }
       .sr-seg-done {
@@ -960,39 +1043,42 @@
         white-space: nowrap;
         text-shadow: 0 1px 2px #000, 0 0 1px #000;
       }
-      /* Colonne delta (dernière colonne, "+/−" façon LiveSplit) : vert =
-         temps gagné vs PB (avance cumulée de la run), rouge = temps perdu,
-         gris = neutre. Largeur pour "-1234.5" (delta cumulé en secondes +
-         dixième) — la case reste visible même vide (jamais display:none).
-         Variables sémantiques — jamais d'hex en dur. */
+      /* Colonne delta (dernière colonne, "+/−" format LiveSplit ±S.d /
+         ±M:SS / ±H:MM:SS) : vert = temps gagné vs PB, rouge = temps perdu,
+         gris = neutre. Largeur pour "-1:02:33" — la case reste visible
+         même vide (jamais display:none ; la colonne entière est masquée
+         via .sr-delta-off, option srModeDelta="off"). Couleurs
+         surchargeables via --sr-couleur-ahead/behind (modale layout). */
       .sr-seg-pb {
         font-variant-numeric: tabular-nums;
         color: var(--gris);
         font-size: 0.9em;
         text-shadow: 0 1px 2px #000;
-        min-width: 4.5em;
+        min-width: 5em;
         text-align: right;
         flex-shrink: 0;
       }
-      .sr-seg-pb.delta-ahead { color: var(--message-ok-color); }
-      .sr-seg-pb.delta-behind { color: var(--message-error-color); }
+      .sr-delta-off .sr-seg-pb { display: none; }
+      .sr-seg-pb.delta-ahead { color: var(--sr-couleur-ahead, var(--message-ok-color)); }
+      .sr-seg-pb.delta-behind { color: var(--sr-couleur-behind, var(--message-error-color)); }
       .sr-seg-pb.delta-ahead,
       .sr-seg-pb.delta-behind { font-weight: 700; }
       /* Bordure du split entier selon le résultat : verte si gagné, rouge si
          perdu. Déclaré après .sr-seg-actif (même spécificité) → l'emporte
          aussi sur le split en cours. */
-      .sr-seg.sr-seg-ahead { border-color: var(--message-ok-color); }
-      .sr-seg.sr-seg-behind { border-color: var(--message-error-color); }
-      /* Temps de segment (colonne milieu) : durée figée (passé), vivante
-         (actif) ou PB du segment (non atteint). Couleur du cadre (gradient).
-         Largeur de colonne fixe — visible même vide, jamais display:none. */
+      .sr-seg.sr-seg-ahead { border-color: var(--sr-couleur-ahead, var(--message-ok-color)); }
+      .sr-seg.sr-seg-behind { border-color: var(--sr-couleur-behind, var(--message-error-color)); }
+      /* Temps de run (colonne milieu) : split time cumulé par défaut
+         ("H:MM:SS" possible) ou durée de segment en mode "segment".
+         Couleur du cadre (gradient). Largeur de colonne fixe — visible
+         même vide, jamais display:none. */
       .sr-seg-time {
         font-variant-numeric: tabular-nums;
         color: var(--sr-grad-from, #e0e0e0);
         font-size: 0.9em;
         font-weight: 600;
         text-shadow: 0 1px 2px #000;
-        min-width: 3.6em;
+        min-width: 4.5em;
         text-align: right;
         flex-shrink: 0;
       }
@@ -1058,6 +1144,166 @@
       .widget.speedrun.sr-ligne .sr-seg-time,
       .widget.speedrun.sr-ligne .sr-seg-pb {
         font-size: 0.75em;
+      }
+      /* ===== Points de validation — pop libre au squelette DÉDIÉ =====
+         À chaque split franchi : un affichage stylé pop pendant
+         srPointsDureePop secondes à la position du squelette DÉDIÉ
+         (frame WS `splitpop-pos`, persisté position_splitpop.json,
+         réglable dans l'onglet Position — section « Pop des splits »,
+         indépendant du cadre partagé welcome/alertes/commandes/pad).
+         Composition « waouh » (2026-10-19) : badge SPLIT n + LE TEMPS
+         GAGNÉ/PERDU en héros géant (Anton, ombre dure + glow néon de la
+         couleur du résultat) + mot-clé GAGNÉ/PERDU dessous — sans boîte,
+         le texte flotte sur une aura sombre. Skippé : hero SKIP rouge ;
+         sans PB : VALIDÉ vert. Animation impact écrasé → overshoot +
+         flash. Couleur custom srCouleurAhead/Behind du widget (var
+         --pop-couleur inline). Puis ça disparaît — rien ne persiste à
+         l'écran. z 9993 : sous le chrono 2 (9994) et le pad (9995). */
+      .splitpop-root {
+        position: absolute;
+        z-index: 9993;
+        pointer-events: none;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        opacity: 0;
+        transform: scale(0.6);
+        transition:
+          opacity 0.3s ease,
+          transform 0.3s cubic-bezier(0.16, 1.08, 0.38, 0.98);
+      }
+      .splitpop-root.visible {
+        opacity: 1;
+        transform: scale(1);
+      }
+      .splitpop-carte {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 0.08em;
+        font-family: "Rajdhani", "Segoe UI", sans-serif;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
+        color: #fff;
+        position: relative;
+        padding: 0.1em 0.6em;
+      }
+      /* Aura derrière le texte — lisible sur tout fond de jeu, SANS boîte
+         (« pas un petit carré ») : halo sombre + teinte du résultat. */
+      .splitpop-carte::before {
+        content: "";
+        position: absolute;
+        inset: -0.5em -1.1em;
+        z-index: -1;
+        border-radius: 2em;
+        background:
+          radial-gradient(closest-side, color-mix(in srgb, var(--pop-couleur, #fff) 15%, transparent), transparent 78%),
+          radial-gradient(closest-side, rgba(0, 0, 0, 0.82), transparent 80%);
+        filter: blur(2px);
+      }
+      /* Pop-in « waouh » : écrasé incliné → overshoot → recentrage. Rejoué à
+         chaque pop par le reflow remove/add .visible du root (srPopSplit). */
+      .splitpop-root.visible .splitpop-carte {
+        animation: splitpop-impact 0.5s cubic-bezier(0.22, 1.32, 0.36, 1) both;
+      }
+      @keyframes splitpop-impact {
+        0% { transform: scale(0.15) rotate(-9deg); opacity: 0; }
+        55% { transform: scale(1.22) rotate(2.5deg); opacity: 1; }
+        78% { transform: scale(0.95) rotate(-1deg); }
+        100% { transform: scale(1) rotate(0deg); opacity: 1; }
+      }
+      /* Flash de luminosité sur le hero au moment de l'impact (temps
+         gagné/perdu, ou mot-hero SKIP/VALIDÉ quand le delta est masqué). */
+      .splitpop-root.visible .splitpop-delta,
+      .splitpop-root.visible .splitpop-carte.sans-delta::after {
+        animation: splitpop-flash 0.65s ease-out both;
+      }
+      @keyframes splitpop-flash {
+        0%, 45% { filter: brightness(2.1) saturate(1.6); }
+        100% { filter: brightness(1) saturate(1); }
+      }
+      /* Badge « SPLIT n » au-dessus du hero. */
+      .splitpop-point {
+        display: flex;
+        align-items: center;
+        font-size: 0.3em;
+        font-weight: 800;
+        letter-spacing: 0.28em;
+        text-transform: uppercase;
+        color: #fff;
+        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
+        padding: 0.24em 0.8em 0.24em 1.08em;
+        border-radius: 999px;
+        background: color-mix(in srgb, var(--pop-couleur, #fff) 26%, rgba(0, 0, 0, 0.72));
+        border: 1px solid color-mix(in srgb, var(--pop-couleur, #fff) 75%, transparent);
+        box-shadow: 0 0 0.55em color-mix(in srgb, var(--pop-couleur, #fff) 45%, transparent);
+      }
+      .splitpop-point::before {
+        content: "SPLIT ";
+      }
+      /* HERO : le temps gagné/perdu, géant façon clipart — police Anton,
+         ombre dure noire + glow néon de la couleur du résultat (vert/rouge,
+         ou custom srCouleurAhead/Behind posée en inline par srPopSplit). */
+      .splitpop-delta {
+        font-family: "Anton", "Rajdhani", sans-serif;
+        font-size: 1.5em;
+        line-height: 1;
+        letter-spacing: 0.02em;
+        transform: skewX(-5deg);
+        color: var(--pop-couleur, #fff);
+        text-shadow:
+          0 0.045em 0 rgba(0, 0, 0, 0.95),
+          0 0.045em 0.14em rgba(0, 0, 0, 0.75),
+          0 0 0.32em color-mix(in srgb, var(--pop-couleur, #fff) 85%, transparent),
+          0 0 0.7em color-mix(in srgb, var(--pop-couleur, #fff) 45%, transparent),
+          0 0.18em 0.42em rgba(0, 0, 0, 0.6);
+      }
+      /* Mot-clé sous le hero : GAGNÉ (ok+delta) / PERDU (ko+delta) ;
+         sans delta → SKIP (skippé, ko) / VALIDÉ (franchi sans PB, ok). */
+      .splitpop-carte::after {
+        content: "GAGNÉ";
+        font-size: 0.3em;
+        font-weight: 800;
+        letter-spacing: 0.5em;
+        text-transform: uppercase;
+        color: #fff;
+        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.95);
+        padding-left: 0.5em;
+      }
+      .splitpop-carte.ko::after { content: "PERDU"; }
+      .splitpop-carte.sans-delta.ok::after { content: "VALIDÉ"; }
+      .splitpop-carte.sans-delta.ko::after { content: "SKIP"; }
+      /* Sans delta (skip / sans PB) : le mot-clé devient le hero — delta
+         masqué, mot en Anton avec les mêmes ombres que le hero. */
+      .splitpop-carte.sans-delta .splitpop-delta { display: none; }
+      .splitpop-carte.sans-delta::after {
+        font-size: 0.85em;
+        font-family: "Anton", "Rajdhani", sans-serif;
+        font-weight: 400;
+        letter-spacing: 0.14em;
+        color: var(--pop-couleur, #fff);
+        text-shadow:
+          0 0.05em 0 rgba(0, 0, 0, 0.95),
+          0 0.05em 0.16em rgba(0, 0, 0, 0.75),
+          0 0 0.3em color-mix(in srgb, var(--pop-couleur, #fff) 80%, transparent),
+          0 0 0.65em color-mix(in srgb, var(--pop-couleur, #fff) 45%, transparent);
+      }
+      /* Re-pop : à 2s/4s d'affichage si la durée configurée le permet,
+         le JS rejoue l'impact avec un flash d'ombre blanche. */
+      @keyframes splitpopRepop {
+        0%   { transform: scale(1); }
+        30%  { transform: scale(1.12) rotate(-1.5deg); }
+        60%  { transform: scale(0.97); }
+        100% { transform: scale(1); }
+      }
+      .splitpop-carte.repop {
+        animation: splitpopRepop 0.45s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+      .splitpop-carte.repop .splitpop-delta,
+      .splitpop-carte.repop .splitpop-mot {
+        filter: drop-shadow(0 0 18px rgba(255,255,255,0.9))
+                drop-shadow(0 0 42px rgba(255,255,255,0.45));
       }
       /* ===== Widget objectif (goal) =====
          Compteur live actuel/cible + barre de progression — même
@@ -1858,6 +2104,24 @@
       .pad-media.pad-zoom {
         animation: pad-zoom 1.2s infinite ease-in-out;
       }
+      /* Plein écran : le média couvre tout le canvas — directement, sans
+         pop-in scale, sans cadre, sans coins arrondis ; object-fit contain
+         pour garder TOUTE la vidéo visible (bandes si ratio différent).
+         L'opacité (transparence/superposition) est posée inline par playPad. */
+      .pad-root.pad-plein,
+      .pad-root.pad-plein.visible {
+        transform: none;
+      }
+      .pad-root.pad-plein .pad-card {
+        width: 100%;
+        height: 100%;
+      }
+      .pad-root.pad-plein .pad-media {
+        width: 100%;
+        height: 100%;
+        max-height: none;
+        border-radius: 0;
+      }
       @keyframes pad-bounce {
         0%, 100% { transform: translateY(0); }
         50% { transform: translateY(-20px); }
@@ -1865,6 +2129,472 @@
       @keyframes pad-zoom {
         0%, 100% { transform: scale(1); }
         50% { transform: scale(1.15); }
+      }
+      /* ===== Emoji Arena (combat d'emojis 1v1 piloté par le chat) =====
+         Overlay éphémère plein canvas (un combattant ancré bas-gauche, l'autre
+         bas-droite, timer/tour au centre-bas). z 9993 : SOUS chrono2/pad/
+         commandes/alertes — les overlays transitoires gardent la priorité
+         visuelle, l'arène est une scène de fond. Même modèle que chrono2 :
+         frames WS `fight-state` auto-réparatrices (snapshot complet — un
+         client reconnecté se réaligne à la frame suivante). La diffusion
+         ne fait QUE rendre + animer : la logique (tours, dégâts, timers)
+         est autoritaire côté Rust. */
+      #fight-root {
+        position: absolute;
+        inset: 0;
+        z-index: 9993;
+        pointer-events: none;
+        display: none;
+      }
+      #fight-root.fight-visible {
+        display: block;
+      }
+      .fight-zone {
+        position: absolute;
+        bottom: 4%;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        width: 300px;
+      }
+      .fight-zone-a { left: 4%; }
+      .fight-zone-b { right: 4%; }
+      .fight-pv {
+        width: 220px;
+        margin-bottom: 8px;
+      }
+      .fight-pv-tete {
+        display: flex;
+        justify-content: space-between;
+        font: 700 15px/1.1 system-ui, sans-serif;
+        color: #fff;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+        margin-bottom: 4px;
+      }
+      .fight-pv-barre {
+        height: 13px;
+        border-radius: 7px;
+        background: rgba(0, 0, 0, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.28);
+        overflow: hidden;
+      }
+      .fight-pv-fill {
+        height: 100%;
+        width: 100%;
+        background: linear-gradient(90deg, #3ddc6a, #a8e04b);
+        transition: width 0.35s ease, background 0.35s ease;
+      }
+      .fight-pv-fill.fight-mid {
+        background: linear-gradient(90deg, #e0b93d, #e0844b);
+      }
+      .fight-pv-fill.fight-low {
+        background: linear-gradient(90deg, #e04b4b, #c02222);
+      }
+      .fight-emoji-wrap {
+        position: relative;
+      }
+      .fight-emoji {
+        font-size: 128px;
+        line-height: 1;
+        filter: drop-shadow(0 8px 16px rgba(0, 0, 0, 0.6));
+        transition: transform 0.12s ease;
+      }
+      .fight-zone-b .fight-emoji {
+        transform: scaleX(-1); /* l'adversaire regarde vers la gauche */
+      }
+      .fight-nom {
+        margin-top: 6px;
+        font: 700 20px/1.2 system-ui, sans-serif;
+        color: #fff;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.85);
+        text-align: center;
+      }
+      .fight-plat {
+        font-size: 11px;
+        opacity: 0.7;
+        font-weight: 600;
+      }
+      /* Animations des coups — classes posées/retirées par animerCoup. */
+      @keyframes fight-lunge-a {
+        0% { transform: translateX(0); }
+        40% { transform: translateX(90px) scale(1.15); }
+        100% { transform: translateX(0); }
+      }
+      @keyframes fight-lunge-b {
+        0% { transform: translateX(0) scaleX(-1); }
+        40% { transform: translateX(-90px) scaleX(-1.15); }
+        100% { transform: translateX(0) scaleX(-1); }
+      }
+      @keyframes fight-shake {
+        0%, 100% { transform: translateX(0) scaleX(-1); }
+        20% { transform: translateX(-8px) scaleX(-1); }
+        40% { transform: translateX(8px) scaleX(-1); }
+        60% { transform: translateX(-6px) scaleX(-1); }
+        80% { transform: translateX(6px) scaleX(-1); }
+      }
+      @keyframes fight-shake-a {
+        0%, 100% { transform: translateX(0); }
+        20% { transform: translateX(-8px); }
+        40% { transform: translateX(8px); }
+        60% { transform: translateX(-6px); }
+        80% { transform: translateX(6px); }
+      }
+      @keyframes fight-dodge-a {
+        0% { transform: translateX(0); }
+        40% { transform: translateX(-46px); }
+        100% { transform: translateX(0); }
+      }
+      @keyframes fight-dodge-b {
+        0% { transform: translateX(0) scaleX(-1); }
+        40% { transform: translateX(46px) scaleX(-1); }
+        100% { transform: translateX(0) scaleX(-1); }
+      }
+      @keyframes fight-pop {
+        0% { opacity: 0; transform: translate(-50%, 0) scale(0.6); }
+        15% { opacity: 1; transform: translate(-50%, -16px) scale(1.15); }
+        100% { opacity: 0; transform: translate(-50%, -70px) scale(1); }
+      }
+      @keyframes fight-ko {
+        to {
+          transform: rotate(75deg) translateY(28px);
+          opacity: 0.35;
+          filter: grayscale(1) drop-shadow(0 8px 16px rgba(0, 0, 0, 0.6));
+        }
+      }
+      .fight-zone.fight-atk-a .fight-emoji { animation: fight-lunge-a 0.5s ease; }
+      .fight-zone.fight-atk-b .fight-emoji { animation: fight-lunge-b 0.5s ease; }
+      .fight-zone-a.fight-hit .fight-emoji { animation: fight-shake-a 0.4s ease; }
+      .fight-zone-b.fight-hit .fight-emoji { animation: fight-shake 0.4s ease; }
+      .fight-zone-a.fight-esq .fight-emoji { animation: fight-dodge-a 0.4s ease; }
+      .fight-zone-b.fight-esq .fight-emoji { animation: fight-dodge-b 0.4s ease; }
+      .fight-zone.fight-ko .fight-emoji {
+        animation: fight-ko 0.9s ease forwards;
+      }
+      .fight-dmg {
+        position: absolute;
+        top: -14px;
+        left: 50%;
+        font: 800 30px/1 system-ui, sans-serif;
+        color: #ffd24b;
+        text-shadow: 0 2px 6px rgba(0, 0, 0, 0.9);
+        animation: fight-pop 1.1s ease forwards;
+        white-space: nowrap;
+      }
+      .fight-dmg.fight-crit { color: #ff5d5d; font-size: 38px; }
+      .fight-dmg.fight-soin { color: #5dff8d; }
+      .fight-dmg.fight-miss { color: #cfd6e4; font-size: 21px; }
+      .fight-centre {
+        position: absolute;
+        left: 50%;
+        bottom: 5%;
+        transform: translateX(-50%);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+      }
+      .fight-tour {
+        font: 700 17px/1.2 system-ui, sans-serif;
+        color: #fff;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+        background: rgba(10, 12, 20, 0.6);
+        padding: 6px 16px;
+        border-radius: 999px;
+        border: 1px solid rgba(255, 255, 255, 0.2);
+        white-space: nowrap;
+      }
+      .fight-timer {
+        width: 210px;
+        height: 8px;
+        border-radius: 4px;
+        background: rgba(0, 0, 0, 0.55);
+        overflow: hidden;
+        border: 1px solid rgba(255, 255, 255, 0.18);
+      }
+      .fight-timer-fill {
+        height: 100%;
+        width: 100%;
+        background: linear-gradient(90deg, #8b5cf6, #d946ef);
+      }
+      .fight-match {
+        font: 600 13px/1 system-ui, sans-serif;
+        color: rgba(255, 255, 255, 0.8);
+        text-shadow: 0 1px 3px rgba(0, 0, 0, 0.9);
+        font-variant-numeric: tabular-nums;
+      }
+      .fight-banner {
+        position: absolute;
+        left: 50%;
+        bottom: 24%;
+        transform: translateX(-50%);
+        text-align: center;
+        font: 800 26px/1.3 system-ui, sans-serif;
+        color: #fff;
+        text-shadow: 0 2px 10px rgba(0, 0, 0, 0.9);
+        background: rgba(10, 12, 20, 0.78);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        padding: 14px 32px;
+        border-radius: 16px;
+        display: none;
+        max-width: 70%;
+      }
+      .fight-banner.visible { display: block; }
+      .fight-banner-sub {
+        font-size: 15px;
+        font-weight: 600;
+        opacity: 0.85;
+        margin-top: 5px;
+      }
+      .fight-banner-emoji {
+        font-size: 72px;
+        line-height: 1;
+        margin-bottom: 4px;
+      }
+      /* Info universelle (toast + carte d'aide) — racine SÉPARÉE de l'arène
+         pour rester visible quand la phase repasse en idle. */
+      #fight-info-root {
+        position: absolute;
+        inset: 0;
+        z-index: 9993;
+        pointer-events: none;
+      }
+      .fight-info {
+        position: absolute;
+        top: 3%;
+        left: 50%;
+        transform: translateX(-50%) translateY(-8px);
+        max-width: 72%;
+        padding: 10px 22px;
+        border-radius: 14px;
+        background: rgba(10, 12, 20, 0.86);
+        border: 1px solid rgba(255, 255, 255, 0.24);
+        color: #fff;
+        font: 600 18px/1.35 system-ui, sans-serif;
+        text-align: center;
+        white-space: pre-line;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+        opacity: 0;
+        transition: opacity 0.18s ease, transform 0.18s ease;
+      }
+      .fight-info.visible {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+      .fight-info.warn {
+        border-color: rgba(255, 120, 120, 0.6);
+        color: #ffd7d7;
+      }
+      .fight-info.ok {
+        border-color: rgba(120, 255, 160, 0.55);
+        color: #d8ffe4;
+      }
+      .fight-info.aide {
+        font-size: 16px;
+        padding: 14px 26px;
+        border-color: rgba(180, 150, 255, 0.6);
+      }
+      /* Liste générique `!cmd` — carte lisible sur toutes les plateformes
+         (Kick/YouTube/TikTok n'ont pas de canal d'envoi chat). */
+      #cmd-liste-root {
+        position: absolute;
+        inset: 0;
+        z-index: 9993;
+        pointer-events: none;
+      }
+      .cmd-liste {
+        position: absolute;
+        top: 3%;
+        left: 50%;
+        transform: translateX(-50%) translateY(-8px);
+        max-width: 72%;
+        max-height: 70vh;
+        overflow: hidden;
+        padding: 14px 24px;
+        border-radius: 14px;
+        background: rgba(10, 12, 20, 0.9);
+        border: 1px solid rgba(180, 150, 255, 0.6);
+        color: #fff;
+        font: 600 16px/1.4 system-ui, sans-serif;
+        text-align: left;
+        white-space: pre-line;
+        overflow-wrap: anywhere;
+        text-shadow: 0 1px 4px rgba(0, 0, 0, 0.9);
+        opacity: 0;
+        transition: opacity 0.18s ease, transform 0.18s ease;
+      }
+      .cmd-liste.visible {
+        opacity: 1;
+        transform: translateX(-50%) translateY(0);
+      }
+      /* Zone active : halo + badge « À TOI » + chips de coups + timer local. */
+      .fight-zone {
+        transition: opacity 0.2s ease;
+      }
+      .fight-zone.fight-inactif {
+        opacity: 0.55;
+      }
+      .fight-zone.fight-actif .fight-emoji-wrap {
+        filter: drop-shadow(0 0 22px rgba(255, 210, 75, 0.55));
+      }
+      .fight-badge-actif {
+        position: absolute;
+        top: -34px;
+        left: 50%;
+        transform: translateX(-50%);
+        font: 800 12px/1 system-ui, sans-serif;
+        letter-spacing: 0.08em;
+        color: #1a1408;
+        background: #ffd24b;
+        padding: 5px 10px;
+        border-radius: 999px;
+        white-space: nowrap;
+        display: none;
+      }
+      .fight-zone.fight-actif .fight-badge-actif {
+        display: block;
+      }
+      .fight-chips {
+        display: none;
+        gap: 6px;
+        margin-top: 8px;
+        justify-content: center;
+        flex-wrap: wrap;
+        max-width: 300px;
+      }
+      .fight-zone.fight-actif .fight-chips {
+        display: flex;
+      }
+      .fight-chip {
+        font: 700 13px/1 system-ui, sans-serif;
+        color: #fff;
+        background: rgba(10, 12, 20, 0.7);
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 999px;
+        padding: 6px 10px;
+        white-space: nowrap;
+      }
+      .fight-chip.fight-chip-off {
+        opacity: 0.35;
+        text-decoration: line-through;
+      }
+      .fight-timer-zone {
+        display: none;
+        width: 220px;
+        height: 5px;
+        margin-top: 7px;
+        border-radius: 3px;
+        background: rgba(0, 0, 0, 0.55);
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        overflow: hidden;
+      }
+      .fight-zone.fight-actif .fight-timer-zone {
+        display: block;
+      }
+      .fight-timer-zone-fill {
+        height: 100%;
+        width: 100%;
+        background: linear-gradient(90deg, #8b5cf6, #d946ef);
+      }
+      /* Idle : respiration sur un wrapper dédié (les transforms d'attaque
+         restent sur .fight-emoji — zéro conflit). */
+      .fight-emoji-idle {
+        animation: fight-idle 2.6s ease-in-out infinite;
+      }
+      @keyframes fight-idle {
+        0%, 100% { transform: translateY(0); }
+        50% { transform: translateY(-5px); }
+      }
+      .fight-no-anim .fight-emoji-idle,
+      .fight-no-anim .fight-fx {
+        animation: none !important;
+      }
+      /* Le KO fige la respiration : le perdant ne doit pas flotter en tombant. */
+      .fight-zone.fight-ko .fight-emoji-idle {
+        animation: none;
+      }
+      /* Impacts : spark/crit/special/soin + flash + secousse d'arène. */
+      .fight-fx {
+        position: absolute;
+        left: 50%;
+        top: 42%;
+        font-size: 54px;
+        line-height: 1;
+        pointer-events: none;
+        animation: fight-fx-pop 0.5s ease forwards;
+        filter: drop-shadow(0 2px 8px rgba(0, 0, 0, 0.8));
+      }
+      .fight-fx.crit { font-size: 74px; }
+      .fight-fx.special { font-size: 64px; }
+      .fight-fx.heal { font-size: 44px; }
+      @keyframes fight-fx-pop {
+        0% { opacity: 0; transform: translate(-50%, -50%) scale(0.4) rotate(-12deg); }
+        30% { opacity: 1; transform: translate(-50%, -50%) scale(1.2) rotate(4deg); }
+        100% { opacity: 0; transform: translate(-50%, -85%) scale(1) rotate(0); }
+      }
+      .fight-zone.fight-flash .fight-emoji {
+        filter: brightness(2.1) drop-shadow(0 0 22px rgba(255, 255, 255, 0.85));
+      }
+      #fight-root.fight-shake {
+        animation: fight-screen-shake 0.3s ease;
+      }
+      @keyframes fight-screen-shake {
+        0%, 100% { transform: translate(0, 0); }
+        25% { transform: translate(-4px, 2px); }
+        50% { transform: translate(4px, -2px); }
+        75% { transform: translate(-2px, 1px); }
+      }
+      /* KO de la zone B : conserve le miroir scaleX(-1). */
+      @keyframes fight-ko-b {
+        to {
+          transform: scaleX(-1) rotate(75deg) translateY(28px);
+          opacity: 0.35;
+          filter: grayscale(1) drop-shadow(0 8px 16px rgba(0, 0, 0, 0.6));
+        }
+      }
+      .fight-zone-b.fight-ko .fight-emoji {
+        animation: fight-ko-b 0.9s ease forwards;
+      }
+      /* ===== Chrono 2 (deuxième chronomètre — touche chrono du pad) =====
+         Squelette DÉDIÉ (position_chrono.json — frames chrono2-pos /
+         chrono2-etat). z 9994 : sous le pad 9995. INDÉPENDANT des médias
+         pad : un chrono de 65 s n'est jamais tué par le pad-stop d'une
+         autre touche (et inversement). Pop-in à l'apparition, fade-out à
+         la durée cible ; l'état arrive par frames WS auto-réparatrices
+         (tick 10 Hz côté Rust — chaque frame porte tout). */
+      .chrono2-root {
+        position: absolute;
+        z-index: 9994;
+        pointer-events: none;
+        opacity: 0;
+        transition:
+          opacity 0.35s ease,
+          transform 0.35s cubic-bezier(0.16, 1.08, 0.38, 0.98);
+        transform: scale(0.6);
+      }
+      .chrono2-root.visible {
+        opacity: 1;
+        transform: scale(1);
+      }
+      .chrono2-carte {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 100%;
+        box-sizing: border-box;
+        padding: 0.25em 0.6em;
+        font-family: "Rajdhani", "Segoe UI", sans-serif;
+        font-size: 26px;
+        font-weight: 700;
+        line-height: 1.1;
+        color: var(--sr-grad-from, #e0e0e0);
+        text-shadow: 0 0 10px rgba(0, 0, 0, 0.8);
+        background: rgba(10, 10, 10, 0.7);
+        border: 1px solid var(--sr-grad-from, #e0e0e0);
+        border-radius: 10px;
+      }
+      .chrono2-temps {
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.04em;
       }
 
       /* ===== Présentation streamer (portage « streamers favoris ») =====
@@ -3118,6 +3848,12 @@
       <div id="bg">
         <canvas id="bg-canvas"></canvas>
       </div>
+      <!-- Spots lumineux : couche ESPACE ÉCRAN — sibling de #bg dans #stage
+           (PAS enfant : le zoom/tilt du fond via transform pousserait les
+           sources hors cadre). z-index 0 après #bg → au-dessus du fond,
+           sous tous les widgets. Trous évidés en coords écran (peindreTrous
+           enEspaceEcran=true) → la lumière ne traverse jamais les widgets. -->
+      <canvas id="spots-canvas"></canvas>
       <!-- Overlay équaliseur — inséré dans le DOM immédiatement après #bg :
            même z-index 0 → l'ordre DOM le départage, il peint au-dessus du
            fond et sous tous les widgets (ajoutés après, z ≥ 0). -->
@@ -4060,6 +4796,205 @@
         return pts;
       }
 
+      // ===== Forme caméra dédiée (cameraForme) =====
+      // Path SVG du cercle INSCRIT dans le rect W×H (diamètre min(W,H),
+      // centré), 4 cubiques kappa — MÊME construction que points.ts (port
+      // TS côté dashboard) : le trou destination-out ci-dessous, le
+      // clip-path DOM de la caméra et le masque OBS (points envoyés par
+      // camera_mask_sync) partagent exactement la même forme — zéro dérive.
+      function pathCercle(W, H) {
+        var r = Math.min(W, H) / 2;
+        var cx = W / 2, cy = H / 2;
+        var k = 0.5522847498307936 * r;
+        return "M " + (cx + r) + " " + cy
+          + " C " + (cx + r) + " " + (cy + k) + " " + (cx + k) + " " + (cy + r) + " " + cx + " " + (cy + r)
+          + " C " + (cx - k) + " " + (cy + r) + " " + (cx - r) + " " + (cy + k) + " " + (cx - r) + " " + cy
+          + " C " + (cx - r) + " " + (cy - k) + " " + (cx - k) + " " + (cy - r) + " " + cx + " " + (cy - r)
+          + " C " + (cx + k) + " " + (cy - r) + " " + (cx + r) + " " + (cy - k) + " " + (cx + r) + " " + cy
+          + " Z";
+      }
+      function clipPathCercle(W, H) {
+        return "path('" + pathCercle(W, H) + "')";
+      }
+      // Variante en coords SCÈNE (translation x,y) pour le clipPath evenodd
+      // #sos-cam-clip : les widgets DOM chevauchant la caméra sont soustraits
+      // du cercle visible (et non du rect — sinon leurs pixels disparaissent
+      // dans les coins hors cercle).
+      function pathCercleScene(x, y, W, H) {
+        var r = Math.min(W, H) / 2;
+        var cx = x + W / 2, cy = y + H / 2;
+        var k = 0.5522847498307936 * r;
+        return "M " + (cx + r) + " " + cy
+          + " C " + (cx + r) + " " + (cy + k) + " " + (cx + k) + " " + (cy + r) + " " + cx + " " + (cy + r)
+          + " C " + (cx - k) + " " + (cy + r) + " " + (cx - r) + " " + (cy + k) + " " + (cx - r) + " " + cy
+          + " C " + (cx - r) + " " + (cy - k) + " " + (cx - k) + " " + (cy - r) + " " + cx + " " + (cy - r)
+          + " C " + (cx + k) + " " + (cy - r) + " " + (cx + r) + " " + (cy - k) + " " + (cx + r) + " " + cy
+          + " Z";
+      }
+
+      // ===== Trous widgets — helper partagé (fond + spots lumineux) =====
+      // Efface alpha (destination-out) dans la zone de chaque widget trou
+      // sur le ctx passé. Appelé par peindreFond (canvas de fond) ET par
+      // spotsDessiner (canvas des spots) : la lumière n'envahit JAMAIS un
+      // trou — la caméra et les captures restent propres.
+      // Le trou suit TOUTES les transforms du widget (x y w h +
+      // rotateX/rotateY + perspective 800px), même ordre que le CSS
+      // .widget-3d : rotateY puis rotateX puis perspective. Si un cadre
+      // avec clip-path est actif, le trou suit la forme du clip-path
+      // (coins biseautés cyberpunk, hexagone, etc.) au lieu d'un
+      // rectangle. Sur le canvas de FOND (peindreFond, dans #bg) les
+      // points écran sont un-projetés (trouToCanvas) pour retomber au
+      // même endroit après le tilt/zoom de #bg — identité quand le fond
+      // est plat. Sur le canvas SPOTS (#stage, espace écran), le param
+      // enEspaceEcran désactive cette compensation : les trous s'y
+      // tracent en coords écran pures.
+      function peindreTrous(ctx, scene, enEspaceEcran) {
+        function projectCorner(lx, ly, rx, ry, d) {
+          const rxR = rx * Math.PI / 180;
+          const ryR = ry * Math.PI / 180;
+          // rotateY (autour de Y) : x' = cos(ry)*lx, z' = -sin(ry)*lx, y' = ly
+          const x1 = Math.cos(ryR) * lx;
+          const z1 = -Math.sin(ryR) * lx;
+          const y1 = ly;
+          // rotateX (autour de X) : y'' = cos(rx)*y' - sin(rx)*z', z'' = sin(rx)*y' + cos(rx)*z'
+          const y2 = Math.cos(rxR) * y1 - Math.sin(rxR) * z1;
+          const z2 = Math.sin(rxR) * y1 + Math.cos(rxR) * z1;
+          // perspective(d) : w = 1 - z/d, px = x/w, py = y/w
+          const w = 1 - z2 / d;
+          return { x: x1 / w, y: y2 / w };
+        }
+        // Projection inverse du tilt 3D du fond (#bg subit perspective(2×cw)
+        // rotateX rotateY en CSS, origin centre — voir renderBg).
+        // projectCorner projette local→écran ; ici on résout l'inverse
+        // écran→local (système 2×2 sur lx, ly) pour que chaque trou,
+        // dessiné AVANT le tilt dans le canvas, retombe à l'écran
+        // exactement sous son widget — jamais déplacé.
+        function unprojectCorner(sx, sy, rx, ry, d) {
+          const rxR = rx * Math.PI / 180;
+          const ryR = ry * Math.PI / 180;
+          const crx = Math.cos(rxR), srx = Math.sin(rxR);
+          const cry = Math.cos(ryR), sry = Math.sin(ryR);
+          const a = cry - (sx / d) * sry * crx;
+          const b = (sx / d) * srx;
+          const c = sry * (srx - (sy / d) * crx);
+          const e = crx + (sy / d) * srx;
+          const det = a * e - b * c;
+          if (Math.abs(det) < 1e-9) return { x: sx, y: sy };
+          return { x: (sx * e - b * sy) / det, y: (a * sy - sx * c) / det };
+        }
+        const cw = (scene && scene.canvasW) || 1920;
+        const ch = (scene && scene.canvasH) || 1080;
+        // Tilt du fond (snapshot) : compensation des trous — voir
+        // unprojectCorner. Fond plat → identité, comportement inchangé.
+        const bgRX = scene.bgRotX || 0;
+        const bgRY = scene.bgRotY || 0;
+        const bgZ = scene.bgZoom || 1;
+        // enEspaceEcran (canvas spots, sibling de #bg dans #stage) : les
+        // trous sont tracés en coords écran pures — PAS de compensation
+        // du tilt/zoom du fond (ce canvas ne le subit pas).
+        const bgCompense = !enEspaceEcran && ((bgRX !== 0 || bgRY !== 0) || bgZ !== 1);
+        // Point écran (coords scène) → point canvas-local à travers le tilt.
+        // Le transform de #bg est "scale(z) perspective rotateX rotateY" :
+        // le scale est appliqué EN DERNIER aux coords écran → on divise
+        // d'abord par z, puis on un-projette le tilt. d = cw×2 : perspective
+        // du FOND (renderBg), pas PERSP=800 qui reste celle des widgets.
+        function trouToCanvas(sx, sy) {
+          if (!bgCompense) return { x: sx, y: sy };
+          const q = unprojectCorner((sx - cw / 2) / bgZ, (sy - ch / 2) / bgZ, bgRX, bgRY, cw * 2);
+          return { x: q.x + cw / 2, y: q.y + ch / 2 };
+        }
+        // Dessine un trou (destination-out) depuis ses points ÉCRAN : avec
+        // un fond tilté chaque point est converti via trouToCanvas (image
+        // réciproque) — le trou reste aligné sous son widget plat ou tilté.
+        function fillTrouEcran(pts) {
+          var q = trouToCanvas(pts[0][0], pts[0][1]);
+          ctx.beginPath();
+          ctx.moveTo(q.x, q.y);
+          for (var i = 1; i < pts.length; i++) {
+            q = trouToCanvas(pts[i][0], pts[i][1]);
+            ctx.lineTo(q.x, q.y);
+          }
+          ctx.closePath();
+          ctx.fill();
+        }
+        ctx.save();
+        ctx.globalCompositeOperation = "destination-out";
+        const ws = (scene && scene.widgets) || [];
+        // Cadre widget actif ? Si oui, on récupère le clip-path pour
+        // découper le trou selon la forme du cadre (et non un rectangle).
+        var cadreWidget = scene && scene.cadreWidget;
+        var cadreWidgetActif = cadreWidget && cadreWidget.actif && (cadreWidget.strokeWidth || 0) > 0;
+        for (let i = 0; i < ws.length; i++) {
+          const w = ws[i];
+          // Trous + caméra : le widget caméra est un trou — la source OBS
+          // "SOS-Caméra" (dshow_input sous SOS-Diffusion) apparaît à travers.
+          // cameraCachee = widget masqué (bouton œil dashboard) : pas de
+          // trou — la zone est repeinte par le fond de scène.
+          if (w.trou === true || (w.type === "camera" && w.cameraCachee !== true)) {
+            const rx = w.rotateX || 0;
+            const ry = w.rotateY || 0;
+
+            // Clip-path du cadre pour ce widget (forme du cadre, pas rectangle).
+            // Caméra : forme DÉDIÉE prioritaire (cameraForme) — "cercle" =
+            // cercle inscrit (découplé du cadre de scène ET de sansCadre),
+            // "carre" = null → rect fast-path. Les autres widgets : w.sansCadre
+            // = pas de cadre dessiné → trou rectangulaire (sinon les coins
+            // du clip-path resteraient remplis sans cadre visible).
+            var clipStr = null;
+            if (w.type === "camera" && (w.cameraForme === "cercle" || w.cameraForme === "carre")) {
+              clipStr = w.cameraForme === "cercle" ? clipPathCercle(w.largeur, w.hauteur) : null;
+            } else if (cadreWidgetActif && w.sansCadre !== true) {
+              clipStr = genererCadreClipPath(cadreWidget, w.largeur, w.hauteur);
+            }
+            var clipPts = getCadreClipPathPoints(clipStr);
+
+            if (clipPts && clipPts.length > 1) {
+              // Trou selon la forme du clip-path du cadre.
+              const cx = w.x + w.largeur / 2;
+              const cy = w.y + w.hauteur / 2;
+              const hw = w.largeur / 2;
+              const hh = w.hauteur / 2;
+              // Points ÉCRAN du trou : clip-path translaté (widget plat) ou
+              // projeté 3D (widget tilté). fillTrouEcran compense le tilt du
+              // fond via trouToCanvas (identité si le fond est plat).
+              var ptsEcran = [];
+              for (var pi = 0; pi < clipPts.length; pi++) {
+                if (rx === 0 && ry === 0) {
+                  ptsEcran.push([clipPts[pi][0] + w.x, clipPts[pi][1] + w.y]);
+                } else {
+                  var p = projectCorner(clipPts[pi][0] - hw, clipPts[pi][1] - hh, rx, ry, PERSP);
+                  ptsEcran.push([cx + p.x, cy + p.y]);
+                }
+              }
+              fillTrouEcran(ptsEcran);
+            } else if (rx === 0 && ry === 0) {
+              if (bgCompense) {
+                // Rectangle écran à un-projeter (fond tilté ou zoomé, widget plat).
+                fillTrouEcran([[w.x, w.y], [w.x + w.largeur, w.y],
+                               [w.x + w.largeur, w.y + w.hauteur], [w.x, w.y + w.hauteur]]);
+              } else {
+                // Fast path : rectangle AABB (pas de cadre ou cadre sans clip-path).
+                ctx.fillRect(w.x, w.y, w.largeur, w.hauteur);
+              }
+            } else {
+              // Quad projeté : 4 coins locaux (relatifs au centre, z=0)
+              // projetés par la même matrice que .widget-3d, puis translatés.
+              const cx = w.x + w.largeur / 2;
+              const cy = w.y + w.hauteur / 2;
+              const hw = w.largeur / 2;
+              const hh = w.hauteur / 2;
+              const c0 = projectCorner(-hw, -hh, rx, ry, PERSP);
+              const c1 = projectCorner( hw, -hh, rx, ry, PERSP);
+              const c2 = projectCorner( hw,  hh, rx, ry, PERSP);
+              const c3 = projectCorner(-hw,  hh, rx, ry, PERSP);
+              fillTrouEcran([[cx + c0.x, cy + c0.y], [cx + c1.x, cy + c1.y],
+                             [cx + c2.x, cy + c2.y], [cx + c3.x, cy + c3.y]]);
+            }
+          }
+        }
+        ctx.restore();
+      }
+
       // Peint le fond sur #bg-canvas avec les trous (destination-out).
       // Appelée à chaque snapshot (image) ou via rAF (vidéo).
       function peindreFond(scene) {
@@ -4208,148 +5143,10 @@
         }
 
         // ===== Trous : destination-out =====
-        // Efface alpha dans la zone de chaque widget trou. Le trou suit TOUTES
-        // les transforms du widget (x y w h + rotateX/rotateY + perspective 800px),
-        // même ordre que le CSS .widget-3d : rotateY puis rotateX puis perspective.
-        // Si un cadre avec clip-path est actif, le trou suit la forme du clip-path
-        // (coins biseautés cyberpunk, hexagone, etc.) au lieu d'un rectangle.
-        function projectCorner(lx, ly, rx, ry, d) {
-          const rxR = rx * Math.PI / 180;
-          const ryR = ry * Math.PI / 180;
-          // rotateY (autour de Y) : x' = cos(ry)*lx, z' = -sin(ry)*lx, y' = ly
-          const x1 = Math.cos(ryR) * lx;
-          const z1 = -Math.sin(ryR) * lx;
-          const y1 = ly;
-          // rotateX (autour de X) : y'' = cos(rx)*y' - sin(rx)*z', z'' = sin(rx)*y' + cos(rx)*z'
-          const y2 = Math.cos(rxR) * y1 - Math.sin(rxR) * z1;
-          const z2 = Math.sin(rxR) * y1 + Math.cos(rxR) * z1;
-          // perspective(d) : w = 1 - z/d, px = x/w, py = y/w
-          const w = 1 - z2 / d;
-          return { x: x1 / w, y: y2 / w };
-        }
-        // Tilt du fond (snapshot) : compensation des trous — voir
-        // unprojectCorner. Fond plat → identité, comportement inchangé.
-        const bgRX = scene.bgRotX || 0;
-        const bgRY = scene.bgRotY || 0;
-        const bgZ = scene.bgZoom || 1;
-        const bgTilt = bgRX !== 0 || bgRY !== 0;
-        const bgCompense = bgTilt || bgZ !== 1;
-        // Projection inverse du tilt 3D du fond (#bg subit perspective(2×cw)
-        // rotateX rotateY en CSS, origin centre — voir renderBg).
-        // projectCorner projette
-        // local→écran ; ici on résout l'inverse écran→local (système 2×2 sur
-        // lx, ly) pour que chaque trou, dessiné AVANT le tilt dans le canvas,
-        // retombe à l'écran exactement sous son widget — jamais déplacé.
-        function unprojectCorner(sx, sy, rx, ry, d) {
-          const rxR = rx * Math.PI / 180;
-          const ryR = ry * Math.PI / 180;
-          const crx = Math.cos(rxR), srx = Math.sin(rxR);
-          const cry = Math.cos(ryR), sry = Math.sin(ryR);
-          const a = cry - (sx / d) * sry * crx;
-          const b = (sx / d) * srx;
-          const c = sry * (srx - (sy / d) * crx);
-          const e = crx + (sy / d) * srx;
-          const det = a * e - b * c;
-          if (Math.abs(det) < 1e-9) return { x: sx, y: sy };
-          return { x: (sx * e - b * sy) / det, y: (a * sy - sx * c) / det };
-        }
-        // Point écran (coords scène) → point canvas-local à travers le tilt.
-        // Identité quand le fond est plat.
-        function trouToCanvas(sx, sy) {
-          if (!bgCompense) return { x: sx, y: sy };
-          // Le transform de #bg est "scale(z) perspective rotateX rotateY" :
-          // le scale est appliqué EN DERNIER aux coords écran → on divise
-          // d'abord par z, puis on un-projette le tilt. d = cw×2 : perspective
-          // du FOND (renderBg), pas PERSP=800 qui reste celle des widgets.
-          const q = unprojectCorner((sx - cw / 2) / bgZ, (sy - ch / 2) / bgZ, bgRX, bgRY, cw * 2);
-          return { x: q.x + cw / 2, y: q.y + ch / 2 };
-        }
-        // Dessine un trou (destination-out) depuis ses points ÉCRAN : avec un
-        // fond tilté chaque point est converti via trouToCanvas (image
-        // réciproque) — le trou reste aligné sous son widget plat ou tilté.
-        function fillTrouEcran(pts) {
-          var q = trouToCanvas(pts[0][0], pts[0][1]);
-          bgCtx.beginPath();
-          bgCtx.moveTo(q.x, q.y);
-          for (var i = 1; i < pts.length; i++) {
-            q = trouToCanvas(pts[i][0], pts[i][1]);
-            bgCtx.lineTo(q.x, q.y);
-          }
-          bgCtx.closePath();
-          bgCtx.fill();
-        }
-        bgCtx.save();
-        bgCtx.globalCompositeOperation = "destination-out";
-        const ws = scene.widgets || [];
-        let n = 0;
-        // Cadre widget actif ? Si oui, on récupère le clip-path pour découper
-        // le trou selon la forme du cadre (et non un rectangle simple).
-        var cadreWidget = scene.cadreWidget;
-        var cadreWidgetActif = cadreWidget && cadreWidget.actif && (cadreWidget.strokeWidth || 0) > 0;
-        for (let i = 0; i < ws.length; i++) {
-          const w = ws[i];
-          // Trous + caméra : le widget caméra est un trou — la source OBS
-          // "SOS-Caméra" (dshow_input sous SOS-Diffusion) apparaît à travers.
-          if (w.trou === true || w.type === "camera") {
-            const rx = w.rotateX || 0;
-            const ry = w.rotateY || 0;
-
-            // Clip-path du cadre pour ce widget (forme du cadre, pas rectangle).
-            // w.sansCadre = pas de cadre dessiné → trou rectangulaire (sinon
-            // les coins du clip-path resteraient remplis sans cadre visible).
-            var clipStr = null;
-            if (cadreWidgetActif && w.sansCadre !== true) {
-              clipStr = genererCadreClipPath(cadreWidget, w.largeur, w.hauteur);
-            }
-            var clipPts = getCadreClipPathPoints(clipStr);
-
-            if (clipPts && clipPts.length > 1) {
-              // Trou selon la forme du clip-path du cadre.
-              const cx = w.x + w.largeur / 2;
-              const cy = w.y + w.hauteur / 2;
-              const hw = w.largeur / 2;
-              const hh = w.hauteur / 2;
-              // Points ÉCRAN du trou : clip-path translaté (widget plat) ou
-              // projeté 3D (widget tilté). fillTrouEcran compense le tilt du
-              // fond via trouToCanvas (identité si le fond est plat).
-              var ptsEcran = [];
-              for (var pi = 0; pi < clipPts.length; pi++) {
-                if (rx === 0 && ry === 0) {
-                  ptsEcran.push([clipPts[pi][0] + w.x, clipPts[pi][1] + w.y]);
-                } else {
-                  var p = projectCorner(clipPts[pi][0] - hw, clipPts[pi][1] - hh, rx, ry, PERSP);
-                  ptsEcran.push([cx + p.x, cy + p.y]);
-                }
-              }
-              fillTrouEcran(ptsEcran);
-            } else if (rx === 0 && ry === 0) {
-              if (bgCompense) {
-                // Rectangle écran à un-projeter (fond tilté ou zoomé, widget plat).
-                fillTrouEcran([[w.x, w.y], [w.x + w.largeur, w.y],
-                               [w.x + w.largeur, w.y + w.hauteur], [w.x, w.y + w.hauteur]]);
-              } else {
-                // Fast path : rectangle AABB (pas de cadre ou cadre sans clip-path).
-                bgCtx.fillRect(w.x, w.y, w.largeur, w.hauteur);
-              }
-            } else {
-              // Quad projeté : 4 coins locaux (relatifs au centre, z=0)
-              // projetés par la même matrice que .widget-3d, puis translatés.
-              const cx = w.x + w.largeur / 2;
-              const cy = w.y + w.hauteur / 2;
-              const hw = w.largeur / 2;
-              const hh = w.hauteur / 2;
-              const c0 = projectCorner(-hw, -hh, rx, ry, PERSP);
-              const c1 = projectCorner( hw, -hh, rx, ry, PERSP);
-              const c2 = projectCorner( hw,  hh, rx, ry, PERSP);
-              const c3 = projectCorner(-hw,  hh, rx, ry, PERSP);
-              fillTrouEcran([[cx + c0.x, cy + c0.y], [cx + c1.x, cy + c1.y],
-                             [cx + c2.x, cy + c2.y], [cx + c3.x, cy + c3.y]]);
-            }
-            n++;
-          }
-        }
-        bgCtx.restore();
-        bgCtx.globalCompositeOperation = "source-over";
+        // Efface alpha dans la zone de chaque widget trou. Logique extraite
+        // dans peindreTrous (partagée avec le canvas des spots lumineux —
+        // même effacement, même compensation du tilt du fond).
+        peindreTrous(bgCtx, scene);
       }
 
       // Boucle rAF pour le fond vidéo (sinon frame figée sans trou).
@@ -5432,12 +6229,167 @@
         return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") + "." + String(cs).padStart(2, "0");
       }
 
-      /// Formate un delta signé (colonne "+/−") : signe toujours présent,
-      /// secondes avec 1 dixième — MÊME au-delà de 60 s ("-2.4", "+62.4").
-      /// Choix utilisateur : toujours en secondes, jamais m:ss.
-      function srFormatDelta(secs) {
+      /// Formate un delta signé (colonne "+/−") — format EXACT de LiveSplit
+      /// (Delta::with_decimal_dropping + Accuracy::Tenths) :
+      ///   |delta| < 60 s → "±S.d"     ("−2.4", "+23.1")
+      ///   |delta| ≥ 60 s → "±M:SS"    ("+12:34" — décimale abandonnée)
+      ///   |delta| ≥ 1 h  → "±H:MM:SS" ("−1:02:33")
+      /// o.deltaPrec : "dixieme" (défaut) | "centieme" | "seconde" ;
+      /// o.deltaDrop : drop des décimales ≥1 min (défaut true). Révoque le
+      /// choix « secondes pures » du 2026-10-09.
+      function srFormatDelta(secs, o) {
         var sign = secs < 0 ? "-" : "+";
-        return sign + Math.abs(secs).toFixed(1);
+        var a = Math.abs(secs);
+        var dec = (o && o.deltaPrec === "centieme") ? 2
+          : (o && o.deltaPrec === "seconde") ? 0 : 1;
+        if (a < 60) return sign + a.toFixed(dec);
+        var drop = !o || o.deltaDrop !== false;
+        var arr = (dec > 0 && !drop) ? a.toFixed(dec) : String(Math.floor(a));
+        var total = Math.floor(Number(arr));
+        var frac = arr.indexOf(".") >= 0 ? "." + arr.split(".")[1] : "";
+        var h = Math.floor(total / 3600);
+        var m = Math.floor((total % 3600) / 60);
+        var s = total % 60;
+        var base = h > 0
+          ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
+          : m + ":" + String(s).padStart(2, "0");
+        return sign + base + frac;
+      }
+
+      /// Formate un temps cumulé de run (colonne « temps » mode "cumul") —
+      /// Regular façon LiveSplit, accuracy Seconds : "M:SS" ou "H:MM:SS",
+      /// SANS centièmes (distinct de srFormatSegment "MM:SS.cc").
+      function srFormatCumul(secs) {
+        if (secs < 0 || isNaN(secs)) return "";
+        var total = Math.round(secs);
+        var h = Math.floor(total / 3600);
+        var m = Math.floor((total % 3600) / 60);
+        var s = total % 60;
+        if (h > 0) {
+          return h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+        }
+        return m + ":" + String(s).padStart(2, "0");
+      }
+
+      /// Reformate une chaîne "MM:SS.cc" selon la précision du timer
+      /// ("seconde" → "M:SS", "dixieme" → "M:SS.d"). "centieme" retourne
+      /// la chaîne brute — le format moteur reste la référence par défaut.
+      function srFormatTimerPrec(str, prec) {
+        if (!str) return str;
+        if (prec === "centieme" || !prec) return str;
+        var secs = srParseTime(str);
+        if (isNaN(secs) || secs < 0) return str;
+        var totalCs = Math.round(secs * 100);
+        var v = prec === "seconde"
+          ? Math.round(totalCs / 100) * 100
+          : Math.round(totalCs / 10) * 10; // dixieme
+        var h = Math.floor(v / 360000);
+        var m = Math.floor((v % 360000) / 6000);
+        var s = Math.floor((v % 6000) / 100);
+        var frac = prec === "seconde" ? "" : "." + Math.floor((v % 100) / 10);
+        var base = h > 0
+          ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
+          : m + ":" + String(s).padStart(2, "0");
+        return base + frac;
+      }
+
+      /// Lit les options de layout du widget speedrun (champs srXxx posés
+      /// par la modale SpeedrunLayout). Appelé dans renderScene où `w` est
+      /// disponible — le résultat est stocké sur entry.srOpts car
+      /// srMajSegmentsVisuel / srMajHeader / srMajTimerEtPhase n'ont pas
+      /// accès à `w`. Défauts = rendu actuel (absent = inchangé).
+      function srLireOpts(w) {
+        return {
+          voirTitre: w.srVoirTitre !== false,
+          voirCat: w.srVoirCategorie !== false,
+          voirStatut: w.srVoirStatut !== false,
+          voirTimer: w.srVoirTimer !== false,
+          voirPhase: w.srVoirPhase !== false,
+          voirCompteur: w.srVoirCompteur !== false,
+          voirBarre: w.srVoirBarre !== false,
+          modeTemps: w.srModeTemps === "segment" ? "segment" : "cumul",
+          modeDelta: (w.srModeDelta === "segment" || w.srModeDelta === "off")
+            ? w.srModeDelta : "cumul",
+          deltaPrec: w.srDeltaPrecision || "dixieme",
+          deltaDrop: w.srDeltaDrop !== false,
+          timerPrec: w.srTimerPrecision || "centieme",
+          timerMethode: w.srTimerMethode || "auto",
+          couleurTimer: w.srCouleurTimer || "",
+          segBordure: w.srSegBordure !== false,
+          segBordEp: (typeof w.srSegBordureEpaisseur === "number")
+            ? w.srSegBordureEpaisseur : 1,
+          segBordRayon: (typeof w.srSegBordureRayon === "number")
+            ? w.srSegBordureRayon : -1,
+          couleurAhead: w.srCouleurAhead || "",
+          couleurBehind: w.srCouleurBehind || "",
+          couleurActif: w.srCouleurActif || "",
+          nbLignes: w.srNbLignes || 0,
+          scrollAuto: w.srScrollAuto !== false,
+          hauteurLigne: w.srHauteurLigne || 0,
+          voirPoints: w.srVoirPoints !== false,
+          pointsDureePop: w.srPointsDureePop || 2,
+          pointsSon: w.srPointsSon || "",
+          pointsSonVolume: (typeof w.srPointsSonVolume === "number")
+            ? w.srPointsSonVolume : 1
+        };
+      }
+
+      /// Applique entry.srOpts au DOM du widget speedrun : toggles de
+      /// visibilité (display), classes d'état et variables CSS — maj
+      /// directe UNIQUEMENT, zéro innerHTML/re-render (CEF saccade sinon).
+      /// Appelée à l'UPDATE et au CREATE du widget dans renderScene.
+      function srAppliquerOpts(entry) {
+        var o = entry.srOpts || {};
+        var el = entry.el;
+        // Toggles visibilité par élément.
+        var t = el.querySelector(".sr-timer");
+        if (t) t.style.display = o.voirTimer === false ? "none" : "";
+        var pill = el.querySelector(".sr-phase-pill");
+        if (pill) pill.style.display = o.voirPhase === false ? "none" : "";
+        var compteur = el.querySelector(".sr-compteur");
+        if (compteur) compteur.style.display = o.voirCompteur === false ? "none" : "";
+        var barre = el.querySelector(".sr-barre");
+        if (barre) barre.style.display = o.voirBarre === false ? "none" : "";
+        // Conteneurs : masqués seulement si TOUS leurs éléments le sont.
+        var meta = el.querySelector(".sr-meta");
+        if (meta) {
+          meta.style.display =
+            (o.voirPhase === false && o.voirCompteur === false) ? "none" : "";
+        }
+        var header = el.querySelector(".sr-header");
+        if (header) {
+          header.style.display =
+            (o.voirTitre === false && o.voirCat === false && o.voirStatut === false)
+              ? "none" : "";
+        }
+        // Colonne delta masquée (modeDelta "off") : classe sur le widget.
+        el.classList.toggle("sr-delta-off", o.modeDelta === "off");
+        // Couleurs / bordures / hauteur de ligne → variables CSS (les
+        // règles .sr-seg/.sr-timer-valeur les consomment avec fallbacks
+        // sémantiques — jamais d'hex en dur dans le CSS).
+        el.style.setProperty("--sr-timer-couleur", o.couleurTimer || "var(--sr-grad-from)");
+        el.style.setProperty("--sr-couleur-ahead", o.couleurAhead || "var(--message-ok-color)");
+        el.style.setProperty("--sr-couleur-behind", o.couleurBehind || "var(--message-error-color)");
+        el.style.setProperty("--sr-couleur-actif", o.couleurActif || "var(--sr-grad-from)");
+        el.style.setProperty("--sr-seg-bw",
+          (o.segBordure === false ? 0 : (o.segBordEp || 1)) + "px");
+        if (o.segBordRayon >= 0) {
+          el.style.setProperty("--sr-seg-br", o.segBordRayon + "px");
+        } else {
+          el.style.removeProperty("--sr-seg-br");
+        }
+        if (o.hauteurLigne > 0) {
+          el.style.setProperty("--sr-seg-lh", o.hauteurLigne + "px");
+        } else {
+          el.style.removeProperty("--sr-seg-lh");
+        }
+        // Rejouer les maj dépendantes des options (header/timer/segments —
+        // le cache srHeaderHtml saute déjà le rebuild si le HTML généré
+        // est identique, donc aucun coût quand les options n'ont pas
+        // changé).
+        srMajHeader(entry);
+        srMajTimerEtPhase(entry);
+        srMajSegmentsVisuel(entry);
       }
 
       /// Recrée le HTML de la liste des segments (quand le total change).
@@ -5457,13 +6409,198 @@
         splitsEl.innerHTML = html;
       }
 
+      /// ===== Points de validation — pop libre au squelette DÉDIÉ =====
+      /// À chaque split franchi/skippé, un affichage stylé pop pendant
+      /// srPointsDureePop secondes à la position du squelette DÉDIÉ
+      /// (frame `splitpop-pos` — onglet Position, section « Pop des
+      /// splits », indépendant du cadre partagé welcome/alertes/commandes/
+      /// pad). Carte = point numéroté coloré + delta vs PB ; puis ça
+      /// disparaît — rien ne persiste à l'écran.
+      /// Overlay GLOBAL (pas par widget) : les scènes à plusieurs widgets
+      /// speedrun dédupent par signature d'event (index+cumul, 1.5 s).
+
+      /// PB cumulé d'un segment j (le .lss stocke les PB en CUMUL — real
+      /// time d'abord, fallback game time). null si pas de PB.
+      function srPointsPbCumul(entry, j) {
+        var seg = (entry.srSegments && j < entry.srSegments.length)
+          ? entry.srSegments[j] : null;
+        if (!seg) return null;
+        return (seg.pbRealTime != null) ? seg.pbRealTime : seg.pbGameTime;
+      }
+
+      /// Calcule l'état d'un point FRANCHI au cumul donné (events split /
+      /// ended) : delta cumulé vs PB — vert si ≤ 0 (en avance/égal = c'est
+      /// bon), rouge si > 0 (en retard = pas bon) ; sans PB : vert sans
+      /// delta (on ne peut pas juger — le split est validé).
+      function srPointEtatFranchi(entry, j, cumulStr) {
+        var pb = srPointsPbCumul(entry, j);
+        if (pb === null || pb === undefined) return { ok: true, delta: "" };
+        var d = srParseTime(cumulStr) - pb;
+        return { ok: d <= 0, delta: srFormatDelta(d, entry.srOpts || {}) };
+      }
+
+      var splitPopRoot = null;
+      var splitPopCarte = null;
+      var splitPopPointEl = null;
+      var splitPopDeltaEl = null;
+      // Position/taille — squelette DÉDIÉ `splitpop-pos` (persisté
+      // position_splitpop.json, onglet Position section « Pop des splits »).
+      // Indépendant du squelette partagé welcome/alertes/commandes/pad :
+      // le pop arrive à chaque split et pouvait chevaucher les alertes.
+      var splitPopGeo = { x: 660, y: 60, largeur: 600, hauteur: 120 };
+      var splitPopTimer = null;
+      // Timers de re-pop (2s/4s) — purgés avec le timer principal.
+      var splitPopRepopTimers = [];
+      // Dédup multi-widget : signature du dernier pop affiché + timestamp.
+      var splitPopLastSig = "";
+      var splitPopLastTs = 0;
+
+      /// Crée l'overlay splitpop une fois (au démarrage). Idempotent.
+      function initSplitPopOverlay() {
+        if (splitPopRoot) return;
+        splitPopRoot = document.createElement("div");
+        splitPopRoot.className = "splitpop-root";
+        splitPopRoot.style.display = "none";
+        splitPopCarte = document.createElement("div");
+        splitPopCarte.className = "splitpop-carte";
+        splitPopPointEl = document.createElement("span");
+        splitPopPointEl.className = "splitpop-point";
+        splitPopDeltaEl = document.createElement("span");
+        splitPopDeltaEl.className = "splitpop-delta";
+        splitPopCarte.appendChild(splitPopPointEl);
+        splitPopCarte.appendChild(splitPopDeltaEl);
+        splitPopRoot.appendChild(splitPopCarte);
+        stageEl.appendChild(splitPopRoot);
+        majSplitPopPos();
+      }
+
+      /// Applique la géométrie du squelette partagé au root + taille de
+      /// police proportionnelle à la hauteur (le squelette dimensionne
+      /// le pop).
+      function majSplitPopPos() {
+        if (!splitPopRoot) return;
+        splitPopRoot.style.left = splitPopGeo.x + "px";
+        splitPopRoot.style.top = splitPopGeo.y + "px";
+        splitPopRoot.style.width = splitPopGeo.largeur + "px";
+        splitPopRoot.style.height = splitPopGeo.hauteur + "px";
+        if (splitPopCarte) {
+          splitPopCarte.style.fontSize =
+            Math.max(18, Math.round(splitPopGeo.hauteur * 0.4)) + "px";
+        }
+      }
+
+      /// Frame WS `splitpop-pos` : squelette dédié du pop — même mécanique
+      /// que `chrono2-pos` — repositionnement live, pop visible ou non.
+      function applySplitPopOverlayConfig(cfg) {
+        if (!cfg) return;
+        if (typeof cfg.x === "number") splitPopGeo.x = cfg.x;
+        if (typeof cfg.y === "number") splitPopGeo.y = cfg.y;
+        if (typeof cfg.largeur === "number") splitPopGeo.largeur = cfg.largeur;
+        if (typeof cfg.hauteur === "number") splitPopGeo.hauteur = cfg.hauteur;
+        majSplitPopPos();
+      }
+
+      /// Cache le pop immédiatement (nouvelle tentative : started/reset/
+      /// goto/stopped/disconnected). Idempotent.
+      function splitPopCacher() {
+        if (!splitPopRoot) return;
+        if (splitPopTimer) {
+          clearTimeout(splitPopTimer);
+          splitPopTimer = null;
+        }
+        splitPopRepopTimers.forEach(clearTimeout);
+        splitPopRepopTimers = [];
+        splitPopRoot.classList.remove("visible");
+        if (splitPopCarte) splitPopCarte.classList.remove("repop");
+        splitPopRoot.style.display = "none";
+        splitPopLastSig = "";
+      }
+
+      /// Affiche le pop d'un split (franchi ou skippé) au squelette
+      /// partagé : carte point numéroté + delta, son configuré, visible
+      /// srPointsDureePop secondes puis fade-out. Dédup par signature :
+      /// un même event traversant plusieurs widgets speedrun ne pop
+      /// qu'une fois.
+      function srPopSplit(entry, j, ok, deltaTxt, sig) {
+        var o = entry.srOpts || {};
+        if (o.voirPoints === false) return;
+        var now = Date.now();
+        if (sig === splitPopLastSig && now - splitPopLastTs < 1500) return;
+        splitPopLastSig = sig;
+        splitPopLastTs = now;
+        if (!splitPopRoot) return;
+        // sans-delta : skippé (ko) ou franchi sans PB (ok) — le mot-clé
+        // (SKIP/VALIDÉ) devient le hero à la place du temps.
+        splitPopCarte.className = "splitpop-carte " + (ok ? "ok" : "ko") +
+          (deltaTxt ? "" : " sans-delta");
+        // Couleur du résultat : custom du widget (srCouleurAhead/Behind de
+        // la modale layout) sinon sémantique ok/error — posée en var inline,
+        // le CSS en dérive badge + glows + ombres du hero.
+        splitPopCarte.style.setProperty("--pop-couleur", ok
+          ? (o.couleurAhead || "var(--message-ok-color)")
+          : (o.couleurBehind || "var(--message-error-color)"));
+        splitPopPointEl.textContent = String(j + 1);
+        splitPopDeltaEl.textContent = deltaTxt || "";
+        if (o.pointsSon) {
+          try {
+            var a = new Audio("/" + o.pointsSon);
+            a.volume = Math.max(0, Math.min(1, o.pointsSonVolume));
+            a.play().catch(function () {});
+          } catch (e) { /* CEF sans audio — ignorer */ }
+        }
+        // Pop-in : reflow entre remove/add de .visible pour rejouer la
+        // transition même si un pop était déjà en cours.
+        splitPopRoot.classList.remove("visible");
+        splitPopRoot.style.display = "";
+        void splitPopRoot.offsetWidth;
+        splitPopRoot.classList.add("visible");
+        if (splitPopTimer) clearTimeout(splitPopTimer);
+        splitPopRepopTimers.forEach(clearTimeout);
+        splitPopRepopTimers = [];
+        var dureeMs = Math.max(1, (o.pointsDureePop || 2)) * 1000;
+        // Re-pops à 2s puis 4s (marge 600ms pour finir avant le fade) :
+        // plus la durée configurée est longue, plus le pop « respire » ;
+        // au-delà de 4s, stabilisation parfaite.
+        [2000, 4000].forEach(function (t) {
+          if (dureeMs > t + 600) {
+            splitPopRepopTimers.push(setTimeout(function () {
+              splitPopCarte.classList.remove("repop");
+              void splitPopCarte.offsetWidth;
+              splitPopCarte.classList.add("repop");
+            }, t));
+          }
+        });
+        splitPopTimer = setTimeout(function () {
+          splitPopTimer = null;
+          splitPopRoot.classList.remove("visible");
+          // Nettoyage différé : laisse la transition fade-out jouer.
+          setTimeout(function () {
+            if (!splitPopRoot.classList.contains("visible")) {
+              splitPopRoot.style.display = "none";
+            }
+          }, 350);
+        }, dureeMs);
+      }
+
       /// Met à jour les classes actif/done des segments + barre + compteur +
       /// temps de run + scroll auto vers le segment actif.
+      /// Les options de layout sont lues sur entry.srOpts (posées par
+      /// srLireOpts dans renderScene — `w` n'est pas accessible ici).
       function srMajSegmentsVisuel(entry) {
         var splitsEl = entry.el.querySelector(".sr-splits");
         if (!splitsEl) return;
         var segs = splitsEl.querySelectorAll(".sr-seg");
         var idx = entry.srIndex;
+        var o = entry.srOpts || {};
+        // Fenêtre de lignes visibles (srNbLignes, façon visual_split_count
+        // LiveSplit) : 0 = toutes. Sinon N lignes avec l'actif en 2e
+        // position (1 précédent visible) quand possible.
+        var visStart = 0;
+        var visEnd = segs.length;
+        if (o.nbLignes > 0 && segs.length > o.nbLignes) {
+          visStart = Math.max(0, Math.min((idx !== null ? idx : 0) - 1, segs.length - o.nbLignes));
+          visEnd = visStart + o.nbLignes;
+        }
         for (var j = 0; j < segs.length; j++) {
           // Durée PB du segment (référence LiveSplit : pb[j] − pb[j-1] en
           // cumul LSS ; real time d'abord, fallback game time). null si le
@@ -5488,18 +6625,6 @@
               }
             }
           }
-          var enregistre = (entry.srSplitTimes && j < entry.srSplitTimes.length)
-            ? entry.srSplitTimes[j] : "";
-          var estActif = (idx !== null && j === idx);
-          var enCours = estActif &&
-            (entry.srPhase === "Running" || entry.srPhase === "Paused");
-          // Delta cumulé vs PB — colonne "+/−" façon LiveSplit (avance/
-          // retard de la run ENTIÈRE à ce split) : actif = chrono total
-          // vivant − PB cumulé (défile à chaque tick), passé = cumul de
-          // run enregistré − PB cumulé (figé au split), non atteint /
-          // skippé / armé en NotRunning / sans PB = vide.
-          var deltaTxt = "";
-          var deltaSens = "";
           // PB cumulé au split j (le .lss stocke les PB en CUMUL — pas de
           // soustraction ; real time d'abord, fallback game time).
           var pbCumul = null;
@@ -5508,23 +6633,57 @@
               ? segDef.pbRealTime
               : segDef.pbGameTime;
           }
-          if (pbCumul !== null) {
-            var cumulSecs = null;
-            var cumulRec = (entry.srSplitCumuls && j < entry.srSplitCumuls.length)
-              ? entry.srSplitCumuls[j]
-              : null;
-            if (idx !== null && j < idx && cumulRec) {
-              cumulSecs = srParseTime(cumulRec);
-            } else if (enCours) {
-              cumulSecs = srParseTime(entry.srGameTime || entry.srRealTime);
+          var enregistre = (entry.srSplitTimes && j < entry.srSplitTimes.length)
+            ? entry.srSplitTimes[j] : "";
+          var cumulRec = (entry.srSplitCumuls && j < entry.srSplitCumuls.length)
+            ? entry.srSplitCumuls[j] : null;
+          var estActif = (idx !== null && j === idx);
+          var enCours = estActif &&
+            (entry.srPhase === "Running" || entry.srPhase === "Paused");
+          // Delta — colonne "+/−", trois modes (modale SpeedrunLayout) :
+          //   - "cumul" (défaut) : avance/retard CUMULÉ de la run vs PB —
+          //     actif = chrono total vivant − PB cumulé, passé = cumul
+          //     enregistré − PB cumulé (figé au split).
+          //   - "segment" : SegmentDelta LiveSplit — temps gagné/perdu sur
+          //     CE segment vs sa durée PB — passé = durée réalisée
+          //     (cumul[j]−cumul[j−1]) − durée PB, actif = segment vivant.
+          //   - "off" : colonne masquée (classe .sr-delta-off sur le widget).
+          //   - non atteint / skippé / armé en NotRunning / sans PB = vide.
+          var deltaTxt = "";
+          var deltaSens = "";
+          var dd = null;
+          if (o.modeDelta !== "off" && idx !== null && j <= idx) {
+            if (o.modeDelta === "segment") {
+              var dur = null;
+              if (j < idx) {
+                var cPrev = j > 0
+                  ? ((entry.srSplitCumuls && j - 1 < entry.srSplitCumuls.length)
+                      ? entry.srSplitCumuls[j - 1] : null)
+                  : "0:00";
+                if (cumulRec && cPrev) dur = srParseTime(cumulRec) - srParseTime(cPrev);
+              } else if (enCours) {
+                dur = srParseTime(entry.srSegTime);
+              }
+              if (dur !== null && segPb !== null) {
+                dd = Math.round((dur - segPb) * 10) / 10;
+              }
+            } else if (pbCumul !== null) {
+              var cumulSecs = null;
+              if (j < idx && cumulRec) {
+                cumulSecs = srParseTime(cumulRec);
+              } else if (enCours) {
+                cumulSecs = srParseTime(entry.srGameTime || entry.srRealTime);
+              }
+              if (cumulSecs !== null) {
+                // Classer sur la valeur arrondie au dixième (cohérente avec
+                // l'affichage : "+0.0" ne bascule pas de couleur).
+                dd = Math.round((cumulSecs - pbCumul) * 10) / 10;
+              }
             }
-            if (cumulSecs !== null) {
-              // Classer sur la valeur arrondie au dixième (cohérente avec
-              // l'affichage : "+0.0" ne bascule pas de couleur).
-              var dd = Math.round((cumulSecs - pbCumul) * 10) / 10;
-              deltaTxt = srFormatDelta(dd);
-              deltaSens = dd < 0 ? "ahead" : dd > 0 ? "behind" : "";
-            }
+          }
+          if (dd !== null) {
+            deltaTxt = srFormatDelta(dd, o);
+            deltaSens = dd < 0 ? "ahead" : dd > 0 ? "behind" : "";
           }
           // Classe de la ligne : actif/done + bordure résultat (ahead/behind).
           var segCls = "sr-seg";
@@ -5533,23 +6692,42 @@
           if (deltaSens === "ahead") segCls += " sr-seg-ahead";
           else if (deltaSens === "behind") segCls += " sr-seg-behind";
           if (segs[j].className !== segCls) segs[j].className = segCls;
-          // Colonne temps (droite) — sémantique LiveSplit :
-          //   - passé avec temps enregistré : durée réalisée figée
-          //   - actif : temps vivant du segment (0:00.00 si armé)
-          //   - non atteint / skippé : durée PB du segment (vide si pas de PB)
+          // Fenêtre de visibilité (srNbLignes) — display direct, pas de
+          // re-render.
+          var vis = (j >= visStart && j < visEnd);
+          var visDisplay = vis ? "" : "none";
+          if (segs[j].style.display !== visDisplay) segs[j].style.display = visDisplay;
+          // Colonne temps (droite) — deux modes (modale SpeedrunLayout) :
+          //   - "cumul" (défaut, façon LiveSplit) : temps TOTAL auquel le
+          //     split est/sera bouclé — passé = cumul enregistré (skippé →
+          //     PB cumulé), actif en run = chrono total vivant, non atteint
+          //     / armé = PB cumulé (temps de comparaison LiveSplit).
+          //   - "segment" : durée de segment — passé = durée figée, actif =
+          //     temps vivant du segment, non atteint = durée PB du segment.
           var timeEl = segs[j].querySelector(".sr-seg-time");
           if (timeEl) {
             var segTime;
-            if (estActif) {
-              segTime = entry.srSegTime || "00:00.00";
-            } else if (idx !== null && j < idx && enregistre) {
-              segTime = enregistre;
+            if (o.modeTemps === "segment") {
+              if (estActif) {
+                segTime = entry.srSegTime || "00:00.00";
+              } else if (idx !== null && j < idx && enregistre) {
+                segTime = enregistre;
+              } else {
+                segTime = (segPb !== null) ? srFormatSegment(segPb) : "";
+              }
             } else {
-              segTime = (segPb !== null) ? srFormatSegment(segPb) : "";
+              segTime = "";
+              if (idx !== null && j < idx && cumulRec) {
+                segTime = srFormatCumul(srParseTime(cumulRec));
+              } else if (enCours) {
+                segTime = srFormatCumul(srParseTime(entry.srGameTime || entry.srRealTime));
+              } else if (pbCumul !== null) {
+                segTime = srFormatCumul(pbCumul);
+              }
             }
             if (timeEl.textContent !== segTime) timeEl.textContent = segTime;
           }
-          // Colonne delta (1ère colonne temps) : texte + couleur du résultat.
+          // Colonne delta (dernière) : texte + couleur du résultat.
           var pbEl = segs[j].querySelector(".sr-seg-pb");
           if (pbEl) {
             if (pbEl.textContent !== deltaTxt) pbEl.textContent = deltaTxt;
@@ -5575,7 +6753,8 @@
         // déborde). Pas de smooth behavior — le CEF d'OBS saccade avec les
         // animations. Scroll instantané par calcul manuel. Mode ligne :
         // centrage horizontal (scrollLeft) au lieu de vertical (scrollTop).
-        if (idx !== null && idx >= 0 && idx < segs.length) {
+        // Désactivable via srScrollAuto (entry.srOpts.scrollAuto).
+        if (o.scrollAuto !== false && idx !== null && idx >= 0 && idx < segs.length) {
           var actif = segs[idx];
           if (entry.el.classList.contains("sr-ligne")) {
             var targetX = actif.offsetLeft - (splitsEl.clientWidth - actif.offsetWidth) / 2;
@@ -5600,11 +6779,17 @@
 
       /// Met à jour le timer + phase pill selon l'état consolidé de l'entry.
       function srMajTimerEtPhase(entry) {
-        // Timer
+        var o = entry.srOpts || {};
+        // Timer — méthode : "auto"/"game" = game si dispo sinon real ;
+        // "real" force le real time. Précision : "centieme" = chaîne brute
+        // du moteur (défaut), sinon reformattée.
         var timerEl = entry.el.querySelector(".sr-timer");
         var timerVal = entry.el.querySelector(".sr-timer-valeur");
         if (timerVal) {
-          var t = entry.srGameTime || entry.srRealTime || "00:00.00";
+          var brut = (o.timerMethode === "real")
+            ? entry.srRealTime
+            : (entry.srGameTime || entry.srRealTime);
+          var t = srFormatTimerPrec(brut || "00:00.00", o.timerPrec);
           if (timerVal.textContent !== t) {
             timerVal.textContent = t;
           }
@@ -5630,19 +6815,28 @@
       function srMajHeader(entry) {
         var header = entry.el.querySelector(".sr-header");
         if (!header) return;
+        // Toggles de la modale layout (défaut : tout visible).
+        var o = entry.srOpts || {};
+        var voirTitre = o.voirTitre !== false;
+        var voirCat = o.voirCat !== false;
+        var voirStatut = o.voirStatut !== false;
         // Titre jeu + catégorie (ou placeholder si aucun splits chargé).
         var html = "";
-        if (entry.srNomJeu || entry.srNomCategorie) {
-          html = '<div class="sr-titre-jeu">' + (entry.srNomJeu || "") + '</div>' +
-            (entry.srNomCategorie ? '<div class="sr-cat">' + entry.srNomCategorie + '</div>' : '');
-        } else {
-          html = '<div class="sr-titre-jeu"><span class="sr-placeholder">Aucun splits chargé</span></div>';
+        if (voirTitre && (entry.srNomJeu || !(voirCat && entry.srNomCategorie))) {
+          html += '<div class="sr-titre-jeu">' +
+            (entry.srNomJeu || '<span class="sr-placeholder">Aucun splits chargé</span>') +
+            '</div>';
+        }
+        if (voirCat && entry.srNomCategorie) {
+          html += '<div class="sr-cat">' + entry.srNomCategorie + '</div>';
         }
         // Pastille de statut (comme le dashboard : ● si connecté, ○ si actif).
-        if (entry.srConnecte) {
-          html += '<span class="sr-status ok" title="' + (entry.srProcessus || "connecté") + '">●</span>';
-        } else if (entry.srActif) {
-          html += '<span class="sr-status attente" title="en attente…">○</span>';
+        if (voirStatut) {
+          if (entry.srConnecte) {
+            html += '<span class="sr-status ok" title="' + (entry.srProcessus || "connecté") + '">●</span>';
+          } else if (entry.srActif) {
+            html += '<span class="sr-status attente" title="en attente…">○</span>';
+          }
         }
         // Fix 2026-09-21 (crash thermique PC) : majSpeedrunEtat s'exécute à
         // CHAQUE event WS speedrun (Time à 15Hz par tick quand le timer
@@ -5684,6 +6878,8 @@
               entry.srSplitTimes = [];
               entry.srSplitCumuls = [];
               entry.srSegTime = "00:00.00";
+              // Nouvelle tentative : un éventuel pop encore visible se cache.
+              splitPopCacher();
               break;
             case "split":
               if (etat.index !== undefined) entry.srIndex = etat.index;
@@ -5706,10 +6902,22 @@
               // Le nouveau segment repart de zéro (segmentTime réel arrive
               // au prochain tick Time).
               entry.srSegTime = "00:00.00";
+              // Point de validation : pop libre au squelette partagé —
+              // delta cumulé vs PB → vert/rouge, ~2 s puis disparition.
+              if (etat.index !== undefined && etat.cumul) {
+                var ptEtat = srPointEtatFranchi(entry, etat.index - 1, etat.cumul);
+                srPopSplit(entry, etat.index - 1, ptEtat.ok, ptEtat.delta,
+                  "split:" + etat.index + ":" + etat.cumul);
+              }
               break;
             case "splitSkipped":
               if (etat.index !== undefined) entry.srIndex = etat.index;
               entry.srSegTime = "00:00.00";
+              // Point skippé = PAS validé : pop rouge sans delta.
+              if (etat.index !== undefined) {
+                srPopSplit(entry, etat.index - 1, false, "",
+                  "skip:" + etat.index);
+              }
               break;
             case "splitUndone":
               if (etat.index !== undefined) {
@@ -5734,6 +6942,7 @@
               entry.srSplitTimes = [];
               entry.srSplitCumuls = [];
               entry.srSegTime = null;
+              splitPopCacher();
               break;
             case "ended":
               entry.srPhase = "Ended";
@@ -5754,6 +6963,12 @@
                   while (entry.srSplitCumuls.length <= lastCumIdx) entry.srSplitCumuls.push(null);
                   entry.srSplitCumuls[lastCumIdx] = etat.cumul;
                 }
+                // Dernier point de validation (le split final compte aussi).
+                if (etat.cumul) {
+                  var ptEtatFin = srPointEtatFranchi(entry, etat.index - 1, etat.cumul);
+                  srPopSplit(entry, etat.index - 1, ptEtatFin.ok, ptEtatFin.delta,
+                    "ended:" + etat.index + ":" + etat.cumul);
+                }
               }
               entry.srSegTime = null;
               break;
@@ -5769,6 +6984,7 @@
               entry.srSegTime =
                 (etat.phase === "Running" || etat.phase === "Paused")
                   ? "00:00.00" : null;
+              splitPopCacher();
               break;
             case "etat":
               // Resync complet (reload/reconnexion) : remplace tout l'état.
@@ -5810,6 +7026,7 @@
               entry.srSplitTimes = [];
               entry.srSplitCumuls = [];
               entry.srSegTime = null;
+              splitPopCacher();
               break;
             case "connected":
               entry.srConnecte = true;
@@ -5827,6 +7044,7 @@
               entry.srSplitTimes = [];
               entry.srSplitCumuls = [];
               entry.srSegTime = null;
+              splitPopCacher();
               break;
             case "lss":
               // Métadonnées LSS (jeu + catégorie + segments) — reçues quand
@@ -5922,6 +7140,11 @@
         // rect/options + boucle rAF ; le spectre arrive par eq-spectrum.
         renderModuleEqualiseur(scene);
 
+        // Spots lumineux — canvas #spots-canvas enfant de #bg (suit le
+        // tilt/zoom du fond, SOUS les widgets, trous évidés). Sync
+        // options + rAF dédiée ~30 fps seulement quand actif.
+        renderModuleSpots(scene);
+
         // Modules HUD (couche séparée des widgets, #modules-root z 9000).
         renderModules(scene);
 
@@ -5930,6 +7153,11 @@
         for (var i = 0; i < scene.widgets.length; i++) {
           var w = scene.widgets[i];
           var wtype = w.type || "media";
+
+          // Caméra masquée (cameraCachee, bouton œil dashboard) : widget
+          // ignoré complètement — pas de div, pas de cadre. Sans seen.add :
+          // le DELETE en fin de boucle détruit l'entry existante au flip.
+          if (wtype === "camera" && w.cameraCachee === true) continue;
 
           // Trous + caméra : widget transparent (le trou est dans le canvas de
           // fond via destination-out). On crée un élément DOM transparent pour
@@ -6202,6 +7430,10 @@
               srEntry.el.style.fontFamily = "'" + srPolice + "', 'Segoe UI', sans-serif";
               srEntry.el.style.fontSize = srTaille + "px";
               srEntry.wrapEl.style.zIndex = w.z;
+              // Options de layout (modale SpeedrunLayout) : relues sur `w`
+              // à chaque render → toggles display/vars CSS, zéro re-render.
+              srEntry.srOpts = srLireOpts(w);
+              srAppliquerOpts(srEntry);
               // Média de fond (sous le timer + les splits, recréé si changé).
               syncMediaFond(srEntry, w);
               applyCadreWidget(srEntry.el, srEntry, w, scene.cadreWidget);
@@ -6249,9 +7481,14 @@
                 srIndex: null, srGameTime: null, srRealTime: "00:00.00",
                 srNomJeu: "", srNomCategorie: "", srConnecte: false, srActif: false,
                 srProcessus: null, srSplitTimes: [], srSplitCumuls: [],
-                srSegTime: null
+                srSegTime: null,
+                // Options de layout (modale SpeedrunLayout) — lues sur `w`
+                // au create ET à l'update (srMajSegmentsVisuel n'a pas
+                // accès à `w`).
+                srOpts: srLireOpts(w)
               };
               widgetMap.set(w.id, srNew);
+              srAppliquerOpts(srNew);
               // Média de fond (premier enfant, sous le timer + les splits).
               syncMediaFond(srNew, w);
               applyCadreWidget(srEl, srNew, w, scene.cadreWidget);
@@ -6684,7 +7921,9 @@
         var camWdg = null;
         for (var ci = 0; ci < scene.widgets.length; ci++) {
           var cand = scene.widgets[ci];
-          if ((cand.type || "media") === "camera") { camWdg = cand; break; }
+          // cameraCachee : caméra masquée → pas de clip (la zone est un
+          // widget normal, les voisins DOM ne sont plus soustraits).
+          if ((cand.type || "media") === "camera" && cand.cameraCachee !== true) { camWdg = cand; break; }
         }
         var camRect = null;
         if (camWdg) {
@@ -6696,12 +7935,19 @@
             camRect = { x0: cx0, y0: cy0, x1: cx1, y1: cy1 };
           }
         }
-        // « Canvas − rect caméra » : le trou est le 2e sous-chemin (evenodd).
+        // « Canvas − caméra » : le trou est le 2e sous-chemin (evenodd).
+        // Rect caméra par défaut ; cameraForme "cercle" = cercle inscrit en
+        // coords scène (approximation non projetée comme le rect : clip de
+        // garde-fou, pas un rendu — la rotation 3D de la caméra est rare).
         var camClipD = "M0 0H" + stageW + "V" + stageH + "H0Z";
         if (camRect) {
-          camClipD += " M" + camRect.x0 + " " + camRect.y0
-            + "H" + camRect.x1 + "V" + camRect.y1
-            + "H" + camRect.x0 + "Z";
+          if (camWdg.cameraForme === "cercle") {
+            camClipD += " " + pathCercleScene(camWdg.x, camWdg.y, camWdg.largeur, camWdg.hauteur);
+          } else {
+            camClipD += " M" + camRect.x0 + " " + camRect.y0
+              + "H" + camRect.x1 + "V" + camRect.y1
+              + "H" + camRect.x0 + "Z";
+          }
         }
         camClipPath.setAttribute("d", camClipD);
         var maxZ = 0;
@@ -6764,8 +8010,7 @@
           : "";
         return '<svg width="' + (W + offset * 2) + '" height="' + (H + offset * 2) + '" viewBox="-' + offset + ' -' + offset + ' ' + (W + offset * 2) + ' ' + (H + offset * 2) + '" preserveAspectRatio="none" style="position:absolute;top:-' + offset + 'px;left:-' + offset + 'px;pointer-events:none;z-index:5;">'
           + '<defs><linearGradient id="' + gradId + '" x1="' + gx1 + '%" y1="' + gy1 + '%" x2="' + gx2 + '%" y2="' + gy2 + '%">'
-          + '<stop offset="0%" stop-color="' + c + '" stop-opacity="1"/>'
-          + '<stop offset="100%" stop-color="' + cFin + '" stop-opacity="1"/>'
+          + stopsLiseres(c, cFin)
           + '</linearGradient></defs>'
           + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + rx + '" ry="' + rx + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '"/>'
           + comet
@@ -6773,8 +8018,8 @@
       }
 
       // --- Cyberpunk ---
-      // Tons dérivés des couleurs utilisateur : couleur = néon principal,
-      // couleurFin = néon secondaire, highlight blanc.
+      // Tons dérivés des couleurs utilisateur : couleurFin = néon principal
+      // (couleur vive unifiée), couleur = néon secondaire, highlight blanc.
       function getCyberpunkBevelSize(sw) {
         return Math.max(8, Math.round(clampStrokeWidth(sw) * 3.5));
       }
@@ -6783,8 +8028,8 @@
         return "path('M " + s + " 0 L " + (W - s) + " 0 L " + W + " " + s + " L " + W + " " + (H - s) + " L " + (W - s) + " " + H + " L " + s + " " + H + " L 0 " + (H - s) + " L 0 " + s + " Z')";
       }
       function renderCyberpunk(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
-        var c2 = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.35);
+        var c1 = bpmHexValide(couleurFin) ? couleurFin : "#ffffff";
+        var c2 = bpmHexValide(couleur) ? couleur : bpmAssombrir(c1, 0.35);
         var c3 = "#ffffff";
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
@@ -6861,7 +8106,7 @@
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<clipPath id="' + clipPathId + '"><path d="' + pathBorder + '"/></clipPath>'
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c1 + '"/><stop offset="50%" stop-color="' + c2 + '"/><stop offset="100%" stop-color="' + c1 + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(c2, c1) + '</linearGradient>'
           + '<linearGradient id="' + gradInnerId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c3 + '" stop-opacity="0.9"/><stop offset="50%" stop-color="' + c1 + '" stop-opacity="0.6"/><stop offset="100%" stop-color="' + c3 + '" stop-opacity="0.9"/></linearGradient>'
           + "</defs>"
           + '<g clip-path="url(#' + clipPathId + ')">'
@@ -6874,8 +8119,8 @@
       }
 
       // --- Story ---
-      // Tons dérivés : couleur = vif, couleurFin = profond ; clair/pale =
-      // couleur éclaircie (aucune palette figée).
+      // Tons dérivés : couleurFin = vif (couleur vive unifiée), couleur =
+      // profond ; clair/pale = couleur éclaircie (aucune palette figée).
       function getStoryClipSize(sw) {
         return Math.max(12, Math.round(clampStrokeWidth(sw) * 4));
       }
@@ -6909,11 +8154,11 @@
           + " Q " + (cx - k) + " " + (cy - k) + " " + cx + " " + (cy - r) + " Z";
       }
       function renderStory(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var vif = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var vif = bpmHexValide(couleurFin) ? couleurFin : "#ffffff";
         var palette = {
           vif: vif,
           clair: bpmEclaircir(vif, 0.35),
-          profond: bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(vif, 0.2),
+          profond: bpmHexValide(couleur) ? couleur : bpmAssombrir(vif, 0.2),
           pale: bpmEclaircir(vif, 0.75)
         };
         var blanc = "#ffffff";
@@ -7001,7 +8246,7 @@
           : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + palette.vif + '"/><stop offset="50%" stop-color="' + palette.clair + '"/><stop offset="100%" stop-color="' + palette.profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(palette.profond, palette.vif) + '</linearGradient>'
           + '<linearGradient id="' + innerGradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + blanc + '" stop-opacity="0.7"/><stop offset="50%" stop-color="' + palette.pale + '" stop-opacity="0.5"/><stop offset="100%" stop-color="' + blanc + '" stop-opacity="0.7"/></linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
@@ -7066,7 +8311,8 @@
       }
 
       // --- Hexagon ---
-      // couleur = principal, couleurFin = profond ; clair = couleur éclaircie.
+      // couleurFin = principal (couleur vive unifiée), couleur = profond ;
+      // clair = couleur éclaircie.
       function getHexagonClipSize(sw) {
         return Math.max(12, Math.round(clampStrokeWidth(sw) * 4));
       }
@@ -7084,10 +8330,10 @@
         return "M " + pts.join(" L ") + " Z";
       }
       function renderHexagon(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var c1 = bpmHexValide(couleurFin) ? couleurFin : "#ffffff";
         var p = {
           principal: c1,
-          profond: bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.3),
+          profond: bpmHexValide(couleur) ? couleur : bpmAssombrir(c1, 0.3),
           clair: bpmEclaircir(c1, 0.45)
         };
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
@@ -7149,7 +8395,7 @@
           : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + p.principal + '"/><stop offset="100%" stop-color="' + p.profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(p.profond, p.principal) + '</linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
           + '<g clip-path="url(#' + clipId + ')">'
@@ -7258,7 +8504,7 @@
         }
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + cPrincipal + '"/><stop offset="100%" stop-color="' + cAccent + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(cPrincipal, cAccent) + '</linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + '<pattern id="' + stripeId + '" patternUnits="userSpaceOnUse" width="' + stripeSize + '" height="' + stripeSize + '" patternTransform="rotate(45)"><rect width="' + (stripeSize / 2) + '" height="' + stripeSize + '" fill="' + cPrincipal + '"/><rect x="' + (stripeSize / 2) + '" width="' + (stripeSize / 2) + '" height="' + stripeSize + '" fill="' + cAccent + '"/></pattern>'
           + "</defs>"
@@ -7297,8 +8543,8 @@
         return "path('M " + bx + " 0 L " + (W - bx) + " 0 L " + W + " " + by + " L " + W + " " + (H - by) + " L " + (W - bx) + " " + H + " L " + bx + " " + H + " L 0 " + (H - by) + " L 0 " + by + " Z')";
       }
       function renderArena(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var principal = bpmHexValide(couleur) ? couleur : "#ffffff";
-        var profond = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(principal, 0.35);
+        var principal = bpmHexValide(couleurFin) ? couleurFin : "#ffffff";
+        var profond = bpmHexValide(couleur) ? couleur : bpmAssombrir(principal, 0.35);
         var clair = bpmEclaircir(principal, 0.5);
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
@@ -7375,7 +8621,7 @@
           : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + principal + '"/><stop offset="100%" stop-color="' + profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(profond, principal) + '</linearGradient>'
           + '<radialGradient id="' + orbGradId + '" cx="35%" cy="30%" r="75%"><stop offset="0%" stop-color="' + clair + '"/><stop offset="100%" stop-color="' + profond + '"/></radialGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
@@ -7478,8 +8724,8 @@
           + " L " + X(ix) + " " + Y(iy + ay);
       }
       function renderTribal(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var principal = bpmHexValide(couleur) ? couleur : "#111111";
-        var profond = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(principal, 0.4);
+        var principal = bpmHexValide(couleurFin) ? couleurFin : "#111111";
+        var profond = bpmHexValide(couleur) ? couleur : bpmAssombrir(principal, 0.4);
         var clair = bpmEclaircir(principal, 0.4);
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
@@ -7522,7 +8768,7 @@
           : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + principal + '"/><stop offset="100%" stop-color="' + profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(profond, principal) + '</linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
           + '<g clip-path="url(#' + clipId + ')">'
@@ -7627,11 +8873,85 @@
         return lum > 0.5 ? "#000" : "#fff";
       }
 
+      // Anneau/bordure de la forme caméra dédiée : cercle inscrit (stroke)
+      // ou rect, gradient couleur/couleurFin du cadre de scène (fallback
+      // blanc→gris via gradientCadre si cadre absent/inactif — même règle
+      // que les titres), épaisseur = strokeWidth du cadre bornée (1.5..12 —
+      // un cadre de scène épais ne doit pas engloutir un cercle caméra).
+      // Même structure que les cadres : SVG absolu, viewBox décalé de
+      // offset — la moitié extérieure du trait est rognée par le clip-path
+      // du parent (règle cadres : la marge n'existe pas).
+      function svgAnneauCamera(w, cadre, cercle) {
+        var W = w.largeur, H = w.hauteur;
+        var grad = gradientCadre(cadre);
+        var c = grad.from, cFin = grad.to;
+        var ep = Math.max(1.5, Math.min((cadre && cadre.strokeWidth) || 4, 12));
+        var off = ep / 2;
+        var gradId = "grad-cam-" + w.id;
+        var svg = '<svg width="' + (W + off * 2) + '" height="' + (H + off * 2) + '"'
+          + ' viewBox="-' + off + ' -' + off + ' ' + (W + off * 2) + ' ' + (H + off * 2) + '"'
+          + ' preserveAspectRatio="none"'
+          + ' style="position:absolute;top:-' + off + 'px;left:-' + off + 'px;pointer-events:none;z-index:5;">'
+          + '<defs><linearGradient id="' + gradId + '" x1="0%" y1="0%" x2="100%" y2="100%">'
+          + stopsLiseres(c, cFin)
+          + '</linearGradient></defs>';
+        if (cercle) {
+          svg += '<circle cx="' + (W / 2) + '" cy="' + (H / 2) + '" r="' + (Math.min(W, H) / 2)
+            + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '"/>';
+        } else {
+          svg += '<rect x="0" y="0" width="' + W + '" height="' + H
+            + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '"/>';
+        }
+        return svg + '</svg>';
+      }
+
+      // Forme DÉDIÉE du widget caméra (cameraForme "cercle"/"carre") :
+      // découplée du cadre de scène — clip-path cercle (carre → aucun,
+      // rect) + anneau optionnel (cameraBord) en overlay .cadre-overlay.
+      // Recréé seulement si la clé change (forme/bord/couleurs/dims).
+      // Retour au cadre de scène (cameraForme absent) : le chemin normal
+      // d'applyCadreWidget nettoie (clip retiré si cadre sans forme, etc.).
+      function appliquerFormeCamera(el, entry, w, cadre) {
+        var cercle = w.cameraForme === "cercle";
+        el.style.border = "none";
+        el.style.borderRadius = "0";
+        if (cercle) {
+          var clip = clipPathCercle(w.largeur, w.hauteur);
+          el.style.clipPath = clip;
+          el.style.webkitClipPath = clip;
+        } else {
+          el.style.clipPath = "";
+          el.style.webkitClipPath = "";
+        }
+        var bord = w.cameraBord === true;
+        var newKey = "cam-" + w.cameraForme + "|" + (bord ? "1" : "0") + "|"
+          + (cadre ? (cadre.couleur || "") + "|" + (cadre.couleurFin || "") + "|" + (cadre.strokeWidth || 4) + "|" + (cadre.actif ? "a1" : "a0") : "")
+          + "|" + Math.round(w.largeur) + "x" + Math.round(w.hauteur);
+        if (entry.cadreKey !== newKey) {
+          if (entry.cadreOverlayEl) entry.cadreOverlayEl.remove();
+          entry.cadreOverlayEl = null;
+          if (bord) {
+            var overlay = document.createElement("div");
+            overlay.className = "cadre-overlay";
+            overlay.innerHTML = svgAnneauCamera(w, cadre, cercle);
+            el.appendChild(overlay);
+            entry.cadreOverlayEl = overlay;
+          }
+          entry.cadreKey = newKey;
+        }
+      }
+
       // Applique le cadre widget sur un élément .widget : clip-path sur el +
       // overlay SVG dans un div .cadre-overlay enfant. Recrée seulement si
       // la clé a changé (style/couleurs/strokeWidth/dims).
       // w.sansCadre (widgets créés par drop) = opt-out : comme cadre inactif.
+      // Caméra avec forme DÉDIÉE (cameraForme) : traitement propre, le
+      // cadre de scène ne s'applique PAS à elle.
       function applyCadreWidget(el, entry, w, cadre) {
+        if (w.type === "camera" && (w.cameraForme === "cercle" || w.cameraForme === "carre")) {
+          appliquerFormeCamera(el, entry, w, cadre);
+          return;
+        }
         var cadreActif = cadre && cadre.actif && (cadre.strokeWidth || 0) > 0 && w.sansCadre !== true;
         if (!cadreActif) {
           // Nettoyer : retirer clip-path + overlay si présent + rendre la
@@ -8358,6 +9678,293 @@
         ctx.restore();
       }
 
+      // ===== Module « Spots lumineux » — deux faisceaux sur le fond =====
+      // Couche canvas ESPACE ÉCRAN (#spots-canvas, sibling de #bg dans
+      // #stage, avant #eq-root) : la lumière reste SOUS tous les widgets,
+      // et les trous y sont évidés par le même peindreTrous que le fond —
+      // jamais de lumière sur la caméra ni les captures. Aucune donnée
+      // poussée : tout vient du snapshot (scene.modules.spots). rAF
+      // SEULEMENT quand le module est actif, plafonnée ~30 fps, backing
+      // store réduit (l'upscale CSS fait le flou) — budget minimal.
+      var spotsCanvas = document.getElementById("spots-canvas");
+      var spotsCtx = spotsCanvas.getContext("2d");
+      var spotsCfg = null;         // { scene, cw, ch, intensite, vitesse, reagir }
+      var spotsRaf = null;
+      var spotsDernierRendu = 0;
+      // Sprite de faisceau pré-rendu (cône blanc doux) + offscreen de
+      // teinture (source-in) — aucun blur/coût par frame.
+      var spotsSprite = null;
+      var spotsTint = null;
+      var spotsTintCtx = null;
+      var SPOTS_SPRITE_W = 192;
+      var SPOTS_SPRITE_H = 448;
+      // Palette fluo cyclique dans l'ordre de la roue des teintes (vert →
+      // jaune → orange → rouge → violet → bleu → retour vert). Couleurs
+      // de l'effet — contenu, pas tokens UI.
+      var SPOTS_PALETTE = [
+        [16, 185, 60],    // vert profond (plus sombre — le fluo pur
+                          // 57,255,20 lisait trop « néon pâle »)
+        [234, 255, 0],    // jaune fluo
+        [255, 149, 0],    // orange fluo
+        [255, 23, 68],    // rouge fluo
+        [191, 0, 255],    // violet fluo
+        [0, 191, 255],    // bleu fluo
+      ];
+
+      /// Cône de lumière blanc pré-rendu (apex étroit en haut-centre, base
+      /// pleine largeur) : dégradé vertical d'intensité, bords latéraux
+      /// plumés (destination-in × dégradé horizontal). Une seule fois —
+      /// la teinte et la rotation sont posées par frame sans recoût.
+      function spotsCreerSprite() {
+        var c = document.createElement("canvas");
+        c.width = SPOTS_SPRITE_W;
+        c.height = SPOTS_SPRITE_H;
+        var x = c.getContext("2d");
+        if (!x) return c;
+        var apex = SPOTS_SPRITE_W / 2;
+        var g = x.createLinearGradient(0, 0, 0, SPOTS_SPRITE_H);
+        g.addColorStop(0, "rgba(255,255,255,0.90)");
+        g.addColorStop(0.5, "rgba(255,255,255,0.30)");
+        g.addColorStop(1, "rgba(255,255,255,0)");
+        x.fillStyle = g;
+        x.beginPath();
+        x.moveTo(apex - 8, 0);
+        x.lineTo(apex + 8, 0);
+        x.lineTo(SPOTS_SPRITE_W, SPOTS_SPRITE_H);
+        x.lineTo(0, SPOTS_SPRITE_H);
+        x.closePath();
+        x.fill();
+        // Adoucissement latéral : plateau décentré (0.40-0.56) → le cône
+        // est légèrement plus lumineux d'un côté — bords fondus fins,
+        // rendu moins symétrique/« mathématique ».
+        x.globalCompositeOperation = "destination-in";
+        var h = x.createLinearGradient(0, 0, SPOTS_SPRITE_W, 0);
+        h.addColorStop(0, "rgba(255,255,255,0)");
+        h.addColorStop(0.40, "rgba(255,255,255,1)");
+        h.addColorStop(0.56, "rgba(255,255,255,1)");
+        h.addColorStop(1, "rgba(255,255,255,0)");
+        x.fillStyle = h;
+        x.fillRect(0, 0, SPOTS_SPRITE_W, SPOTS_SPRITE_H);
+        return c;
+      }
+
+      /// Interpolation cyclique de la palette fluo : t (0..1) parcourt la
+      /// liste en boucle — ~55 % de palier sur chaque couleur puis
+      /// transition douce (smoothstep) vers la suivante. → [r,g,b].
+      function spotsCouleur(t) {
+        var n = SPOTS_PALETTE.length;
+        var x = (((t % 1) + 1) % 1) * n;
+        var i = Math.floor(x);
+        var f = x - i;
+        var a = SPOTS_PALETTE[i % n];
+        var b = SPOTS_PALETTE[(i + 1) % n];
+        var f2 = f < 0.55 ? 0 : (f - 0.55) / 0.45;
+        var k = f2 * f2 * (3 - 2 * f2);
+        return [
+          Math.round(a[0] + (b[0] - a[0]) * k),
+          Math.round(a[1] + (b[1] - a[1]) * k),
+          Math.round(a[2] + (b[2] - a[2]) * k),
+        ];
+      }
+
+      /// Mixe deux couleurs [r,g,b] — sert au cœur blanc-chaud des spots.
+      function spotsMix(a, b, k) {
+        return [
+          Math.round(a[0] + (b[0] - a[0]) * k),
+          Math.round(a[1] + (b[1] - a[1]) * k),
+          Math.round(a[2] + (b[2] - a[2]) * k),
+        ];
+      }
+
+      /// Teinte le sprite cône (petit offscreen partagé : clear + draw +
+      /// source-in = 3 ops). Le résultat doit être dessiné AVANT l'appel
+      /// suivant — le buffer est réutilisé à chaque teinte.
+      function spotsTeinter(coul) {
+        if (!spotsTintCtx) return spotsSprite;
+        spotsTintCtx.globalCompositeOperation = "source-over";
+        spotsTintCtx.globalAlpha = 1;
+        spotsTintCtx.clearRect(0, 0, SPOTS_SPRITE_W, SPOTS_SPRITE_H);
+        spotsTintCtx.drawImage(spotsSprite, 0, 0);
+        spotsTintCtx.globalCompositeOperation = "source-in";
+        spotsTintCtx.fillStyle = "rgb(" + coul[0] + "," + coul[1] + "," + coul[2] + ")";
+        spotsTintCtx.fillRect(0, 0, SPOTS_SPRITE_W, SPOTS_SPRITE_H);
+        return spotsTint;
+      }
+
+      /// Sync config depuis le snapshot (chaque renderScene) : options +
+      /// démarrage/arrêt de la boucle rAF. Zéro rAF quand inactif.
+      /// Jamais d'exception ici (appel au milieu de renderScene).
+      function renderModuleSpots(scene) {
+        var m = scene && scene.modules && scene.modules.spots;
+        if (!m || !m.actif || !spotsCtx) {
+          spotsCfg = null;
+          if (spotsRaf) { cancelAnimationFrame(spotsRaf); spotsRaf = null; }
+          spotsCanvas.style.display = "none";
+          // Transform neutre : le transform réduit posé par spotsDessiner
+          // persisterait sinon → clearRect ne couvrirait qu'une fraction.
+          if (spotsCtx) {
+            spotsCtx.setTransform(1, 0, 0, 1, 0, 0);
+            spotsCtx.clearRect(0, 0, spotsCanvas.width, spotsCanvas.height);
+          }
+          return;
+        }
+        var cw = scene.canvasW || 1920;
+        var ch = scene.canvasH || 1080;
+        // Backing store ~40 % : les faisceaux sont flous par nature, la
+        // montée en résolution CSS est invisible — ~6× moins de pixels
+        // qu'un canvas pleine résolution.
+        var bw = Math.max(2, Math.round(cw * 0.4));
+        var bh = Math.max(2, Math.round(ch * 0.4));
+        if (spotsCanvas.width !== bw) spotsCanvas.width = bw;
+        if (spotsCanvas.height !== bh) spotsCanvas.height = bh;
+        // "block" obligatoire : la feuille de style porte display:none
+        // (même leçon que #eq-root — "" ne retirerait que l'inline).
+        spotsCanvas.style.display = "block";
+        spotsCfg = {
+          scene: scene,
+          cw: cw,
+          ch: ch,
+          intensite: typeof m.opacite === "number" ? Math.min(1, Math.max(0, m.opacite)) : 0.8,
+          vitesse: typeof m.spotsVitesse === "number" ? Math.min(3, Math.max(0.25, m.spotsVitesse)) : 1,
+          reagir: m.spotsReagir !== false,
+        };
+        if (!spotsSprite) spotsSprite = spotsCreerSprite();
+        if (!spotsRaf) {
+          spotsDernierRendu = 0;
+          spotsRaf = requestAnimationFrame(spotsOverlayTick);
+        }
+      }
+
+      // Nom dédié (même classe de bug que eqOverlayTick/eqTick : toute
+      // variable du module est préfixée spots* — vérifié sans collision).
+      function spotsOverlayTick(t) {
+        spotsRaf = null;
+        if (!spotsCfg) return;
+        // ~30 fps : un balayage lent n'a pas besoin de la cadence rAF —
+        // moitié moins de travail (budget partagé avec l'équaliseur).
+        if (t - spotsDernierRendu >= 33) {
+          spotsDernierRendu = t;
+          spotsDessiner(t / 1000);
+        }
+        spotsRaf = requestAnimationFrame(spotsOverlayTick);
+      }
+
+      /// Frame de rendu : pour chaque spot — sprite teinté (source-in sur
+      /// petit offscreen) projeté en rotation depuis l'apex, cœur plus
+      /// chaud superposé, halo à la source, mare de lumière à l'impact —
+      /// puis évidage des trous (peindreTrous, destination-out).
+      function spotsDessiner(tSec) {
+        var ctx = spotsCtx;
+        var cfg = spotsCfg;
+        if (!ctx || !cfg || !spotsSprite) return;
+        var cw = cfg.cw, ch = cfg.ch;
+        var s = spotsCanvas.width / cw;
+        ctx.setTransform(s, 0, 0, s, 0, 0);
+        ctx.clearRect(0, 0, cw, ch);
+
+        // Réactivité audio : énergie = max des bandes du spectre déjà
+        // calculé par l'équaliseur (eq-spectrum ~30 Hz). Sans capture
+        // active (eqCible null) → 0 → balayage d'ambiance normal.
+        var energie = 0;
+        if (cfg.reagir && eqCible) {
+          for (var ei = 0; ei < EQ_NB; ei++) {
+            var ev = eqCible[ei];
+            if (typeof ev === "number" && ev > energie) energie = Math.min(1, ev);
+          }
+        }
+        var intens = cfg.intensite * (0.85 + 0.5 * energie);
+        var vit = cfg.vitesse;
+
+        if (!spotsTintCtx) {
+          spotsTint = document.createElement("canvas");
+          spotsTint.width = SPOTS_SPRITE_W;
+          spotsTint.height = SPOTS_SPRITE_H;
+          spotsTintCtx = spotsTint.getContext("2d");
+        }
+        ctx.globalCompositeOperation = "lighter";
+        var len = ch * 1.25;    // le faisceau traverse jusqu'au bas du canvas
+        var bw = cw * 0.36;     // largeur du cône à la base
+        for (var i = 0; i < 2; i++) {
+          var gauche = i === 0;
+          // Apex aux vrais coins supérieurs — ASYMÉTRIQUES (positions et
+          // hauteurs différentes) : la scène ne doit pas se lire en miroir.
+          var ax = gauche ? cw * 0.05 : cw * 0.95;
+          var apexY = gauche ? -ch * 0.02 : -ch * 0.055;
+          // Chaque spot a sa propre cadence (×1.17) — jamais synchronisés.
+          var vitSpot = vit * (gauche ? 1 : 1.17);
+          var phase = gauche ? 0 : 2.1;
+          // Tilt de base vers le centre (asymétrique) + balayage NON
+          // sinusoïdal pur : deux sinus à fréquences non multiples →
+          // trajectoire organique, sans retour mécanique visible.
+          // rotate(θ>0) bascule le faisceau vers la GAUCHE (axe y vers le
+          // bas) : dir mirroré → les deux spots balayent l'INTÉRIEUR de
+          // la scène, jamais vers l'extérieur (leçon : signe inversé =
+          // faisceaux qui pointaient hors cadre, 2026-10-20).
+          var dir = gauche ? -1 : 1;
+          var ang = dir * ((gauche ? 0.34 : 0.44)
+            + Math.sin(tSec * 0.5 * vitSpot + phase) * 0.30
+            + Math.sin(tSec * 0.83 * vitSpot + phase * 1.7) * 0.07);
+          // Largeur qui respire — le cône n'est jamais rigide.
+          var bwS = bw * (1 + 0.07 * Math.sin(tSec * 0.9 * vitSpot + i * 2.7));
+          // Respiration d'intensité par spot + couleurs déphasées d'un
+          // demi-cycle (jamais la même couleur en même temps).
+          var intens2 = intens * (0.88 + 0.12 * Math.sin(tSec * 0.8 * vitSpot + i * 2.7));
+          // Trois teintes : couleur principale, teinte de BORD (décalée
+          // le long du cycle palette — les bords annoncent la couleur
+          // suivante), cœur blanc-chaud (couleur poussée vers le blanc).
+          var coul = spotsCouleur(tSec * vitSpot * 0.035 + i * 0.5);
+          var coulE = spotsCouleur(tSec * vitSpot * 0.035 + i * 0.5 + 0.07);
+          var coulC = spotsMix(coul, [255, 255, 255], 0.55);
+          var r = coul[0], g = coul[1], b = coul[2];
+
+          ctx.save();
+          ctx.translate(ax, apexY);
+          ctx.rotate(ang);
+          // Quatre passes additif : halo ambiant très large et très
+          // faible (teinte de bord), cône externe teinte de bord (bords
+          // plus sombres / colorés), faisceau principal couleur pure,
+          // cœur blanc-chaud étroit. Superposition → dégradé multi-
+          // teinte, jamais un cône plat.
+          ctx.globalAlpha = intens2 * 0.16;
+          ctx.drawImage(spotsTeinter(coulE), -bwS * 0.75, 0, bwS * 1.5, len);
+          ctx.globalAlpha = intens2 * 0.40;
+          ctx.drawImage(spotsTeinter(coulE), -bwS / 2, 0, bwS, len);
+          ctx.globalAlpha = intens2 * 0.50;
+          ctx.drawImage(spotsTeinter(coul), -bwS * 0.33, 0, bwS * 0.66, len);
+          ctx.globalAlpha = intens2 * 0.42;
+          ctx.drawImage(spotsTeinter(coulC), -bwS * 0.13, 0, bwS * 0.26, len);
+          // Halo de la source lumineuse à l'apex (cœur blanc-chaud).
+          var rg = ctx.createRadialGradient(0, 0, 0, 0, 0, cw * 0.045);
+          rg.addColorStop(0, "rgba(" + coulC[0] + "," + coulC[1] + "," + coulC[2] + ",0.6)");
+          rg.addColorStop(0.4, "rgba(" + r + "," + g + "," + b + ",0.28)");
+          rg.addColorStop(1, "rgba(" + r + "," + g + "," + b + ",0)");
+          ctx.globalAlpha = intens2;
+          ctx.fillStyle = rg;
+          ctx.beginPath();
+          ctx.arc(0, 0, cw * 0.045, 0, 6.2832);
+          ctx.fill();
+          // Mare de lumière là où le faisceau atterrit (teinte de bord).
+          ctx.translate(0, len * 0.9);
+          ctx.scale(1, 0.32);
+          var rp = ctx.createRadialGradient(0, 0, 0, 0, 0, bwS * 0.5);
+          rp.addColorStop(0, "rgba(" + coulE[0] + "," + coulE[1] + "," + coulE[2] + ",0.26)");
+          rp.addColorStop(1, "rgba(" + coulE[0] + "," + coulE[1] + "," + coulE[2] + ",0)");
+          ctx.fillStyle = rp;
+          ctx.beginPath();
+          ctx.arc(0, 0, bwS * 0.5, 0, 6.2832);
+          ctx.fill();
+          ctx.restore();
+        }
+        ctx.globalCompositeOperation = "source-over";
+        ctx.globalAlpha = 1;
+
+        // Trous : la lumière n'envahit JAMAIS les widgets trou/caméra —
+        // même effacement destination-out que le fond (helper partagé),
+        // en coords ÉCRAN pures : ce canvas vit dans #stage (sibling de
+        // #bg), il ne subit pas le tilt/zoom du fond.
+        peindreTrous(ctx, cfg.scene, true);
+      }
+
       // Appliquer un snapshot reçu : met à jour currentScene, les dims canvas,
       // rend la scène, et rafraîchit les overlays (bandeau, alerte, welcome).
       // Extraite du handler WS pour être réutilisée par le fondu (rendu différé
@@ -8375,7 +9982,13 @@
           appliquerCadreOverlay(alerteCardEl, "alerte");
         }
         if (welcomeRoot && welcomeRoot.style.display === "block" && welcomeClipEl) {
-          appliquerCadreOverlay(welcomeClipEl, "welcome");
+          // Le cadre de scène ne s'applique qu'en mode squelette ; en
+          // spotlight, s'assurer qu'il n'en reste pas un résiduel.
+          if (welcomeSpotlight) {
+            nettoyerCadreOverlay(welcomeClipEl, "welcome");
+          } else {
+            appliquerCadreOverlay(welcomeClipEl, "welcome");
+          }
         }
         // Écran d'attente : cadre minuteur + couleurs suivent le cadre
         // widget de la nouvelle scène (BRB affiché pendant le changement).
@@ -8418,6 +10031,12 @@
           // Resync musique : si une piste jouait pendant le reload du
           // browser source (OBS), le serveur re-émet musique-play.
           ws.send(JSON.stringify({ type: "musique-resync" }));
+          // Resync du squelette splitpop : les events speedrun ne portent
+          // pas la position du pop → le serveur re-émet `splitpop-pos`.
+          ws.send(JSON.stringify({ type: "splitpop-resync" }));
+          // Resync Emoji Arena : reload OBS en plein combat → le serveur
+          // re-émet le snapshot fight-state courant (auto-réparateur).
+          ws.send(JSON.stringify({ type: "fight-resync" }));
         };
         ws.onclose = () => {
           if (wsCourant === ws) wsCourant = null;
@@ -8590,11 +10209,45 @@
               }
             } else if (msg.type === "position-overlay-config") {
               // Squelette de position unifié (clip de bienvenue + alertes +
-              // commandes). Applique la même position/taille aux trois.
+              // commandes + pad). Le pop de validation des splits a son
+              // squelette DÉDIÉ (frame splitpop-pos ci-dessous).
               applyWelcomeOverlayConfig(msg.config || {});
               applyAlerteOverlayConfig(msg.config || {});
               applyCommandeOverlayConfig(msg.config || {});
               applyPadOverlayConfig(msg.config || {});
+            } else if (msg.type === "splitpop-pos") {
+              // Squelette DÉDIÉ du pop de validation des splits (onglet
+              // Squelette de position, section Pop des splits) —
+              // repositionnement live, pop visible ou non.
+              applySplitPopOverlayConfig(msg.config || {});
+            } else if (msg.type === "splitpop-test") {
+              // Test manuel du rendu (bouton « Tester le rendu » de
+              // l'onglet Position) : pop factice « SPLIT 3 / −1.3 /
+              // GAGNÉ » reprenant les options du 1er widget speedrun
+              // présent (couleurs custom, durée, son) — même code path
+              // visuel qu'un vrai split. Sig unique : bypass dédup pour
+              // permettre les tests répétés rapides.
+              var en0 = null;
+              widgetMap.forEach(function (en) {
+                if (!en0 && en.srOpts) en0 = en;
+              });
+              var fakeOpts = en0 ? en0.srOpts : {};
+              srPopSplit({ srOpts: fakeOpts }, 2, true,
+                srFormatDelta(-1.3, fakeOpts), "test:" + Date.now());
+            } else if (msg.type === "chrono2-pos") {
+              // Squelette DÉDIÉ du chrono 2 (onglet Squelette de position,
+              // section Chrono 2) — repositionnement live.
+              majChrono2PosConfig(msg.config || {});
+            } else if (msg.type === "chrono2-etat") {
+              // Chrono 2 : frame auto-réparatrice (tick 10 Hz côté Rust).
+              majChrono2Etat(msg);
+            } else if (msg.type === "fight-state") {
+              // Emoji Arena : snapshot complet de la partie (auto-réparateur
+              // — idle vide l'arène, combat/fin la redessine).
+              majFightState(msg.combat || {});
+            } else if (msg.type === "cmd-liste") {
+              // Liste générique `!cmd` (toutes plateformes) — carte texte.
+              afficherCmdListe(msg);
             }
           } catch (e) {
             console.error("Message WS invalide:", e);
@@ -8612,6 +10265,8 @@
 
       var welcomeRoot = null;       // div racine positionnable (x/y/w/h, z)
       var welcomeVoileEl = null;    // voile noir opaque plein écran (spotlight)
+      var welcomeFondEl = null;     // fond image de chaîne dans le voile (spotlight)
+      var welcomeFondImgEl = null;
       var welcomeClipEl = null;     // div.widget.welcome-clip (carte verticale)
       var welcomeEnteteEl = null;   // en-tête : avatar rond + pseudo + CTA + bio
       var welcomeAvatarEl = null;
@@ -8715,6 +10370,15 @@
         welcomeVoileEl.className = "welcome-clip-voile";
         welcomeVoileEl.style.zIndex = "9999";
         welcomeVoileEl.style.display = "none";
+        // Fond « image de chaîne » (spotlight) : 1er enfant du voile → le
+        // noir du voile reste derrière comme base (image absente/lente).
+        welcomeFondEl = document.createElement("div");
+        welcomeFondEl.className = "welcome-clip-fond";
+        welcomeFondEl.style.display = "none";
+        welcomeFondImgEl = document.createElement("img");
+        welcomeFondImgEl.alt = "";
+        welcomeFondEl.appendChild(welcomeFondImgEl);
+        welcomeVoileEl.appendChild(welcomeFondEl);
         stageEl.appendChild(welcomeVoileEl);
         stageEl.appendChild(welcomeRoot);
 
@@ -8737,8 +10401,11 @@
         if (typeof cfg.hauteur === "number") welcomeConfig.hauteur = cfg.hauteur;
         if (welcomeSpotlight) {
           // Spotlight : carte centrée à 85 % via la classe .spot — nettoyer
-          // les styles inline posés par le mode squelette (ils gagneraient).
+          // les styles inline posés par le mode squelette (ils gagneraient)
+          // + retirer un cadre SVG posé en squelette si le mode bascule à
+          // chaud (le spotlight n'utilise pas le cadre de scène).
           welcomeRoot.classList.add("spot");
+          nettoyerCadreOverlay(welcomeClipEl, "welcome");
           welcomeRoot.style.left = "";
           welcomeRoot.style.top = "";
           welcomeRoot.style.width = "";
@@ -8829,6 +10496,21 @@
             voile.classList.toggle("visible", voileSpot);
           });
         }
+        // Fond « image de chaîne » plein écran (spotlight) : bannière du
+        // viewer, ou avatar fortement flouté en repli. Ni l'un ni l'autre →
+        // le voile reste noir (fond affiché seulement s'il y a une image).
+        if (welcomeFondEl) {
+          var fondSrc = viewer.banniere || viewer.avatar || "";
+          welcomeFondImgEl.src = fondSrc;
+          welcomeFondEl.classList.toggle("flou", !viewer.banniere && !!viewer.avatar);
+          welcomeFondEl.style.display =
+            welcomeSpotlight && fondSrc ? "block" : "none";
+          // Entrée : état de départ posé → retiré au rAF → le fond zoom-out /
+          // se défloute pendant que la carte pop (fondu + slide + scale,
+          // décalée de 120 ms). Squelette : aucune classe .enter.
+          welcomeFondEl.classList.toggle("enter", welcomeSpotlight && !!fondSrc);
+        }
+        welcomeRoot.classList.toggle("enter", welcomeSpotlight);
 
         // Phase intro spotlight : avatar seul 3 s puis split gauche/droite.
         if (welcomeSpotTimer) {
@@ -8840,10 +10522,20 @@
         // Afficher le root + la carte IMMÉDIATEMENT (le viewer voit tout de
         // suite qui arrive, pendant que la vidéo buffer en arrière-plan).
         welcomeRoot.style.display = "block";
-        // Cadre SVG : mesurer la carte une fois affichée (hauteur auto).
+        // Déclenche l'entrée spotlight : retrait des classes .enter → les
+        // transitions partent (fond qui se stabilise + carte qui pop).
         requestAnimationFrame(function () {
-          appliquerCadreOverlay(welcomeClipEl, "welcome");
+          welcomeRoot.classList.remove("enter");
+          if (welcomeFondEl) welcomeFondEl.classList.remove("enter");
         });
+        // Cadre SVG de scène : mesurer la carte une fois affichée (hauteur
+        // auto). Squelette uniquement — le spotlight utilise le panneau
+        // glass neutre, pas le cadre de scène.
+        if (!welcomeSpotlight) {
+          requestAnimationFrame(function () {
+            appliquerCadreOverlay(welcomeClipEl, "welcome");
+          });
+        }
 
         // Nettoyer les handlers précédents (au cas où stop n'a pas tourné).
         welcomeVideoEl.oncanplay = null;
@@ -8858,10 +10550,6 @@
           // Spotlight : la vidéo buffer pendant l'intro (3 s) puis démarre au
           // split. Le timer Rust a déjà +3 s (INTRO_SPOTLIGHT_MS).
           welcomeVideoEl.oncanplay = function () {
-            // Le clip change la hauteur de la carte → re-mesurer le cadre.
-            requestAnimationFrame(function () {
-              appliquerCadreOverlay(welcomeClipEl, "welcome");
-            });
             welcomeVideoEl.oncanplay = null;
           };
           welcomeSpotTimer = setTimeout(function () {
@@ -8870,9 +10558,6 @@
             welcomeRoot.classList.remove("intro");
             welcomeDroiteEl.style.display = "flex";
             welcomeVideoEl.play().catch(function () {});
-            requestAnimationFrame(function () {
-              appliquerCadreOverlay(welcomeClipEl, "welcome");
-            });
           }, 3000);
         } else {
           welcomeVideoEl.oncanplay = function () {
@@ -8910,9 +10595,15 @@
         welcomeFavorisEl.style.display = "none";
         welcomeRoot.style.display = "none";
         welcomeRoot.classList.remove("intro");
+        welcomeRoot.classList.remove("enter");
         if (welcomeVoileEl) {
           welcomeVoileEl.classList.remove("visible");
           welcomeVoileEl.style.display = "none";
+        }
+        if (welcomeFondEl) {
+          welcomeFondEl.style.display = "none";
+          welcomeFondEl.classList.remove("flou", "enter");
+          welcomeFondImgEl.removeAttribute("src");
         }
         if (welcomeClipEl) nettoyerCadreOverlay(welcomeClipEl, "welcome");
       }
@@ -9550,6 +11241,23 @@
         return "#" + pad(rr) + pad(gg) + pad(bb);
       }
 
+      /// Rampe « liserés » du dégradé principal d'un cadre : dominante
+      /// sombre avec deux fins passages clairs (éclat = vive éclaircie
+      /// 45 % vers 33 %, vive pure vers 68 %) — la couleur s'exprime par
+      /// touches au lieu d'un grand dégradé uniforme.
+      /// Miroir de couleurs.ts::stopsLiseres (dashboard).
+      function stopsLiseres(sombre, vive) {
+        var eclat = bpmEclaircir(vive, 0.45);
+        return '<stop offset="0%" stop-color="' + sombre + '"/>'
+          + '<stop offset="30%" stop-color="' + sombre + '"/>'
+          + '<stop offset="33%" stop-color="' + eclat + '"/>'
+          + '<stop offset="36%" stop-color="' + sombre + '"/>'
+          + '<stop offset="64%" stop-color="' + sombre + '"/>'
+          + '<stop offset="68%" stop-color="' + vive + '"/>'
+          + '<stop offset="72%" stop-color="' + sombre + '"/>'
+          + '<stop offset="100%" stop-color="' + sombre + '"/>';
+      }
+
       /// Résout les couleurs { p, s } depuis le cadre widget de la scène active.
       /// Tous les styles utilisent couleur/couleurFin (couleurFin invalide →
       /// dérivée de couleur, jamais de noir). Fallback → BPM_COULEURS_DEFAUT.
@@ -9999,11 +11707,11 @@
         }
         var c = msg.commande || {};
         commandeTexteEl.textContent = c.texte || "";
-        // Couleur du texte = couleur du cadre widget de la scène si actif,
-        // sinon blanc (plus de champ couleur sur les commandes).
-        var couleur = "#ffffff";
+        // Couleur du texte : personnalisée si définie, sinon couleur du
+        // cadre widget de la scène si actif, sinon blanc.
+        var couleur = c.couleur || "#ffffff";
         var cadreW = currentScene && currentScene.cadreWidget;
-        if (cadreW && cadreW.actif) {
+        if (!c.couleur && cadreW && cadreW.actif) {
           couleur = bpmResoudreCouleurs().p;
         }
         commandeRoot.style.setProperty("--commande-couleur", couleur);
@@ -10011,8 +11719,20 @@
           "--commande-taille",
           (c.taille_px || 48) + "px"
         );
+        // Style du texte par commande : police embarquée ("" = système),
+        // gras / italique / souligné (mêmes champs que les titres).
+        commandeTexteEl.style.fontFamily = c.police
+          ? "'" + c.police + "', sans-serif"
+          : "";
+        // NB : la CSS .commande-texte pose font-weight:700 — "400" explicite
+        // requis pour que le toggle gras=false soit réellement non gras.
+        commandeTexteEl.style.fontWeight = c.gras ? "700" : "400";
+        commandeTexteEl.style.fontStyle = c.italique ? "italic" : "";
+        commandeTexteEl.style.textDecoration = c.souligne ? "underline" : "";
 
-        // Média : vidéo (son inclus) ou image (son séparé via c.son).
+        // Média : vidéo (son inclus) ou image. Le son importé (c.son) joue
+        // par-dessus dans TOUS les modes — vidéo incluse (mix : l'audio de
+        // la vidéo n'est pas coupé) et texte seul.
         if (commandeMediaEl) {
           commandeMediaEl.remove();
           commandeMediaEl = null;
@@ -10022,7 +11742,9 @@
           vid.className = "commande-media";
           vid.src = "/" + c.media;
           vid.autoplay = true;
-          vid.muted = PREVIEW;
+          // Audio de la vidéo désactivable par commande (video_son=false →
+          // vidéo muette — utile quand un son importé joue par-dessus).
+          vid.muted = PREVIEW || c.video_son === false;
           vid.setAttribute("playsinline", "");
           vid.oncanplay = function () {
             vid.oncanplay = null;
@@ -10048,12 +11770,13 @@
           commandeCardEl.appendChild(commandeMediaEl);
         }
 
-        // Son : mode image → son importé ; mode vidéo → son porté par la vidéo.
+        // Son : importé → joué dans tous les modes (par-dessus — l'audio
+        // de la vidéo, si présent, n'est pas coupé).
         if (commandeAudio) {
           commandeAudio.pause();
           commandeAudio = null;
         }
-        if (c.son && c.media_kind !== "video" && !PREVIEW) {
+        if (c.son && !PREVIEW) {
           try {
             commandeAudio = new Audio("/" + c.son);
             commandeAudio.volume = 0.8;
@@ -10509,6 +12232,9 @@
         if (typeof cfg.y === "number") padOverlay.y = cfg.y;
         if (typeof cfg.largeur === "number") padOverlay.largeur = cfg.largeur;
         if (typeof cfg.hauteur === "number") padOverlay.hauteur = cfg.hauteur;
+        // En plein écran la position d'overlay est ignorée : on mémorise
+        // seulement — le prochain affichage non plein écran l'appliquera.
+        if (padRoot.classList.contains("pad-plein")) return;
         padRoot.style.left = padOverlay.x + "px";
         padRoot.style.top = padOverlay.y + "px";
         padRoot.style.width = padOverlay.largeur + "px";
@@ -10529,6 +12255,10 @@
         var dureeMs = p.duree_ms || 5000;
         var bounce = !!p.bounce;
         var zoom = !!p.zoom;
+        var pleinEcran = !!p.plein_ecran;
+        var transparence = !!p.transparence;
+        var transparenceOpacite =
+          typeof p.transparence_opacite === "number" ? p.transparence_opacite : 0.5;
 
         // Nettoyer le média précédent.
         if (padMediaEl) {
@@ -10536,7 +12266,27 @@
           padMediaEl = null;
         }
 
+        // Position : plein écran → TOUT le canvas (position d'overlay ignorée,
+        // pas de pop-in scale) ; sinon → position d'overlay partagée.
+        if (pleinEcran) {
+          padRoot.style.left = "0px";
+          padRoot.style.top = "0px";
+          padRoot.style.width = "100%";
+          padRoot.style.height = "100%";
+          padRoot.classList.add("pad-plein");
+          // Plein écran = SANS cadre : retirer celui d'un play précédent,
+          // sinon la vidéo serait clippée à la taille de l'ancienne carte.
+          nettoyerCadreOverlay(padCardEl, "pad");
+        } else {
+          padRoot.style.left = padOverlay.x + "px";
+          padRoot.style.top = padOverlay.y + "px";
+          padRoot.style.width = padOverlay.largeur + "px";
+          padRoot.style.height = "";
+          padRoot.classList.remove("pad-plein");
+        }
+
         // Média : vidéo (son inclus) ou image (son séparé). Audio pur → pas de média.
+        // Effets bounce/zoom : ignorés en plein écran (conçus pour la petite carte).
         if (media && mediaKind === "video") {
           var vid = document.createElement("video");
           vid.className = "pad-media";
@@ -10545,10 +12295,13 @@
           vid.muted = PREVIEW;
           vid.volume = volume;
           vid.setAttribute("playsinline", "");
-          if (bounce) vid.classList.add("pad-bounce");
-          if (zoom) vid.classList.add("pad-zoom");
+          if (!pleinEcran) {
+            if (bounce) vid.classList.add("pad-bounce");
+            if (zoom) vid.classList.add("pad-zoom");
+          }
           vid.oncanplay = function () {
             vid.oncanplay = null;
+            if (pleinEcran) return;
             requestAnimationFrame(function () {
               appliquerCadreOverlay(padCardEl, "pad");
             });
@@ -10558,10 +12311,13 @@
           var img = document.createElement("img");
           img.className = "pad-media";
           img.alt = "";
-          if (bounce) img.classList.add("pad-bounce");
-          if (zoom) img.classList.add("pad-zoom");
+          if (!pleinEcran) {
+            if (bounce) img.classList.add("pad-bounce");
+            if (zoom) img.classList.add("pad-zoom");
+          }
           img.onload = function () {
             img.onload = null;
+            if (pleinEcran) return;
             appliquerCadreOverlay(padCardEl, "pad");
           };
           img.src = "/" + media;
@@ -10569,6 +12325,11 @@
         }
         if (padMediaEl) {
           padMediaEl.style.display = "block";
+          // Transparence (superposition) : opacité sur le média plein écran
+          // pour laisser la scène visible derrière.
+          if (pleinEcran && transparence) {
+            padMediaEl.style.opacity = String(Math.max(0, Math.min(1, transparenceOpacite)));
+          }
           padCardEl.appendChild(padMediaEl);
         }
 
@@ -10600,10 +12361,12 @@
           void padRoot.offsetWidth;
           padRoot.classList.add("visible");
           padVisible = true;
-          // Cadre SVG : mesurer la carte une fois affichée.
-          requestAnimationFrame(function () {
-            appliquerCadreOverlay(padCardEl, "pad");
-          });
+          // Cadre SVG : mesurer la carte une fois affichée — PAS en plein écran.
+          if (!pleinEcran) {
+            requestAnimationFrame(function () {
+              appliquerCadreOverlay(padCardEl, "pad");
+            });
+          }
         }
 
         // Fallback local : le pad-stop Rust est autoritaire, mais si perdu
@@ -10645,6 +12408,602 @@
 
       // Initialiser l'overlay pad dès le démarrage.
       initPadOverlay();
+
+      // ===== Emoji Arena (combat d'emojis 1v1 piloté par le chat) =====
+      //
+      // Frame WS `fight-state` : snapshot COMPLET de la partie émis par Rust
+      // à chaque transition (idle → lobby → combat → fin → idle). Même
+      // contrat que chrono2-etat : la frame est auto-réparatrice — un client
+      // (re)connecté (reload OBS mid-fight via `fight-resync` à l'open) se
+      // réaligne à la frame suivante. La diffusion ne fait QUE rendre +
+      // animer : tours, dégâts, timers et bot sont autoritaires côté Rust.
+      // `derniere.seq` déduplique l'animation des coups (la même frame peut
+      // être re-émise au resync sans rejouer l'action).
+      var fightRoot = null;
+      var fightEls = null;       // refs DOM construites une fois au boot
+      var fightPhase = "idle";   // phase courante (re-render sur transition)
+      var fightSeqVu = -1;       // seq de la dernière action animée
+      var fightInt = null;       // intervalle des countdowns locaux
+      var fightFinTourMs = 0;    // Date.now() de fin du tour courant
+      var fightDureeTourMs = 1;  // durée totale du tour (barre de progression)
+      var fightFinLobbyMs = 0;   // Date.now() d'expiration du lobby
+      var fightFinMatchMs = 0;   // Date.now() de fin de match
+      var fightLobbyCtx = null;  // contexte pour le texte du countdown lobby
+      var fightInfoRoot = null;  // racine SÉPARÉE des toasts (visible en idle)
+      var fightInfoEl = null;    // toast / carte d'aide
+      var fightInfoSeq = -1;     // seq du dernier message d'info affiché
+      var fightInfoTimer = null; // timer de disparition du toast
+      var fightAnimsReduites = false; // FX réduits (config dashboard)
+      var fightTour = "a";       // zone active (barre de timer locale)
+      var fightTourNom = "?";    // pseudo du joueur actif
+
+      /// Construit le DOM d'une zone combattant (barre PV + emoji + nom +
+      /// chips de coups + timer local + badge « À TOI »).
+      function fightZoneHtml() {
+        return (
+          '<div class="fight-badge-actif">À TOI</div>' +
+          '<div class="fight-pv">' +
+          '<div class="fight-pv-tete"><span class="fpv-nom"></span>' +
+          '<span class="fpv-val"></span></div>' +
+          '<div class="fight-pv-barre"><div class="fight-pv-fill"></div></div>' +
+          '</div>' +
+          '<div class="fight-emoji-wrap">' +
+          '<div class="fight-emoji-idle"><div class="fight-emoji"></div></div>' +
+          '</div>' +
+          '<div class="fight-nom"></div>' +
+          '<div class="fight-chips">' +
+          '<span class="fight-chip chip-a"></span>' +
+          '<span class="fight-chip chip-b"></span>' +
+          '<span class="fight-chip chip-c"></span>' +
+          '</div>' +
+          '<div class="fight-timer-zone"><div class="fight-timer-zone-fill"></div></div>'
+        );
+      }
+
+      /// Crée l'overlay fight une fois (au démarrage). Idempotent.
+      function initFightOverlay() {
+        if (fightRoot) return;
+        fightRoot = document.createElement("div");
+        fightRoot.id = "fight-root";
+        var za = document.createElement("div");
+        za.className = "fight-zone fight-zone-a";
+        za.innerHTML = fightZoneHtml();
+        var zb = document.createElement("div");
+        zb.className = "fight-zone fight-zone-b";
+        zb.innerHTML = fightZoneHtml();
+        var centre = document.createElement("div");
+        centre.className = "fight-centre";
+        centre.innerHTML =
+          '<div class="fight-tour"></div>' +
+          '<div class="fight-timer"><div class="fight-timer-fill"></div></div>' +
+          '<div class="fight-match"></div>';
+        var banner = document.createElement("div");
+        banner.className = "fight-banner";
+        banner.innerHTML =
+          '<div class="fight-banner-emoji"></div>' +
+          '<div class="fight-banner-titre"></div>' +
+          '<div class="fight-banner-sub"></div>';
+        fightRoot.appendChild(za);
+        fightRoot.appendChild(zb);
+        fightRoot.appendChild(centre);
+        fightRoot.appendChild(banner);
+        stageEl.appendChild(fightRoot);
+        // Toasts : racine séparée pour rester visibles quand l'arène est idle.
+        fightInfoRoot = document.createElement("div");
+        fightInfoRoot.id = "fight-info-root";
+        fightInfoEl = document.createElement("div");
+        fightInfoEl.className = "fight-info";
+        fightInfoRoot.appendChild(fightInfoEl);
+        stageEl.appendChild(fightInfoRoot);
+        function refs(zone) {
+          return {
+            zone: zone,
+            pvNom: zone.querySelector(".fpv-nom"),
+            pvVal: zone.querySelector(".fpv-val"),
+            pvFill: zone.querySelector(".fight-pv-fill"),
+            emoji: zone.querySelector(".fight-emoji"),
+            emojiWrap: zone.querySelector(".fight-emoji-wrap"),
+            nom: zone.querySelector(".fight-nom"),
+            chips: {
+              a: zone.querySelector(".chip-a"),
+              b: zone.querySelector(".chip-b"),
+              c: zone.querySelector(".chip-c"),
+            },
+            timerZoneFill: zone.querySelector(".fight-timer-zone-fill"),
+          };
+        }
+        fightEls = {
+          a: refs(za),
+          b: refs(zb),
+          centre: centre,
+          tour: centre.querySelector(".fight-tour"),
+          timerFill: centre.querySelector(".fight-timer-fill"),
+          match: centre.querySelector(".fight-match"),
+          banner: banner,
+          bannerEmoji: banner.querySelector(".fight-banner-emoji"),
+          bannerTitre: banner.querySelector(".fight-banner-titre"),
+          bannerSub: banner.querySelector(".fight-banner-sub"),
+          info: fightInfoEl,
+        };
+      }
+
+      /// Met à jour barre de vie + identité d'une zone (pseudo/emoji via
+      /// textContent — jamais innerHTML : le pseudo vient du chat).
+      function fightMajZone(el, j) {
+        if (!j) {
+          el.zone.style.display = "none";
+          return;
+        }
+        el.zone.style.display = "";
+        el.emoji.textContent = j.emoji || "❓";
+        // Ligne sous l'emoji : pseudo + badge plateforme (multi-plateforme —
+        // un combat Twitch vs Kick doit se lire visuellement).
+        var plat = j.plateforme && j.plateforme !== "bot" && j.plateforme !== "local"
+          ? j.plateforme
+          : "";
+        el.nom.textContent = j.pseudo || "?";
+        if (plat) {
+          var badge = document.createElement("span");
+          badge.className = "fight-plat";
+          badge.textContent = " · " + plat;
+          el.nom.appendChild(badge);
+        }
+        var pv = typeof j.pv === "number" ? j.pv : 0;
+        var max = typeof j.pv_max === "number" && j.pv_max > 0 ? j.pv_max : 100;
+        var pct = Math.max(0, Math.min(100, Math.round((pv / max) * 100)));
+        el.pvNom.textContent = j.pseudo || "?";
+        el.pvVal.textContent = pv + "/" + max;
+        el.pvFill.style.width = pct + "%";
+        el.pvFill.classList.toggle("fight-mid", pct <= 55 && pct > 25);
+        el.pvFill.classList.toggle("fight-low", pct <= 25);
+      }
+
+      /// Chips de coups sous le combattant actif (noms courants + spécial
+      /// grisé après usage — `special_utilise` arrive déjà dans la frame).
+      function fightMajChips(el, j, cmds) {
+        if (!el.chips || !el.chips.a) return;
+        el.chips.a.textContent = "⚡ !" + (cmds.a || "a") + " rapide";
+        el.chips.b.textContent = "💥 !" + (cmds.b || "b") + " lourd";
+        el.chips.c.textContent = "🩸 !" + (cmds.c || "c") + " spécial";
+        var special = !!(j && j.special_utilise);
+        el.chips.c.classList.toggle("fight-chip-off", special);
+      }
+
+      /// Affiche un toast / la carte d'aide (dedup par seq, âge vérifié pour
+      /// ne pas rejouer un vieux message après un reload OBS).
+      function fightMajInfo(info) {
+        if (!fightEls || !fightEls.info || !info) return;
+        if (info.seq === fightInfoSeq) return;
+        var duree = info.duree_ms || 2600;
+        if (typeof info.age_ms === "number" && info.age_ms > duree) return;
+        fightInfoSeq = info.seq;
+        var el = fightEls.info;
+        el.textContent = info.texte || "";
+        el.className = "fight-info " + (info.kind || "info");
+        void el.offsetWidth;
+        el.classList.add("visible");
+        if (fightInfoTimer) clearTimeout(fightInfoTimer);
+        fightInfoTimer = setTimeout(function () {
+          el.classList.remove("visible");
+        }, duree);
+      }
+
+      /// Impact visuel sur le défenseur (spark/crit/special) ou le soigneur.
+      /// Respecte `animations_reduites` : les popups restent, pas les FX.
+      function fightImpact(zoneEl, kind) {
+        if (fightAnimsReduites) return;
+        var fx = document.createElement("div");
+        fx.className = "fight-fx " + kind;
+        fx.textContent =
+          kind === "crit" ? "💢" :
+          kind === "special" ? "🩸" :
+          kind === "heal" ? "✨" : "💥";
+        zoneEl.emojiWrap.appendChild(fx);
+        fx.addEventListener("animationend", function () {
+          fx.remove();
+        });
+        zoneEl.zone.classList.remove("fight-flash");
+        void zoneEl.zone.offsetWidth;
+        zoneEl.zone.classList.add("fight-flash");
+        setTimeout(function () {
+          zoneEl.zone.classList.remove("fight-flash");
+        }, 260);
+      }
+
+      /// Micro-secousse de l'arène (coup lourd / critique).
+      function fightShake() {
+        if (fightAnimsReduites || !fightRoot) return;
+        fightRoot.classList.remove("fight-shake");
+        void fightRoot.offsetWidth;
+        fightRoot.classList.add("fight-shake");
+        setTimeout(function () {
+          fightRoot.classList.remove("fight-shake");
+        }, 320);
+      }
+
+      /// Popup de dégâts/soins au-dessus de l'emoji (élément éphémère —
+      /// retiré du DOM à la fin de l'animation).
+      function fightPopup(zoneEl, texte, classe) {
+        var d = document.createElement("div");
+        d.className = "fight-dmg" + (classe ? " " + classe : "");
+        d.textContent = texte;
+        zoneEl.emojiWrap.appendChild(d);
+        d.addEventListener("animationend", function () {
+          d.remove();
+        });
+      }
+
+      /// Pose une classe d'animation sur une zone (force reflow pour
+      /// permettre de rejouer la même animation deux fois de suite).
+      function fightAnime(zone, classe, duree) {
+        var z = zone.zone;
+        z.classList.remove(classe);
+        void z.offsetWidth; // reflow → rejoue la keyframe
+        z.classList.add(classe);
+        setTimeout(function () {
+          z.classList.remove(classe);
+        }, duree);
+      }
+
+      /// Anime la dernière action (attaque de `acteur` sur l'adversaire).
+      /// "passe" = tour sauté au timeout (petit ⏳, pas de lunge).
+      function fightAnimerCoup(d) {
+        var atk = d.acteur === "a" ? fightEls.a : fightEls.b;
+        var def = d.acteur === "a" ? fightEls.b : fightEls.a;
+        if (d.coup === "passe") {
+          fightPopup(atk, "⏳ passe…", "fight-miss");
+          return;
+        }
+        fightAnime(atk, d.acteur === "a" ? "fight-atk-a" : "fight-atk-b", 500);
+        if (!d.touche) {
+          // Raté : l'adversaire esquive latéralement + popup "raté".
+          fightAnime(def, "fight-esq", 420);
+          fightPopup(def, "raté", "fight-miss");
+          return;
+        }
+        setTimeout(function () {
+          // Shake/flash différé : la lunge atteint l'adversaire ~40 % de
+          // l'anim (200 ms) — le coup impacte visuellement à ce moment.
+          fightAnime(def, "fight-hit", 400);
+          fightImpact(def, d.critique ? "crit" : "hit");
+          if (d.coup === "lourd" || d.critique) fightShake();
+        }, 200);
+        if (d.degats > 0) {
+          fightPopup(
+            def,
+            "-" + d.degats,
+            d.critique ? "fight-crit" : "",
+          );
+        }
+        if (d.soin > 0) {
+          setTimeout(function () {
+            fightPopup(atk, "+" + d.soin, "fight-soin");
+            fightImpact(atk, "heal");
+          }, 200);
+        }
+        if (d.coup === "special") {
+          setTimeout(function () {
+            fightImpact(def, "special");
+          }, 200);
+        }
+      }
+
+      /// Countdowns locaux (tour, lobby, match) : les frames Rust portent
+      /// des deadlines — la diffusion décrémente en local entre les frames.
+      function fightTick() {
+        var now = Date.now();
+        if (fightPhase === "combat") {
+          var reste = Math.max(0, fightFinTourMs - now);
+          var pct = Math.max(0, Math.min(100, (reste / fightDureeTourMs) * 100));
+          fightEls.timerFill.style.width = pct + "%";
+          var zoneActive = fightEls[fightTour];
+          if (zoneActive && zoneActive.timerZoneFill) {
+            zoneActive.timerZoneFill.style.width = pct + "%";
+          }
+          fightEls.tour.textContent =
+            "⚔ Au tour de " + fightTourNom + " · " +
+            Math.max(0, Math.ceil(reste / 1000)) + " s";
+          var mreste = Math.max(0, Math.ceil((fightFinMatchMs - now) / 1000));
+          var mm = Math.floor(mreste / 60);
+          var ss = String(mreste % 60).padStart(2, "0");
+          fightEls.match.textContent = mm + ":" + ss;
+        } else if (fightPhase === "lobby" && fightLobbyCtx) {
+          var r = Math.max(0, Math.ceil((fightFinLobbyMs - now) / 1000));
+          fightEls.bannerSub.textContent =
+            fightLobbyCtx.sub + " — " + r + " s";
+        }
+      }
+
+      function fightStartTick() {
+        if (!fightInt) {
+          fightInt = setInterval(fightTick, 250);
+        }
+      }
+      function fightStopTick() {
+        if (fightInt) {
+          clearInterval(fightInt);
+          fightInt = null;
+        }
+      }
+
+      /// Rendu principal : snapshot complet de la partie (handler WS
+      /// `fight-state`). Idempotent — rejouable à l'identique au resync.
+      function majFightState(c) {
+        if (!fightRoot || !c) return;
+        var phase = c.phase || "idle";
+        fightPhase = phase;
+        fightAnimsReduites = !!c.anims_reduites;
+        fightRoot.classList.toggle("fight-no-anim", fightAnimsReduites);
+        fightMajInfo(c.info);
+        if (phase === "idle") {
+          fightRoot.classList.remove("fight-visible");
+          fightEls.banner.classList.remove("visible");
+          fightEls.a.zone.classList.remove("fight-actif", "fight-inactif");
+          fightEls.b.zone.classList.remove("fight-actif", "fight-inactif");
+          fightStopTick();
+          return;
+        }
+        fightRoot.classList.add("fight-visible");
+        fightStartTick();
+
+        if (phase === "lobby") {
+          // Bannière centrée uniquement (pas d'arène avant l'adversaire).
+          fightEls.a.zone.style.display = "none";
+          fightEls.b.zone.style.display = "none";
+          fightEls.a.zone.classList.remove("fight-actif", "fight-inactif");
+          fightEls.b.zone.classList.remove("fight-actif", "fight-inactif");
+          fightEls.centre.style.display = "none";
+          fightEls.banner.classList.add("visible");
+          var defiant = c.defiant || {};
+          var cmds = c.cmds || {};
+          var emoji = defiant.emoji || "🐲";
+          var mini =
+            "3 coups · " + (c.duree_tour_s || 15) + " s/tour · " +
+            Math.max(1, Math.round((c.duree_match_s || 180) / 60)) + " min";
+          var titre, sub;
+          if (c.cible) {
+            titre = "⚔ " + (defiant.pseudo || "?") + " défie @" + c.cible;
+            sub =
+              "!" + (cmds.accept || "accept") + " " + emoji +
+              " ou !" + (cmds.refuse || "refuse") + " · " + mini;
+          } else {
+            titre = "⚔ " + (defiant.pseudo || "?") + " cherche un adversaire";
+            sub =
+              "!" + (cmds.accept || "accept") + " " + emoji +
+              " pour combattre · " + mini;
+          }
+          fightEls.bannerEmoji.textContent = emoji;
+          fightEls.bannerEmoji.style.display = "block";
+          fightEls.bannerTitre.textContent = titre;
+          fightLobbyCtx = { sub: sub };
+          fightFinLobbyMs = Date.now() + (c.reste_lobby_ms || 0);
+          fightTick();
+          return;
+        }
+
+        // combat / fin : arène complète.
+        fightEls.banner.classList.remove("visible");
+        fightEls.bannerEmoji.style.display = "none";
+        fightEls.a.zone.classList.remove("fight-ko");
+        fightEls.b.zone.classList.remove("fight-ko");
+        fightMajZone(fightEls.a, c.ja);
+        fightMajZone(fightEls.b, c.jb);
+
+        if (phase === "combat") {
+          fightEls.centre.style.display = "";
+          var cmds2 = c.cmds || {};
+          var actif = c.tour === "a" ? c.ja : c.jb;
+          fightTour = c.tour === "b" ? "b" : "a";
+          fightTourNom = (actif && actif.pseudo) || "?";
+          fightEls.a.zone.classList.toggle("fight-actif", fightTour === "a");
+          fightEls.b.zone.classList.toggle("fight-actif", fightTour === "b");
+          fightEls.a.zone.classList.toggle("fight-inactif", fightTour !== "a");
+          fightEls.b.zone.classList.toggle("fight-inactif", fightTour !== "b");
+          fightMajChips(fightEls.a, c.ja, cmds2);
+          fightMajChips(fightEls.b, c.jb, cmds2);
+          fightDureeTourMs = c.duree_tour_ms || 15000;
+          fightFinTourMs = Date.now() + (c.reste_tour_ms || 0);
+          fightFinMatchMs = Date.now() + ((c.reste_match_s || 0) * 1000);
+          // Anime l'action si nouvelle (seq dédup — resync sans rejouer).
+          var d = c.derniere;
+          if (d && d.seq !== fightSeqVu) {
+            fightSeqVu = d.seq;
+            fightAnimerCoup(d);
+          }
+          fightTick();
+          return;
+        }
+
+        // fin : bannière résultat + KO visuel du perdant.
+        fightEls.centre.style.display = "none";
+        fightEls.a.zone.classList.remove("fight-actif", "fight-inactif");
+        fightEls.b.zone.classList.remove("fight-actif", "fight-inactif");
+        var g = c.gagnant;
+        var raison = c.raison || "ko";
+        var titre2;
+        if (raison === "stop") {
+          titre2 = "🛑 Combat arrêté";
+        } else if (raison === "afk") {
+          titre2 = "⏹ Match abandonné — inactivité";
+        } else if (g === "a" || g === "b") {
+          var gj = g === "a" ? c.ja : c.jb;
+          titre2 =
+            "🏆 " + ((gj && gj.pseudo) || "?") +
+            (raison === "abandon" ? " gagne par abandon !" :
+             raison === "temps" ? " gagne au temps !" : " gagne !");
+        } else {
+          titre2 = "🤝 Égalité !";
+        }
+        fightEls.bannerTitre.textContent = titre2;
+        fightEls.bannerSub.textContent = "";
+        fightEls.banner.classList.add("visible");
+        // Le perdant (ou les deux à égalité nulle de PV) tombe en KO.
+        if (g === "a") fightEls.b.zone.classList.add("fight-ko");
+        else if (g === "b") fightEls.a.zone.classList.add("fight-ko");
+        fightStopTick();
+      }
+
+      // ===== Liste générique !cmd (toutes plateformes) =====
+      //
+      // Frame WS `cmd-liste` : carte texte groupée émise par commandes.rs.
+      // Twitch reçoit aussi la liste en chunks PRIVMSG ; les autres
+      // plateformes n'ont que cette carte (aucun canal d'envoi).
+      var cmdListeRoot = null;
+      var cmdListeEl = null;
+      var cmdListeTimer = null;
+
+      function initCmdListeOverlay() {
+        if (cmdListeRoot) return;
+        cmdListeRoot = document.createElement("div");
+        cmdListeRoot.id = "cmd-liste-root";
+        cmdListeEl = document.createElement("div");
+        cmdListeEl.className = "cmd-liste";
+        cmdListeRoot.appendChild(cmdListeEl);
+        stageEl.appendChild(cmdListeRoot);
+      }
+
+      function afficherCmdListe(msg) {
+        initCmdListeOverlay();
+        cmdListeEl.textContent = msg.texte || "";
+        void cmdListeEl.offsetWidth;
+        cmdListeEl.classList.add("visible");
+        if (cmdListeTimer) clearTimeout(cmdListeTimer);
+        cmdListeTimer = setTimeout(function () {
+          cmdListeEl.classList.remove("visible");
+        }, msg.duree_ms || 12000);
+      }
+
+      // Initialiser l'overlay fight dès le démarrage.
+      initFightOverlay();
+      initCmdListeOverlay();
+
+      // ===== Chrono 2 (deuxième chronomètre — touche chrono du pad) =====
+      //
+      // Overlay INDÉPENDANT du pad (z 9994, sous le pad 9995) : un chrono
+      // de 65 s ne doit pas être tué par le pad-stop d'une autre touche (et
+      // inversement). État = frames WS auto-réparatrices `chrono2-etat`
+      // (tick 10 Hz côté Rust — chaque frame porte TOUT : actif, écoulé,
+      // durée, sons, volume, position du squelette DÉDIÉ position_chrono.json).
+      // `chrono2-pos` repositionne en live (réglage du squelette pendant que
+      // le chrono tourne). Fin (durée cible atteinte) : petit son d'alerte
+      // + fade-out + nettoyage différé.
+      var chrono2Root = null;
+      var chrono2TempsEl = null;
+      var chrono2Geo = { x: 760, y: 80, largeur: 400, hauteur: 120 };
+      var chrono2Actif = false;
+      var chrono2Timer = null;
+      var chrono2RunId = -1;
+
+      /// Crée l'overlay chrono 2 une fois (au démarrage). Idempotent.
+      function initChrono2Overlay() {
+        if (chrono2Root) return;
+        chrono2Root = document.createElement("div");
+        chrono2Root.className = "chrono2-root";
+        chrono2Root.style.display = "none";
+        var carte = document.createElement("div");
+        carte.className = "chrono2-carte";
+        var temps = document.createElement("span");
+        temps.className = "chrono2-temps";
+        temps.textContent = "0:00.0";
+        carte.appendChild(temps);
+        chrono2Root.appendChild(carte);
+        stageEl.appendChild(chrono2Root);
+        chrono2TempsEl = temps;
+        majChrono2Pos();
+      }
+
+      /// Applique la géométrie du squelette dédié au root chrono 2 +
+      /// teinte la carte au dégradé du cadre de la scène (comme les
+      /// widgets speedrun — currentScene peut être null au tout début).
+      function majChrono2Pos() {
+        if (!chrono2Root) return;
+        chrono2Root.style.left = chrono2Geo.x + "px";
+        chrono2Root.style.top = chrono2Geo.y + "px";
+        chrono2Root.style.width = chrono2Geo.largeur + "px";
+        if (currentScene && currentScene.cadreWidget) {
+          var g = gradientCadre(currentScene.cadreWidget);
+          chrono2Root.style.setProperty("--sr-grad-from", g.from);
+        }
+      }
+
+      /// Frame WS `chrono2-pos` : squelette dédié (onglet Squelette de
+      /// position, section Chrono 2). Applique en live, chrono visible ou non.
+      function majChrono2PosConfig(cfg) {
+        if (!cfg) return;
+        if (typeof cfg.x === "number") chrono2Geo.x = cfg.x;
+        if (typeof cfg.y === "number") chrono2Geo.y = cfg.y;
+        if (typeof cfg.largeur === "number") chrono2Geo.largeur = cfg.largeur;
+        if (typeof cfg.hauteur === "number") chrono2Geo.hauteur = cfg.hauteur;
+        majChrono2Pos();
+      }
+
+      /// Formate des ms écoulées → "M:SS.d" (dixièmes).
+      function chrono2Format(ms) {
+        var total = Math.max(0, Math.floor(ms));
+        var dix = Math.floor((total % 1000) / 100);
+        var s = Math.floor(total / 1000);
+        var m = Math.floor(s / 60);
+        var h = Math.floor(m / 60);
+        s = s % 60;
+        if (h > 0) {
+          return h + ":" + String(m % 60).padStart(2, "0") + ":" +
+            String(s).padStart(2, "0") + "." + dix;
+        }
+        return m + ":" + String(s).padStart(2, "0") + "." + dix;
+      }
+
+      /// Frame WS `chrono2-etat` (auto-réparatrice — un client reconnecté se
+      /// réaligne à la frame suivante, tick 10 Hz).
+      function majChrono2Etat(msg) {
+        if (!chrono2Root || !msg) return;
+        if (msg.config) majChrono2PosConfig(msg.config);
+        var volume = typeof msg.volume === "number" ? msg.volume : 1.0;
+        if (msg.actif) {
+          // Son de départ : nouvelle run (run_id change à chaque pression —
+          // rejoué aussi sur un reset à zéro en cours de chrono).
+          if (msg.run_id !== chrono2RunId) {
+            chrono2RunId = msg.run_id;
+            if (msg.son_depart) {
+              var a = new Audio("/" + msg.son_depart);
+              a.volume = volume;
+              a.play().catch(function () {});
+            }
+          }
+          // Pop-in (transition opacity/transform de .chrono2-root.visible).
+          chrono2Root.style.display = "";
+          if (chrono2Timer) {
+            clearTimeout(chrono2Timer);
+            chrono2Timer = null;
+          }
+          requestAnimationFrame(function () {
+            chrono2Root.classList.add("visible");
+          });
+          var txt = chrono2Format(msg.ecoule_ms || 0);
+          if (chrono2TempsEl && chrono2TempsEl.textContent !== txt) {
+            chrono2TempsEl.textContent = txt;
+          }
+        } else {
+          // Fin (durée cible atteinte) : petit son d'alerte + fade-out +
+          // nettoyage différé (700 ms — laisse la transition jouer).
+          if (msg.fin && msg.son_fin) {
+            var b = new Audio("/" + msg.son_fin);
+            b.volume = volume;
+            b.play().catch(function () {});
+          }
+          chrono2Root.classList.remove("visible");
+          if (chrono2Timer) clearTimeout(chrono2Timer);
+          chrono2Timer = setTimeout(function () {
+            chrono2Timer = null;
+            if (!chrono2Actif) chrono2Root.style.display = "none";
+          }, 700);
+        }
+        chrono2Actif = !!msg.actif;
+      }
+
+      // Initialiser l'overlay chrono 2 dès le démarrage.
+      initChrono2Overlay();
+      // Overlay des pops de validation de splits (squelette partagé).
+      initSplitPopOverlay();
 
       // ===== Écran d'attente (BRB) — overlay plein écran =====
       //

@@ -176,19 +176,11 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
 
     // Snapshot initial : envoyer l'état courant dès la connexion.
     // `sceneId` inclus (même contrat que scenes::push_snapshot) — la
-    // diffusion l'initialise SANS déclencher le fondu au noir.
+    // diffusion l'initialise SANS déclencher le fondu au noir. Passe par
+    // snapshot_courant : l'override « !cadres » (couleur viewer éphémère)
+    // est injecté ici aussi, jamais depuis le fichier scène.
     {
-        let snapshot = {
-            // Ordre des locks : scene PUIS current_id (convention scenes.rs).
-            let scene = state.scenes.scene.lock().unwrap();
-            let id = state.scenes.current_id.lock().unwrap();
-            serde_json::json!({
-                "type": "snapshot",
-                "sceneId": &*id,
-                "scene": &*scene
-            })
-            .to_string()
-        };
+        let snapshot = crate::scenes::snapshot_courant(&state.scenes);
         let _ = sender.send(Message::Text(snapshot.into())).await;
     }
 
@@ -252,6 +244,14 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
                         Some("just-chatting-resync") => {
                             crate::just_chatting::reemit(&state.app);
                         }
+                        // Resync viewers : le client (re)connecté — pop-out
+                        // chat ouvert en plein live, reload OBS — reçoit les
+                        // derniers counts. Les frames "viewers" sont dedup'd
+                        // côté viewers.rs : sans resync, la barre resterait
+                        // vide jusqu'au prochain changement de count.
+                        Some("viewers-resync") => {
+                            crate::viewers::reemit(&state.scenes.chat_tx);
+                        }
                         // Fin de piste musique (ended/error de l'<audio> de la
                         // diffusion) → avancer la file. id vérifié côté
                         // musique (dedup multi-clients WS).
@@ -275,6 +275,22 @@ async fn handle_ws(socket: WebSocket, state: Arc<ServerState>) {
                             {
                                 m.reemit();
                             }
+                        }
+                        // Resync Emoji Arena : la diffusion (re)connectée
+                        // reçoit le snapshot fight-state courant (reload OBS
+                        // en plein combat — la frame est auto-réparatrice).
+                        Some("fight-resync") => {
+                            if let Some(f) =
+                                state.app.try_state::<crate::fight::FightState>()
+                            {
+                                f.reemit();
+                            }
+                        }
+                        // Resync du squelette splitpop : les events speedrun
+                        // ne portent pas la position du pop → la diffusion
+                        // demande la frame `splitpop-pos` à la (re)connexion.
+                        Some("splitpop-resync") => {
+                            crate::position_overlay::reemit_splitpop(&state.app);
                         }
                         // Durée de la piste courante (loadedmetadata de
                         // l'<audio> diffusion — seule source fiable) → posée

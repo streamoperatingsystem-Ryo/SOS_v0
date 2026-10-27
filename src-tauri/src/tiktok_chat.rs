@@ -118,19 +118,30 @@ pub fn demarrer(
                         );
                     }
                     // Commandes chat : "!commande" → overlay diffusion.
+                    // Accusé ignoré — pas de canal de réponse sur TikTok.
                     if let Some(commandes) = app.try_state::<crate::commandes::CommandesState>() {
-                        commandes.on_message(&pseudo, &pseudo, &texte);
+                        let _ = commandes.on_message("tiktok", &pseudo, &pseudo, &texte);
                     }
-                    // Musique : "!rs <titre>" → bibliothèque locale. TikTok
-                    // n'expose pas de badge mod via PirateTok → est_mod =
-                    // streamer uniquement (unique_id == username suivi).
+                    // est_mod : TikTok n'expose pas de badge mod via
+                    // PirateTok → streamer uniquement (unique_id ==
+                    // username suivi). Partagé musique + arène.
+                    let est_mod = msg
+                        .user
+                        .as_ref()
+                        .map(|u| u.unique_id.eq_ignore_ascii_case(&username))
+                        .unwrap_or(false);
+                    // Musique : "!rs <titre>" → bibliothèque locale.
                     if let Some(musique) = app.try_state::<crate::musique::MusiqueState>() {
-                        let est_mod = msg
-                            .user
-                            .as_ref()
-                            .map(|u| u.unique_id.eq_ignore_ascii_case(&username))
-                            .unwrap_or(false);
                         musique.on_message("tiktok", &pseudo, &texte, est_mod);
+                    }
+                    // Emoji Arena : "!fight"/coups → combat côté diffusion.
+                    if let Some(fight) = app.try_state::<crate::fight::FightState>() {
+                        fight.on_message("tiktok", &pseudo, &texte, est_mod);
+                    }
+                    // Cadres : "!cadres <couleur>" → couleur du cadre
+                    // (retour ignoré — pas de canal de réponse).
+                    if let Some(cadres) = app.try_state::<crate::cadres_cmd::CadresChatState>() {
+                        let _ = cadres.on_message(&pseudo, &texte);
                     }
                 }
 
@@ -140,6 +151,9 @@ pub fn demarrer(
                     // pastille viewers du widget chat, seulement si ça change.
                     if Some(viewers) != dernier_viewers {
                         dernier_viewers = Some(viewers);
+                        // Map partagée pour viewers-resync (pop-out chat /
+                        // reload OBS arrivés en cours de live).
+                        crate::viewers::noter_count("tiktok", Some(viewers));
                         let _ = app.emit("tiktok:viewers", &viewers);
                         if let Some(state) = app.try_state::<ScenesState>() {
                             let _ = state.chat_tx.send(
@@ -265,6 +279,26 @@ pub fn demarrer(
         // Nettoyage
         if let Some(ts) = app.try_state::<TiktokState>() {
             ts.set_connected(false);
+        }
+        // Déconnexion : efface la pastille viewers (parité `deconnecte` de
+        // viewers.rs pour twitch/youtube/kick — count:null retire la
+        // plateforme de la barre) + sort le count de la map resync.
+        if dernier_viewers.is_some() {
+            if let Some(state) = app.try_state::<ScenesState>() {
+                let _ = state.chat_tx.send(
+                    serde_json::json!({
+                        "type": "viewers",
+                        "plateforme": "tiktok",
+                        "count": null,
+                    })
+                    .to_string(),
+                );
+            }
+            let _ = app.emit(
+                "viewers:update",
+                serde_json::json!({"plateforme": "tiktok", "count": null}),
+            );
+            crate::viewers::noter_count("tiktok", None);
         }
         let _ = app.emit("tiktok:deconnecte", ());
     })

@@ -173,6 +173,11 @@ pub struct SpeedrunConfig {
     /// Vide pour les ASL simples (type SOR) qui n'ont pas de settings individuels.
     #[serde(default)]
     pub settings_asl: std::collections::HashMap<String, bool>,
+    /// Compteur de tentatives de run (« Partie n°N » de l'export splits).
+    /// Incrémenté par le frontend à chaque event `started` (start manuel ou
+    /// ASL) ; jamais décrémenté (undo/goto/reset ne comptent pas).
+    #[serde(default)]
+    pub nb_tentatives: u32,
 }
 
 impl Default for SpeedrunSettings {

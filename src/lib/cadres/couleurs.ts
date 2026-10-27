@@ -35,6 +35,26 @@ export function eclaircir(hex: string, ratio: number): string {
   return `#${canal(r + (255 - r) * k)}${canal(g + (255 - g) * k)}${canal(b + (255 - b) * k)}`;
 }
 
+/// Rampe « liserés » pour le dégradé principal d'un cadre : dominante
+/// sombre avec deux fins passages clairs — la couleur s'exprime par
+/// touches au lieu d'un grand dégradé uniforme (le simple 2-stops
+/// écrasait le bord en un seul ton). Deux liserés de tons différents :
+/// « éclat » (vive éclaircie 45 %) vers 33 %, puis vive pure vers 68 %.
+/// Miroir vanilla : stopsLiseres (diffusion.html + chat-popout.html).
+export function stopsLiseres(sombre: string, vive: string): string {
+  const eclat = eclaircir(vive, 0.45);
+  return (
+    `<stop offset="0%" stop-color="${sombre}"/>` +
+    `<stop offset="30%" stop-color="${sombre}"/>` +
+    `<stop offset="33%" stop-color="${eclat}"/>` +
+    `<stop offset="36%" stop-color="${sombre}"/>` +
+    `<stop offset="64%" stop-color="${sombre}"/>` +
+    `<stop offset="68%" stop-color="${vive}"/>` +
+    `<stop offset="72%" stop-color="${sombre}"/>` +
+    `<stop offset="100%" stop-color="${sombre}"/>`
+  );
+}
+
 /// Convertit un angle en degrés (0-360) en coordonnées x1/y1/x2/y2 (0-100%)
 /// pour un linearGradient SVG. 0° = gauche→droite, 90° = haut→bas,
 /// 135° = diagonal haut-gauche→bas-droite (défaut).

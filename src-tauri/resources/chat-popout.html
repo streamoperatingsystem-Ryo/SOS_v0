@@ -20,10 +20,50 @@
         -webkit-user-select: none;
         user-select: none;
       }
+      /* Colonne : barre viewers (flex-shrink 0) + chat-body (flex 1). */
+      body { display: flex; flex-direction: column; }
+      /* Barre viewers en tête : œil + une pastille (logo + count) par
+         plateforme live. Cachée tant qu'aucun count n'est connu (:empty →
+         display:none, layout identique à avant). Parité diffusion.html —
+         alimentée par les frames "viewers" du WS (déjà dédupliquées côté
+         Rust) + resync "viewers-resync" demandé à la connexion. Reste
+         visible aussi en mode bulles : c'est le chrome de la fenêtre,
+         pas un message. */
+      .chat-viewers {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.8em;
+        padding: 0.3em 0.6em;
+        flex-shrink: 0;
+        color: #fff;
+        font-weight: 700;
+        font-size: 0.85rem;
+        border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+      }
+      .chat-viewers:empty { display: none; }
+      .chat-viewers .vplat { display: inline-flex; align-items: center; gap: 0.25em; }
+      .chat-viewers .veye { opacity: 0.8; }
+      .chat-viewers .logo { width: 1em; height: 1em; opacity: 0.85; }
+      .chat-viewers .plat-badge {
+        font-size: 0.55em;
+        font-weight: 700;
+        padding: 0 0.2rem;
+        border-radius: 0.15rem;
+        color: #fff;
+        line-height: 1.4;
+      }
+      .chat-viewers .plat-badge.twitch { background: #9146ff; }
+      .chat-viewers .plat-badge.kick { background: #53fc18; color: #000; }
+      .chat-viewers .plat-badge.youtube { background: #ff0000; }
+      .chat-viewers .plat-badge.tiktok { background: #000; }
       /* Chat body : même style que diffusion.html (bulles + zébrage). */
       .chat-body {
         width: 100%;
-        height: 100%;
+        /* flex:1 + min-height:0 au lieu de height:100% — la barre viewers
+           prend sa place au-dessus sans faire déborder la fenêtre. */
+        flex: 1;
+        min-height: 0;
         overflow-y: auto;
         overflow-wrap: break-word;
         word-break: break-word;
@@ -119,6 +159,7 @@
     </style>
   </head>
   <body style="background:#0e0e10;color:#efeff1;margin:0">
+    <div class="chat-viewers" id="viewersBar"></div>
     <div class="chat-body" id="chatBody"></div>
     <script>
       // Pop-out chat : WS :4321 en dur, bulles seulement (pas de scène, pas d'OBS).
@@ -131,6 +172,38 @@
       var chatMessages = [];
       var MAX_CHAT = 200;
       var chatBody = document.getElementById("chatBody");
+
+      // Count viewers par plateforme (frames WS "viewers", déjà dédupliquées
+      // côté Rust — même alimentation que la barre des widgets chat dans
+      // diffusion.html). number = live, absent = hors-ligne ou inconnu.
+      var viewersParPlateforme = {};
+      var PLATS_VIEWERS = ["twitch", "youtube", "kick", "tiktok"];
+      var viewersBar = document.getElementById("viewersBar");
+
+      // Formate un count viewers en compact : 1234 → "1,2k" (virgule FR).
+      // Porté de diffusion.html — même convention que renderTexte/parseBadges.
+      function formatViewers(n) {
+        if (n >= 1000) {
+          var k = (n / 1000).toFixed(1).replace(/[.,]0$/, "");
+          return k.replace(".", ",") + "k";
+        }
+        return String(n);
+      }
+
+      // Remplit la barre viewers : une pastille par plateforme live (pas de
+      // filtre dans le pop-out → comme "unifie"). Barre vidée (cachée par
+      // :empty) si rien à montrer.
+      function fillViewersBar() {
+        var items = "";
+        for (var i = 0; i < PLATS_VIEWERS.length; i++) {
+          var p = PLATS_VIEWERS[i];
+          var n = viewersParPlateforme[p];
+          if (typeof n !== "number") continue;
+          items += '<span class="vplat">' + logoPlateforme(p)
+            + '<span class="vcount">' + formatViewers(n) + '</span></span>';
+        }
+        viewersBar.innerHTML = items ? '<span class="veye">👁</span>' + items : "";
+      }
 
       var TWITCH_LOGO_SVG = '<svg class="logo" viewBox="0 0 16 16" width="12" height="12" aria-hidden="true">'
         + '<path fill="currentColor" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/>'
@@ -272,6 +345,21 @@
         function pad(v) { return v.toString(16).padStart(2, "0"); }
         return "#" + pad(rr) + pad(gg) + pad(bb);
       }
+      /// Rampe « liserés » du dégradé principal d'un cadre : dominante
+      /// sombre avec deux fins passages clairs (éclat = vive éclaircie
+      /// 45 % vers 33 %, vive pure vers 68 %).
+      /// Miroir de couleurs.ts::stopsLiseres (dashboard).
+      function stopsLiseres(sombre, vive) {
+        var eclat = bpmEclaircir(vive, 0.45);
+        return '<stop offset="0%" stop-color="' + sombre + '"/>'
+          + '<stop offset="30%" stop-color="' + sombre + '"/>'
+          + '<stop offset="33%" stop-color="' + eclat + '"/>'
+          + '<stop offset="36%" stop-color="' + sombre + '"/>'
+          + '<stop offset="64%" stop-color="' + sombre + '"/>'
+          + '<stop offset="68%" stop-color="' + vive + '"/>'
+          + '<stop offset="72%" stop-color="' + sombre + '"/>'
+          + '<stop offset="100%" stop-color="' + sombre + '"/>';
+      }
       function mgAngleToCoords(angle) {
         var rad = angle * Math.PI / 180;
         var dx = Math.cos(rad), dy = Math.sin(rad);
@@ -307,8 +395,7 @@
           : "";
         return '<svg width="' + (W + offset * 2) + '" height="' + (H + offset * 2) + '" viewBox="-' + offset + ' -' + offset + ' ' + (W + offset * 2) + ' ' + (H + offset * 2) + '" preserveAspectRatio="none" style="position:absolute;top:-' + offset + 'px;left:-' + offset + 'px;pointer-events:none;z-index:5;">'
           + '<defs><linearGradient id="' + gradId + '" x1="' + gx1 + '%" y1="' + gy1 + '%" x2="' + gx2 + '%" y2="' + gy2 + '%">'
-          + '<stop offset="0%" stop-color="' + c + '" stop-opacity="1"/>'
-          + '<stop offset="100%" stop-color="' + cFin + '" stop-opacity="1"/>'
+          + stopsLiseres(c, cFin)
           + '</linearGradient></defs>'
           + '<rect x="0" y="0" width="' + W + '" height="' + H + '" rx="' + rx + '" ry="' + rx + '" fill="none" stroke="url(#' + gradId + ')" stroke-width="' + ep + '"/>'
           + comet
@@ -323,8 +410,8 @@
         return "path('M " + s + " 0 L " + (W - s) + " 0 L " + W + " " + s + " L " + W + " " + (H - s) + " L " + (W - s) + " " + H + " L " + s + " " + H + " L 0 " + (H - s) + " L 0 " + s + " Z')";
       }
       function renderCyberpunk(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
-        var c2 = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.35);
+        var c1 = bpmHexValide(couleurFin) ? couleurFin : "#ffffff";
+        var c2 = bpmHexValide(couleur) ? couleur : bpmAssombrir(c1, 0.35);
         var c3 = "#ffffff";
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
@@ -401,7 +488,7 @@
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
           + '<clipPath id="' + clipPathId + '"><path d="' + pathBorder + '"/></clipPath>'
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c1 + '"/><stop offset="50%" stop-color="' + c2 + '"/><stop offset="100%" stop-color="' + c1 + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(c2, c1) + '</linearGradient>'
           + '<linearGradient id="' + gradInnerId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + c3 + '" stop-opacity="0.9"/><stop offset="50%" stop-color="' + c1 + '" stop-opacity="0.6"/><stop offset="100%" stop-color="' + c3 + '" stop-opacity="0.9"/></linearGradient>'
           + "</defs>"
           + '<g clip-path="url(#' + clipPathId + ')">'
@@ -446,11 +533,11 @@
           + " Q " + (cx - k) + " " + (cy - k) + " " + cx + " " + (cy - r) + " Z";
       }
       function renderStory(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var vif = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var vif = bpmHexValide(couleurFin) ? couleurFin : "#ffffff";
         var palette = {
           vif: vif,
           clair: bpmEclaircir(vif, 0.35),
-          profond: bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(vif, 0.2),
+          profond: bpmHexValide(couleur) ? couleur : bpmAssombrir(vif, 0.2),
           pale: bpmEclaircir(vif, 0.75)
         };
         var blanc = "#ffffff";
@@ -538,7 +625,7 @@
           : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + palette.vif + '"/><stop offset="50%" stop-color="' + palette.clair + '"/><stop offset="100%" stop-color="' + palette.profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(palette.profond, palette.vif) + '</linearGradient>'
           + '<linearGradient id="' + innerGradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + blanc + '" stop-opacity="0.7"/><stop offset="50%" stop-color="' + palette.pale + '" stop-opacity="0.5"/><stop offset="100%" stop-color="' + blanc + '" stop-opacity="0.7"/></linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
@@ -617,10 +704,10 @@
         return "M " + pts.join(" L ") + " Z";
       }
       function renderHexagon(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var c1 = bpmHexValide(couleur) ? couleur : "#ffffff";
+        var c1 = bpmHexValide(couleurFin) ? couleurFin : "#ffffff";
         var p = {
           principal: c1,
-          profond: bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(c1, 0.3),
+          profond: bpmHexValide(couleur) ? couleur : bpmAssombrir(c1, 0.3),
           clair: bpmEclaircir(c1, 0.45)
         };
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
@@ -682,7 +769,7 @@
           : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="-' + margin + " -" + margin + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + margin + "px;left:-" + margin + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + p.principal + '"/><stop offset="100%" stop-color="' + p.profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(p.profond, p.principal) + '</linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
           + '<g clip-path="url(#' + clipId + ')">'
@@ -778,7 +865,7 @@
         }
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + cPrincipal + '"/><stop offset="100%" stop-color="' + cAccent + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(cPrincipal, cAccent) + '</linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + '<pattern id="' + stripeId + '" patternUnits="userSpaceOnUse" width="' + stripeSize + '" height="' + stripeSize + '" patternTransform="rotate(45)"><rect width="' + (stripeSize / 2) + '" height="' + stripeSize + '" fill="' + cPrincipal + '"/><rect x="' + (stripeSize / 2) + '" width="' + (stripeSize / 2) + '" height="' + stripeSize + '" fill="' + cAccent + '"/></pattern>'
           + "</defs>"
@@ -817,8 +904,8 @@
         return "path('M " + bx + " 0 L " + (W - bx) + " 0 L " + W + " " + by + " L " + W + " " + (H - by) + " L " + (W - bx) + " " + H + " L " + bx + " " + H + " L 0 " + (H - by) + " L 0 " + by + " Z')";
       }
       function renderArena(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var principal = bpmHexValide(couleur) ? couleur : "#ffffff";
-        var profond = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(principal, 0.35);
+        var principal = bpmHexValide(couleurFin) ? couleurFin : "#ffffff";
+        var profond = bpmHexValide(couleur) ? couleur : bpmAssombrir(principal, 0.35);
         var clair = bpmEclaircir(principal, 0.5);
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
@@ -895,7 +982,7 @@
           : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + principal + '"/><stop offset="100%" stop-color="' + profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(profond, principal) + '</linearGradient>'
           + '<radialGradient id="' + orbGradId + '" cx="35%" cy="30%" r="75%"><stop offset="0%" stop-color="' + clair + '"/><stop offset="100%" stop-color="' + profond + '"/></radialGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
@@ -998,8 +1085,8 @@
           + " L " + X(ix) + " " + Y(iy + ay);
       }
       function renderTribal(W, H, idCadre, strokeWidth, couleur, couleurFin, gradientAngle, animer) {
-        var principal = bpmHexValide(couleur) ? couleur : "#111111";
-        var profond = bpmHexValide(couleurFin) ? couleurFin : bpmAssombrir(principal, 0.4);
+        var principal = bpmHexValide(couleurFin) ? couleurFin : "#111111";
+        var profond = bpmHexValide(couleur) ? couleur : bpmAssombrir(principal, 0.4);
         var clair = bpmEclaircir(principal, 0.4);
         var gc = mgAngleToCoords(isFinite(gradientAngle) ? gradientAngle : 135);
         var ep = clampStrokeWidth(strokeWidth);
@@ -1042,7 +1129,7 @@
           : "";
         return '<svg width="' + svgW + '" height="' + svgH + '" viewBox="' + viewX + " " + viewY + " " + svgW + " " + svgH + '" preserveAspectRatio="none" style="position:absolute;top:-' + (offset + margin) + "px;left:-" + (offset + margin) + 'px;pointer-events:none;z-index:5;">'
           + "<defs>"
-          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%"><stop offset="0%" stop-color="' + principal + '"/><stop offset="100%" stop-color="' + profond + '"/></linearGradient>'
+          + '<linearGradient id="' + gradId + '" x1="' + gc.x1 + '%" y1="' + gc.y1 + '%" x2="' + gc.x2 + '%" y2="' + gc.y2 + '%">' + stopsLiseres(profond, principal) + '</linearGradient>'
           + '<clipPath id="' + clipId + '"><path d="' + borderPath + '"/></clipPath>'
           + "</defs>"
           + '<g clip-path="url(#' + clipId + ')">'
@@ -1179,7 +1266,19 @@
       function connect() {
         var ws = new WebSocket(WS_URL);
 
+        ws.onopen = function () {
+          // Resync viewers : les frames sont dedup'd côté Rust — sans cette
+          // demande, la barre resterait vide jusqu'au prochain changement
+          // de count quand le pop-out s'ouvre en cours de live. Inerte sur
+          // un serveur plus ancien (type inconnu ignoré par le dispatch).
+          ws.send('{"type":"viewers-resync"}');
+        };
+
         ws.onclose = function () {
+          // Counts potentiellement périmés (serveur relancé = map resync
+          // vide côté Rust) → barre vidée ; onopen+resync la repeuplera.
+          viewersParPlateforme = {};
+          fillViewersBar();
           setTimeout(connect, 2000);
         };
 
@@ -1199,6 +1298,19 @@
               // Snapshot scène : cadreWidget + chatStyle des widgets →
               // parité « bulles » avec diffusion (rebuild si changé).
               majEtatCadre(msg.scene);
+            } else if (msg.type === "viewers") {
+              // Count viewers (dedup'd côté Rust) → barre en tête.
+              // count null/absent = plateforme hors-ligne ou déconnectée
+              // → pastille retirée (deconnecte viewers.rs / nettoyage
+              // tiktok_chat.rs).
+              if (PLATS_VIEWERS.indexOf(msg.plateforme) !== -1) {
+                if (typeof msg.count === "number") {
+                  viewersParPlateforme[msg.plateforme] = msg.count;
+                } else {
+                  delete viewersParPlateforme[msg.plateforme];
+                }
+                fillViewersBar();
+              }
             }
           } catch (e) {
           }

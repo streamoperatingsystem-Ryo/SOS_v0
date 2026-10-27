@@ -126,13 +126,15 @@ async fn scene_sos(write: &mut WsSink, read: &mut WsStreamHalf) -> Result<Option
 }
 
 /// Type de capture supporté. "camera" = dshow_input, "window" = window_capture,
-/// "game" = game_capture (capture_specific_window sur la fenêtre choisie).
+/// "game" = game_capture (capture_specific_window sur la fenêtre choisie),
+/// "monitor" = monitor_capture (monitor_id = "\\?\DISPLAY#…#{guid}" OBS).
 #[derive(Debug, Clone, serde::Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CaptureKind {
     Camera,
     Window,
     Game,
+    Monitor,
 }
 
 impl CaptureKind {
@@ -141,16 +143,19 @@ impl CaptureKind {
             CaptureKind::Camera => "dshow_input",
             CaptureKind::Window => "window_capture",
             CaptureKind::Game => "game_capture",
+            CaptureKind::Monitor => "monitor_capture",
         }
     }
 
     /// Nom de la propriété OBS contenant la liste des cibles.
-    /// Caméra = video_device_id, Fenêtre/Jeu = window (liste des fenêtres).
+    /// Caméra = video_device_id, Fenêtre/Jeu = window (liste des fenêtres),
+    /// Écran = monitor_id (liste des device interface paths).
     fn property_name(&self) -> Option<&'static str> {
         match self {
             CaptureKind::Camera => Some("video_device_id"),
             CaptureKind::Window => Some("window"),
             CaptureKind::Game => Some("window"),
+            CaptureKind::Monitor => Some("monitor_id"),
         }
     }
 
@@ -294,6 +299,14 @@ pub async fn create_trou_source(
                 settings.insert("window".to_string(), Value::String(win.clone()));
             }
         }
+        CaptureKind::Monitor => {
+            // monitor_id = device interface path "\\?\DISPLAY#…#{guid}" —
+            // fiable quel que soit l'ordre des écrans (contrairement à
+            // l'ancien index int "monitor").
+            if let Some(id) = &target {
+                settings.insert("monitor_id".to_string(), Value::String(id.clone()));
+            }
+        }
     }
 
     // 3. CreateInput dans la scène SOS (via sceneUuid).
@@ -375,7 +388,7 @@ pub struct InputEntry {
 
 /// Vrai si inputKind correspond au type de capture (filtrage souple, includes).
 /// Caméra → dshow / video / av_capture (PAS wasapi = audio) ;
-/// Fenêtre → window ; Jeu → game.
+/// Fenêtre → window ; Jeu → game ; Écran → monitor/display.
 fn kind_matches(kind: &CaptureKind, ikind: &str) -> bool {
     let k = ikind.to_lowercase();
     match kind {
@@ -385,6 +398,7 @@ fn kind_matches(kind: &CaptureKind, ikind: &str) -> bool {
         }
         CaptureKind::Window => k.contains("window"),
         CaptureKind::Game => k.contains("game"),
+        CaptureKind::Monitor => k.contains("monitor") || k.contains("display"),
     }
 }
 
@@ -760,7 +774,8 @@ pub async fn sync_trous(
 /// activée, calée sur le widget et placée sous SOS-Diffusion, au-dessus de
 /// la plaque (via reorder_sos_sources, seul endroit qui gère les indices).
 /// Garantit AUSSI la plaque noire "SOS-Caméra-Fond" (sous la caméra) :
-/// le trou montre du noir quand le capteur est off ou occupé.
+/// le trou montre du noir quand le capteur est off ou occupé — SAUF en mode
+/// fond vert virtuel (fond_vert : plaque masquée, voir ensure_camera_fond).
 /// Connexion déjà ouverte (write/read) — partagée avec sync_scene_captures
 /// et camera_sync.
 ///
@@ -772,6 +787,10 @@ pub async fn sync_trous(
 /// Transform : même sémantique que sync_trous (position = centre du widget,
 /// bounds w×h, OBS_BOUNDS_SCALE_OUTER = cover, alignment 0) → aucun saut
 /// entre la création et le premier move/resize.
+///
+/// `visible` = inverse de cameraCachee (bouton œil du widget) : false → les
+/// items sont créés/réactivés DÉSACTIVÉS (caméra + plaque) — l'état masqué
+/// survit à tous les chemins ensure (boot, openScene, device change, toggle).
 #[allow(clippy::too_many_arguments)]
 async fn ensure_camera(
     write: &mut WsSink,
@@ -783,13 +802,15 @@ async fn ensure_camera(
     w: f64,
     h: f64,
     apply_device: bool,
+    fond_vert: bool,
+    visible: bool,
 ) -> Result<(), String> {
     let scene_uuid = &sos.scene_uuid;
 
     // 0. Plaque noire d'abord : créée/réactivée/calée sous la caméra.
     //    Échec → Err propagé (STOP : la caméra n'est pas sync sur une base
     //    cassée ; l'appelant décide de la remontée).
-    ensure_camera_fond(write, read, sos, x, y, w, h).await?;
+    ensure_camera_fond(write, read, sos, x, y, w, h, fond_vert, visible).await?;
 
     // 1. L'input "SOS-Caméra" existe-t-il globalement ?
     let inputs_resp = rpc(write, read, "GetInputList", "cam_inputs", json!({})).await?;
@@ -819,7 +840,7 @@ async fn ensure_camera(
                 "inputName": SOS_CAMERA,
                 "inputKind": "dshow_input",
                 "inputSettings": Value::Object(settings),
-                "sceneItemEnabled": true
+                "sceneItemEnabled": visible
             }),
         )
         .await?;
@@ -835,7 +856,8 @@ async fn ensure_camera(
             .and_then(|it| it["sceneItemId"].as_i64());
 
         if let Some(id) = existing {
-            // Item présent → réactiver (recréation du widget caméra).
+            // Item présent → réactiver (ou garder masqué si le widget est
+            // en état cameraCachee — le flag doit survivre à ce chemin).
             let _ = rpc(
                 write,
                 read,
@@ -844,7 +866,7 @@ async fn ensure_camera(
                 json!({
                     "sceneUuid": scene_uuid,
                     "sceneItemId": id,
-                    "sceneItemEnabled": true
+                    "sceneItemEnabled": visible
                 }),
             )
             .await;
@@ -859,7 +881,7 @@ async fn ensure_camera(
                 json!({
                     "sceneUuid": scene_uuid,
                     "sourceName": SOS_CAMERA,
-                    "sceneItemEnabled": true
+                    "sceneItemEnabled": visible
                 }),
             )
             .await?;
@@ -938,9 +960,15 @@ async fn ensure_camera(
 }
 
 /// Garantit que la plaque noire "SOS-Caméra-Fond" existe dans la scène « SOS »,
-/// est activée et calée sur le même rectangle que le widget caméra.
-/// Miroir simplifié d'ensure_camera : pas de device, jamais RemoveInput,
-/// jamais SetInputSettings sur l'input existant (couleur fixée à la création).
+/// calée sur le même rectangle que le widget caméra. Miroir simplifié
+/// d'ensure_camera : pas de device, jamais RemoveInput, jamais
+/// SetInputSettings sur l'input existant (couleur fixée à la création).
+/// `fond_vert` = flag cameraFondVert du widget (incrustation « fond vert
+/// virtuel ») : la plaque est créée/réactivée MASQUÉE — les pixels
+/// transparents de la caméra (arrière-plan supprimé par le filtre plugin
+/// background_removal) doivent laisser voir la scène OBS derrière, PAS la
+/// plaque noire. `visible` = inverse de cameraCachee : false → plaque
+/// masquée quel que soit fond_vert (caméra cachée = zone vide).
 ///
 /// Kind : color_source_v3 (OBS 28+). Fallback UNIQUE color_source_v2 si le
 /// CreateInput v3 échoue ; si v2 échoue aussi → Err (STOP, pas de 3e kind).
@@ -950,6 +978,7 @@ async fn ensure_camera(
 ///
 /// Transform : même sémantique que la caméra (position = centre du widget,
 /// bounds w×h, OBS_BOUNDS_SCALE_OUTER, alignment 0) — pas de crop.
+#[allow(clippy::too_many_arguments)]
 async fn ensure_camera_fond(
     write: &mut WsSink,
     read: &mut WsStreamHalf,
@@ -958,6 +987,8 @@ async fn ensure_camera_fond(
     y: f64,
     w: f64,
     h: f64,
+    fond_vert: bool,
+    visible: bool,
 ) -> Result<(), String> {
     let scene_uuid = &sos.scene_uuid;
 
@@ -990,7 +1021,7 @@ async fn ensure_camera_fond(
                 "inputName": SOS_CAMERA_FOND,
                 "inputKind": "color_source_v3",
                 "inputSettings": settings.clone(),
-                "sceneItemEnabled": true
+                "sceneItemEnabled": !fond_vert && visible
             }),
         )
         .await;
@@ -1005,7 +1036,7 @@ async fn ensure_camera_fond(
                     "inputName": SOS_CAMERA_FOND,
                     "inputKind": "color_source_v2",
                     "inputSettings": settings,
-                    "sceneItemEnabled": true
+                    "sceneItemEnabled": !fond_vert && visible
                 }),
             )
             .await;
@@ -1025,7 +1056,7 @@ async fn ensure_camera_fond(
             .and_then(|it| it["sceneItemId"].as_i64());
 
         if let Some(id) = existing {
-            // Item présent → réactiver.
+            // Item présent → réactiver (ou garder masqué en mode fond vert).
             let _ = rpc(
                 write,
                 read,
@@ -1034,7 +1065,7 @@ async fn ensure_camera_fond(
                 json!({
                     "sceneUuid": scene_uuid,
                     "sceneItemId": id,
-                    "sceneItemEnabled": true
+                    "sceneItemEnabled": !fond_vert && visible
                 }),
             )
             .await;
@@ -1049,7 +1080,7 @@ async fn ensure_camera_fond(
                 json!({
                     "sceneUuid": scene_uuid,
                     "sourceName": SOS_CAMERA_FOND,
-                    "sceneItemEnabled": true
+                    "sceneItemEnabled": !fond_vert && visible
                 }),
             )
             .await?;
@@ -1090,7 +1121,14 @@ async fn ensure_camera_fond(
 /// Commande frontend : crée / met à jour la source "SOS-Caméra" dans OBS.
 /// Appelée à la création du widget caméra (device=None → device par défaut
 /// d'OBS) et au changement de device (apply_device → SetInputSettings).
-/// One-shot : connect → scene_sos() → ensure_camera() → close.
+/// `fond_vert` = flag cameraFondVert du widget : plaque masquée + filtre
+/// background_removal (ré)asserté → chaque chemin caméra (création, device,
+/// boot) ré-applique l'état complet, aucune divergence possible.
+/// `visible` = inverse du flag cameraCachee (bouton œil du widget) : false →
+/// items SOS-Caméra + SOS-Caméra-Fond désactivés (SetSceneItemEnabled,
+/// jamais RemoveInput) — la même commande fait masquer ET réafficher.
+/// One-shot : connect → scene_sos() → ensure_camera() → appliquer_fond_vert()
+/// → close.
 #[allow(clippy::too_many_arguments)]
 pub async fn camera_sync(
     host: &str,
@@ -1101,16 +1139,23 @@ pub async fn camera_sync(
     y: f64,
     w: f64,
     h: f64,
+    fond_vert: bool,
+    visible: bool,
 ) -> Result<(), String> {
     let (mut write, mut read) = connect(host, port, password).await?;
     let sos = scene_sos(&mut write, &mut read).await?
         .ok_or("OBS: scène « SOS » introuvable ou sans SOS-Diffusion")?;
-    ensure_camera(&mut write, &mut read, &sos, device, x, y, w, h, device.is_some()).await?;
+    ensure_camera(&mut write, &mut read, &sos, device, x, y, w, h, device.is_some(), fond_vert, visible).await?;
     // Ordre des items : Diffusion en haut, caméra + plaque au-dessus des
     // trous, dès la création (CreateInput place les nouveaux items en haut
     // de scène).
     // reorder_sos_sources est le SEUL endroit qui gère les indices.
     reorder_sos_sources(&mut write, &mut read, &sos.scene_uuid).await;
+    // Fond vert virtuel : (ré)assertion (créée le filtre si besoin, plaque
+    // déjà masquée par le gate de ensure_camera_fond). Plugin absent → Err :
+    // l'appelant (frontend) décide — le toggle dédié remonte l'erreur à
+    // l'utilisateur, les autres chemins l'ignorent (état persisté).
+    appliquer_fond_vert(&mut write, &mut read, &sos, fond_vert, visible).await?;
     let _ = write.close().await;
     Ok(())
 }
@@ -1150,6 +1195,416 @@ pub async fn camera_hide(host: &str, port: u16, password: &str) -> Result<(), St
         }
     }
     let _ = write.close().await;
+    Ok(())
+}
+
+// ===== Fond vert virtuel — incrustation plugin (background_removal) =====
+
+/// Nom du filtre d'incrustation posé sur SOS-Caméra.
+const SOS_FOND_VERT_FILTRE: &str = "SOS-Fond-Vert";
+
+/// Kind OBS du filtre = plugin « Background Removal » (occ-ai /
+/// obs-backgroundremoval) : incrustation « fond vert virtuelle » par réseau
+/// de neurones, inférence ONNX 100% LOCALE (zéro envoi réseau — conforme au
+/// CONTRAT FIGÉ vie privée). Id vérifié sur src/background-filter-info.c du
+/// plugin. Absent d'OBS → GetSourceFilterKindList ne le liste pas.
+const SOS_FOND_VERT_KIND: &str = "background_removal";
+
+/// Préfixe d'erreur « plugin non installé » — le frontend le détecte pour
+/// afficher le hint i18n dédié (carteEdition.fondVertPluginAbsent) au lieu
+/// du message technique brut.
+const SOS_FOND_VERT_PLUGIN_ABSENT: &str = "PLUGIN_ABSENT";
+
+/// Applique l'état « fond vert virtuel » — idempotent, connexion ouverte :
+/// - actif : détecte le plugin (GetSourceFilterKindList — absent → Err
+///   PLUGIN_ABSENT), crée le filtre SOS-Fond-Vert si besoin (settings vides
+///   = défauts du plugin, l'utilisateur peut les affiner dans OBS) puis
+///   l'active (SetSourceFilterEnabled true — réactivable sans perdre les
+///   réglages) ;
+/// - inactif : filtre DÉSACTIVÉ (jamais retiré — les réglages survivent) ;
+/// - plaque SOS-Caméra-Fond : item masqué quand actif / montré sinon
+///   (SetSceneItemEnabled, JAMAIS RemoveInput) — sinon la personne flotterait
+///   sur une plaque noire au lieu de la scène OBS derrière. Lookup non
+///   fatal : item absent de sos.items (créé à l'instant) → skip, le gate de
+///   ensure_camera_fond a déjà posé le bon état à la création.
+///
+/// NB : l'ordre des filtres importe peu — masque (alpha ×) et suppression
+/// d'arrière-plan (alpha 0) sont multiplicatifs, ils commutent.
+async fn appliquer_fond_vert(
+    write: &mut WsSink,
+    read: &mut WsStreamHalf,
+    sos: &SceneSos,
+    actif: bool,
+    visible: bool,
+) -> Result<(), String> {
+    let liste = rpc(
+        write,
+        read,
+        "GetSourceFilterList",
+        "fv_filtres",
+        json!({ "sourceName": SOS_CAMERA }),
+    )
+    .await?;
+    let filtre_existe = liste["filters"]
+        .as_array()
+        .map(|fs| {
+            fs.iter()
+                .any(|f| f["filterName"].as_str() == Some(SOS_FOND_VERT_FILTRE))
+        })
+        .unwrap_or(false);
+    if actif {
+        // Plugin installé ? (GetSourceFilterKindList — v5.4.0+)
+        let kinds = rpc(
+            write,
+            read,
+            "GetSourceFilterKindList",
+            "fv_kinds",
+            json!({}),
+        )
+        .await?;
+        // sourceFilterKinds = tableau de CHAÎNES (pas d'objets) — vérifié
+        // live obs-websocket 5.7.4 : lire k["filterKind"] renvoie toujours
+        // Null → plugin déclaré absent en boucle (bug 2026-10-26).
+        let plugin_present = kinds["sourceFilterKinds"]
+            .as_array()
+            .map(|ks| ks.iter().any(|k| k.as_str() == Some(SOS_FOND_VERT_KIND)))
+            .unwrap_or(false);
+        if !plugin_present {
+            return Err(format!(
+                "{}plugin OBS « Background Removal » (occ-ai/obs-backgroundremoval) introuvable — installe-le puis réactive",
+                SOS_FOND_VERT_PLUGIN_ABSENT
+            ));
+        }
+        if !filtre_existe {
+            rpc(
+                write,
+                read,
+                "CreateSourceFilter",
+                "fv_create",
+                json!({
+                    "sourceName": SOS_CAMERA,
+                    "filterName": SOS_FOND_VERT_FILTRE,
+                    "filterKind": SOS_FOND_VERT_KIND,
+                    "filterSettings": {}
+                }),
+            )
+            .await?;
+        }
+        rpc(
+            write,
+            read,
+            "SetSourceFilterEnabled",
+            "fv_on",
+            json!({
+                "sourceName": SOS_CAMERA,
+                "filterName": SOS_FOND_VERT_FILTRE,
+                "filterEnabled": true
+            }),
+        )
+        .await?;
+    } else if filtre_existe {
+        // Désactivation seule (le filtre reste posé, réglages conservés).
+        rpc(
+            write,
+            read,
+            "SetSourceFilterEnabled",
+            "fv_off",
+            json!({
+                "sourceName": SOS_CAMERA,
+                "filterName": SOS_FOND_VERT_FILTRE,
+                "filterEnabled": false
+            }),
+        )
+        .await?;
+    }
+    // Plaque : cachée quand actif OU quand la caméra est masquée
+    // (cameraCachee → visible=false) — un toggle fond vert ne doit pas
+    // ré-afficher la plaque pendant que le widget est caché.
+    if let Some(item_id) = sos
+        .items
+        .iter()
+        .find(|it| it["sourceName"].as_str() == Some(SOS_CAMERA_FOND))
+        .and_then(|it| it["sceneItemId"].as_i64())
+    {
+        let _ = rpc(
+            write,
+            read,
+            "SetSceneItemEnabled",
+            &format!("fv_fond_{}", item_id),
+            json!({
+                "sceneUuid": sos.scene_uuid,
+                "sceneItemId": item_id,
+                "sceneItemEnabled": !actif && visible
+            }),
+        )
+        .await;
+    }
+    Ok(())
+}
+
+/// Commande frontend : toggle « fond vert virtuel » (one-shot explicite
+/// depuis la carte caméra). appliquer_fond_vert fait tout (filtre + plaque).
+/// Plugin absent de l'OBS en cours + actif → **installation automatique**
+/// (dernière release GitHub, SHA256 vérifié, extraction per-user — aucun
+/// exécutable lancé, aucun admin ; le toggle EST le consentement) puis
+/// statut `redemarrer-obs` : un plugin posé sur disque n'est chargé qu'au
+/// prochain démarrage d'OBS, l'état persisté (cameraFondVert) s'applique
+/// alors tout seul à la reconnexion (scene_sync_captures). Plugin déjà sur
+/// disque mais non chargé (OBS démarré avant l'install) → même statut, sans
+/// re-télécharger. actif=false → filtre désactivé (jamais retiré).
+/// OBS offline → Err : l'état reste persisté dans le widget.
+/// One-shot : connect → scene_sos() → appliquer_fond_vert() → (install ?)
+/// → close.
+pub async fn camera_fond_vert(
+    host: &str,
+    port: u16,
+    password: &str,
+    actif: bool,
+    visible: bool,
+) -> Result<String, String> {
+    let (mut write, mut read) = connect(host, port, password).await?;
+    let sos = scene_sos(&mut write, &mut read).await?
+        .ok_or("OBS: scène « SOS » introuvable ou sans SOS-Diffusion")?;
+    let statut = match appliquer_fond_vert(&mut write, &mut read, &sos, actif, visible).await {
+        Ok(()) => if actif { "applique" } else { "desactive" }.to_string(),
+        Err(e) if actif && e.starts_with(SOS_FOND_VERT_PLUGIN_ABSENT) => {
+            // Plugin absent de l'OBS EN COURS : installer (déjà sur disque →
+            // no-op immédiat) puis demander le redémarrage d'OBS.
+            let _ = write.close().await;
+            installer_plugin_fond_vert().await?;
+            return Ok("redemarrer-obs".to_string());
+        }
+        Err(e) => return Err(e),
+    };
+    let _ = write.close().await;
+    Ok(statut)
+}
+
+// ===== Fond vert virtuel — installation automatique du plugin =====
+
+/// API GitHub de la dernière release du plugin (GET anonyme, User-Agent
+/// requis par l'API GitHub — AUCUNE donnée utilisateur envoyée : le
+/// téléchargement est l'unique flux réseau, initié par le toggle explicite
+/// « Fond vert virtuel » de la carte caméra).
+const OBR_API_RELEASE: &str =
+    "https://api.github.com/repos/occ-ai/obs-backgroundremoval/releases/latest";
+
+/// Nom du dossier du plugin dans C:\ProgramData\obs-studio\plugins (dossier
+/// « tous utilisateurs, sans admin » scanné par OBS 28+ — même cible que
+/// l'installateur officiel occ-ai).
+const OBR_DOSSIER: &str = "obs-backgroundremoval";
+
+/// Dossier plugins OBS « tous utilisateurs, sans admin » :
+/// `C:\ProgramData\obs-studio\plugins` (variable env `ProgramData`).
+/// ⚠️ LEÇON 2026-10-26 : c'est `ProgramData`, PAS `%APPDATA%\obs-studio\plugins`
+/// — OBS ne scanne QUE ProgramData (preuve : le « Install Into Here.lnk » du
+/// zip officiel occ-ai pointe vers `C:\ProgramData\obs-studio\plugins` ; une
+/// première implémentation dans %APPDATA% n'était JAMAIS chargée par OBS,
+/// log OBS sans aucune ligne de chargement). NB : OBS « portable » (config à
+/// côté de l'exe) n'utilise pas non plus ce chemin → installation manuelle.
+fn dossier_plugins_obs() -> Result<PathBuf, String> {
+    let programdata = std::env::var("ProgramData")
+        .map_err(|_| "ProgramData introuvable — installation du plugin impossible")?;
+    Ok(PathBuf::from(programdata).join("obs-studio").join("plugins"))
+}
+
+/// Emplacement ERRONÉ de la première implémentation (2026-10-22) :
+/// `%APPDATA%\obs-studio\plugins` — OBS ne le scanne PAS, le plugin n'y est
+/// jamais chargé. Sert UNIQUEMENT à la migration vers ProgramData.
+fn ancien_dossier_plugins_obs() -> Option<PathBuf> {
+    let appdata = std::env::var("APPDATA").ok()?;
+    Some(PathBuf::from(appdata).join("obs-studio").join("plugins"))
+}
+
+/// Le plugin est-il déjà installé sur disque ? bin/64bit = marqueur sûr
+/// (c'est ce dossier qu'OBS charge au démarrage). Un plugin posé mais pas
+/// encore chargé par l'OBS en cours (installé après son démarrage) répond
+/// true → l'appelant skip le téléchargement et réclame un redémarrage OBS.
+fn plugin_fond_vert_sur_disque() -> bool {
+    dossier_plugins_obs()
+        .map(|p| p.join(OBR_DOSSIER).join("bin").join("64bit").is_dir())
+        .unwrap_or(false)
+}
+
+/// Déplace le plugin depuis l'ancien emplacement %APPDATA% (première
+/// implémentation, jamais chargé par OBS) vers ProgramData : rename même
+/// volume (C:) → zéro re-téléchargement pour les machines déjà passées par
+/// l'ancienne version. Ok(false) = rien à migrer ou échec (rename KO,
+/// ProgramData non créable) → l'appelant retombe sur le téléchargement
+/// complet, l'ancien dossier est nettoyé en cas de succès final.
+fn migrer_plugin_ancien_emplacement(dossier_plugins: &Path) -> bool {
+    let Some(ancien_racine) = ancien_dossier_plugins_obs() else {
+        return false;
+    };
+    let ancien = ancien_racine.join(OBR_DOSSIER);
+    if !ancien.join("bin").join("64bit").is_dir() {
+        return false;
+    }
+    let dest = dossier_plugins.join(OBR_DOSSIER);
+    if dest.join("bin").join("64bit").is_dir() {
+        // Déjà migré : juste nettoyer l'ancien reliquat éventuel.
+        let _ = fs::remove_dir_all(&ancien);
+        return true;
+    }
+    if dest.exists() || fs::create_dir_all(dossier_plugins).is_err() {
+        return false;
+    }
+    fs::rename(&ancien, &dest).is_ok()
+}
+
+/// SHA256 hex complet (hex_court ne garde que 8 octets — pour les masques).
+fn hex_sha256(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Installe le plugin « Background Removal » (occ-ai) : dernière release
+/// GitHub → asset `*-windows-x64.zip` → téléchargement (~50 Mo) → SHA256
+/// vérifié contre le digest publié par l'API GitHub → extraction via
+/// `zip_store::ZipLecteur` (anti zip-slip + CRC par entrée) vers
+/// C:\ProgramData\obs-studio\plugins\obs-backgroundremoval (staging +
+/// rename atomique, ancienne version remplacée). Un ancien emplacement
+/// %APPDATA% (première implémentation, jamais chargé par OBS) est migré
+/// par rename AVANT tout téléchargement, puis nettoyé. Aucun exécutable
+/// lancé, aucun admin — pure extraction de fichiers. Déjà sur disque →
+/// Ok immédiat (pas de téléchargement).
+async fn installer_plugin_fond_vert() -> Result<(), String> {
+    if plugin_fond_vert_sur_disque() {
+        return Ok(());
+    }
+    let dossier_plugins = dossier_plugins_obs()?;
+    // Migration %APPDATA% → ProgramData (première implémentation au
+    // mauvais endroit — OBS ne scanne pas %APPDATA%) : rename, zéro
+    // re-téléchargement pour les machines déjà passées par l'ancienne
+    // version.
+    if migrer_plugin_ancien_emplacement(&dossier_plugins) {
+        return Ok(());
+    }
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(300))
+        .build()
+        .map_err(|e| format!("plugin: client HTTP: {}", e))?;
+    // 1. Dernière release (API GitHub — User-Agent obligatoire).
+    let release: Value = client
+        .get(OBR_API_RELEASE)
+        .header("User-Agent", "StreamOS")
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("plugin: API GitHub injoignable: {}", e))?
+        .json()
+        .await
+        .map_err(|e| format!("plugin: réponse GitHub illisible: {}", e))?;
+    // 2. Asset Windows x64 (zip, jamais l'installateur .exe).
+    let asset = release["assets"]
+        .as_array()
+        .and_then(|assets| {
+            assets
+                .iter()
+                .find(|a| a["name"].as_str().is_some_and(|n| n.ends_with("windows-x64.zip")))
+        })
+        .ok_or("plugin: asset Windows x64 introuvable dans la dernière release")?;
+    let url = asset["browser_download_url"]
+        .as_str()
+        .ok_or("plugin: URL de téléchargement absente")?
+        .to_string();
+    let digest_attendu = asset["digest"]
+        .as_str()
+        .and_then(|d| d.strip_prefix("sha256:"))
+        .map(str::to_string);
+    // 3. Téléchargement (one-shot, ~50 Mo en mémoire transitoire).
+    let bytes = client
+        .get(&url)
+        .header("User-Agent", "StreamOS")
+        .send()
+        .await
+        .and_then(|r| r.error_for_status())
+        .map_err(|e| format!("plugin: téléchargement échoué: {}", e))?
+        .bytes()
+        .await
+        .map_err(|e| format!("plugin: téléchargement interrompu: {}", e))?;
+    // 4. Intégrité : SHA256 contre le digest publié par l'API GitHub.
+    let mut hacheur = Sha256::new();
+    hacheur.update(&bytes);
+    let digest = hex_sha256(&hacheur.finalize());
+    if let Some(attendu) = &digest_attendu {
+        if !attendu.eq_ignore_ascii_case(&digest) {
+            return Err(format!(
+                "plugin: SHA256 mismatch (attendu {}, reçu {}) — téléchargement corrompu",
+                attendu, digest
+            ));
+        }
+    }
+    // 5. ZIP sur disque + extraction staging (ZipLecteur veut un Path).
+    fs::create_dir_all(&dossier_plugins)
+        .map_err(|e| format!("plugin: création {}: {}", dossier_plugins.display(), e))?;
+    let zip_tmp = std::env::temp_dir().join("streamos-obs-backgroundremoval.zip");
+    fs::write(&zip_tmp, &bytes)
+        .map_err(|e| format!("plugin: écriture ZIP temporaire: {}", e))?;
+    let extraction = extraire_plugin_zip(&zip_tmp, &dossier_plugins);
+    let _ = fs::remove_file(&zip_tmp);
+    extraction?;
+    // Nettoyage best-effort de l'ancien emplacement %APPDATA% (première
+    // implémentation — jamais chargé par OBS, ne sert plus à rien).
+    if let Some(ancien_racine) = ancien_dossier_plugins_obs() {
+        let _ = fs::remove_dir_all(ancien_racine.join(OBR_DOSSIER));
+        let _ = fs::remove_dir(ancien_racine);
+    }
+    Ok(())
+}
+
+/// Extrait le dossier `obs-backgroundremoval/` du zip (les fichiers d'aide à
+/// la racine — How to install…, .lnk, .bat — sont ignorés) vers
+/// `<plugins>/obs-backgroundremoval` via un staging `.obs-backgroundremoval-install`
+/// renommé en place : l'ancienne version est remplacée en une opération.
+fn extraire_plugin_zip(zip: &Path, dossier_plugins: &Path) -> Result<(), String> {
+    let mut lecteur = crate::zip_store::ZipLecteur::ouvrir(zip)
+        .map_err(|e| format!("plugin: ZIP illisible: {}", e))?;
+    let prefixe = format!("{}/", OBR_DOSSIER);
+    let staging = dossier_plugins.join(format!(".{}-install", OBR_DOSSIER));
+    if staging.exists() {
+        let _ = fs::remove_dir_all(&staging);
+    }
+    // entrees() emprunte le lecteur → noms collectés avant lire_bytes (&mut).
+    let noms: Vec<String> = lecteur.entrees().map(str::to_string).collect();
+    for nom in &noms {
+        let Some(reste) = nom.strip_prefix(&prefixe) else {
+            continue;
+        };
+        if reste.is_empty() || reste.ends_with('/') {
+            continue;
+        }
+        let dest = staging.join(reste);
+        if let Some(parent) = dest.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|e| format!("plugin: création dossier extrait: {}", e))?;
+        }
+        let data = lecteur
+            .lire_bytes(nom)
+            .map_err(|e| format!("plugin: lecture entrée {}: {}", nom, e))?;
+        fs::write(&dest, &data)
+            .map_err(|e| format!("plugin: écriture {}: {}", dest.display(), e))?;
+    }
+    // Garde : le plugin extrait DOIT avoir bin/64bit avant de remplacer
+    // l'existant — sinon on ne casse pas une installation qui marche.
+    if !staging.join("bin").join("64bit").is_dir() {
+        let _ = fs::remove_dir_all(&staging);
+        return Err("plugin: structure inattendue (bin/64bit absent du zip)".into());
+    }
+    let final_dir = dossier_plugins.join(OBR_DOSSIER);
+    if final_dir.exists() {
+        // Remplacement d'une version précédente. Échec typique : l'OBS en
+        // cours charge la dll (verrou) — impossible ici par construction
+        // (le filtre était absent → plugin non chargé), mais le message le
+        // dit au cas où.
+        fs::remove_dir_all(&final_dir).map_err(|e| {
+            format!(
+                "plugin: ancienne version non supprimable (OBS la charge ? redémarre OBS): {}",
+                e
+            )
+        })?;
+    }
+    fs::rename(&staging, &final_dir)
+        .map_err(|e| format!("plugin: finalisation installation: {}", e))?;
     Ok(())
 }
 
@@ -1555,10 +2010,19 @@ pub async fn sync_scene_captures(
             cam.largeur,
             cam.hauteur,
             false,
+            cam.cameraFondVert,
+            !cam.cameraCachee,
         )
         .await
         {
             eprintln!("[OBS] sync captures caméra/fond: {}", e);
+        }
+        // Fond vert virtuel : (ré)application auto-guérison (boot / openScene /
+        // connexion OBS — le toggle a pu échouer sur OBS offline). Plugin
+        // absent → log seulement, JAMAIS d'échec du sync global : l'état
+        // reste persisté côté widget, le hint UI le remonte au toggle.
+        if let Err(e) = appliquer_fond_vert(&mut write, &mut read, &sos, cam.cameraFondVert, !cam.cameraCachee).await {
+            eprintln!("[OBS] fond vert virtuel: {}", e);
         }
     } else {
         for name in [SOS_CAMERA, SOS_CAMERA_FOND] {
@@ -1917,6 +2381,11 @@ pub async fn create_trou_from_pc(
             settings.insert("capture_mode".to_string(), Value::String("capture_specific_window".to_string()));
             if let Some(win) = &target {
                 settings.insert("window".to_string(), Value::String(win.clone()));
+            }
+        }
+        CaptureKind::Monitor => {
+            if let Some(id) = &target {
+                settings.insert("monitor_id".to_string(), Value::String(id.clone()));
             }
         }
     }

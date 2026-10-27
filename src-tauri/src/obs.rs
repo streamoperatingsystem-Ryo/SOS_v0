@@ -2,7 +2,9 @@
 /// résolution de canvas OBS (GetVideoSettings → baseWidth/baseHeight, fallback
 /// 1920×1080), s'assure que la scène "SOS" et la source navigateur
 /// "SOS-Diffusion" (URL :4321, dims = résolution OBS) existent sans doublon,
-/// puis se déconnecte. Retourne (canvasW, canvasH).
+/// active la scène "SOS" en program SAUF si un stream/record tourne (garde
+/// live : jamais de bascule à l'antenne), puis se déconnecte.
+/// Retourne (canvasW, canvasH).
 ///
 /// IMPORTANT : la scène et la source ont des noms DIFFÉRENTS pour éviter
 /// l'ambiguïté côté OBS (GetSceneItemList attend un nom de scène, pas d'input).
@@ -370,6 +372,57 @@ pub async fn connect_and_setup(host: &str, port: u16, password: &str) -> Result<
         Err(e) => log::warn!("OBS: refresh \"{}\" échoué (non-fatal): {}", SOURCE_NAME, e),
     }
 
+    // 9. Activer la scène "SOS" côté OBS (SetCurrentProgramScene) : créée dans
+    //    la liste ne suffit pas — sans bascule, l'utilisateur reste sur sa
+    //    scène courante et ne voit rien du setup. GARDE LIVE : si un stream
+    //    OU un record tourne, on ne touche jamais le program (une bascule =
+    //    coupure à l'antenne). Non-fatal : échec → warn + on termine quand
+    //    même la connexion en "connected".
+    let activation = async {
+        let stream = rpc(
+            &mut write,
+            &mut read,
+            "GetStreamStatus",
+            "stream_status_scene",
+            json!({}),
+        )
+        .await?;
+        let record = rpc(
+            &mut write,
+            &mut read,
+            "GetRecordStatus",
+            "record_status_scene",
+            json!({}),
+        )
+        .await?;
+        let live = stream["outputActive"].as_bool().unwrap_or(false)
+            || record["outputActive"].as_bool().unwrap_or(false);
+        if !live {
+            rpc(
+                &mut write,
+                &mut read,
+                "SetCurrentProgramScene",
+                "set_program_scene",
+                json!({ "sceneName": SCENE_NAME }),
+            )
+            .await?;
+        }
+        Ok::<bool, String>(live)
+    }
+    .await;
+    match activation {
+        Ok(true) => log::info!(
+            "OBS: stream/record actif → scène \"{}\" NON activée (program préservé)",
+            SCENE_NAME
+        ),
+        Ok(false) => log::info!("OBS: scène \"{}\" activée (program)", SCENE_NAME),
+        Err(e) => log::warn!(
+            "OBS: activation scène \"{}\" échouée (non-fatal): {}",
+            SCENE_NAME,
+            e
+        ),
+    }
+
     let _ = write.close().await;
     Ok((canvas_w, canvas_h))
 }
@@ -398,36 +451,85 @@ pub async fn refresh_diffusion(host: &str, port: u16, password: &str) -> Result<
     refresh_result.map(|_| ())
 }
 
-/// Bascule le streaming OBS (ToggleStream). One-shot : connect → request →
-/// close. Retourne le nouvel état (outputActive de la réponse).
-pub async fn toggle_stream(host: &str, port: u16, password: &str) -> Result<bool, String> {
+/// Met le streaming OBS dans l'état demandé. One-shot : connect → statut →
+/// Start/Stop UNIQUEMENT si nécessaire → re-statut → close. JAMAIS
+/// ToggleStream : la direction vient de l'UI (l'utilisateur a confirmé
+/// « Démarrer » ou « Arrêter ») — un toggle agit sur l'état réel d'OBS,
+/// potentiellement l'inverse du libellé affiché si OBS a été touché
+/// entre-temps (bouton OBS, stream tombé, record stoppé hors StreamOS).
+/// Idempotent : déjà dans l'état voulu → aucune action envoyée.
+/// Retourne outputActive RELU (Start*/Stop* répondent un responseData vide).
+pub async fn set_stream(host: &str, port: u16, password: &str, actif: bool) -> Result<bool, String> {
     let (mut write, mut read) = connect(host, port, password).await?;
-    let result = rpc(
+    let result = set_output(
         &mut write,
         &mut read,
-        "ToggleStream",
-        "toggle_stream",
-        json!({}),
+        "GetStreamStatus",
+        if actif { "StartStream" } else { "StopStream" },
+        actif,
+        "stream",
     )
     .await;
     let _ = write.close().await;
-    result.map(|data| data["outputActive"].as_bool().unwrap_or(false))
+    result
 }
 
-/// Bascule l'enregistrement OBS (ToggleRecord). One-shot : connect → request →
-/// close. Retourne le nouvel état (outputActive de la réponse).
-pub async fn toggle_record(host: &str, port: u16, password: &str) -> Result<bool, String> {
+/// Met l'enregistrement OBS dans l'état demandé. Même contrat que
+/// set_stream (Start/StopRecord, idempotent, état relu après action).
+pub async fn set_record(host: &str, port: u16, password: &str, actif: bool) -> Result<bool, String> {
     let (mut write, mut read) = connect(host, port, password).await?;
-    let result = rpc(
+    let result = set_output(
         &mut write,
         &mut read,
-        "ToggleRecord",
-        "toggle_record",
-        json!({}),
+        "GetRecordStatus",
+        if actif { "StartRecord" } else { "StopRecord" },
+        actif,
+        "record",
     )
     .await;
     let _ = write.close().await;
-    result.map(|data| data["outputActive"].as_bool().unwrap_or(false))
+    result
+}
+
+/// Lit le statut d'une sortie OBS et n'envoie action_type QUE si elle n'est
+/// pas déjà dans l'état voulu, puis relit le statut. Helper partagé de
+/// set_stream / set_record — même connexion one-shot, requestIds préfixés.
+async fn set_output(
+    write: &mut WsSink,
+    read: &mut WsStreamHalf,
+    status_type: &str,
+    action_type: &str,
+    voulu: bool,
+    id_prefix: &str,
+) -> Result<bool, String> {
+    let status = rpc(
+        write,
+        read,
+        status_type,
+        &format!("{}_status_avant", id_prefix),
+        json!({}),
+    )
+    .await?;
+    if status["outputActive"].as_bool().unwrap_or(false) == voulu {
+        return Ok(voulu);
+    }
+    rpc(
+        write,
+        read,
+        action_type,
+        &format!("{}_action", id_prefix),
+        json!({}),
+    )
+    .await?;
+    let status = rpc(
+        write,
+        read,
+        status_type,
+        &format!("{}_status_apres", id_prefix),
+        json!({}),
+    )
+    .await?;
+    Ok(status["outputActive"].as_bool().unwrap_or(false))
 }
 
 /// Lit l'état des sorties OBS (GetStreamStatus + GetRecordStatus) en UNE
@@ -755,6 +857,10 @@ where
                 v["d"]["responseData"]
             );
             if result {
+                // Boîte noire : horodate le dernier RPC réussi — point de
+                // passage UNIQUE de tous les appels obs-websocket, donc la
+                // seule mesure fiable de « StreamOS parle encore à OBS ? ».
+                crate::conso::marquer_obs_ok();
                 return Ok(v["d"]["responseData"].clone());
             } else {
                 return Err(format!(

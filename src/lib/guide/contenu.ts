@@ -72,13 +72,50 @@ export const PAGES: PageGuide[] = [
           "guide.pages.principe.l1",
           "guide.pages.principe.l2",
           "guide.pages.principe.l3",
+          "guide.pages.principe.l4",
         ],
       },
       { type: "note", cle: "guide.pages.principe.note" },
     ],
   },
+  // ===== Chapitre 2 — Vos données, chez vous =====
+  {
+    id: "vieprivee",
+    titreCle: "guide.pages.vieprivee.titre",
+    chapitreCle: "guide.chapitres.vieprivee",
+    blocs: [
+      { type: "para", cle: "guide.pages.vieprivee.p1" },
+      {
+        type: "liste",
+        cles: [
+          "guide.pages.vieprivee.l1",
+          "guide.pages.vieprivee.l2",
+          "guide.pages.vieprivee.l3",
+          "guide.pages.vieprivee.l4",
+        ],
+      },
+      { type: "note", cle: "guide.pages.vieprivee.note" },
+    ],
+  },
+  {
+    id: "sauvegardes",
+    titreCle: "guide.pages.sauvegardes.titre",
+    blocs: [
+      { type: "para", cle: "guide.pages.sauvegardes.p1" },
+      {
+        type: "liste",
+        cles: [
+          "guide.pages.sauvegardes.l1",
+          "guide.pages.sauvegardes.l2",
+          "guide.pages.sauvegardes.l3",
+          "guide.pages.sauvegardes.l4",
+        ],
+      },
+      { type: "note", cle: "guide.pages.sauvegardes.note" },
+    ],
+  },
 
-  // ===== Chapitre 2 — Les trois réglages =====
+  // ===== Chapitre 3 — Les trois réglages =====
   {
     id: "premierPas",
     titreCle: "guide.pages.premierPas.titre",
@@ -418,6 +455,26 @@ export const PAGES: PageGuide[] = [
           "guide.pages.plusLoin.l6",
         ],
       },
+    ],
+  },
+  // Page « sous le capot » du chapitre 9 : le WebSocket OBS expliqué en une
+  // face, avec renvoi vers la modale « Connexion OBS » (section OBS de la
+  // barre latérale) pour l'inventaire détaillé — le format une-face ne
+  // permet pas plus, la modale prend le relais.
+  {
+    id: "websocket",
+    titreCle: "guide.pages.websocket.titre",
+    blocs: [
+      { type: "para", cle: "guide.pages.websocket.p1" },
+      {
+        type: "liste",
+        cles: [
+          "guide.pages.websocket.l1",
+          "guide.pages.websocket.l2",
+          "guide.pages.websocket.l3",
+        ],
+      },
+      { type: "note", cle: "guide.pages.websocket.note" },
     ],
   },
   {

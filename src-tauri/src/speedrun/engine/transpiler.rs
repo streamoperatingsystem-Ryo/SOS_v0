@@ -156,7 +156,12 @@ fn transpile_cs_to_js_inner(csharp: &str) -> String {
     // Doit être AVANT l'étape 11 (casts) car (int) dans default(int) serait strippé
     js = transpile_default(&js);
 
-    // === 11. Casts — retirer les casts de type primitif
+    // === 11. Casts — préserver la sémantique signe/largeur des casts numériques
+    // (short)0xFFFF = -1 en C# ; un strip naïf produisait 65535 en JS, ce qui
+    // cassait les checks d'inventaire de l'ASL MGS (ammo != -1 → hasPSG1 toujours
+    // vrai → split Cell → Armory jamais tiré). Les casts restants sans
+    // sémantique en JS (IntPtr, long, float…) sont retirés comme avant.
+    js = transpile_numeric_casts(&js);
     for cast in &[
         "(IntPtr)", "(long)", "(int)", "(short)", "(uint)", "(ushort)",
         "(sbyte)", "(byte)", "(decimal)", "(float)", "(double)", "(bool)", "(string)",
@@ -2275,6 +2280,213 @@ fn find_top_level_comma(s: &str) -> Option<usize> {
     None
 }
 
+/// Transpile les casts numériques C# qui changent la valeur en JS :
+/// `(short)x` → `__toShort(x)`, `(sbyte)` → `__toSByte`, `(ushort)` → `__toUShort`,
+/// `(byte)` → `__toByte`, `(int)` → `__toInt`, `(uint)` → `__toUInt`.
+/// Le cast s'applique à l'expression unaire qui suit : opérateurs préfixe,
+/// littéral, chaîne, groupe parenthésé ou chaîne d'accès `a.b[i].c()`.
+/// Sans opérande détectable, le cast est laissé tel quel — le strip de
+/// l'étape 11 le supprime ensuite comme avant. Char-safe.
+fn transpile_numeric_casts(code: &str) -> String {
+    const CASTS: [(&str, &str); 6] = [
+        ("short", "__toShort"),
+        ("sbyte", "__toSByte"),
+        ("ushort", "__toUShort"),
+        ("byte", "__toByte"),
+        ("int", "__toInt"),
+        ("uint", "__toUInt"),
+    ];
+    let mut result = String::with_capacity(code.len());
+    let chars: Vec<(usize, char)> = char_indices_vec(code);
+    let mut idx = 0;
+
+    while idx < chars.len() {
+        let (_, ch) = chars[idx];
+        let mut handled = false;
+
+        if ch == '(' {
+            // La parenthèse contient-elle uniquement un nom de type castable ?
+            let mut j = idx + 1;
+            while j < chars.len() && chars[j].1.is_whitespace() { j += 1; }
+            let name_start = j;
+            while j < chars.len() && (chars[j].1.is_alphanumeric() || chars[j].1 == '_') { j += 1; }
+            if j > name_start {
+                let name = &code[chars[name_start].0..chars[j].0];
+                let mut k = j;
+                while k < chars.len() && chars[k].1.is_whitespace() { k += 1; }
+                if k < chars.len() && chars[k].1 == ')' {
+                    if let Some((_, fname)) = CASTS.iter().find(|(n, _)| *n == name) {
+                        if let Some(op_end) = scan_cast_operand(&chars, k + 1) {
+                            let operand = code[chars[k + 1].0..chars[op_end].0].trim();
+                            // Opérande valide (non vide, pas un mot-clé seul comme `new`)
+                            if !operand.is_empty()
+                                && !matches!(
+                                    operand,
+                                    "new" | "typeof" | "sizeof" | "default" | "checked" | "unchecked"
+                                )
+                            {
+                                result.push_str(fname);
+                                result.push('(');
+                                result.push_str(&transpile_numeric_casts(operand));
+                                result.push(')');
+                                idx = op_end;
+                                handled = true;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if !handled {
+            result.push(ch);
+            idx += 1;
+        }
+    }
+
+    result
+}
+
+/// Scanne l'opérande d'un cast C# à partir de l'index char `start` (juste après
+/// le `)` du cast). Retourne l'index char juste après la fin de l'opérande, ou
+/// None si rien n'est identifiable. L'opérande est une expression unaire :
+/// préfixes `- + ~ !`, puis un primaire (parenthèse, chaîne, littéral,
+/// identifiant) suivi de suffixes `.ident`, `[...]`, `(...)`, `<T>` et `++`/`--`.
+fn scan_cast_operand(chars: &[(usize, char)], start: usize) -> Option<usize> {
+    let mut j = start;
+    // Whitespace + opérateurs unaires préfixe
+    loop {
+        while j < chars.len() && chars[j].1.is_whitespace() { j += 1; }
+        if j < chars.len() && matches!(chars[j].1, '-' | '+' | '~' | '!') {
+            j += 1;
+        } else {
+            break;
+        }
+    }
+    j = scan_primary(chars, j)?;
+
+    // Suffixes de la chaîne d'accès
+    loop {
+        match chars.get(j).map(|c| c.1) {
+            Some('.') => {
+                let m = j + 1;
+                if m < chars.len() && (chars[m].1.is_alphabetic() || chars[m].1 == '_') {
+                    let mut m = m;
+                    while m < chars.len() && (chars[m].1.is_alphanumeric() || chars[m].1 == '_') {
+                        m += 1;
+                    }
+                    j = m;
+                } else {
+                    break;
+                }
+            }
+            Some('[') => match scan_balanced(chars, j, '[', ']') {
+                Some(e) => j = e,
+                None => break,
+            },
+            Some('(') => match scan_balanced(chars, j, '(', ')') {
+                Some(e) => j = e,
+                None => break,
+            },
+            // `<T>` n'est un générique que s'il est suivi de `(` ou `.`
+            Some('<') => match scan_balanced(chars, j, '<', '>') {
+                Some(e) if matches!(chars.get(e).map(|c| c.1), Some('(') | Some('.')) => j = e,
+                _ => break,
+            },
+            Some('+') if chars.get(j + 1).map(|c| c.1) == Some('+') => j += 2,
+            Some('-') if chars.get(j + 1).map(|c| c.1) == Some('-') => j += 2,
+            _ => break,
+        }
+    }
+    Some(j)
+}
+
+/// Scanne le primaire d'une expression : groupe `(...)`, chaîne `'..'`/`".."`,
+/// littéral numérique ou identifiant. Retourne l'index char après le primaire.
+fn scan_primary(chars: &[(usize, char)], j: usize) -> Option<usize> {
+    let c = chars.get(j)?.1;
+    match c {
+        '(' => scan_balanced(chars, j, '(', ')'),
+        '"' | '\'' => scan_string(chars, j),
+        c if c.is_ascii_digit() || c == '.' => {
+            let mut m = j;
+            while m < chars.len() {
+                let ch = chars[m].1;
+                if ch.is_alphanumeric() || matches!(ch, '.' | '_') {
+                    m += 1;
+                } else if matches!(ch, '+' | '-') && m > j && matches!(chars[m - 1].1, 'e' | 'E') {
+                    m += 1;
+                } else {
+                    break;
+                }
+            }
+            Some(m)
+        }
+        c if c.is_alphabetic() || c == '_' || c == '@' => {
+            let mut m = j;
+            if chars[m].1 == '@' {
+                m += 1; // identifiant @verbatim
+            }
+            while m < chars.len() && (chars[m].1.is_alphanumeric() || chars[m].1 == '_') {
+                m += 1;
+            }
+            Some(m)
+        }
+        _ => None,
+    }
+}
+
+/// Scanne un littéral chaîne `'..'` ou `".."` (échappements `\` gérés).
+/// Retourne l'index char après le guillemet fermant.
+fn scan_string(chars: &[(usize, char)], start: usize) -> Option<usize> {
+    let quote = chars.get(start)?.1;
+    let mut j = start + 1;
+    let mut escaped = false;
+    while j < chars.len() {
+        let c = chars[j].1;
+        if c == quote && !escaped {
+            return Some(j + 1);
+        }
+        escaped = c == '\\' && !escaped;
+        j += 1;
+    }
+    None
+}
+
+/// Scanne une paire de délimiteurs équilibrés (`(` `)`, `[` `]`, `<` `>`)
+/// en ignorant le contenu des chaînes. `start` est l'index char du délimiteur
+/// ouvrant ; retourne l'index char juste après le fermant correspondant.
+fn scan_balanced(chars: &[(usize, char)], start: usize, open: char, close: char) -> Option<usize> {
+    let mut depth = 0i32;
+    let mut j = start;
+    let mut in_str: Option<char> = None;
+    let mut escaped = false;
+    while j < chars.len() {
+        let c = chars[j].1;
+        if let Some(q) = in_str {
+            if c == q && !escaped {
+                in_str = None;
+            }
+            escaped = c == '\\' && !escaped;
+        } else {
+            match c {
+                '"' | '\'' => in_str = Some(c),
+                _ if c == open => depth += 1,
+                _ if c == close => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(j + 1);
+                    }
+                }
+                _ => {}
+            }
+            escaped = false;
+        }
+        j += 1;
+    }
+    None
+}
+
 // =============================================================================
 // Tests unitaires — E7 Lot T2 (transpileur : initializers, IntPtr.Add, foreach)
 // =============================================================================
@@ -2999,5 +3211,82 @@ content = settingTemplates[0];
                 critical_failures, report
             );
         }
+    }
+}
+
+// =============================================================================
+// Tests — casts numériques signés (fix split Cell : (short)0xFFFF = -1 en C#,
+// pas 65535 — sinon F.AmmoCount/hasPSG1 lisent l'inventaire de travers)
+// =============================================================================
+#[cfg(test)]
+mod tests_casts {
+    use super::transpile_cs_to_js;
+
+    /// Cast parenthésé imbriqué — pattern exact de F.AmmoCount dans MGS
+    #[test]
+    fn test_cast_short_parenthesized_nested() {
+        let cs = r#"var ammo = (short)((short)data[key] + ((short)data[key + 1] << 8));"#;
+        let js = transpile_cs_to_js(cs);
+        assert!(
+            js.contains("__toShort(") && !js.contains("(short)"),
+            "(short)(...) doit devenir __toShort(...), obtenu: {}", js
+        );
+        // Les casts internes sont aussi enveloppés
+        assert!(
+            js.contains("__toShort(data[key])") && js.contains("__toShort(data[key + 1])"),
+            "Casts internes enveloppés, obtenu: {}", js
+        );
+    }
+
+    /// Cast sur chaîne d'accès membre → enveloppe toute la chaîne
+    #[test]
+    fn test_cast_short_member_chain() {
+        let cs = r#"let CurProg = (short)M["Progress"].Current;"#;
+        let js = transpile_cs_to_js(cs);
+        assert!(
+            js.contains("__toShort(M[\"Progress\"].Current)"),
+            "(short)M[...] doit envelopper la chaîne d'accès, obtenu: {}", js
+        );
+    }
+
+    /// Cast (int) sur indexation → __toInt
+    #[test]
+    fn test_cast_int_index() {
+        let cs = r#"var phase = (int)data["Phase"];"#;
+        let js = transpile_cs_to_js(cs);
+        assert!(
+            js.contains("__toInt(data[\"Phase\"])"),
+            "(int)X doit devenir __toInt(X), obtenu: {}", js
+        );
+    }
+
+    /// Cast (uint) sur littéral hexa → __toUInt
+    #[test]
+    fn test_cast_uint_literal() {
+        let cs = r#"emu.RegionSize = (uint)0x200000;"#;
+        let js = transpile_cs_to_js(cs);
+        assert!(
+            js.contains("__toUInt(0x200000)"),
+            "(uint)littéral doit devenir __toUInt(...), obtenu: {}", js
+        );
+    }
+
+    /// (byte) et (sbyte) → wrappers masque/signe
+    #[test]
+    fn test_cast_byte_sbyte() {
+        let cs = r#"var a = (byte)x; var b = (sbyte)y;"#;
+        let js = transpile_cs_to_js(cs);
+        assert!(
+            js.contains("__toByte(x)") && js.contains("__toSByte(y)"),
+            "obtenu: {}", js
+        );
+    }
+
+    /// Cast sans opérande → laissé puis strippé par l'étape 11 (pas de crash)
+    #[test]
+    fn test_cast_no_operand_fallback() {
+        let cs = r#"var x = sizeof(int);"#;
+        let js = transpile_cs_to_js(cs);
+        assert!(!js.contains("(int)"), "obtenu: {}", js);
     }
 }

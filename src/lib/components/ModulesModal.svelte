@@ -46,6 +46,7 @@
     musique: "♫",
     objectifs: "🎯",
     equaliseur: "🎚",
+    spots: "🔦",
   };
 
   // Module sélectionné dans le master-detail (l'ouverture porte déjà
@@ -147,7 +148,10 @@
         <p class="hint">{$t("modules.hint." + sel)}</p>
       </div>
 
-      <!-- Position/taille — complément précis du drag/resize canvas. -->
+      <!-- Position/taille — complément précis du drag/resize canvas.
+           Masqué pour spots : effet plein canvas, le rect n'y est pas
+           utilisé (pas de carte sur le canvas non plus). -->
+      {#if sel !== "spots"}
       <div class="modal-bloc">
         <div class="bloc-titre">{$t("modules.position")}</div>
         <div class="pos-grid">
@@ -161,11 +165,12 @@
             <input type="number" min="36" value={Math.round(cfg.hauteur)} onchange={(e) => patch({ hauteur: Math.max(36, num(e)) })} /></label>
         </div>
       </div>
+      {/if}
 
-      <!-- Style : police / taille / fond / cadre. Masqué pour l'équaliseur :
-           overlay diffusion sans texte ni cadre, translucide par nature —
-           ces réglages n'y ont aucun effet. -->
-      {#if sel !== "equaliseur"}
+      <!-- Style : police / taille / fond / cadre. Masqué pour l'équaliseur
+           et spots : overlays diffusion sans texte ni cadre, translucides
+           par nature — ces réglages n'y ont aucun effet. -->
+      {#if sel !== "equaliseur" && sel !== "spots"}
       <div class="modal-bloc">
         <div class="bloc-titre">{$t("modules.style")}</div>
         <div class="pos-grid">
@@ -231,6 +236,19 @@
             {$t("modules.equaliseur.couleursAuto")}
           </button>
           <p class="hint">{$t("modules.equaliseur.hintMicro")}</p>
+        {:else if sel === "spots"}
+          <!-- Intensité = champ générique `opacite` (0-1), relu par le
+               renderer diffusion comme multiplicateur d'alpha. -->
+          <label class="pos-field"><span class="field-label">{$t("modules.spots.intensite")}</span>
+            <input class="modal-range" type="range" min="0.1" max="1" step="0.05" value={cfg.opacite ?? 0.8}
+              oninput={(e) => patch({ opacite: +(e.target as HTMLInputElement).value })} /></label>
+          <label class="pos-field"><span class="field-label">{$t("modules.spots.vitesse")}</span>
+            <input class="modal-range" type="range" min="0.25" max="2" step="0.05" value={cfg.spotsVitesse ?? 1}
+              oninput={(e) => patch({ spotsVitesse: +(e.target as HTMLInputElement).value })} /></label>
+          <label class="toggle"><input type="checkbox" checked={cfg.spotsReagir !== false}
+              onchange={(e) => patch({ spotsReagir: e.currentTarget.checked })} />
+            <span>{$t("modules.spots.reagir")}</span></label>
+          <p class="hint">{$t("modules.spots.hintReagir")}</p>
         {:else}
           <label class="pos-field"><span class="field-label">{$t("modules.objectifs.titre")}</span>
             <input type="text" value={cfg.titre ?? ""} placeholder={$t("modules.objectifs.titrePh")}

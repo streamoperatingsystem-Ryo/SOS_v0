@@ -513,42 +513,60 @@ pub fn run_ws(
                                 );
                             }
                             // Commandes chat : "!commande" → overlay diffusion.
+                            // Accusé ignoré — pas de canal de réponse sur Kick.
                             if let Some(commandes) =
                                 app.try_state::<crate::commandes::CommandesState>()
                             {
-                                commandes.on_message(pseudo, pseudo, texte);
+                                let _ = commandes.on_message("kick", pseudo, pseudo, texte);
                             }
-                            // Musique : "!rs <titre>" → bibliothèque locale.
                             // est_mod : badge identity moderator/broadcaster
-                            // ou le streamer (sender.slug == slug du canal).
+                            // ou le streamer (sender.slug == slug du canal)
+                            // — partagé musique + arène.
+                            let est_badge = payload["sender"]["identity"]["badges"]
+                                .as_array()
+                                .map(|bs| {
+                                    bs.iter().any(|b| {
+                                        matches!(
+                                            b["type"].as_str(),
+                                            Some("moderator") | Some("broadcaster")
+                                        )
+                                    })
+                                })
+                                .unwrap_or(false);
+                            let est_streamer = app
+                                .try_state::<crate::KickState>()
+                                .and_then(|ks| ks.slug_courant())
+                                .map(|slug| {
+                                    payload["sender"]["slug"].as_str()
+                                        == Some(slug.as_str())
+                                })
+                                .unwrap_or(false);
+                            let est_mod = est_badge || est_streamer;
+                            // Musique : "!rs <titre>" → bibliothèque locale.
                             if let Some(musique) =
                                 app.try_state::<crate::musique::MusiqueState>()
                             {
-                                let est_badge = payload["sender"]["identity"]["badges"]
-                                    .as_array()
-                                    .map(|bs| {
-                                        bs.iter().any(|b| {
-                                            matches!(
-                                                b["type"].as_str(),
-                                                Some("moderator") | Some("broadcaster")
-                                            )
-                                        })
-                                    })
-                                    .unwrap_or(false);
-                                let est_streamer = app
-                                    .try_state::<crate::KickState>()
-                                    .and_then(|ks| ks.slug_courant())
-                                    .map(|slug| {
-                                        payload["sender"]["slug"].as_str()
-                                            == Some(slug.as_str())
-                                    })
-                                    .unwrap_or(false);
                                 musique.on_message(
                                     "kick",
                                     pseudo,
                                     texte,
-                                    est_badge || est_streamer,
+                                    est_mod,
                                 );
+                            }
+                            // Emoji Arena : "!fight"/coups → combat côté
+                            // diffusion (retour ignoré — pas de canal de
+                            // réponse chat sur Kick).
+                            if let Some(fight) =
+                                app.try_state::<crate::fight::FightState>()
+                            {
+                                fight.on_message("kick", pseudo, texte, est_mod);
+                            }
+                            // Cadres : "!cadres <couleur>" → couleur du cadre
+                            // (retour ignoré — pas de canal de réponse).
+                            if let Some(cadres) =
+                                app.try_state::<crate::cadres_cmd::CadresChatState>()
+                            {
+                                let _ = cadres.on_message(pseudo, texte);
                             }
                             continue;
                         }

@@ -1,4 +1,4 @@
-// Registre central des cadres SVG — 7 cadres disponibles.
+// Registre central des cadres SVG — 9 cadres disponibles.
 // Tous les cadres sont personnalisables : rendus avec dégradé
 // couleur/couleurFin + angle de gradient utilisateur. Les presets
 // (cyberpunk, story, thin-line, hexagon) dérivent leurs tons internes
@@ -12,7 +12,7 @@ import renderHexagon, { getHexagonClipPath } from "./cadre-hexagon";
 import renderMGStyle, { getMGStyleClipPath } from "./cadre-mgstyle";
 import renderArena, { getArenaClipPath } from "./cadre-arena";
 import renderTribal, { getTribalClipPath } from "./cadre-tribal";
-import { angleVersCoords } from "./couleurs";
+import { angleVersCoords, stopsLiseres } from "./couleurs";
 
 export interface CadreRegistre {
   id: string;
@@ -95,8 +95,7 @@ export function genererSVG(
     return `<svg width="${largeur + offset * 2}" height="${hauteur + offset * 2}" viewBox="-${offset} -${offset} ${largeur + offset * 2} ${hauteur + offset * 2}" preserveAspectRatio="none" style="position:absolute;top:-${offset}px;left:-${offset}px;pointer-events:none;z-index:5;">
         <defs>
           <linearGradient id="${gradId}" x1="${x1}%" y1="${y1}%" x2="${x2}%" y2="${y2}%">
-            <stop offset="0%" stop-color="${c}" stop-opacity="1"/>
-            <stop offset="100%" stop-color="${cFin}" stop-opacity="1"/>
+            ${stopsLiseres(c, cFin)}
           </linearGradient>
         </defs>
         <rect x="0" y="0" width="${largeur}" height="${hauteur}" rx="${rx}" ry="${rx}" fill="none" stroke="url(#${gradId})" stroke-width="${ep}"/>

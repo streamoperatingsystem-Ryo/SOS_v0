@@ -28,6 +28,7 @@
     "pause": "暂停",
     "image": "图片",
     "video": "视频",
+    "chrono": "计时器",
     "debut": "开始",
     "fin": "结束",
     "apercu": "预览",
@@ -69,6 +70,87 @@
     "erreurAuth": "OBS 密码缺失或无效。在 OBS 中：工具 → WebSocket 服务器设置 → 显示连接信息，复制密码并粘贴到上方字段。",
     "erreurInjoignable": "无法连接 OBS。请确认 OBS 已打开且 WebSocket 服务器已启用（工具 → WebSocket 服务器设置）。"
   },
+  "obsWs": {
+    "ouvrir": "WebSocket 与选项",
+    "titre": "OBS 连接 —— WebSocket",
+    "hint": "通过 OBS 通道传输的一切——供有兴趣者查阅。都不是必需的：基本设置在 OBS 分区中完成。",
+    "blocCestQuoi": "什么是 WebSocket？",
+    "intro": {
+      "p1": "WebSocket 是两个程序之间只需打开一次的双向通信通道：双方可以随时发送消息，无需为每条消息重新建立连接。它于 2011 年为网页浏览器而生（RFC 6455），如今已成为远程控制软件的标准方式。",
+      "p2": "自 28 版（2022 年）起，OBS Studio 内置 obs-websocket v5 服务器：StreamOS 正是通过这个通道与 OBS 对话——就像 Stream Deck 一样。在 OBS 28 之前，该服务器是一个协议不兼容的独立插件（v4）：因此 StreamOS 需要 OBS 28 或更高版本。",
+      "p3": "StreamOS 的特点：没有常驻连接。每个操作——移动捕获、开始直播、切换摄像头——都会开启一次简短对话，发送请求后即关闭。是几十通简短的电话，而不是一条常开的线路：关闭再打开 OBS，不会丢失任何东西，下一个操作会自行继续。"
+    },
+    "blocEtat": "连接状态",
+    "connexion": {
+      "ok": "已连接",
+      "enCours": "连接中…",
+      "hs": "未连接"
+    },
+    "version": "协议：obs-websocket v5 —— 需要 OBS Studio 28 或更高版本。",
+    "blocInventaire": "通过 OBS WebSocket 传输的内容",
+    "inventaireHint": "圆点反映各功能的真实状态。此面板不是总开关：每个功能都在自己的分区中控制。",
+    "groupe": {
+      "diffusion": "推流与捕获",
+      "direct": "直播",
+      "modes": "模式与叠加层"
+    },
+    "etat": {
+      "actif": "已启用",
+      "inactif": "未启用",
+      "aLaDemande": "按需",
+      "liees": "已关联 {n} 项"
+    },
+    "feat": {
+      "diffusion": {
+        "nom": "推流源",
+        "desc": "「SOS」场景和「SOS-Diffusion」浏览器源——观众看到的页面，按像素对齐到 OBS 的分辨率。"
+      },
+      "captures": {
+        "nom": "捕获窗口",
+        "desc": "每个挖孔的小部件在 OBS 中关联一个窗口、游戏或屏幕——源在每次移动时跟随小部件。"
+      },
+      "camera": {
+        "nom": "摄像头",
+        "desc": "「SOS-Caméra」源，通过直接应用在 OBS 中的遮罩滤镜裁剪成边框的形状。"
+      },
+      "fond": {
+        "nom": "以应用或游戏作背景",
+        "desc": "全屏捕获可以替代背景媒体——每个场景一个专用源。"
+      },
+      "direct": {
+        "nom": "直播与录制",
+        "desc": "OBS 分区的开始/停止按钮控制两个输出；每次操作都会重新读取其状态。"
+      },
+      "projecteur": {
+        "nom": "预览投影",
+        "desc": "在所选屏幕上打开 OBS 投影——相当于在 OBS 中右键点击「打开投影」。"
+      },
+      "attente": {
+        "nom": "待机画面",
+        "desc": "启动时，StreamOS 会在 OBS 中配置专用音频源——并可关闭桌面声音（可在下方调整）。"
+      },
+      "jc": {
+        "nom": "Just Chatting",
+        "desc": "在模式持续期间重新定位摄像头并隐藏 OBS 中的其他捕获——不改动场景。"
+      }
+    },
+    "blocReglages": "设置",
+    "reglages": {
+      "autoConnect": "启动时自动连接 OBS",
+      "autoConnectDesc": "取消勾选后，仅在 OBS 分区中手动连接 OBS。",
+      "fermerProj": "连接时关闭 OBS 投影",
+      "fermerProjDesc": "OBS 会重新打开上次的投影窗口；StreamOS 默认将其关闭。",
+      "muterBureau": "待机画面期间关闭桌面声音",
+      "muterBureauDesc": "取消勾选后，待机画面期间桌面声音会继续进入直播。"
+    },
+    "blocHors": "不经过此通道的内容",
+    "hors": {
+      "l1": "推流服务器（端口 4321）：StreamOS 自己的 WebSocket——它提供浏览器源读取的页面。",
+      "l2": "Twitch、YouTube、Kick 和 TikTok 聊天：各平台的 WebSocket 和 API。",
+      "l3": "均衡器：根据 Windows 音频计算——obs-websocket 不提供任何音量数据。",
+      "l4": "捕获缩略图、硬件检测和投影窗口的关闭：Windows API。"
+    }
+  },
   "scenes": {
     "creationRefusee": "场景创建被拒绝：{erreur}",
     "ouvertureRefusee": "场景打开被拒绝：{erreur}",
@@ -80,6 +162,13 @@
     "nomPackPrompt": "包名称？",
     "nomPackVide": "包名称为空",
     "exportRefuse": "导出被拒绝：{erreur}",
+    "exportSceneCourante": "导出当前场景",
+    "exportToutZip": "全部导出 (.zip)",
+    "exportZipOk": "导出完成：{chemin}",
+    "importPackDossier": "导入文件夹包",
+    "importToutZip": "全部导入 (.zip)",
+    "importZipConflit": "“{nom}”已存在（“{nomLocal}”）。\n\n确定 = 用备份版本替换\n取消 = 保留当前版本",
+    "importZipOk": "导入完成：已恢复 {scenes} 个场景、{medias} 个媒体，跳过 {sautees} 个",
     "importRefuse": "导入被拒绝：{erreur}"
   },
   "scene": {
@@ -127,6 +216,21 @@
     "titre": "删除此小组件？",
     "hint": "此操作不可撤销。"
   },
+  "confirmOuvrirScene": {
+    "titre": "打开此场景？",
+    "hintNom": "场景“{nom}”将显示在直播中。",
+    "hintGenerique": "此场景将显示在直播中。"
+  },
+  "confirmObsOutput": {
+    "titreStreamStart": "开始直播？",
+    "hintStreamStart": "OBS 将在其配置的服务上开始推流。",
+    "titreStreamStop": "停止直播？",
+    "hintStreamStop": "当前直播将被中断。",
+    "titreRecordStart": "开始录制？",
+    "hintRecordStart": "OBS 将开始录制输出。",
+    "titreRecordStop": "停止录制？",
+    "hintRecordStop": "当前录制将停止并保存文件。"
+  },
   "gizmo": {
     "hautBas": "上/下：{deg}°",
     "gaucheDroite": "左/右：{deg}°",
@@ -152,15 +256,19 @@
     "titreFond": "将应用或游戏设为背景",
     "titreWidget": "关联 OBS 源",
     "hintFond": "捕获画面将填满整个场景背景，位于小组件之后。您可以随时更换或移除它。",
-    "hintWidget": "捕获画面（摄像头、窗口或游戏）将放置在叠加层之后，透过小组件的捕获窗口可见。",
+    "hintWidget": "捕获画面（摄像头、窗口、游戏或屏幕）将放置在叠加层之后，透过小组件的捕获窗口可见。",
     "choisirType": "选择源类型：",
     "kind": {
       "camera": "摄像头",
       "window": "窗口",
-      "game": "游戏"
+      "game": "游戏",
+      "monitor": "屏幕"
     },
     "retour": "返回",
-    "aucuneCible": "此类型没有 PC 目标。"
+    "aucuneCible": "此类型没有 PC 目标。",
+    "filtrer": "筛选…",
+    "ecranN": "屏幕 {n}",
+    "principal": "主屏"
   },
   "inputBinding": {
     "titre": "手柄按键绑定",
@@ -191,9 +299,14 @@
   "sceneBar": {
     "vosScenes": "您的场景",
     "nouvelle": "场景",
-    "afficherTitre": "显示标题",
-    "masquerTitre": "隐藏标题",
-    "supprimerConfirm": "删除？"
+    "afficherScene": "显示此场景",
+    "masquerScene": "隐藏此场景！",
+    "supprimerConfirm": "删除？",
+    "nbWidgets": "小组件：{n}",
+    "antenne": "直播中",
+    "illisible": "文件无法读取",
+    "groupeMasquees": "隐藏的场景",
+    "groupeVisibles": "可见场景"
   },
   "canvas": {
     "captureFond": "应用/游戏背景捕获——由 OBS 渲染",
@@ -206,10 +319,8 @@
     "aideCadres": "左键点击背景或小组件 → “自定义边框…”（左侧面板）"
   },
   "consoModal": {
-    "titre": "诊断",
-    "tabApp": "应用",
-    "tabAudience": "观众",
-    "hint": "真实测量值，每秒刷新。曲线覆盖最近 5 分钟——悬停可读取具体数值。不记录任何数据：全部保存在内存中。",
+    "titre": "性能",
+    "hint": "真实测量值，每秒刷新。曲线覆盖最近 5 分钟——悬停可读取具体数值。只有“黑匣子”会写入您的磁盘（本地，绝不发送）。",
     "indisponible": "测量不可用——后端无响应。",
     "collecte": "正在采集——曲线将在几秒后出现。",
     "meta": "{coeurs} 核心 • {s} 秒历史",
@@ -226,7 +337,18 @@
     "ilYA": "{s} 秒前",
     "courbe": "{nom} 曲线",
     "mo": "MB",
-    "go": "GB"
+    "go": "GB",
+    "boiteNoire": "黑匣子",
+    "sousTitreBoiteNoire": "写入磁盘的日志（每 5 秒 1 个点）：可在死机或断电后保留。绝不发送。",
+    "boiteNoireVide": "尚未记录任何数据。",
+    "boiteNoireMeta": "{n} 个点，共 {min} 分钟",
+    "boiteNoireAge": "最后记录点：{s} 秒前",
+    "obsMuet": "OBS 无响应 {s} 秒",
+    "colHeure": "时间",
+    "colRamApp": "应用内存",
+    "colCpuApp": "应用 CPU",
+    "colRamSysteme": "系统内存",
+    "obsConnect": "OBS 连接数：{n} · 最后来源「{origine}」"
   },
   "audience": {
     "periode": "时间范围",
@@ -345,7 +467,83 @@
     "disposition": "布局",
     "dispoAuto": "自动",
     "dispoColonne": "纵向",
-    "dispoLigne": "横向"
+    "dispoLigne": "横向",
+    "metronome": "节拍器",
+    "metronomeBpm": "BPM",
+    "metronomeVolume": "音量",
+    "metronomeTest": "试听节拍",
+    "metronomeHint": "速通期间播放的节拍：开始时启动，暂停、重置、结束时停止。仅在此处的面板上可闻，绝不会进入直播。",
+    "exporter": "导出分段",
+    "exportAucun": "没有可导出的分段",
+    "exportPartie": "第 {n} 次尝试",
+    "exportStatutEnCours": "进行中",
+    "exportStatutEnPause": "已暂停",
+    "exportStatutTerminee": "已完成",
+    "exportStatutArretee": "已停止",
+    "exportTotal": "总时间",
+    "exportColSplit": "分段",
+    "exportColSegment": "分段时长",
+    "exportColTotal": "总计",
+    "exportColDelta": "Δ 对比 PB",
+    "exportSkip": "跳过",
+    "exportTagEnCours": "进行中",
+    "exportGenereLe": "由 StreamOS 导出于 {date}"
+  },
+  "speedrunLayout": {
+    "titre": "创建您的布局",
+    "hint": "类似 LiveSplit 的布局编辑器：仅控制计时器内部元素。即时生效。",
+    "ouvrir": "创建布局…",
+    "aucunWidget": "选择一个速通小组件以编辑其布局。",
+    "secGeneral": "常规",
+    "disposition": "布局",
+    "taillePolice": "基础大小",
+    "secEntete": "标题栏",
+    "titreJeu": "游戏标题",
+    "categorie": "类别",
+    "pastilleStatut": "状态点",
+    "secTimer": "计时器",
+    "timerVisible": "显示计时器",
+    "timerPrecision": "精度",
+    "precSecondes": "秒",
+    "precDixiemes": "十分之一秒",
+    "precCentiemes": "百分之一秒",
+    "timerMethode": "计时方式",
+    "methodeAuto": "自动（游戏 > 真实）",
+    "methodeReal": "真实时间",
+    "methodeGame": "游戏时间",
+    "timerCouleur": "计时器颜色",
+    "couleurAuto": "自动",
+    "secMeta": "元信息",
+    "phasePill": "阶段标记",
+    "compteur": "「x / total」计数器",
+    "barre": "进度条",
+    "secSegments": "分段",
+    "colTemps": "时间列",
+    "tempsCumul": "累计（分段计时）",
+    "tempsSegment": "分段时间",
+    "colDelta": "差值列",
+    "deltaCumul": "累计（本次 vs PB）",
+    "deltaSegment": "按分段",
+    "deltaOff": "隐藏",
+    "deltaPrecision": "差值精度",
+    "deltaDrop": "≥1 分钟时隐藏小数",
+    "segBordure": "分段边框",
+    "segBordEp": "粗细 (px)",
+    "segBordRayon": "圆角 (px，留空 = 自动)",
+    "couleurAhead": "「领先」颜色",
+    "couleurBehind": "「落后」颜色",
+    "couleurActif": "当前分段颜色",
+    "nbLignes": "可见行数 (0 = 全部)",
+    "scrollAuto": "自动滚动到当前项",
+    "hauteurLigne": "行高 (px，留空 = 自动)",
+    "secPoints": "验证点",
+    "pointsVisibles": "显示验证点",
+    "pointsHint": "每完成一个分段：在共享骨架位置（位置标签页）弹出数秒的醒目提示——编号点 + 与 PB 的差距，绿色 = 领先，红色 = 落后。跳过的分段为红色。",
+    "pointsDureePop": "弹窗时长（秒）",
+    "pointsSon": "激活音效",
+    "pointsSonImporter": "导入音效",
+    "pointsSonRetirer": "移除",
+    "pointsSonVolume": "音效音量 {n} %"
   },
   "titreForm": {
     "textesParPosition": "按位置的文本",
@@ -375,6 +573,12 @@
     "apercuVide": "标题将显示在这里"
   },
   "toolbar": {
+    "groupeScene": "我的场景",
+    "groupeConnexions": "连接",
+    "groupeDirect": "直播",
+    "groupeInteractions": "互动",
+    "groupeChaine": "我的频道",
+    "groupeApplication": "应用",
     "widgets": "小组件",
     "creerWidget": "创建小组件",
     "creerChat": "创建聊天小组件",
@@ -384,19 +588,23 @@
     "creerGoal": "创建目标小组件",
     "creerMusique": "创建音乐小组件",
     "hintEdition": "点击小组件或背景进行编辑",
-    "connexions": "连接",
+    "connexions": "平台",
     "chatOn": "聊天 开",
     "chatOff": "聊天 关",
-    "interactions": "直播互动",
-    "interactionsTitle": "打开直播互动（欢迎剪辑、提醒、日程…）",
+    "interactions": "互动",
+    "interactionsTitle": "打开互动（提醒、欢迎剪辑、命令、音乐…）",
     "ecranAttente": "等待画面",
     "ecranAttenteTitle": "打开等待画面（直播中的媒体 + 计时器）",
     "justChatting": "Just Chatting",
     "justChattingTitle": "切换 Just Chatting（直播仅显示摄像头 + 聊天 — 不修改场景）",
-    "moderation": "频道",
-    "moderationTitle": "频道控制",
-    "diagnostic": "诊断",
-    "diagnosticTitle": "打开诊断（资源占用、观众分析）",
+    "moderation": "管理",
+    "moderationTitle": "打开管理（社区、角色、直播控制）",
+    "planning": "日程",
+    "planningTitle": "打开 Twitch 日程（直播时段、休假）",
+    "statistiques": "统计",
+    "statistiquesTitle": "打开直播观众统计",
+    "diagnostic": "性能",
+    "diagnosticTitle": "打开应用性能（CPU/RAM 占用、活动）",
     "preview": "预览",
     "previewTitle": "直播实时缩略图 + OBS 投影器——标题开关缩略图",
     "previewFenetre": "窗口",
@@ -412,13 +620,13 @@
     "streamStop": "停止直播",
     "streamStart": "开始直播",
     "obsTelecharger": "下载 OBS Studio",
-    "personnalisation": "个性化",
+    "personnalisation": "边框与背景",
     "fondChanger": "更换背景图片",
     "fond": "背景图片",
     "fondRetirer": "移除背景图片",
     "fondDash": "面板背景",
     "fondDashTitle": "为面板导入背景图片（画布不受影响）",
-    "ergonomie": "易用性",
+    "ergonomie": "设置",
     "guide": "主播指南",
     "guideTitle": "打开指南 — StreamOS 能为您做什么",
     "cadreActif": "已启用边框（小组件 + 应用边缘）",
@@ -440,7 +648,7 @@
       "fullscreen": "全屏"
     },
     "demarrageHint": "启动时的显示器和显示模式——立即应用。窗口模式下恢复上次的位置和大小。",
-    "modules": "模块",
+    "modules": "HUD 模块",
     "modulesTitle": "打开场景 HUD 模块（时钟、正在播放、直播目标）"
   },
   "modules": {
@@ -458,13 +666,15 @@
       "horloge": "时钟",
       "musique": "正在播放",
       "objectifs": "直播目标",
-      "equaliseur": "均衡器"
+      "equaliseur": "均衡器",
+      "spots": "灯光聚束"
     },
     "hint": {
       "horloge": "日期与时间由竖线分隔，单位为画布像素。也可以直接在画布上拖动/调整大小。",
       "musique": "「正在播放」卡片 + 时间/进度小胶囊 — 由音乐队列 (!rs) 驱动。",
       "objectifs": "「指标 — 当前值 / 目标」行，带进度条。每行 = 一个实测指标或一个已链接的 Twitch 目标。",
-      "equaliseur": "直播底部的音频频谱叠加层：半透明霓虹条 + 气泡，位于小部件下方。仅在直播（OBS）中渲染——此处为可定位占位符。"
+      "equaliseur": "直播底部的音频频谱叠加层：半透明霓虹条 + 气泡，位于小部件下方。仅在直播（OBS）中渲染——此处为可定位占位符。",
+      "spots": "两个舞台光束位于直播顶部两角：缓慢扫动、荧光色彩，照亮背景且从不覆盖小部件。仅在直播（OBS）中渲染——画布上为静态预览。"
     },
     "horloge": {
       "date": "显示日期 (DD / MM / YY)",
@@ -495,6 +705,12 @@
       "couleursAuto": "自动配色（场景边框）",
       "hintMicro": "频谱来自 Windows 默认音频输出（≈ OBS 的“桌面音频”）；未启用 OBS 监听时人声不在其中——因此有专用麦克风采集。",
       "placeholder": "均衡器——在直播中渲染"
+    },
+    "spots": {
+      "intensite": "灯光强度",
+      "vitesse": "速度（扫动 + 颜色）",
+      "reagir": "随音乐律动",
+      "hintReagir": "脉动复用音频频谱——需启用「均衡器」模块采集声音，否则聚束以氛围模式扫动。"
     }
   },
   "app": {
@@ -509,17 +725,24 @@
     "eaTitleActif": "等待画面已激活——点击打开控制",
     "attentePause": "等待（暂停）",
     "attente": "等待",
+    "chrono2": "计时器",
+    "chrono2Title": "计时器 2 运行中 — 点击打开直播互动（数字键盘标签页）",
     "obsDabord": "请先连接 OBS（侧边栏 OBS 部分）",
     "streamStop": "停止直播",
     "streamStart": "开始直播",
     "arreterApp": "停止应用",
     "redemarrerApp": "重启应用",
     "refreshObs": "刷新 OBS / SOS-Diffusion",
-    "tailleUi": "界面字体大小"
+    "tailleUi": "界面字体大小",
+    "connectesPlat": "平台已连接",
+    "connectesPlats": "平台已连接"
   },
   "widget": {
     "chatActif": "聊天已激活",
     "camera": "摄像头",
+    "cameraMasquer": "隐藏摄像头",
+    "cameraAfficher": "显示摄像头",
+    "cameraCachee": "摄像头已隐藏",
     "inputViewerObs": "您的输入显示器正在 OBS 中显示",
     "videoLectureObs": "您的视频正在 OBS 中播放"
   },
@@ -531,6 +754,20 @@
     "deviceDefaut": "（默认设备）",
     "aucuneCamera": "未检测到摄像头。检查网络摄像头？",
     "hintAndroidCam": "Android 手机：通过 USB 连接，然后在手机的 USB 选项中选择“网络摄像头”（需 Android 14 及以上）。",
+    "sectionForme": "形状",
+    "formeCadreScene": "场景边框",
+    "formeCercle": "圆形",
+    "formeCarre": "方形",
+    "cameraBord": "摄像头边框",
+    "sectionVisibilite": "可见性",
+    "cameraDiffusion": "输出中的摄像头",
+    "cameraDiffusionHint": "在 OBS 侧隐藏摄像头而不删除小组件——等同于 OBS 的眼睛图标。该区域完全消失（不留空框）。",
+    "sectionFondVirtuel": "虚拟背景",
+    "fondVert": "虚拟绿幕",
+    "fondVertHint": "首次开启时会自动安装 OBS 插件「Background Removal」（免费，100% 本地运行）。OBS 场景将在你身后显示。",
+    "fondVertInstalle": "插件已安装——请重启 OBS 并重新连接，虚拟绿幕会自动启用。",
+    "fondVertInstallation": "安装中…",
+    "fondVertPluginAbsent": "未安装「Background Removal」插件——安装后请重新开启虚拟绿幕。",
     "tabContenu": "内容",
     "tabTransformation": "变换",
     "tabEffets": "效果",
@@ -678,7 +915,8 @@
     }
   },
   "moderationModal": {
-    "titre": "频道",
+    "titre": "管理",
+    "plateformesBientot": "Kick、TikTok 和 Trovo 即将推出",
     "connecterTwitch": "连接 Twitch 以进行管理。",
     "scopesManquants": "缺少管理所需的权限（scope）。",
     "reconnecter": "重新连接 Twitch 以进行管理",
@@ -689,6 +927,7 @@
     "secBannis": "已封禁",
     "secMessages": "消息",
     "secUnfollows": "取关",
+    "secDirect": "直播控制",
     "chaine": "频道",
     "aucunType": "无",
     "viewersLive": "直播观众",
@@ -789,21 +1028,21 @@
     "bientot": "即将推出"
   },
   "interactions": {
-    "titre": "直播互动",
-    "tabBienvenue": "欢迎剪辑",
+    "titre": "互动",
+    "tabBienvenue": "欢迎",
     "tabBandeau": "首条消息横幅",
     "tabAlertes": "提醒",
     "tabCommandes": "命令",
-    "tabPad": "数字小键盘",
+    "tabPad": "音效板",
     "tabPresentation": "主播展示",
-    "tabPlanning": "日程",
     "tabMusique": "音乐",
-    "tabPosition": "位置框架",
+    "tabFight": "竞技场",
+    "tabPosition": "悬浮层位置",
     "bienvenue": {
       "secFile": "队列",
       "secAttribution": "分配",
       "actifs": "欢迎剪辑已启用",
-      "utiliserSquelette": "使用位置框架",
+      "utiliserSquelette": "使用悬浮层位置",
       "utiliserSqueletteHint": "未勾选：全屏黑色帷幕，头像开场 3 秒，然后剪辑居中播放（屏幕的 85%）",
       "dureeAffichage": "显示时长",
       "naturelle": "原始时长",
@@ -854,7 +1093,7 @@
       "testMessage": "这是我的第一条消息！"
     },
     "alertes": {
-      "hintIntro": "Twitch、YouTube、Kick 和 TikTok：关注、订阅、突袭、bits、礼物和打赏会在直播上触发提醒。Twitch 关注通过 EventSub 实时检测。在左侧选择类型以设置其媒体、文本和行为。叠加层的位置/大小在“位置框架”选项卡中设置（与欢迎剪辑共享）。",
+      "hintIntro": "Twitch、YouTube、Kick 和 TikTok：关注、订阅、突袭、bits、礼物和打赏会在直播上触发提醒。Twitch 关注通过 EventSub 实时检测。在左侧选择类型以设置其媒体、文本和行为。叠加层的位置/大小在“悬浮层位置”工具中设置（与欢迎剪辑共享）。",
       "desactiverType": "禁用此提醒类型",
       "activerType": "启用此提醒类型",
       "variablesHint": "变量：{vars}",
@@ -871,7 +1110,8 @@
       }
     },
     "commandes": {
-      "hintIntro": "在聊天中输入的命令（例如 !hype）。当观众输入命令时，会以叠加层形式显示在直播上（与提醒相同的引擎：队列、冷却、SVG 边框）。位置/大小在“位置框架”选项卡中设置。",
+      "navChat": "聊天命令",
+      "hintIntro": "在聊天中输入的命令（例如 !hype）。当观众输入命令时，会以叠加层形式显示在直播上（与提醒相同的引擎：队列、冷却、SVG 边框）。位置/大小在“悬浮层位置”工具中设置。",
       "activer": "启用此命令",
       "desactiver": "禁用此命令",
       "titreBloc": "命令",
@@ -881,7 +1121,36 @@
       "tester": "测试命令",
       "supprimerTitle": "删除此命令",
       "aucuneSelection": "未选择命令——请创建一个。",
-      "defautTemplate": "{pseudo} 使用了 {commande}！"
+      "defautTemplate": "{pseudo} 使用了 {commande}！",
+      "nomPackPrompt": "包名称？",
+      "nomPackVide": "包名称为空",
+      "exportRefuse": "导出被拒绝：{erreur}",
+      "importConflit": "「{cmd}」已存在 — 用包中的命令覆盖吗？",
+      "ecraser": "覆盖",
+      "ignorer": "忽略",
+      "importReserves": "保留给音乐的名称已忽略：{noms}",
+      "hintMedia": "图片 = 图片 + 文本 · 视频 = 视频（含声音）+ 文本 · 无 = 图标 + 文本 · 导入的音效在所有模式下叠加播放。",
+      "sonVideo": "视频声音",
+      "reponsesChat": "聊天确认（仅 Twitch）"
+    },
+    "cadres": {
+      "navCadres": "边框",
+      "hintIntro": "观众在聊天中输入「!cadres <颜色>」即可更改场景边框的亮色（渐变末端）— 例如「!cadres green」。适用于所有已连接的平台；确认消息仅在 Twitch 上发布。边框的形状和位置不变。",
+      "activation": "启用",
+      "activer": "启用边框命令",
+      "desactiver": "禁用边框命令",
+      "hintActif": "{cmd} <颜色> 会在聊天中回复。",
+      "hintInactif": "该命令在聊天中被忽略。",
+      "nom": "命令",
+      "hintCommande": "观众输入 {cmd} <颜色>。名称不能与现有聊天、音乐或竞技场命令重复。",
+      "reponsesChat": "聊天确认（仅 Twitch）",
+      "hintCooldown": "强制全局冷却：两次更改之间间隔 60 秒（无法禁用）。",
+      "paletteTitre": "可用颜色（{n}）",
+      "hintPalette": "封闭列表：观众输入英文颜色名 — 例如 {cmd} violet。该颜色会替换当前边框的渐变末端颜色。",
+      "sauveKo": "保存失败：{erreur}",
+      "tester": "在场景中测试此颜色",
+      "stopTest": "停止测试（恢复颜色）",
+      "pasCadre": "场景中没有启用的边框 — 测试已禁用"
     },
     "musique": {
       "titreInfo": "工作原理",
@@ -935,8 +1204,63 @@
       "confirmer": "确认",
       "annuler": "取消"
     },
+    "fight": {
+      "titreInfo": "表情竞技场 — 由聊天驱动的 1v1 对战",
+      "intro": "观众输入“!fight”发起挑战：开放式（第一个“!accept”加入）、指定式（“!fight @用户”——被挑战者可接受或拒绝）或对战电脑（“!fight bot”）。两个表情会出现在直播画面底部并带有血条。",
+      "introCoups": "回合制：当前玩家需在几秒内输入招式——快攻（稳妥，低伤害）、重击（高风险，高伤害）或特殊技（吸血，每场限用一次）。超时未出招自动跳过（防挂机），比赛限时：时间到时血量高者获胜。",
+      "introMulti": "跨平台：Twitch 观众可以与 Kick、YouTube 或 TikTok 观众在同一竞技场对战。除 Twitch 外不会向聊天回复——悬浮层显示全部信息（挑战、回合、结果）。",
+      "enCours": "对战",
+      "aucunePartie": "当前没有对战——观众可以在聊天中输入“!fight”。",
+      "phaseLobby": "挑战等待中",
+      "phaseCombat": "对战进行中",
+      "phaseFin": "对战结束",
+      "phaseIdle": "等待中",
+      "tester": "测试（vs BOT）",
+      "stop": "强制停止",
+      "confirmStop": "停止当前对战或挑战？",
+      "reglages": "设置",
+      "actif": "竞技场已启用（对战命令会在聊天中响应）",
+      "commandeFight": "发起挑战",
+      "commandeAccept": "接受",
+      "commandeRefuse": "拒绝",
+      "commandeA": "快攻",
+      "commandeB": "重击",
+      "commandeC": "特殊技",
+      "commandeFf": "认输",
+      "commandeStop": "强制停止（房管）",
+      "vieMax": "生命值",
+      "dureeLobby": "等待对手（秒）",
+      "dureeTour": "每回合时间（秒）",
+      "dureeMatch": "单场上限（秒）",
+      "cooldown": "每人冷却（秒，0 = 关闭）",
+      "reponsesChat": "聊天确认消息（仅 Twitch）",
+      "annonceTour": "在聊天中播报每个回合（Twitch）",
+      "rappelTour": "最后 5 秒提醒（Twitch）",
+      "animationsReduites": "减少动画（冲击、震动）",
+      "accueilTitre": "聊天欢迎消息",
+      "copierAccueil": "复制消息",
+      "previsualiserAide": "预览帮助",
+      "copieOk": "消息已复制",
+      "copieKo": "无法复制",
+      "specialUtilise": "必杀技已使用",
+      "enregistrer": "保存设置",
+      "sauveOk": "设置已保存",
+      "sauveKo": "保存失败",
+      "testOk": "已在直播上启动测试对战",
+      "testKo": "无法启动测试（是否已有对战进行中？）",
+      "cooldownsActifs": "冷却中的观众（{n}）：",
+      "hintModeration": "聊天中的强制停止命令仅供您和房管使用。命令名称必须唯一，且不能复用已有的聊天命令或音乐命令（反之亦然）。",
+      "confirmer": "确认",
+      "annuler": "取消",
+      "gagnant": "胜者：{pseudo}",
+      "egalite": "完全平局！",
+      "matchAfk": "对战中止 — 无操作",
+      "matchStop": "管理员已停止对战",
+      "vs": "VS",
+      "bot": "BOT"
+    },
     "pad": {
-      "hintIntro": "数字小键盘：16 个按键 × 3 个分组。按下小键盘按键即可在直播上以叠加层形式触发音效、图片或视频。小键盘的 + 和 - 切换分组。位置/大小在“位置框架”选项卡中设置（与欢迎/提醒/命令共享）。音频在两侧播放：直播（OBS 捕获给观众）+ 仪表盘（您在自己电脑上听到）。",
+      "hintIntro": "数字小键盘：16 个按键 × 3 个分组。按下小键盘按键即可在直播上以叠加层形式触发音效、图片或视频。小键盘的 + 和 - 切换分组。位置/大小在“悬浮层位置”工具中设置（与欢迎/提醒/命令共享）。音频在两侧播放：直播（OBS 捕获给观众）+ 仪表盘（您在自己电脑上听到）。",
       "activation": "启用",
       "desactiver": "禁用小键盘",
       "activer": "启用小键盘",
@@ -952,7 +1276,15 @@
       "toucheTitre": "按键 {touche}（分组 {plage}）",
       "hintTouche": "按下小键盘上的此键即可触发媒体。",
       "hintMedia": "音频 = 仅声音（直播 + 仪表盘播放）· 图片 = 图片 + 独立音效 · 视频 = 视频（含声音，直播）。",
+      "hintChrono": "按下按键后计时器从零开始，在直播画面中按其专用位置骨架（位置骨架标签页）显示，到达目标时长后消失。再次按下将归零。",
+      "chronoDuree": "目标时长（秒）",
+      "chronoSonDepart": "开始音效",
+      "chronoSonFin": "结束音效",
       "volume": "音量 {n}%",
+      "pleinEcran": "全屏",
+      "transparence": "透明",
+      "opacite": "不透明度 {n}%",
+      "hintPleinEcran": "全屏：媒体无边框地覆盖整个直播画布。启用透明后，后面的场景仍然可见（叠加显示）。",
       "tester": "测试按键",
       "reinitialiserTitle": "重置此按键",
       "testHint": "测试会在直播上触发该按键 + 播放本地音频。",
@@ -992,10 +1324,18 @@
       "aucunePresentation": "暂无进行中的展示 — 请从「搜索」或「收藏」中启动。"
     },
     "position": {
+      "titreOutil": "调整共享悬浮层位置",
       "hintIntro": "“欢迎剪辑”和“提醒”叠加层共享的框架位置和大小。拖动移动，角落调整大小。位置实时应用到直播。",
       "overlay": "叠加层",
       "hintGlisser": "拖动移动 · 角落调整大小 · 画布 {w}×{h}",
       "hauteurRef": "高度（参考）",
+      "tester": "测试渲染",
+      "titreChrono": "计时器 2（专用骨架）",
+      "chrono": "计时器 2",
+      "hintChrono": "第二个计时器的位置，由数字小键盘的计时器按键触发。与共享悬浮层骨架相互独立。",
+      "titreSplitpop": "分段弹窗（专用骨架）",
+      "splitpop": "分段弹窗",
+      "hintSplitpop": "速通过程中每完成一个分段时显示的验证弹窗位置。独立于共享骨架：弹窗出现频繁，不应与提醒重叠。",
       "pos": {
         "haut-gauche": "左上",
         "haut-centre": "中上",
@@ -1012,7 +1352,11 @@
     "testSuppression": "测试与删除",
     "testHint": "测试会绕过冷却。无媒体时：图标 + 文本。"
   },
+  "statistiques": {
+    "titre": "统计"
+  },
   "planning": {
+    "titre": "日程",
     "connecterTwitch": "连接 Twitch 以管理日程。",
     "scopesManquants": "缺少日程所需的 Twitch 权限（channel:manage:schedule）。请重新连接账号以授权。",
     "reconnecter": "重新连接 Twitch",
@@ -1078,6 +1422,7 @@
     "tournezPages": "翻动书页",
     "chapitres": {
       "comprendre": "了解 StreamOS",
+      "vieprivee": "您的数据，在您身边",
       "reglages": "三个起步设置",
       "reperer": "熟悉应用",
       "chat": "聊天",
@@ -1102,7 +1447,26 @@
         "l1": "**动态且交互**的场景：一个游戏或五十个，切换流畅，无论有无 Stream Deck——一切都会**保存**，逐个小组件，直到应用背景。",
         "l2": "定期丰富的**装饰边框**，为您的直播增添层次感。",
         "l3": "眨眼间导入您的**媒体**，以 **3D** 倾斜，随心变形。",
+        "l4": "有些设置**仅供您自己**：分割器的**节拍器**只在面板上发声，绝不会进入直播。另一些**给观众**：提醒、横幅、等待画面——只在推流画面上显示。",
         "note": "移动或调整元素大小：OBS 中的画面会**实时**更新。"
+      },
+      "vieprivee": {
+        "titre": "您的数据留在您身边",
+        "p1": "StreamOS **没有任何服务器**，也不收集任何数据：应用保存的一切都在您的电脑上——永远不会离开。",
+        "l1": "您的**场景、设置和统计数据**都是本地文件，位于应用文件夹中——只有您能读取。",
+        "l2": "您的**账号**保存在 **Windows 凭据保管库**中，绝不会以明文文件存储。",
+        "l3": "网络上传输的内容：只发送到**您**连接的平台（Twitch、YouTube、Kick、TikTok）。",
+        "l4": "**没有跟踪器**，没有使用分析，没有外发报告：您的观众数据只为您服务。",
+        "note": "这就是与在线导播工具的区别：在这里，没有什么可出售的。"
+      },
+      "sauvegardes": {
+        "titre": "您的文件，您做主",
+        "p1": "每个场景都是**您电脑上的一个文件**，每次修改后**自动保存**——您永远不需要想着去保存。",
+        "l1": "窗口顶部的**导出 / 导入**按钮可把场景变成**便携文件夹**（场景 + 媒体）：您的备份，随身携带。",
+        "l2": "随时可以**重新导入**一个包——换电脑、重装系统，或者只是回退。",
+        "l3": "改造场景前，先**复制**一份（右键点击场景名）：原件保持原样。",
+        "l4": "敏感操作都会**要求确认**：删除场景或小组件、打开隐藏场景——不会意外丢失任何东西。",
+        "note": "专业建议：导出您满意的场景——这是您应对意外的保险。"
       },
       "premierPas": {
         "titre": "第一步",
@@ -1144,27 +1508,27 @@
       },
       "barreLaterale": {
         "titre": "侧边栏自上而下",
-        "p1": "一切都从**左侧面板**控制。同一时间只展开一个分区；其余只是打开窗口的普通按钮。",
-        "l1": "**小组件**：创建小组件（媒体、聊天、摄像头、输入显示、速通、目标、音乐）。",
-        "l2": "**连接**：Twitch、YouTube、Kick、TikTok——每个已连接平台一个绿点。",
-        "l3": "**直播互动**、**等待画面**、**Just Chatting**、**频道**、**诊断**：直播控制窗口。",
-        "l4": "**OBS**：连接、直播与录制。",
-        "l5": "**预览**：观众所见画面的缩略图。",
-        "l6": "**个性化**：边框与背景图。最底部是**主播指南**（本书），其上方是**易用性**：面板背景、窗口与快捷栏。",
-        "note": "每个展开的分区会呈现其卡片的颜色：小组件为蓝色，连接为绿色，OBS 为金色……"
+        "p1": "一切都从**左侧面板**控制，分为**六个组**。同一时间只展开一个分区；其他条目只是打开窗口的普通按钮。",
+        "l1": "**我的场景**：**小组件**（媒体、聊天、摄像头、输入显示、速通、目标、音乐）、**HUD 模块**（时钟、正在播放、直播目标）和**边框与背景**（SVG 边框、背景图）。",
+        "l2": "**连接**：**OBS**（连接、直播、录制），然后是**平台**（Twitch、YouTube、Kick、TikTok——每个已连接平台一个绿点）。",
+        "l3": "**直播**：**预览**（观众所见的画面）、**等待画面**和 **Just Chatting**。",
+        "l4": "**互动**：提醒、欢迎剪辑、命令和音效板、主播展示、聊天点播的音乐。",
+        "l5": "**我的频道**：**管理**（角色、封禁、直播控制）、Twitch **日程**和观众**统计**。",
+        "l6": "最底部是**应用**：**设置**（面板背景、窗口、快捷栏）、**性能**（应用占用）和**主播指南**（本书）。",
+        "note": "每个展开的分区会呈现其卡片的颜色：小组件为蓝色，平台为绿色，OBS 为金色……"
       },
       "scenes": {
         "titre": "您的场景",
         "p1": "顶部栏列出**您的场景**。点击「**您的场景**」展开，再点名称即可打开：直播画面立即切换。",
         "l1": "「**场景**」新建一个场景——从模板或空白页面开始。",
-        "l2": "对场景**右键点击**：**重命名**、**复制**、**显示/隐藏标题**、**删除**。",
+        "l2": "对场景**右键点击**：**重命名**、**复制**、**显示/隐藏此场景**、**删除**。",
         "l3": "**拖动**场景即可调整其在栏中的顺序。",
         "l4": "删除总是需要确认——不会误删任何内容。",
         "note": "每个场景保留自己的小组件、背景和边框：场景之间切换不会混淆。"
       },
       "plateformes": {
         "titre": "连接每个平台",
-        "p1": "侧边栏的**连接**区。每行都有自己的指示灯：灰色 = 已断开，绿色 = 在线。",
+        "p1": "侧边栏的**平台**区（**连接**组）。每行都有自己的指示灯：灰色 = 已断开，绿色 = 在线。",
         "l1": "**Twitch** 和 **YouTube**：点击**连接**，会出现一个代码——在指定网页上输入即可。StreamOS 中无需输入任何密码。",
         "l2": "**Kick**：输入您的频道名（与 kick.com/… 地址中一致），然后**连接**。",
         "l3": "**TikTok**：输入您的用户名，然后**连接**。直播必须正在进行。",
@@ -1207,29 +1571,29 @@
       "cadres": {
         "titre": "SVG 边框",
         "p1": "**一个设置**即可装饰所有小组件和场景边缘：同样的风格，同样的颜色，无处不在。",
-        "p2": "从侧边栏的**个性化**部分打开边框弹窗：所选模板会实时应用到直播中。",
+        "p2": "从侧边栏的**边框与背景**部分打开边框弹窗：所选模板会实时应用到直播中。",
         "note": "提醒和横幅会自动沿用**当前边框的颜色**。"
       },
       "cadresModale": {
         "titre": "「您的边框」窗口",
         "p1": "九种风格任选——圆角、方形、MGStyle、赛博朋克、Story、细线、六边形、Arena、部落——各有自己的颜色和粗细。",
-        "e1": "侧边栏 → **个性化** → 「**您的边框**」。点击图库中的风格：预览立即更新。",
+        "e1": "侧边栏 → **边框与背景** → 「**您的边框**」。点击图库中的风格：预览立即更新。",
         "e2": "调节**粗细**与**渐变**色。想让渐变动起来，打开「**动画**」。",
         "e3": "点击「**已启用边框**」：应用到所有小组件。「**应用边缘**」会在直播四周加上同样的边框。",
         "note": "小组件可以例外：在其卡片中选择「**移除此组件的边框**」。"
       },
       "alertes": {
         "titre": "提醒与欢迎剪辑",
-        "p1": "侧边栏 → 「**直播互动**」。这个窗口汇集了直播中响应观众的一切。",
+        "p1": "侧边栏 → 「**互动**」。这个窗口汇集了直播中响应观众的一切。",
         "l1": "**提醒**标签页：关注、Raid、订阅、续订、赠送订阅、Bits（Twitch）——以及 TikTok 礼物、Kick 订阅/突袭和 YouTube SuperChat/会员。在左侧选择类型，再设置媒体、文本并启用。「**在直播上测试提醒**」无需等待真实关注即可播放。",
-        "l2": "**欢迎剪辑**标签页：当关注者进入聊天时播放的剪辑。「**自动分配**」为每人分配一个剪辑；也可以手动逐个选择。",
-        "l3": "**位置框架**标签页：把覆盖层拖到您想要的屏幕位置——该位置对提醒、剪辑和命令都生效。",
+        "l2": "**欢迎**标签页：当关注者进入聊天时播放的剪辑。「**自动分配**」为每人分配一个剪辑；也可以手动逐个选择。",
+        "l3": "「**悬浮层位置**」工具（窗口顶部）：把覆盖层拖到您想要的屏幕位置——该位置对提醒、剪辑和命令都生效。",
         "note": "一切都在 **OBS 直播**上播放，绝不在仪表盘：用预览来验证。"
       },
       "bandeau": {
         "titre": "首条消息横幅",
         "p1": "横幅会在您的聊天中突出每位观众的**第一条消息**，覆盖所有平台。正好用来问候每一位新人。",
-        "e1": "**直播互动** → **首条消息横幅**标签页 → 勾选「**首条消息横幅已启用**」。",
+        "e1": "**互动** → **欢迎**标签页 → 「**首条消息横幅**」→ 勾选「**首条消息横幅已启用**」。",
         "e2": "选择屏幕**顶部**或**底部**，以及**显示时长**（2 到 20 秒）。",
         "e3": "「**测试横幅**」会在直播上显示一条虚拟横幅，验证显示效果。",
         "note": "新开一场直播？「**重置会话**」会让所有观众重新变成「第一次」——否则老观众永远不会再次触发横幅。"
@@ -1266,16 +1630,24 @@
       "plusLoin": {
         "titre": "还有更多……",
         "p1": "主流程到此走完。其余功能在应用中自行探索，每个窗口都会说明自己的用途。",
-        "l1": "**频道**：Twitch 与 YouTube 管理——封禁、VIP、房管、直播标题与分类、广告、护盾模式。",
-        "l2": "**直播互动** → **命令**、**数字小键盘**、**主播展示**、Twitch **日程**、观众用「!rs」点播的**音乐**。",
+        "l1": "**管理**：Twitch 与 YouTube 管理——封禁、VIP、房管、直播标题与分类、广告、护盾模式。",
+        "l2": "**互动** → **命令**（聊天和**音效板**）、**主播展示**、观众用「!rs」点播的**音乐**。Twitch **日程**在「我的频道」中有独立入口。",
         "l3": "**目标**小组件（粉丝、订阅……）、**速通**（计时分段器）、**输入显示**（屏幕上的键盘、鼠标、手柄）。",
-        "l4": "**诊断**：StreamOS 的 CPU 和内存占用，实时显示。",
-        "l5": "**易用性** → **快捷栏**：一条始终可见的小工具栏——甚至盖在游戏之上。",
+        "l4": "**性能**：StreamOS 的 CPU 和内存占用，实时显示——还有直播观众**统计**。",
+        "l5": "**设置** → **快捷栏**：一条始终可见的小工具栏——甚至盖在游戏之上。",
         "l6": "顶部的**语言**选择器：应用支持八种语言。"
+      },
+      "websocket": {
+        "titre": "幕后：WebSocket",
+        "p1": "StreamOS 如何与 OBS 对话？通过 **WebSocket**：在两个程序之间打开的通信通道，双方可以随时发送消息。",
+        "l1": "OBS 自 **28 版**起内置此通道——因此需要较新的版本。",
+        "l2": "StreamOS 不保留**常开的线路**：每个操作都是一次简短的交换，然后连接关闭。",
+        "l3": "捕获、摄像头、直播、投影、待机画面……**几乎所有涉及 OBS 的功能**都经过此通道。",
+        "note": "想了解详情？**OBS** 分区 → 「**WebSocket 与选项**」：完整清单，实时显示。"
       },
       "fin": {
         "titre": "轮到您了",
-        "p1": "其余功能可在**侧边栏**逐区探索：连接、小组件、个性化……**祝直播愉快！**"
+        "p1": "其余功能可在**侧边栏**逐区探索：连接、小组件、设置……**祝直播愉快！**"
       }
     }
   }

@@ -1,13 +1,13 @@
 // Cadre SVG Hexagone — bordure octogonale + identité « ruche sci-fi » :
 // grappes d'alvéoles dans la marge des coins, nœuds lumineux aux sommets,
 // glyphes hexagonaux aux milieux d'arêtes. Tons dérivés des couleurs
-// utilisateur : couleur = principal, couleurFin = profond ; clair =
-// couleur éclaircie (aucune palette figée).
+// utilisateur : couleurFin = principal (couleur vive unifiée), couleur =
+// profond ; clair = couleur éclaircie (aucune palette figée).
 // opts.animer → les 4 grappes d'alvéoles tournent lentement sur
 // elles-mêmes (UN animateTransform par grappe, transform = pas cher).
 
 import type { CadreOpts } from "./cadre-cyberpunk";
-import { angleVersCoords, assombrir, couleurOu, eclaircir } from "./couleurs";
+import { angleVersCoords, assombrir, couleurOu, eclaircir, stopsLiseres } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
@@ -49,10 +49,10 @@ function hexPath(cx: number, cy: number, r: number): string {
 
 export default function renderHexagon(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const principal = couleurOu(opts.couleur, "#ffffff");
+  const principal = couleurOu(opts.couleurFin, "#ffffff");
   const p = {
     principal,
-    profond: couleurOu(opts.couleurFin, assombrir(principal, 0.3)),
+    profond: couleurOu(opts.couleur, assombrir(principal, 0.3)),
     clair: eclaircir(principal, 0.45),
   };
   const angle = Number.isFinite(Number(opts.gradientAngle)) ? Number(opts.gradientAngle) : 135;
@@ -142,8 +142,7 @@ export default function renderHexagon(opts: CadreOpts): string {
   return `<svg width="${svgW}" height="${svgH}" viewBox="${vx} ${vy} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${margin}px; left:-${margin}px; pointer-events:none; z-index:5;">
   <defs>
     <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
-      <stop offset="0%" stop-color="${p.principal}" />
-      <stop offset="100%" stop-color="${p.profond}" />
+      ${stopsLiseres(p.profond, p.principal)}
     </linearGradient>
     <clipPath id="${clipId}">
       <path d="${borderPath}" />

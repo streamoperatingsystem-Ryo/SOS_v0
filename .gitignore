@@ -11,3 +11,11 @@ IDEE/
 Agent Manager/archives/
 ASL_LSS_EXAMPLES*/
 nul
+
+# Scripts et artefacts de session
+_ico_trim.ps1
+message-a-manu.html
+
+# Sources brutes des icônes (recadrées par _ico_trim.ps1) — seuls les .png
+# sont importés par Toolbar.svelte, ne jamais les ignorer.
+src/assets/ico/*.jpg

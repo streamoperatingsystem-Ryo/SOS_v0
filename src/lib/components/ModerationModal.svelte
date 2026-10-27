@@ -6,7 +6,7 @@
   //     suppression de messages, clear chat).
   //   Onglet YouTube (fonctionnel) : communauté YouTube en lecture seule
   //     (channel, viewers live, stats, members).
-  //   Onglets Kick/TikTok/Trovo : "Bientôt disponible" (grisés).
+  //   Kick/TikTok/Trovo : pas d'onglets — simple note discrète « bientôt ».
   //
   // Réutilise les données followers/subs du store communaute.ts (chargées
   // réactivement dans App.svelte à la connexion) + recherche par pseudo via
@@ -76,8 +76,8 @@
 
   let { onFermer = () => {} }: { onFermer?: () => void } = $props();
 
-  // Onglet actif (Twitch et YouTube sont fonctionnels).
-  let tab = $state<"twitch" | "kick" | "youtube" | "tiktok" | "trovo">("twitch");
+  // Onglet actif (seules les plateformes fonctionnelles ont un onglet).
+  let tab = $state<"twitch" | "youtube">("twitch");
 
   // Section sélectionnée dans l'onglet Twitch (master-detail).
   // « communaute » = supervision lecture seule (broadcaster, viewers live,
@@ -572,12 +572,10 @@
     <button class="tab" class:active={tab === "twitch"} onclick={() => (tab = "twitch")}>
       Twitch
     </button>
-    <button class="tab" disabled>Kick</button>
     <button class="tab" class:active={tab === "youtube"} onclick={() => (tab = "youtube")}>
       YouTube
     </button>
-    <button class="tab" disabled>TikTok</button>
-    <button class="tab" disabled>Trovo</button>
+    <span class="tab-note">{$t("moderationModal.plateformesBientot")}</span>
   </div>
 
   {#if tab === "twitch"}
@@ -611,7 +609,7 @@
               class:selected={sec === "direct"}
               onclick={() => (sec = "direct")}
             >
-              <span class="mod-nom">{$t("moderationModal.enDirect")}</span>
+              <span class="mod-nom">{$t("moderationModal.secDirect")}</span>
             </button>
             <button
               class="md-select"
@@ -1453,10 +1451,6 @@
         </button>
       {/if}
     </div>
-  {:else}
-    <div class="tab-body">
-      <p class="hint-centre">{$t("moderationModal.bientot")}</p>
-    </div>
   {/if}
 </Modal>
 
@@ -1492,6 +1486,17 @@
   .tab:disabled {
     opacity: 0.3;
     cursor: not-allowed;
+  }
+  /* Note discrète pour les plateformes pas encore gérées — à droite de la
+     barre, pas un onglet. */
+  .tab-note {
+    margin-left: auto;
+    align-self: center;
+    font-size: 0.72rem;
+    opacity: 0.5;
+    font-style: italic;
+    padding: 0 0.4rem;
+    white-space: nowrap;
   }
 
   /* Corps */

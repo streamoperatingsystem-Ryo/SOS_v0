@@ -21,9 +21,8 @@
 //! TIMEOUT_FRONT après la durée minimale → main montrée quand même —
 //! jamais de fenêtre invisible définitive.
 //!
-//! DEV (tauri::is_dev) : le splash est une fenêtre normale maximisée
-//! (draggable + resizable) qui n'est JAMAIS fermée automatiquement —
-//! elle reste ouverte à côté du dashboard tout au long de la session.
+//! DEV = PROD (2026-10-26, consigne) : même petite fenêtre éphémère,
+//! fermée après le même timer — le splash ne reste jamais ouvert.
 
 use std::sync::Arc;
 use tauri::{AppHandle, Listener, Manager};
@@ -50,10 +49,8 @@ const MASCOTTE_PNG: &[u8] = include_bytes!("../../src/assets/streamy/streamy-wel
 /// Non-fatal : échec de création → on continue, le boot reste utilisable
 /// (armer_affichage montrera main comme si le splash n'existait pas).
 ///
-/// Deux visages : en PROD petite fenêtre topmost éphémère façon Discord ;
-/// en DEV (tauri::is_dev) fenêtre NORMALE maximisée — barre de titre
-/// (draggable), redimensionnable, dans la barre des tâches, et JAMAIS
-/// fermée par armer_affichage (elle reste ouverte à côté du dashboard).
+/// Un seul visage, dev et prod : petite fenêtre topmost éphémère façon
+/// Discord, fermée par armer_affichage après le même timer (2026-10-26).
 pub fn demarrer(app: &AppHandle) {
     use tauri::webview::WebviewWindowBuilder;
 
@@ -64,20 +61,15 @@ pub fn demarrer(app: &AppHandle) {
             return;
         }
     };
-    let dev = tauri::is_dev();
     let res = WebviewWindowBuilder::new(app, LABEL, tauri::WebviewUrl::CustomProtocol(url))
-        .title(if dev { "StreamOS — Splash" } else { "StreamOS" })
+        .title("StreamOS")
         .inner_size(440.0, 280.0)
-        // Dev : fenêtre normale maximisée (« plein écran » manipulable —
-        // un vrai fullscreen borderless ne serait ni draggable ni
-        // resizable). Prod : fenêtre modale éphémère.
-        .resizable(dev)
-        .maximizable(dev)
-        .minimizable(dev)
-        .decorations(dev)
-        .always_on_top(!dev)
-        .skip_taskbar(!dev)
-        .maximized(dev)
+        .resizable(false)
+        .maximizable(false)
+        .minimizable(false)
+        .decorations(false)
+        .always_on_top(true)
+        .skip_taskbar(true)
         .center()
         .build();
     if let Err(e) = res {
@@ -111,13 +103,9 @@ pub fn armer_affichage(app: &AppHandle) {
             let _ = main.set_focus();
         }
         if let Some(splash) = app_task.get_webview_window(LABEL) {
-            // Dev : le splash reste ouvert en permanence (fenêtre normale
-            // maximisée, draggable + resizable — consigne dev). On ne le
-            // ferme jamais automatiquement ; fermeture manuelle possible
-            // via sa barre de titre.
-            if !tauri::is_dev() {
-                let _ = splash.close();
-            }
+            // Dev comme prod : le splash se ferme après le timer (consigne
+            // 2026-10-26 — plus de fenêtre splash persistante en dev).
+            let _ = splash.close();
         }
     });
 }

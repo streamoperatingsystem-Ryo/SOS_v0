@@ -84,19 +84,21 @@
   // Icônes des cards (tracés SVG internes, stroke currentColor — même style
   // que les .ico de l'app). Fallback : carré minimaliste.
   const ICONES: Record<string, string> = {
-    gaming:
+    "gaming-plein-ecran":
       '<rect x="2" y="7" width="20" height="10" rx="5"/><path d="M7 11v2"/><path d="M6 12h2"/><circle cx="15.5" cy="12" r="0.6" fill="currentColor" stroke="none"/><circle cx="18.5" cy="12" r="0.6" fill="currentColor" stroke="none"/>',
+    "gaming-4-3":
+      '<rect x="4" y="4" width="16" height="12" rx="1.5"/><path d="M12 16v4"/><path d="M9 20h6"/>',
     "just-chatting":
       '<path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/>',
     speedrun:
       '<circle cx="12" cy="13" r="8"/><path d="M12 13l3-3"/><path d="M9 2h6"/><path d="M12 2v2"/>',
-    minimal: '<rect x="4" y="4" width="16" height="16" rx="3"/>',
   };
   const ICONE_VIERGE =
     '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>';
+  const ICONE_FALLBACK = '<rect x="4" y="4" width="16" height="16" rx="3"/>';
 
   function iconePour(id: string): string {
-    return ICONES[id] ?? ICONES.minimal;
+    return ICONES[id] ?? ICONE_FALLBACK;
   }
 </script>
 

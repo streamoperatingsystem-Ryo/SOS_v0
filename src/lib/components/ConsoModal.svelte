@@ -1,36 +1,37 @@
 <script lang="ts">
-  // ConsoModal — « Diagnostic » : consommation réelle mesurée par le backend
-  // (conso.rs, 1 échantillon/s) : processus (StreamOS, WebView2, OBS, jeu,
-  // système) + sous-systèmes (threads nommés : splitter, input viewer…) +
-  // compteurs d'activité (chat/s, events speedrun/s, pubs input/s).
+  // ConsoModal — « Performances » : consommation réelle mesurée par le
+  // backend (conso.rs, 1 échantillon/s) : processus (StreamOS, WebView2,
+  // OBS, jeu, système) + sous-systèmes (threads nommés : splitter, input
+  // viewer…) + compteurs d'activité (chat/s, events speedrun/s, pubs
+  // input/s). L'analyse d'audience vit dans StatistiquesModal.svelte.
   //
   // Objectif : ultra lisible pour un non-technicien — une ligne = un nom,
   // sa valeur actuelle, son max récent, et sa courbe des 5 dernières minutes.
   // Le survol d'une courbe affiche le point précis (valeur + il y a N s).
   import { get } from "svelte/store";
   import Modal from "./Modal.svelte";
-  import AudienceTab from "./AudienceTab.svelte";
   import {
+    boiteNoire,
+    chargerBoiteNoire,
     consoEtat,
     consoErreur,
     demarrerPollingConso,
     arreterPollingConso,
   } from "../stores/conso";
+  import type { BoiteNoireEchantillon } from "../tauri";
   import { t } from "../stores/langue";
 
   let { onFermer }: { onFermer: () => void } = $props();
 
-  // Onglet courant : "application" (conso temps réel) | "audience" (analyse
-  // des lives depuis la télémétrie).
-  let tab = $state<"application" | "audience">("application");
-
-  // Polling 1 Hz UNIQUEMENT sur l'onglet application (l'audience lit
-  // l'historique JSONL — pas de temps réel). Teardown au switch + démontage.
+  // Polling 1 Hz UNIQUEMENT tant que la modale est montée (teardown au
+  // démontage).
   $effect(() => {
-    if (tab === "application") {
-      demarrerPollingConso();
-      return arreterPollingConso;
-    }
+    demarrerPollingConso();
+    // Boîte noire : lecture UNIQUE à l'ouverture (pas de polling — le
+    // fichier fait jusqu'à 2 Mio). Elle ne bouge donc pas tant que la
+    // modale reste ouverte.
+    void chargerBoiteNoire(720);
+    return arreterPollingConso;
   });
 
   const COULEURS = [
@@ -187,6 +188,57 @@
       ? `${(mo / 1024).toFixed(1)} ${get(t)("consoModal.go")}`
       : `${Math.round(mo)} ${get(t)("consoModal.mo")}`;
   }
+
+  // ---- Boîte noire (journal persistant, 1 point / 5 s) ----
+
+  /// Points affichés (les plus récents).
+  const POINTS_BOITE_NOIRE = 8;
+
+  /// Au-delà de cet âge, le dernier point est considéré comme anormal : la
+  /// boucle écrit toutes les 5 s, donc 20 s = 4 échantillons manqués. En
+  /// dessous, c'est le fonctionnement normal et l'affichage reste neutre.
+  /// (Le rouge n'a de sens qu'après un arrêt : au redémarrage suivant, il
+  /// indique l'heure approximative du gel précédent.)
+  const SEUIL_AGE_ALERTE = 20;
+
+  let derniersPoints = $derived(
+    ($boiteNoire?.echantillons ?? []).slice(-POINTS_BOITE_NOIRE)
+  );
+
+  /// Le point le plus récent — porte le compteur d'appels `obs_connect`.
+  let dernierPoint = $derived(
+    derniersPoints[derniersPoints.length - 1]
+  );
+
+  /// Âge du dernier point enregistré. Après un redémarrage, c'est l'heure
+  /// approximative du gel précédent — l'information la plus utile ici.
+  let ageDernier = $derived.by((): number | null => {
+    const e = $boiteNoire?.echantillons ?? [];
+    const dernier = e[e.length - 1];
+    if (!dernier) return null;
+    return Math.max(0, Math.round((Date.now() - dernier.ts) / 1000));
+  });
+
+  /// Durée couverte par le journal chargé, en minutes.
+  let dureeBoiteNoire = $derived.by((): number => {
+    const e = $boiteNoire?.echantillons ?? [];
+    if (e.length < 2) return 0;
+    return Math.round((e[e.length - 1].ts - e[0].ts) / 60000);
+  });
+
+  function heurePoint(ts: number): string {
+    return new Date(ts).toLocaleTimeString();
+  }
+
+  /// Badge OBS : présence du processus + silence depuis le dernier RPC
+  /// réussi (le signal qui manquait le 2026-10-27).
+  function libelleObs(p: BoiteNoireEchantillon): string {
+    if (!p.obs_present) return "OBS —";
+    if (p.obs_silence_s !== null && p.obs_silence_s > 120) {
+      return get(t)("consoModal.obsMuet", { s: p.obs_silence_s });
+    }
+    return "OBS ✓";
+  }
 </script>
 
 <Modal
@@ -196,26 +248,6 @@
   maxWidth="61rem"
   hint={$t("consoModal.hint")}
 >
-  <div class="tabs">
-    <button
-      class="tab"
-      class:active={tab === "application"}
-      onclick={() => (tab = "application")}
-    >
-      {$t("consoModal.tabApp")}
-    </button>
-    <button
-      class="tab"
-      class:active={tab === "audience"}
-      onclick={() => (tab = "audience")}
-    >
-      {$t("consoModal.tabAudience")}
-    </button>
-  </div>
-
-  {#if tab === "audience"}
-    <AudienceTab />
-  {:else}
   <div class="corps">
     {#if $consoErreur}
       <p class="vide">{$t("consoModal.indisponible")}</p>
@@ -358,42 +390,60 @@
         </div>
       {/each}
     {/if}
+
+    <!-- ============ BOÎTE NOIRE (journal persistant) ============ -->
+    <h3>{$t("consoModal.boiteNoire")}</h3>
+    <p class="sous-titre">{$t("consoModal.sousTitreBoiteNoire")}</p>
+    {#if derniersPoints.length === 0}
+      <p class="vide">{$t("consoModal.boiteNoireVide")}</p>
+    {:else}
+      <p class="meta">
+        {$t("consoModal.boiteNoireMeta", {
+          n: $boiteNoire?.echantillons.length ?? 0,
+          min: dureeBoiteNoire,
+        })}
+      </p>
+      {#if ageDernier !== null}
+        <p class="meta" class:alerte={ageDernier > SEUIL_AGE_ALERTE}>
+          {$t("consoModal.boiteNoireAge", { s: ageDernier })}
+        </p>
+      {/if}
+      {#if dernierPoint}
+        <p class="meta">
+          {$t("consoModal.obsConnect", {
+            n: dernierPoint.obs_connect_n,
+            origine: dernierPoint.obs_connect_origine ?? "—",
+          })}
+        </p>
+      {/if}
+      <div class="boite">
+        <div class="point entete">
+          <span class="heure">{$t("consoModal.colHeure")}</span>
+          <span class="chiffre">{$t("consoModal.colRamApp")}</span>
+          <span class="chiffre">{$t("consoModal.colCpuApp")}</span>
+          <span class="chiffre">{$t("consoModal.colRamSysteme")}</span>
+          <span class="obs">&nbsp;</span>
+        </div>
+        {#each derniersPoints as p (p.ts)}
+          <div class="point">
+            <span class="heure">{heurePoint(p.ts)}</span>
+            <span class="chiffre">{fmtRam(p.ram_mo)}</span>
+            <span class="chiffre">{fmtPct(p.cpu_pct)}</span>
+            <span class="chiffre">{fmtRam(p.ram_systeme_mo)}</span>
+            <span
+              class="obs"
+              class:muet={p.obs_present && (p.obs_silence_s ?? 0) > 120}
+            >
+              {libelleObs(p)}
+            </span>
+          </div>
+        {/each}
+      </div>
+    {/if}
   </div>
-  {/if}
 </Modal>
 
 <style>
-  /* Tabs — même pattern qu'InteractionViewerModal (bordure accent-ui sur
-     l'actif, pas de radius). */
-  .tabs {
-    display: flex;
-    flex-wrap: wrap;
-    flex-shrink: 0;
-    gap: 0.2rem;
-    border-bottom: 1px solid var(--bordure-ui);
-    padding: 0 1rem;
-  }
-  .tab {
-    background: var(--btn-surface);
-    box-shadow: var(--btn-inset);
-    color: var(--texte);
-    border: none;
-    border-bottom: 2px solid transparent;
-    padding: 0.4rem 0.8rem;
-    cursor: pointer;
-    opacity: 0.6;
-    white-space: nowrap;
-    transition: background 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
-  }
-  .tab:hover {
-    background: var(--btn-surface-hover);
-    box-shadow: var(--btn-inset-hover);
-    opacity: 0.8;
-  }
-  .tab.active {
-    opacity: 1;
-    border-bottom-color: var(--accent-ui);
-  }
   .corps {
     flex: 1;
     min-height: 0;
@@ -493,5 +543,50 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
     white-space: nowrap;
+  }
+  .alerte {
+    color: var(--dash-danger);
+    opacity: 0.95;
+  }
+  .boite {
+    margin-top: 0.35rem;
+    background: var(--fond-controle);
+    border: 1px solid var(--bordure-ui);
+    border-radius: var(--rayon-petit);
+    padding: 0.35rem 0.55rem;
+    font-size: 0.72rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .point {
+    display: flex;
+    gap: 0.5rem;
+    padding: 0.12rem 0;
+  }
+  .point.entete {
+    font-size: 0.66rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    opacity: 0.55;
+    border-bottom: 1px solid var(--bordure-ui);
+    padding-bottom: 0.2rem;
+    margin-bottom: 0.15rem;
+  }
+  .heure {
+    opacity: 0.6;
+    min-width: 5rem;
+  }
+  .chiffre {
+    min-width: 4.2rem;
+    text-align: right;
+  }
+  .obs {
+    flex: 1;
+    text-align: right;
+    opacity: 0.75;
+    white-space: nowrap;
+  }
+  .obs.muet {
+    color: var(--dash-danger);
+    opacity: 1;
   }
 </style>

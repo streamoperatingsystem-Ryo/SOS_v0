@@ -98,3 +98,26 @@ export function pointsClipPathCadre(
   const pts = svgPathEnPoints(m[1]);
   return pts.length >= 3 ? pts : null;
 }
+
+/// Path SVG du cercle INSCRIT dans le rect W×H (diamètre min(W,H), centré) :
+/// 4 cubiques kappa. MÊME construction des deux côtés (port miroir
+/// `pathCercle` de diffusion.html — vanilla JS) : le clip-path DOM, le trou
+/// destination-out de peindreFond et le masque OBS (points envoyés par
+/// camera_mask_sync) partagent exactement la même forme, zéro dérive.
+export function pathCercle(W: number, H: number): string {
+  const r = Math.min(W, H) / 2;
+  const cx = W / 2;
+  const cy = H / 2;
+  const k = 0.5522847498307936 * r;
+  return `M ${cx + r} ${cy} C ${cx + r} ${cy + k} ${cx + k} ${cy + r} ${cx} ${cy + r}`
+    + ` C ${cx - k} ${cy + r} ${cx - r} ${cy + k} ${cx - r} ${cy}`
+    + ` C ${cx - r} ${cy - k} ${cx - k} ${cy - r} ${cx} ${cy - r}`
+    + ` C ${cx + k} ${cy - r} ${cx + r} ${cy - k} ${cx + r} ${cy} Z`;
+}
+
+/// Points du polygone du cercle inscrit (aplati par svgPathEnPoints —
+/// ~49 points, cercle lisse). Forme DÉDIÉE caméra (cameraForme "cercle"),
+/// découplée du cadre de scène.
+export function pointsCercle(W: number, H: number): [number, number][] {
+  return svgPathEnPoints(pathCercle(W, H));
+}

@@ -12,6 +12,9 @@
 //   - "pad:etat" : config changée (touche modifiée, plage changée, actif).
 //   - "pad:plage-changee" : plage changée via touches + ou - du numpad.
 //   - "pad:touche-stop" : le timer Rust a expiré → stop audio local.
+//   - Chrono 2 (touche media_type "chrono") : event "chrono2:etat" → store
+//     `chrono2Etat` (pillule dashboard) + sons locaux double face (départ /
+//     fin), indépendants de l'audio pad.
 import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
 import { tauri, type PadConfig, type ToucheConfig } from "../tauri";
@@ -71,10 +74,22 @@ export const padStore = writable<PadConfig | null>(null);
 /// Erreur/avertissement pad (ex : NumLock OFF). null = pas d'erreur.
 export const padErreur = writable<string | null>(null);
 
+/// État live du chrono 2 (event Rust `chrono2:etat`, tick 10 Hz).
+/// null = inactif. Porté par App.svelte pour la pillule « Chrono M:SS ».
+export const chrono2Etat = writable<{
+  actif: boolean;
+  ecoule_ms: number;
+  duree_s: number;
+} | null>(null);
+
 let listenersBound = false;
 
 /// Audio local courant (joué côté dashboard pour le user).
 let audioLocal: HTMLAudioElement | null = null;
+
+/// run_id du chrono 2 vu en dernier (détection nouvelle run → son de
+/// départ rejoué aussi sur un reset à zéro en cours de chrono).
+let chrono2RunId = -1;
 
 /// Initialise les listeners Tauri. Idempotent. À appeler au mount du dashboard.
 export async function initPad(): Promise<void> {
@@ -112,6 +127,34 @@ export async function initPad(): Promise<void> {
   // Avertissement NumLock OFF (ou null quand NumLock repasse ON).
   await listen<string | null>("pad:erreur", (e) => {
     padErreur.set(e.payload);
+  });
+
+  // Chrono 2 (touche media_type "chrono") : état live (pillule) + sons
+  // locaux double face — son de départ au front actif, son d'alerte sur la
+  // frame fin. La diffusion joue les mêmes via la frame WS chrono2-etat.
+  await listen<{
+    actif: boolean;
+    fin: boolean;
+    run_id?: number;
+    ecoule_ms: number;
+    duree_s: number;
+    son_depart?: string;
+    son_fin?: string;
+    volume: number;
+  }>("chrono2:etat", (e) => {
+    const p = e.payload;
+    if (p.actif && (p.run_id ?? -1) !== chrono2RunId) {
+      chrono2RunId = p.run_id ?? -1;
+      if (p.son_depart) {
+        jouerSonChronoLocal(p.son_depart, p.volume);
+      }
+    }
+    if (p.fin && p.son_fin) {
+      jouerSonChronoLocal(p.son_fin, p.volume);
+    }
+    chrono2Etat.set(
+      p.actif ? { actif: true, ecoule_ms: p.ecoule_ms, duree_s: p.duree_s } : null,
+    );
   });
 
 }
@@ -219,6 +262,12 @@ export async function padImporterSon(
   }
 }
 
+/// Importe un son SANS toucher la config de la touche (sons dédiés du
+/// chrono 2 : départ / fin). Retourne le chemin relatif ou null.
+export async function padImporterSonSeul(): Promise<string | null> {
+  return tauri.padImporterSon();
+}
+
 // =============================================================================
 // AUDIO LOCAL (dashboard — le user entend sur son PC)
 // =============================================================================
@@ -261,8 +310,20 @@ function stopperAudioLocal(): void {
   }
 }
 
+/// Joue un son court côté dashboard (sons du chrono 2 — double face,
+/// pattern pad : le user l'entend sur son PC en plus de la diffusion).
+/// One-shot : pas de référence gardée, les sons se chevauchent librement.
+function jouerSonChronoLocal(son: string, volume: number): void {
+  const url = son.startsWith("/") ? son : `/${son}`;
+  const audio = new Audio(url);
+  audio.volume = Math.max(0, Math.min(1, volume));
+  audio.play().catch(() => {});
+}
+
 /// Remet à zéro (après déconnexion).
 export function resetPad(): void {
   padStore.set(null);
+  chrono2Etat.set(null);
+  chrono2RunId = -1;
   stopperAudioLocal();
 }

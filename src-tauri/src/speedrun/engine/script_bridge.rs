@@ -672,6 +672,18 @@ impl ScriptContext {
         if (!Array.prototype.Clear) {
             Array.prototype.Clear = function() { this.length = 0; };
         }
+        // C# List<T>.Remove(item) → retire la 1re occurrence, retourne bool.
+        // Le transpileur ne convertit pas .Remove( (seul RemoveRange → splice) :
+        // sans ce shim, R.ActiveWatchCodes.Remove(code) dans MGS split() throw
+        // un TypeError avalé par le wrapper → le split watcher (ex: W.CP-294
+        // « Score ») est silencieusement perdu → timer jamais Ended.
+        if (!Array.prototype.Remove) {
+            Array.prototype.Remove = function(item) {
+                var i = this.indexOf(item);
+                if (i >= 0) { this.splice(i, 1); return true; }
+                return false;
+            };
+        }
 
         // --- Object.prototype.__subscribe / __unsubscribe (no-op générique) ---
         // Les scripts ASL font `btn.Click += handler` → transpilé en `btn.Click.__subscribe(handler)`.
@@ -778,6 +790,12 @@ impl ScriptContext {
         TimeSpan.FromSeconds = function(s) { return new TimeSpan(s); };
         TimeSpan.FromMilliseconds = function(ms) { return new TimeSpan(ms / 1000); };
         TimeSpan.prototype.TotalMilliseconds = function() { return this.TotalSeconds * 1000; };
+        // gameTime() renvoie un TimeSpan : JSON.stringify({result: ts}) doit
+        // produire un nombre de secondes (parse::<f64> côté Rust), pas un
+        // objet {TotalSeconds} — sinon game_time reste None à vie et le
+        // timer tombe en RTA pur au lieu du temps de jeu (affichage ≠
+        // LiveSplit, deltas décalés sur la base PB).
+        TimeSpan.prototype.toJSON = function() { return this.TotalSeconds; };
         
         // --- Stopwatch (équivalent System.Diagnostics.Stopwatch) ---
         function Stopwatch() { this._start = 0; this._running = false; this._elapsed = 0; }
@@ -979,17 +997,24 @@ impl ScriptContext {
         }
 
         // --- TimerModel (équivalent LiveSplit.Model.TimerModel) ---
-        // Shim léger : les actions split/undo/skip réelles sont gérées côté Rust
-        // via le retour des méthodes ASL (start/split/reset). Le shim expose
-        // CurrentState (= timer) et des méthodes no-op pour que le script ne crash pas.
+        // VRAIES actions différées : chaque méthode pousse dans la file
+        // globalThis.__asl_timer_actions, drainée par le moteur Rust
+        // (ScriptContext::drain_timer_actions) après les appels de méthode
+        // — sémantique LiveSplit (TimerModel.Split() agit immédiatement
+        // sur le timer). Avant, c'étaient des no-op : les scripts qui
+        // passent par TimerModel pour les splits "backup"/skip/undo (ex.
+        // MGS : F.ManualSplit, F.BackupSplitCheck, F.UndoSplit PAL)
+        // marquaient leur état interne SANS que le timer bouge → splits
+        // mangés et index moteur désynchronisé (timer jamais Ended).
         function TimerModel() {
             this.CurrentState = null;
         }
-        TimerModel.prototype.Split = function() {};
-        TimerModel.prototype.UndoSplit = function() {};
-        TimerModel.prototype.SkipSplit = function() {};
-        TimerModel.prototype.Reset = function() {};
-        TimerModel.prototype.Pause = function() {};
+        TimerModel.prototype.Split = function() { globalThis.__asl_timer_queue("split"); };
+        TimerModel.prototype.UndoSplit = function() { globalThis.__asl_timer_queue("undo"); };
+        TimerModel.prototype.SkipSplit = function() { globalThis.__asl_timer_queue("skip"); };
+        TimerModel.prototype.Reset = function() { globalThis.__asl_timer_queue("reset"); };
+        TimerModel.prototype.Pause = function() { globalThis.__asl_timer_queue("pause"); };
+        TimerModel.prototype.Start = function() { globalThis.__asl_timer_queue("start"); };
 
         // --- Application (équivalent System.Windows.Forms.Application) ---
         // Stub : ExecutablePath retourne un chemin neutre.
@@ -1179,6 +1204,17 @@ impl ScriptContext {
             return new Array(count).fill(0);
         }
 
+        // --- Casts numériques C# (sémantique signe/largeur) ---
+        // Le transpileur émet ces wrappers pour préserver le wrapping C# :
+        // (short)0xFFFF = -1 en C#, pas 65535. Indispensable pour les byte
+        // arrays d'inventaire (ex: F.AmmoCount → hasPSG1 dans MetalGearSolid.asl).
+        function __toShort(x) { return (x << 16) >> 16; }
+        function __toSByte(x) { return (x << 24) >> 24; }
+        function __toUShort(x) { return x & 0xFFFF; }
+        function __toByte(x) { return x & 0xFF; }
+        function __toInt(x) { return x | 0; }
+        function __toUInt(x) { return x >>> 0; }
+
         // --- System namespace (équivalent System.* — agrège les stubs existants) ---
         // MGS et autres scripts ASL référencent System.IO.Path, System.Text.Encoding,
         // System.Drawing.Point, etc. On expose un objet System qui pointe vers les
@@ -1242,6 +1278,45 @@ impl ScriptContext {
         // reset} est rafraîchi à chaque appel (l'utilisateur peut toggler en
         // cours de run via majSettings).
         let _ = ctx.eval(Source::from_bytes("globalThis.__asl_settings = null;"));
+
+        // --- Registre d'events timer LiveSplit + file d'actions TimerModel ---
+        // Les scripts s'abonnent via `timer.OnReset += F.TimerOnReset`
+        // (transpilé en timer.OnReset.__subscribe(h)) : les handlers sont
+        // stockés dans __asl_timer_handlers (persistant — le timer passé aux
+        // méthodes est un JSON éphémère). Le moteur les déclenche via
+        // __asl_dispatch_timer_event aux transitions du timer (OnStart /
+        // OnSplit / OnReset, sémantique LiveSplit). Sans ça, les scripts qui
+        // réinitialisent leur état interne sur OnReset (MGS : ResetRunVars
+        // vide CompletedSplits/LatestSplits) le gardent entre les runs →
+        // "Repeat split" silencieux sur tous les codes déjà tirés.
+        // __asl_timer_actions : actions V.TimerModel.* différées, drainées
+        // par le moteur via __asl_drain_timer_actions.
+        let _ = ctx.eval(Source::from_bytes(
+            r#"
+            globalThis.__asl_timer_handlers = {
+                OnStart: [], OnSplit: [], OnReset: [], OnPause: [],
+                OnResume: [], OnUndoSplit: [], OnSkipSplit: []
+            };
+            globalThis.__asl_timer_actions = [];
+            globalThis.__asl_timer_queue = function(action) {
+                globalThis.__asl_timer_actions.push(action);
+            };
+            globalThis.__asl_dispatch_timer_event = function(name, arg) {
+                var l = globalThis.__asl_timer_handlers[name];
+                if (!l) return;
+                for (var i = 0; i < l.length; i++) {
+                    try { l[i](null, arg); } catch(e) {
+                        globalThis.__asl_last_error = "timer." + name + ": " + e.message;
+                    }
+                }
+            };
+            globalThis.__asl_drain_timer_actions = function() {
+                var a = globalThis.__asl_timer_actions;
+                globalThis.__asl_timer_actions = [];
+                return JSON.stringify(a);
+            };
+            "#,
+        ));
 
         // --- Invoker pré-compilé (perf — le vrai nœud du splitter) ---
         // Avant : call_method reconstruisait un wrapper JS par format! puis
@@ -1326,12 +1401,32 @@ impl ScriptContext {
                     if (!game.ReadBytes) game.ReadBytes = __mem_read_bytes;
                 }}
                 // E7 — events LiveSplit standard sur timer (API LiveSplit générique).
-                // Les scripts font timer.OnReset.__subscribe(handler) (transpilé de `+=`) :
-                // on pose des objets vides pour que l'abonnement soit un no-op propre.
+                // Le transpileur convertit `timer.OnReset += h` en
+                // timer.OnReset.__subscribe(h) : les handlers s'enregistrent
+                // dans le registre PERSISTANT __asl_timer_handlers (le timer
+                // passé ici est un JSON éphémère recréé à chaque appel) et
+                // sont déclenchés par __asl_dispatch_timer_event aux
+                // transitions du timer. Déduplication par identité de
+                // fonction — init relancé (ré-attach processus) ne doit pas
+                // empiler deux fois le même handler.
                 if (timer) {{
                     var __timer_evts = ['OnStart', 'OnSplit', 'OnReset', 'OnPause', 'OnResume', 'OnUndoSplit', 'OnSkipSplit'];
                     for (var __ti = 0; __ti < __timer_evts.length; __ti++) {{
-                        if (!timer[__timer_evts[__ti]]) timer[__timer_evts[__ti]] = {{}};
+                        (function(__ev) {{
+                            timer[__ev] = {{
+                                __subscribe: function(h) {{
+                                    var l = globalThis.__asl_timer_handlers[__ev];
+                                    if (typeof h === 'function' && l.indexOf(h) < 0) l.push(h);
+                                    return this;
+                                }},
+                                __unsubscribe: function(h) {{
+                                    var l = globalThis.__asl_timer_handlers[__ev];
+                                    var i = l.indexOf(h);
+                                    if (i >= 0) l.splice(i, 1);
+                                    return this;
+                                }}
+                            }};
+                        }})(__timer_evts[__ti]);
                     }}
                 }}
                 globalThis.__asl_last_error = null;
@@ -1464,8 +1559,51 @@ impl ScriptContext {
     /// LOT 1 — splits bloqués : reset settings en plus de vars.
     pub fn reset_etat_script(&mut self) {
         let _ = self.ctx.eval(Source::from_bytes(
-            "globalThis.__asl_vars = {}; globalThis.__asl_settings = null;",
+            "globalThis.__asl_vars = {}; globalThis.__asl_settings = null;\
+             globalThis.__asl_timer_handlers = { OnStart: [], OnSplit: [], OnReset: [], OnPause: [], OnResume: [], OnUndoSplit: [], OnSkipSplit: [] };\
+             globalThis.__asl_timer_actions = [];",
         ));
+    }
+
+    /// Déclenche un event timer LiveSplit auprès des handlers enregistrés par
+    /// le script (timer.OnStart/OnSplit/OnReset += …). `arg` est une chaîne
+    /// JSON (null, "\"Ended\"", …) passée en 2e argument du handler — les
+    /// handlers MGS l'ignorent, mais l'arg suit la sémantique EventHandlerT.
+    pub fn dispatch_timer_event(&mut self, name: &str, arg_json: &str) {
+        let code = format!(
+            "globalThis.__asl_dispatch_timer_event({}, {});",
+            serde_json::to_string(name).unwrap_or_else(|_| "\"\"".to_string()),
+            arg_json
+        );
+        let _ = self.ctx.eval(Source::from_bytes(&code));
+        // Un handler qui throw pose __asl_last_error — on le log puis on le
+        // consomme pour ne pas le confondre avec une erreur de méthode ASL.
+        if let Some(err) = self.derniere_erreur() {
+            log::warn!("[ASL] Erreur dans un handler timer.{}: {}", name, err);
+            let _ = self.ctx.eval(Source::from_bytes(
+                "globalThis.__asl_last_error = null;",
+            ));
+        }
+    }
+
+    /// Draine la file d'actions TimerModel poussées par le script pendant les
+    /// appels de méthode (V.TimerModel.Split()/UndoSplit()/SkipSplit()/…).
+    /// Retourne les actions dans l'ordre : "split", "undo", "skip", "reset",
+    /// "pause", "start".
+    pub fn drain_timer_actions(&mut self) -> Vec<String> {
+        match self
+            .ctx
+            .eval(Source::from_bytes("globalThis.__asl_drain_timer_actions()"))
+        {
+            Ok(val) => {
+                let s = val
+                    .as_string()
+                    .map(|s| s.to_std_string_escaped())
+                    .unwrap_or_else(|| "[]".to_string());
+                serde_json::from_str::<Vec<String>>(&s).unwrap_or_default()
+            }
+            Err(_) => Vec::new(),
+        }
     }
 
     /// Sérialise globalThis.__asl_vars en JSON (lecture-only). Utilisé par les
@@ -1845,7 +1983,7 @@ fn rust_local_appdata_fn(_this: &JsValue, _args: &[JsValue], _ctx: &mut Context)
 }
 
 /// Convertit une LectureMemoire en JsValue.
-fn lecture_vers_js(lecture: Option<super::pont_memoire::LectureMemoire>, _ctx: &mut Context) -> JsValue {
+fn lecture_vers_js(lecture: Option<super::pont_memoire::LectureMemoire>, ctx: &mut Context) -> JsValue {
     use super::pont_memoire::LectureMemoire;
     match lecture {
         Some(LectureMemoire::Int(v)) => JsValue::new(v as f64),
@@ -1853,7 +1991,13 @@ fn lecture_vers_js(lecture: Option<super::pont_memoire::LectureMemoire>, _ctx: &
         Some(LectureMemoire::Float(v)) => JsValue::new(v),
         Some(LectureMemoire::Bool(v)) => JsValue::new(v),
         Some(LectureMemoire::String(s)) => JsValue::String(boa_engine::string::JsString::from(s)),
-        Some(LectureMemoire::Bytes(_)) => JsValue::null(), // bytes non supportés en JS direct
+        Some(LectureMemoire::Bytes(b)) => {
+            let arr = boa_engine::object::builtins::JsArray::from_iter(
+                b.into_iter().map(|v| JsValue::from(v as i32)),
+                ctx,
+            );
+            JsValue::from(arr)
+        }
         None => JsValue::null(),
     }
 }
@@ -2256,6 +2400,27 @@ mod tests_t1 {
         assert_eq!(r, "2,1,2", "Array.Add doit pousser les items");
     }
 
+    /// E7 runtime — Array.prototype.Remove (idiome C# List<T>.Remove sur
+    /// arrays transpilés : `new List<T>()` → `[]`). Sans ce shim, l'ASL MGS
+    /// fait `R.ActiveWatchCodes.Remove(code)` dans split() → TypeError avalé
+    /// par le wrapper → les splits watchers (dont W.CP-294 « Score », le
+    /// dernier segment) sont silencieusement perdus → timer jamais Ended.
+    #[test]
+    fn test_array_remove_shim() {
+        let r = eval_js(
+            r#"
+            var a = ["W.CP-255", "W.CP-294", "W.CL-s19b"];
+            var removed = a.Remove("W.CP-294");
+            var missing = a.Remove("absent");
+            return removed + ',' + missing + ',' + a.length + ',' + a.join('|');
+            "#,
+        );
+        assert_eq!(
+            r, "true,false,2,W.CP-255|W.CL-s19b",
+            "Array.Remove doit retirer la 1re occurrence et retourner bool"
+        );
+    }
+
     /// E7 runtime — EventLog(args) + EntryWritten.__subscribe ne throw pas.
     #[test]
     fn test_eventlog_stub() {
@@ -2293,6 +2458,58 @@ mod tests_t1 {
             vars_json.contains("\"ok\":true"),
             "startup doit aller au bout (vars.ok=true), vars: {}",
             vars_json
+        );
+    }
+
+    /// Régression — le vrai split() de l'ASL MGS itère R.ActiveWatchCodes
+    /// (array [] transpilé) et appelle .Remove(code) avant F.Split(code).
+    /// Sans Array.prototype.Remove, le TypeError était avalé par le wrapper
+    /// → le split watcher était perdu en silence (ex : W.CP-294 « Score »,
+    /// dernier segment → timer bloqué RUNNING 70/71, jamais Ended).
+    /// Ce test dump le JS transpilé réel et simule la boucle telle quelle.
+    #[test]
+    fn test_mgs_split_remove_reel() {
+        let asl_path = std::path::Path::new(
+            "E:\\SPEEDRUN\\MetalGearSolidSpeedrun\\Fichiers Sources Install\\livesplit_asl_mgs1-master\\MetalGearSolid.asl",
+        );
+        if !asl_path.exists() {
+            eprintln!("[test_mgs_split_remove_reel] ASL absent, skip");
+            return;
+        }
+        let source = std::fs::read_to_string(asl_path).expect("lecture ASL");
+        let script = crate::speedrun::asl::parse(&source).expect("parse ASL");
+        let split_code = script.methods.split.as_ref().expect("split présent");
+        let js = crate::speedrun::engine::transpiler::transpile_cs_to_js(split_code);
+        // Dump autour de ActiveWatchCodes
+        if let Some(pos) = js.find("ActiveWatchCodes") {
+            let start = js[..pos].rfind("if (").unwrap_or(0);
+            eprintln!("[SPLIT JS]\n{}", &js[start..(pos + 1200.min(js.len() - pos))]);
+        }
+        // Simulation exacte du pattern transpilé sur array natif
+        let r = eval_js(
+            r#"
+            var R = { ActiveWatchCodes: ["W.CP-255", "W.CP-294", "W.CL-s19b"] };
+            var F = { Watch: { "W.CP-294": function() { return 1; }, "W.CP-255": function() { return 0; }, "W.CL-s19b": function() { return 0; } },
+                      Split: function(code) { return "SPLIT:" + code; } };
+            var __ret = null;
+            if (R.ActiveWatchCodes != null) {
+                for (const __code of (R.ActiveWatchCodes instanceof Map ? R.ActiveWatchCodes.entries() : R.ActiveWatchCodes)) {
+                    var code = (R.ActiveWatchCodes instanceof Map && __code instanceof Array) ? { Key: __code[0], Value: __code[1] } : __code;
+                    var result = F.Watch[code]();
+                    if (result == 0) continue;
+                    R.ActiveWatchCodes.Remove(code);
+                    if (result == 1) { __ret = F.Split(code); break; }
+                    if (result == -1) { __ret = false; break; }
+                }
+            }
+            return __ret + "|" + R.ActiveWatchCodes.join(',');
+            "#,
+        );
+        eprintln!("[test_mgs_split_remove_reel] résultat: {}", r);
+        assert!(
+            r.starts_with("SPLIT:W.CP-294|W.CP-255,W.CL-s19b"),
+            "le watcher split doit passer : {}",
+            r
         );
     }
 

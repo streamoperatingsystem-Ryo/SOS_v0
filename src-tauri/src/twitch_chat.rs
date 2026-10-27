@@ -67,11 +67,12 @@ pub fn demarrer(
     cmd_rx: Option<mpsc::Receiver<String>>,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        // Client HTTP partagé + cache infos user (login lowercase → (avatar, bio)).
-        // Le cache persiste across reconnexions d'une même tâche IRC :
+        // Client HTTP partagé + cache infos user (login lowercase →
+        // (avatar, bio, banniere)). Le cache persiste across reconnexions
+        // d'une même tâche IRC :
         // un chatter n'est fetché qu'une seule fois à vie (pas par re-rendu).
         let client = reqwest::Client::new();
-        let mut avatar_cache: HashMap<String, (String, String)> = HashMap::new();
+        let mut avatar_cache: HashMap<String, (String, String, String)> = HashMap::new();
         // Cache des emotes tierces (BTTV/7TV/FFZ, global + chaine) : chargé
         // en tâche parallèle — le chat démarre immédiatement, les emotes
         // tierces s'activent dès que les listes sont là (quelques centaines
@@ -122,7 +123,7 @@ async fn connect_irc(
     app: &AppHandle,
     chat_tx: &broadcast::Sender<String>,
     client: &reqwest::Client,
-    avatar_cache: &mut HashMap<String, (String, String)>,
+    avatar_cache: &mut HashMap<String, (String, String, String)>,
     cache_emotes: &Arc<RwLock<CacheEmotes>>,
     token: &str,
     login: &str,
@@ -279,17 +280,18 @@ async fn connect_irc(
                         Ok(u) => u,
                         Err(e) => {
                             eprintln!("[Twitch] avatar miss login={} : {}", key, e);
-                            (String::new(), String::new())
+                            (String::new(), String::new(), String::new())
                         }
                     };
                     avatar_cache.insert(key.clone(), infos);
                 }
-                let (avatar_url, bio) = avatar_cache
+                let (avatar_url, bio, banniere) = avatar_cache
                     .get(&key)
                     .cloned()
                     .unwrap_or_default();
                 payload.avatar = Some(avatar_url).filter(|s| !s.is_empty());
                 let bio = Some(bio).filter(|s| !s.is_empty());
+                let banniere = Some(banniere).filter(|s| !s.is_empty());
                 let json_msg = json!({
                     "type": "chat",
                     "message": payload,
@@ -306,6 +308,7 @@ async fn connect_irc(
                         &payload.pseudo,
                         payload.avatar.clone(),
                         bio.clone(),
+                        banniere.clone(),
                     );
                 }
                 // Bandeau premier message : détection 1er message de n'importe
@@ -321,22 +324,52 @@ async fn connect_irc(
                 }
                 // Commandes chat : "!commande" tapée par un viewer → overlay
                 // diffusion (même moteur que les alertes). Non-fatal si absent.
+                // L'accusé éventuel est posté en PRIVMSG (validation).
                 if let Some(commandes) = app.try_state::<crate::commandes::CommandesState>() {
-                    commandes.on_message(&payload.pseudo, &payload.pseudo, &payload.texte);
+                    if let Some(rep) =
+                        commandes.on_message(
+                            "twitch",
+                            &payload.pseudo,
+                            &payload.pseudo,
+                            &payload.texte,
+                        )
+                    {
+                        let irc = format!("PRIVMSG #{} :{}", login_lower, rep);
+                        let _ = write.send(Message::Text(irc.into())).await;
+                    }
                 }
+                // est_mod : badge moderator/broadcaster ou le streamer
+                // lui-même — partagé par la musique et l'arène d'emojis.
+                let est_mod = payload
+                    .badges
+                    .as_deref()
+                    .map(|b| b.contains("moderator/") || b.contains("broadcaster/"))
+                    .unwrap_or(false)
+                    || payload.pseudo.to_lowercase() == login_lower;
                 // Musique : "!rs <titre>" → bibliothèque locale + file côté
                 // diffusion. Retourne un accusé → posté en chat via PRIVMSG.
-                // est_mod : badge moderator/broadcaster ou le streamer lui-même.
                 if let Some(musique) = app.try_state::<crate::musique::MusiqueState>() {
-                    let est_mod = payload
-                        .badges
-                        .as_deref()
-                        .map(|b| b.contains("moderator/") || b.contains("broadcaster/"))
-                        .unwrap_or(false)
-                        || payload.pseudo.to_lowercase() == login_lower;
                     if let Some(rep) =
                         musique.on_message("twitch", &payload.pseudo, &payload.texte, est_mod)
                     {
+                        let irc = format!("PRIVMSG #{} :{}", login_lower, rep);
+                        let _ = write.send(Message::Text(irc.into())).await;
+                    }
+                }
+                // Emoji Arena : "!fight"/"!a"-"!c" → combat côté diffusion.
+                // Même canal d'accusé que la musique (PRIVMSG).
+                if let Some(fight) = app.try_state::<crate::fight::FightState>() {
+                    if let Some(rep) =
+                        fight.on_message("twitch", &payload.pseudo, &payload.texte, est_mod)
+                    {
+                        let irc = format!("PRIVMSG #{} :{}", login_lower, rep);
+                        let _ = write.send(Message::Text(irc.into())).await;
+                    }
+                }
+                // Cadres : "!cadres <couleur>" → couleur vive du cadre unifié
+                // (event dashboard → mettreAJourCadre). Même canal d'accusé.
+                if let Some(cadres) = app.try_state::<crate::cadres_cmd::CadresChatState>() {
+                    if let Some(rep) = cadres.on_message(&payload.pseudo, &payload.texte) {
                         let irc = format!("PRIVMSG #{} :{}", login_lower, rep);
                         let _ = write.send(Message::Text(irc.into())).await;
                     }
@@ -544,15 +577,17 @@ fn parse_privmsg(line: &str) -> Option<ChatMessage> {
     })
 }
 
-/// Récupère l'avatar (profile_image_url) + la bio (description) Helix d'un login.
+/// Récupère l'avatar (profile_image_url) + la bio (description) + la bannière
+/// de chaîne (offline_image_url) Helix d'un login.
 /// `GET /users?login=<login>` avec `Authorization: Bearer <token>` +
-/// `Client-Id: <CLIENT_ID>`. Retourne (avatar, bio) ou Err (l'appelant stocke "").
+/// `Client-Id: <CLIENT_ID>`. Retourne (avatar, bio, banniere) ou Err
+/// (l'appelant stocke "").
 /// Pub : réutilisé par welcome_tester_clip (lib.rs) pour le test manuel.
 pub async fn fetch_user_infos(
     client: &reqwest::Client,
     token: &str,
     login: &str,
-) -> Result<(String, String), String> {
+) -> Result<(String, String, String), String> {
     let resp = client
         .get(HELIX_USERS_URL)
         .header("Authorization", format!("Bearer {}", token))
@@ -579,7 +614,8 @@ pub async fn fetch_user_infos(
         .ok_or_else(|| "Helix users: data[0] absent".to_string())?;
     let url = user["profile_image_url"].as_str().unwrap_or("").to_string();
     let bio = user["description"].as_str().unwrap_or("").to_string();
-    Ok((url, bio))
+    let banniere = user["offline_image_url"].as_str().unwrap_or("").to_string();
+    Ok((url, bio, banniere))
 }
 
 async fn await_cancel(cancel: &Cancel) {

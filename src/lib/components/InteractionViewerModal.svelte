@@ -1,13 +1,15 @@
 <script lang="ts">
-  // Modale "Interactions Live" — interactions chat + outils live :
-  //   (1) onglet Clip de bienvenue : attribution followers→clips, file +
-  //       contrôles, config overlay (mini-canvas drag/resize),
-  //   (2) onglet Bandeau premier message : config globale,
-  //   (3) onglet Alertes : config par type (follow/raid/sub/resub/subgift/
-  //       bits) + position overlay (migré depuis la sidebar Toolbar),
-  //   (4) onglet Planning : le vrai planning Twitch (Helix /schedule) —
-  //       vues semaine/mois/liste, glisser-déposer de jacquettes, vacances.
-  //   (Commandes chat : prévues, pas encore implémentées — pas d'onglet.)
+  // Modale « Interactions » — interactions chat + outils live :
+  //   (1) Alertes : config par type (follow/raid/sub/resub/subgift/bits),
+  //   (2) Bienvenue : clip de bienvenue (général/file/attribution) +
+  //       bandeau premier message (blocs empilés dans le volet détail),
+  //   (3) Commandes : commandes chat + soundboard (rail gauche : 2 entrées
+  //       de nav, puis le contenu propre à l'outil actif),
+  //   (4) Présentation : inviter/présenter un streamer (favoris + diffusion),
+  //   (5) Musique : demandes !rs, lecteur, bibliothèque.
+  //   + « Position des overlays » : bouton-outil à droite de la barre —
+  //     squelette de position partagé des overlays (mini-canvas drag/resize).
+  //   Le planning Twitch vit désormais dans PlanningModal.svelte.
   import { followers, chargerFollowers, broadcaster } from "../stores/communaute";
   import {
     welcomeEtat,
@@ -47,7 +49,11 @@
   } from "../stores/alertes";
   import {
     positionOverlay,
+    positionChrono,
+    positionSplitpop,
     sauverPositionOverlay,
+    sauverPositionChrono,
+    sauverPositionSplitpop,
   } from "../stores/positionOverlay";
   import {
     commandesStore,
@@ -55,7 +61,17 @@
     sauverCommande,
     supprimerCommande,
     testerCommande,
+    exporterCommandes,
+    importerCommandes,
+    ecraserCommandes,
   } from "../stores/commandes";
+  import {
+    cadresChatStore,
+    cadresChatPalette,
+    chargerCadresChat,
+    sauverCadresChat,
+    signatureCadresChat,
+  } from "../stores/cadresChat";
   import {
     padStore,
     padErreur,
@@ -67,6 +83,7 @@
     padTesterTouche,
     padImporterMedia,
     padImporterSon,
+    padImporterSonSeul,
     DISPOSITION_PAD,
     TOUCHES_RESERVEES,
     NOMS_AFFICHAGE,
@@ -88,7 +105,8 @@
     presentationAudioStopper,
     ecouterSon,
   } from "../stores/presentation";
-  import { sceneStore } from "../stores/scene";
+  import { sceneStore, mettreAJourCadre } from "../stores/scene";
+  import { gradientCadre } from "../cadres/registre";
   import { t } from "../stores/langue";
   import { get } from "svelte/store";
   import {
@@ -96,35 +114,36 @@
     type WelcomeViewerConfig,
     type WelcomeClipInfo,
     type AlerteTypeConfig,
+    type CadreConfig,
     type CommandeConfig,
+    type PaletteCouleur,
     type PositionOverlayConfig,
     type ToucheConfig,
     type PresentationSearchResult,
   } from "../tauri";
   import Modal from "./Modal.svelte";
-  import PlanningTab from "./PlanningTab.svelte";
   import MusiqueTab from "./MusiqueTab.svelte";
+  import FightTab from "./FightTab.svelte";
 
   let { onFermer = () => {} }: { onFermer?: () => void } = $props();
 
-  // Onglet actif.
+  // Onglet actif (« position » n'est pas un onglet de la barre : il s'ouvre
+  // via le bouton-outil « Position des overlays » à droite de la barre).
   let tab = $state<
-    | "bienvenue"
-    | "bandeau"
     | "alertes"
+    | "bienvenue"
     | "commandes"
-    | "pad"
     | "presentation"
-    | "planning"
     | "musique"
+    | "fight"
     | "position"
-  >("bienvenue");
+  >("alertes");
 
   // Section sélectionnée dans les onglets master-detail (liste gauche).
-  let secBienvenue = $state<"general" | "file" | "attribution">("general");
-  let secBandeau = $state<
-    "general" | "duree" | "position" | "test" | "apparence"
+  let secBienvenue = $state<
+    "general" | "file" | "attribution" | "bandeau"
   >("general");
+  let secCommandes = $state<"commandes" | "cadres" | "pad">("commandes");
 
   // ===== Présentation streamer (portage « streamers favoris ») =====
   let secPresentation = $state<"recherche" | "favoris" | "diffusion">("favoris");
@@ -350,6 +369,55 @@
   let cmdSelId = $state<string | null>(null);
   let cmdSel = $derived(commandes.find((c) => c.id === cmdSelId) ?? null);
 
+  // Dégradé du cadre actif — affiché dans le picker quand la couleur du
+  // texte de commande est « auto » (même règle que les titres).
+  let cmdGrad = $derived(gradientCadre($sceneStore.cadreWidget ?? null));
+
+  // ===== Commande cadres (!cadres <couleur> → couleur vive du cadre) =====
+  // Commande intégrée (pas une CommandeConfig) : config unique côté Rust.
+  let cadresChat = $derived($cadresChatStore);
+  let cadresPalette = $derived($cadresChatPalette);
+
+  // Test couleur : applique la signature « !cadres » (vif = couleur
+  // choisie, base = noir — signatureCadresChat) sur le cadre actif
+  // (commit → la diffusion suit comme pour !cadres) puis restaure les
+  // DEUX champs d'origine à l'arrêt. Un seul test à la fois ; restauré
+  // aussi à la fermeture.
+  let cadreActifScene = $derived(!!$sceneStore.cadreWidget?.actif);
+  let cadresTestNom = $state<string | null>(null);
+  let cadreAvantTest: Pick<CadreConfig, "couleur" | "couleurFin"> | undefined;
+
+  async function testerCouleurCadres(c: PaletteCouleur) {
+    if (cadresTestNom === c.nom) {
+      await arreterTestCadres();
+      return;
+    }
+    if (!cadreActifScene) return;
+    if (cadresTestNom === null) {
+      const cadre = $sceneStore.cadreWidget;
+      if (cadre) {
+        cadreAvantTest = { couleur: cadre.couleur, couleurFin: cadre.couleurFin };
+      }
+    }
+    cadresTestNom = c.nom;
+    await mettreAJourCadre(signatureCadresChat(c.hex));
+  }
+  async function arreterTestCadres() {
+    if (cadresTestNom === null) return;
+    cadresTestNom = null;
+    await mettreAJourCadre({
+      couleur: cadreAvantTest?.couleur,
+      couleurFin: cadreAvantTest?.couleurFin,
+    });
+  }
+  // Un test en cours est restauré quand la modale se ferme (cleanup d'effet
+  // → destroy) — jamais de couleur « fantôme » laissée sur la scène.
+  $effect(() => {
+    return () => {
+      if (cadresTestNom !== null) void arreterTestCadres();
+    };
+  });
+
   function commandeVierge(): CommandeConfig {
     return {
       id: "",
@@ -363,6 +431,13 @@
       son: undefined,
       media: undefined,
       media_kind: undefined,
+      video_son: true,
+      police: "",
+      gras: false,
+      italique: false,
+      souligne: false,
+      couleur: undefined,
+      reponses_chat: true,
     };
   }
   async function onAjouterCommande() {
@@ -405,6 +480,39 @@
     return "aucun";
   }
 
+  // Import/export pack — même mécanique que les scènes (dossier choisi par
+  // l'utilisateur). Les conflits de noms se tranchent un par un dans la
+  // barre inline : « écraser » remplace l'existante, « ignorer » la garde.
+  let cmdImport = $state<{
+    packDir: string;
+    file: CommandeConfig[];
+    acceptes: CommandeConfig[];
+  } | null>(null);
+
+  // Export pack : ligne de saisie inline du nom (pas de prompt() natif).
+  let cmdExport = $state(false);
+  let cmdExportNom = $state("commandes");
+
+  async function onExporterCommandes() {
+    if (await exporterCommandes(cmdExportNom)) cmdExport = false;
+  }
+  async function onImporterCommandes() {
+    const res = await importerCommandes();
+    if (res) cmdImport = { packDir: res.packDir, file: res.conflits, acceptes: [] };
+  }
+  async function trancherConflitCommande(ecraser: boolean) {
+    if (!cmdImport) return;
+    const packDir = cmdImport.packDir;
+    const [courant, ...reste] = cmdImport.file;
+    const acceptes = ecraser ? [...cmdImport.acceptes, courant] : cmdImport.acceptes;
+    if (reste.length > 0) {
+      cmdImport = { packDir, file: reste, acceptes };
+      return;
+    }
+    cmdImport = null;
+    if (acceptes.length > 0) await ecraserCommandes(packDir, acceptes);
+  }
+
   // ===== Pad numérique (16 touches Numpad × 3 plages → overlay diffusion) =====
   let pad = $derived($padStore);
   let padActif = $derived(pad?.actif ?? false);
@@ -421,12 +529,16 @@
       : null,
   );
 
-  /// Mode média effectif de la touche : "aucun" | "audio" | "image" | "video".
-  function modeMediaPad(tc: ToucheConfig | null): "aucun" | "audio" | "image" | "video" {
+  /// Mode média effectif de la touche :
+  /// "aucun" | "audio" | "image" | "video" | "chrono" (chrono 2).
+  function modeMediaPad(
+    tc: ToucheConfig | null,
+  ): "aucun" | "audio" | "image" | "video" | "chrono" {
     if (!tc) return "aucun";
     if (tc.media_type === "audio") return "audio";
     if (tc.media_type === "video") return "video";
     if (tc.media_type === "image") return "image";
+    if (tc.media_type === "chrono") return "chrono";
     return "aucun";
   }
 
@@ -466,6 +578,20 @@
   function onRetirerSonPad(): void {
     if (!padSel) return;
     majPad({ son: undefined });
+  }
+
+  /// Importe un son de départ/fin pour le chrono 2 de la touche sélectionnée
+  /// (champs dédiés chrono_son_* — ne touche PAS au champ son du média).
+  async function onImporterSonChrono(kind: "depart" | "fin"): Promise<void> {
+    if (!padSelCode) return;
+    try {
+      const rel = await padImporterSonSeul();
+      if (rel) {
+        majPad(kind === "depart" ? { chrono_son_depart: rel } : { chrono_son_fin: rel });
+      }
+    } catch (e) {
+      alert(get(t)("commun.importRefuse", { erreur: String(e) }));
+    }
   }
 
   /// Supprime (reset) la touche sélectionnée.
@@ -632,9 +758,10 @@
     }
   });
 
-  // Charge les commandes chat (une fois à l'ouverture de la modale).
+  // Charge les commandes chat + la config cadres (une fois à l'ouverture).
   $effect(() => {
     void chargerCommandes();
+    void chargerCadresChat();
   });
 
   // ===== File d'attente =====
@@ -656,38 +783,67 @@
     await welcomeSetDureeAffichage(Math.round(sec * 1000));
   }
 
-  // ===== Config overlay : mini-canvas drag/resize (onglet "Squelette de position") =====
+  // ===== Config overlay : mini-canvas drag/resize (outil « Position des overlays ») =====
   // Le canvas de référence est 1920x1080 (défaut diffusion). Le mini-canvas
   // affiche une version réduite où l'utilisateur drag/resize le squelette
   // de l'overlay. Les coordonnées sont converties en pixels canvas réels.
   //
-  // Le squelette est un rectangle LIBRE (pas de ratio contraint) : la position
-  // et la taille sont partagées par les overlays "clip de bienvenue" et
-  // "alertes". Côté diffusion, la hauteur est auto (la carte s'ajuste à son
-  // contenu) — la hauteur ici est une référence visuelle pour le squelette.
+  // Trois squelettes indépendants : "overlay" (partagé welcome/alertes/
+  // commandes/pad — rectangle LIBRE, hauteur auto côté diffusion),
+  // "chrono" (squelette DÉDIÉ du chrono 2 — position_chrono.json) et
+  // "splitpop" (squelette DÉDIÉ du pop de validation des splits —
+  // position_splitpop.json, séparé car le pop arrive à chaque split et
+  // pouvait chevaucher les alertes du cadre partagé).
   let overlay = $derived($positionOverlay);
+  let overlayChrono = $derived($positionChrono);
+  let overlaySplitpop = $derived($positionSplitpop);
 
   // Dimensions canvas de référence (récupérées depuis la scène si dispo,
-  // sinon 1920x1080).
+  // sinon 1920×1080).
   const REF_W = 1920;
   const REF_H = 1080;
 
-  // Valeurs locales (édition fluide pendant le drag, commit au pointerup).
-  // Initialisées avec les défauts — le $effect ci-dessous sync depuis
-  // l'état Rust dès qu'il arrive.
-  let ovX = $state(1480);
-  let ovY = $state(580);
-  let ovW = $state(320);
-  let ovH = $state(352);
+  // Squelette en cours d'édition : "overlay" (partagé) | "chrono" | "splitpop" (dédiés).
+  type SqueletteCible = "overlay" | "chrono" | "splitpop";
 
-  // Sync depuis l'état Rust quand il change (sans écraser pendant le drag).
+  // Valeurs locales (édition fluide pendant le drag, commit au pointerup).
+  // Initialisées avec les défauts — les $effect ci-dessous sync depuis
+  // l'état Rust dès qu'il arrive.
+  let ov = $state({ x: 1480, y: 580, w: 320, h: 352 });
+  let chr = $state({ x: 760, y: 80, w: 400, h: 120 });
+  let spp = $state({ x: 660, y: 60, w: 600, h: 120 });
+  let cible = $state<SqueletteCible>("overlay");
+
+  /// Rect courant du squelette ciblé (proxy $state — mutation directe).
+  function rectSquelette(c: SqueletteCible) {
+    return c === "overlay" ? ov : c === "chrono" ? chr : spp;
+  }
+
+  // Sync depuis l'état Rust quand il change (sans écraser pendant le drag
+  // du squelette concerné).
   let dragging = $state(false);
   $effect(() => {
-    if (overlay && !dragging) {
-      ovX = overlay.x;
-      ovY = overlay.y;
-      ovW = overlay.largeur;
-      ovH = overlay.hauteur;
+    if (overlay && !(dragging && cible === "overlay")) {
+      ov.x = overlay.x;
+      ov.y = overlay.y;
+      ov.w = overlay.largeur;
+      ov.h = overlay.hauteur;
+    }
+  });
+  $effect(() => {
+    if (overlayChrono && !(dragging && cible === "chrono")) {
+      chr.x = overlayChrono.x;
+      chr.y = overlayChrono.y;
+      chr.w = overlayChrono.largeur;
+      chr.h = overlayChrono.hauteur;
+    }
+  });
+  $effect(() => {
+    if (overlaySplitpop && !(dragging && cible === "splitpop")) {
+      spp.x = overlaySplitpop.x;
+      spp.y = overlaySplitpop.y;
+      spp.w = overlaySplitpop.largeur;
+      spp.h = overlaySplitpop.hauteur;
     }
   });
 
@@ -698,90 +854,122 @@
   // Échelle : pixels mini-canvas → pixels canvas réels.
   let scale = $derived(miniW / REF_W);
 
-  async function onOverlayCommit() {
+  async function onOverlayCommit(c: SqueletteCible) {
+    const r = rectSquelette(c);
     const cfg: PositionOverlayConfig = {
-      x: Math.round(ovX),
-      y: Math.round(ovY),
-      largeur: Math.round(ovW),
-      hauteur: Math.round(ovH),
+      x: Math.round(r.x),
+      y: Math.round(r.y),
+      largeur: Math.round(r.w),
+      hauteur: Math.round(r.h),
     };
     try {
-      await sauverPositionOverlay(cfg);
+      if (c === "overlay") {
+        await sauverPositionOverlay(cfg);
+      } else if (c === "chrono") {
+        await sauverPositionChrono(cfg);
+      } else {
+        await sauverPositionSplitpop(cfg);
+      }
+    } catch {
+    }
+  }
+
+  /// Bouton « Tester le rendu » d'un squelette : affiche le VRAI overlay
+  /// factice côté diffusion à la position configurée — overlay partagé →
+  /// alerte follow de test (même pipeline que les boutons Test de
+  /// l'onglet Alertes ; no-op si ce type est désactivé), chrono → chrono
+  /// factice de 10 s, splitpop → pop « SPLIT 3 / −1.3 / GAGNÉ » reprenant
+  /// les options du 1er widget speedrun.
+  async function testerSquelette(c: SqueletteCible) {
+    try {
+      if (c === "overlay") {
+        await tauri.alertesTester("follow");
+      } else if (c === "chrono") {
+        await tauri.positionChronoTest();
+      } else {
+        await tauri.positionSplitpopTest();
+      }
     } catch {
     }
   }
 
   // Presets 6 positions (partagés avec l'ancien bloc alertes).
-  function presetOverlay(pos: string) {
+  function presetSquelette(pos: string, c: SqueletteCible) {
     const cw = $sceneStore.canvasW ?? 1920;
     const ch = $sceneStore.canvasH ?? 1080;
-    const w = ovW;
-    const h = ovH;
+    const r = rectSquelette(c);
+    const w = r.w;
+    const h = r.h;
     const marge = 40;
-    let x = ovX;
-    let y = ovY;
+    let x = r.x;
+    let y = r.y;
     if (pos.includes("gauche")) x = marge;
     else if (pos.includes("droite")) x = cw - w - marge;
     else x = Math.round((cw - w) / 2);
     if (pos.startsWith("haut")) y = marge;
     else y = ch - h - marge;
-    ovX = x;
-    ovY = y;
-    void onOverlayCommit();
+    r.x = x;
+    r.y = y;
+    void onOverlayCommit(c);
   }
 
-  // ===== Drag / resize du squelette overlay =====
+  // ===== Drag / resize des squelettes overlay =====
   type DragMode = "move" | "resize-se" | "resize-sw" | "resize-ne" | "resize-nw" | null;
   let dragMode = $state<DragMode>(null);
   let dragStart = { px: 0, py: 0, x: 0, y: 0, w: 0, h: 0 };
 
-  function onRectDown(e: PointerEvent) {
+  function onRectDown(e: PointerEvent, c: SqueletteCible) {
     e.stopPropagation();
     e.preventDefault();
+    cible = c;
     dragMode = "move";
     dragging = true;
-    dragStart = { px: e.clientX, py: e.clientY, x: ovX, y: ovY, w: ovW, h: ovH };
+    const r = rectSquelette(c);
+    dragStart = { px: e.clientX, py: e.clientY, x: r.x, y: r.y, w: r.w, h: r.h };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }
 
-  function onHandleDown(e: PointerEvent, mode: DragMode) {
+  function onHandleDown(e: PointerEvent, mode: DragMode, c: SqueletteCible) {
     e.stopPropagation();
     e.preventDefault();
+    cible = c;
     dragMode = mode;
     dragging = true;
-    dragStart = { px: e.clientX, py: e.clientY, x: ovX, y: ovY, w: ovW, h: ovH };
+    const r = rectSquelette(c);
+    dragStart = { px: e.clientX, py: e.clientY, x: r.x, y: r.y, w: r.w, h: r.h };
     (e.target as HTMLElement).setPointerCapture(e.pointerId);
   }
 
   function onPointerMove(e: PointerEvent) {
     if (!dragMode) return;
+    const r = rectSquelette(cible);
     const dx = (e.clientX - dragStart.px) / scale;
     const dy = (e.clientY - dragStart.py) / scale;
 
     if (dragMode === "move") {
-      ovX = Math.max(0, Math.min(REF_W - ovW, dragStart.x + dx));
-      ovY = Math.max(0, Math.min(REF_H - ovH, dragStart.y + dy));
+      r.x = Math.max(0, Math.min(REF_W - r.w, dragStart.x + dx));
+      r.y = Math.max(0, Math.min(REF_H - r.h, dragStart.y + dy));
     } else if (dragMode === "resize-se") {
       // Rectangle libre : largeur et hauteur suivent indépendamment la souris.
-      ovW = Math.max(80, Math.min(REF_W - ovX, dragStart.w + dx));
-      ovH = Math.max(60, Math.min(REF_H - ovY, dragStart.h + dy));
+      r.w = Math.max(80, Math.min(REF_W - r.x, dragStart.w + dx));
+      r.h = Math.max(60, Math.min(REF_H - r.y, dragStart.h + dy));
     } else if (dragMode === "resize-sw") {
       const newW = Math.max(80, dragStart.w - dx);
-      ovX = Math.max(0, dragStart.x + (dragStart.w - newW));
-      ovW = newW;
-      ovH = Math.max(60, Math.min(REF_H - ovY, dragStart.h + dy));
+      r.x = Math.max(0, dragStart.x + (dragStart.w - newW));
+      r.w = newW;
+      r.h = Math.max(60, Math.min(REF_H - r.y, dragStart.h + dy));
     } else if (dragMode === "resize-ne") {
       const newH = Math.max(60, dragStart.h - dy);
-      ovY = Math.max(0, dragStart.y + (dragStart.h - newH));
-      ovW = Math.max(80, Math.min(REF_W - ovX, dragStart.w + dx));
-      ovH = newH;
+      r.y = Math.max(0, dragStart.y + (dragStart.h - newH));
+      r.w = Math.max(80, Math.min(REF_W - r.x, dragStart.w + dx));
+      r.h = newH;
     } else if (dragMode === "resize-nw") {
       const newW = Math.max(80, dragStart.w - dx);
       const newH = Math.max(60, dragStart.h - dy);
-      ovX = Math.max(0, dragStart.x + (dragStart.w - newW));
-      ovY = Math.max(0, dragStart.y + (dragStart.h - newH));
-      ovW = newW;
-      ovH = newH;
+      r.x = Math.max(0, dragStart.x + (dragStart.w - newW));
+      r.y = Math.max(0, dragStart.y + (dragStart.h - newH));
+      r.w = newW;
+      r.h = newH;
     }
   }
 
@@ -789,7 +977,7 @@
     if (!dragMode) return;
     dragMode = null;
     dragging = false;
-    await onOverlayCommit();
+    await onOverlayCommit(cible);
   }
 
   // ===== Bandeau premier message =====
@@ -812,24 +1000,14 @@
 
 <Modal title={$t("interactions.titre")} onClose={onFermer} maxWidth="75rem" crochet="var(--crochet-rose)">
   <div class="tabs">
-    <button class="tab" class:active={tab === "bienvenue"} onclick={() => (tab = "bienvenue")}>
-      {$t("interactions.tabBienvenue")}
-    </button>
-    <button class="tab" class:active={tab === "bandeau"} onclick={() => (tab = "bandeau")}>
-      {$t("interactions.tabBandeau")}
-    </button>
     <button class="tab" class:active={tab === "alertes"} onclick={() => (tab = "alertes")}>
       {$t("interactions.tabAlertes")}
     </button>
+    <button class="tab" class:active={tab === "bienvenue"} onclick={() => (tab = "bienvenue")}>
+      {$t("interactions.tabBienvenue")}
+    </button>
     <button class="tab" class:active={tab === "commandes"} onclick={() => (tab = "commandes")}>
       {$t("interactions.tabCommandes")}
-    </button>
-    <button
-      class="tab"
-      class:active={tab === "pad"}
-      onclick={() => { tab = "pad"; void chargerPad(); }}
-    >
-      {$t("interactions.tabPad")}
     </button>
     <button
       class="tab"
@@ -838,18 +1016,19 @@
     >
       {$t("interactions.tabPresentation")}
     </button>
-    <button
-      class="tab"
-      class:active={tab === "planning"}
-      onclick={() => (tab = "planning")}
-    >
-      {$t("interactions.tabPlanning")}
-    </button>
     <button class="tab" class:active={tab === "musique"} onclick={() => (tab = "musique")}>
       {$t("interactions.tabMusique")}
     </button>
-    <button class="tab" class:active={tab === "position"} onclick={() => (tab = "position")}>
-      {$t("interactions.tabPosition")}
+    <button class="tab" class:active={tab === "fight"} onclick={() => (tab = "fight")}>
+      {$t("interactions.tabFight")}
+    </button>
+    <button
+      class="tab tab-outil"
+      class:active={tab === "position"}
+      onclick={() => (tab = "position")}
+      title={$t("interactions.position.titreOutil")}
+    >
+      ⌖ {$t("interactions.tabPosition")}
     </button>
   </div>
 
@@ -878,6 +1057,13 @@
               onclick={() => (secBienvenue = "attribution")}
             >
               <span class="alerte-nom">{$t("interactions.bienvenue.secAttribution")}</span>
+            </button>
+            <button
+              class="md-select"
+              class:selected={secBienvenue === "bandeau"}
+              onclick={() => (secBienvenue = "bandeau")}
+            >
+              <span class="alerte-nom">{$t("interactions.tabBandeau")}</span>
             </button>
           </div>
 
@@ -1099,56 +1285,9 @@
               </div>
             </div>
             {/if}
-            </div>
-          </div>
-        </div>
-      {/if}
-
-    {#if tab === "bandeau"}
-      <div class="tab-body">
-        <div class="md-layout">
-          <!-- Colonne gauche : sections de l'onglet -->
-          <div class="md-liste">
-            <button
-              class="md-select"
-              class:selected={secBandeau === "general"}
-              onclick={() => (secBandeau = "general")}
-            >
-              <span class="alerte-nom">{$t("commun.general")}</span>
-            </button>
-            <button
-              class="md-select"
-              class:selected={secBandeau === "duree"}
-              onclick={() => (secBandeau = "duree")}
-            >
-              <span class="alerte-nom">{$t("commun.duree")}</span>
-            </button>
-            <button
-              class="md-select"
-              class:selected={secBandeau === "position"}
-              onclick={() => (secBandeau = "position")}
-            >
-              <span class="alerte-nom">{$t("interactions.bandeau.secPosition")}</span>
-            </button>
-            <button
-              class="md-select"
-              class:selected={secBandeau === "test"}
-              onclick={() => (secBandeau = "test")}
-            >
-              <span class="alerte-nom">{$t("interactions.bandeau.secTest")}</span>
-            </button>
-            <button
-              class="md-select"
-              class:selected={secBandeau === "apparence"}
-              onclick={() => (secBandeau = "apparence")}
-            >
-              <span class="alerte-nom">{$t("interactions.bandeau.secApparence")}</span>
-            </button>
-          </div>
-
-          <!-- Panneau droit : contenu de la section -->
-          <div class="md-detail">
-            {#if secBandeau === "general"}
+            {#if secBienvenue === "bandeau"}
+              <!-- Bandeau premier message — regroupé en blocs empilés
+                   (pas de liste↔détail : chaque bloc est une config courte). -->
               <div class="modal-bloc">
                 <div class="modal-bloc-titre">{$t("commun.general")}</div>
                 <label class="toggle">
@@ -1163,7 +1302,6 @@
                   {$t("interactions.bandeau.actifHint", { pos: bPosition === "haut" ? $t("interactions.bandeau.posHaut") : $t("interactions.bandeau.posBas") })}
                 </p>
               </div>
-            {:else if secBandeau === "duree"}
               <div class="modal-bloc">
                 <div class="modal-bloc-titre">{$t("interactions.bandeau.dureeAffichage")}</div>
                 <div class="duree-row">
@@ -1181,7 +1319,6 @@
                 />
                 <p class="hint">{$t("interactions.bandeau.dureeHint")}</p>
               </div>
-            {:else if secBandeau === "position"}
               <div class="modal-bloc">
                 <div class="modal-bloc-titre">{$t("interactions.bandeau.position")}</div>
                 <div class="position-row">
@@ -1201,7 +1338,6 @@
                   </button>
                 </div>
               </div>
-            {:else if secBandeau === "test"}
               <div class="modal-bloc">
                 <div class="modal-bloc-titre">{$t("interactions.bandeau.secTest")}</div>
                 <div class="queue-actions">
@@ -1216,7 +1352,6 @@
                   {$t("interactions.bandeau.testHint")}
                 </p>
               </div>
-            {:else}
               <div class="modal-bloc">
                 <div class="modal-bloc-titre">{$t("interactions.bandeau.apparenceTitre")}</div>
                 <p class="hint">
@@ -1238,10 +1373,10 @@
                 </select>
               </div>
             {/if}
+            </div>
           </div>
         </div>
-      </div>
-    {/if}
+      {/if}
 
     {#if tab === "alertes"}
       <div class="tab-body">
@@ -1407,12 +1542,43 @@
     {#if tab === "commandes"}
       <div class="tab-body">
         <p class="hint">
-          {$t("interactions.commandes.hintIntro")}
+          {secCommandes === "commandes"
+            ? $t("interactions.commandes.hintIntro")
+            : secCommandes === "cadres"
+              ? $t("interactions.cadres.hintIntro")
+              : $t("interactions.pad.hintIntro")}
         </p>
+        {#if secCommandes === "pad" && padErr}
+          <div class="pad-erreur">⚠ {padErr}</div>
+        {/if}
 
         <div class="md-layout">
-          <!-- Colonne gauche : liste des commandes + ajout -->
+          <!-- Colonne gauche : nav outil (Commandes chat | Soundboard) puis
+               contenu propre à l'outil actif (liste de commandes / blocs pad). -->
           <div class="md-liste">
+            <button
+              class="md-select"
+              class:selected={secCommandes === "commandes"}
+              onclick={() => (secCommandes = "commandes")}
+            >
+              <span class="alerte-nom">{$t("interactions.commandes.navChat")}</span>
+            </button>
+            <button
+              class="md-select"
+              class:selected={secCommandes === "cadres"}
+              onclick={() => { secCommandes = "cadres"; void chargerCadresChat(); }}
+            >
+              <span class="alerte-nom">{$t("interactions.cadres.navCadres")}</span>
+            </button>
+            <button
+              class="md-select"
+              class:selected={secCommandes === "pad"}
+              onclick={() => { secCommandes = "pad"; void chargerPad(); }}
+            >
+              <span class="alerte-nom">{$t("interactions.tabPad")}</span>
+            </button>
+            <div class="md-sep"></div>
+            {#if secCommandes === "commandes"}
             {#each $commandesStore as c (c.id)}
               <div class="alerte-item" class:selected={cmdSelId === c.id}>
                 <button
@@ -1433,190 +1599,110 @@
             <button class="alerte-test cmd-ajouter" onclick={onAjouterCommande}>
               + {$t("commun.ajouter")}
             </button>
-          </div>
-
-          <!-- Panneau droit : config de la commande sélectionnée -->
-          <div class="md-detail">
-            {#if cmdSel}
-              <div class="modal-bloc">
-                <div class="modal-bloc-titre">{$t("interactions.commandes.titreBloc")}</div>
-                <label class="alerte-field">
-                  <span class="field-label">{$t("interactions.commandes.label")}</span>
+            <div class="cmd-pack">
+              <button class="alerte-test" onclick={() => (cmdExport = !cmdExport)}>
+                {$t("commun.exporter")}
+              </button>
+              <button class="alerte-test" onclick={() => void onImporterCommandes()}>
+                {$t("commun.importer")}
+              </button>
+            </div>
+            {#if cmdExport}
+              <div class="cmd-conflit">
+                <label class="alerte-field cmd-export-field">
+                  <span class="field-label">{$t("interactions.commandes.nomPackPrompt")}</span>
                   <input
-                    value={cmdSel.commande}
+                    bind:value={cmdExportNom}
                     spellcheck="false"
-                    placeholder="hype"
-                    onchange={(e) => {
-                      const v = (e.target as HTMLInputElement).value.trim().replace(/^!+/, "");
-                      if (v === "") {
-                        // Nom vide refusé côté Rust → restaurer l'ancien nom.
-                        (e.target as HTMLInputElement).value = cmdSel.commande;
-                        return;
-                      }
-                      majCommande({ commande: v });
-                    }}
+                    onkeydown={(e) => { if (e.key === "Enter") void onExporterCommandes(); }}
                   />
                 </label>
-                <p class="hint">
-                  {$t("interactions.commandes.hintCommande", { cmd: "!" + (cmdSel.commande || "…") })}
-                </p>
-              </div>
-
-              <div class="modal-bloc">
-                <div class="modal-bloc-titre">{$t("commun.media")}</div>
-                <div class="media-modes">
-                  <button
-                    class="mode-btn"
-                    class:active={modeMediaCommande(cmdSel) === "aucun"}
-                    onclick={() => majCommande({ media: undefined, media_kind: undefined, son: undefined })}
-                  >{$t("commun.aucun")}</button>
-                  <button
-                    class="mode-btn"
-                    class:active={modeMediaCommande(cmdSel) === "image"}
-                    onclick={() => importerMediaCommande("image")}
-                  >{$t("commun.image")}</button>
-                  <button
-                    class="mode-btn"
-                    class:active={modeMediaCommande(cmdSel) === "video"}
-                    onclick={() => importerMediaCommande("video")}
-                  >{$t("commun.video")}</button>
-                </div>
-                {#if cmdSel.media}
-                  <div class="alerte-son">
-                    <span class="alerte-son-nom">{cmdSel.media.split("/").pop()}</span>
-                    <button
-                      class="alerte-toggle"
-                      onclick={() => majCommande({ media: undefined, media_kind: undefined })}
-                      title={$t("commun.retirerMedia")}
-                    >✕</button>
-                  </div>
-                {/if}
-                {#if modeMediaCommande(cmdSel) === "image"}
-                  <div class="alerte-son">
-                    {#if cmdSel.son}
-                      <span class="alerte-son-nom">{cmdSel.son.split("/").pop()}</span>
-                      <button
-                        class="alerte-toggle"
-                        onclick={() => majCommande({ son: undefined })}
-                        title={$t("commun.retirerSon")}
-                      >✕</button>
-                    {:else}
-                      <button class="alerte-test" onclick={importerSonCommande}>
-                        {$t("commun.importerSon")}
-                      </button>
-                    {/if}
-                  </div>
-                {/if}
-                <p class="hint">
-                  {$t("interactions.hintMedia")}
-                </p>
-              </div>
-
-              <div class="modal-bloc">
-                <div class="modal-bloc-titre">{$t("commun.texte")}</div>
-                <label class="alerte-field">
-                  <span class="field-label">{$t("commun.texte")}</span>
-                  <input
-                    value={cmdSel.texte_template}
-                    spellcheck="false"
-                    onchange={(e) => majCommande({ texte_template: (e.target as HTMLInputElement).value })}
-                  />
-                </label>
-                <p class="hint">
-                  {$t("interactions.commandes.variablesHint")}
-                </p>
-                <p class="hint">
-                  {$t("interactions.hintCadre")}
-                </p>
-                <label class="alerte-field">
-                  <span class="field-label">{$t("commun.taille")} {cmdSel.taille_px}px</span>
-                  <input
-                    class="range"
-                    type="range"
-                    min="16"
-                    max="96"
-                    step="2"
-                    value={cmdSel.taille_px}
-                    oninput={(e) => majCommande({ taille_px: +(e.target as HTMLInputElement).value })}
-                  />
-                </label>
-              </div>
-
-              <div class="modal-bloc">
-                <div class="modal-bloc-titre">{$t("commun.comportement")}</div>
-                <div class="alerte-2col">
-                  <label class="alerte-field">
-                    <span class="field-label">{$t("commun.dureeS")}</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="60"
-                      value={Math.round(cmdSel.duree_ms / 1000)}
-                      onchange={(e) => majCommande({ duree_ms: Math.max(1, +(e.target as HTMLInputElement).value) * 1000 })}
-                    />
-                  </label>
-                  <label class="alerte-field">
-                    <span class="field-label">{$t("interactions.cooldownGlobal")}</span>
-                    <input
-                      type="number"
-                      min="0"
-                      max="600"
-                      value={cmdSel.cooldown_global_s}
-                      onchange={(e) => majCommande({ cooldown_global_s: Math.max(0, +(e.target as HTMLInputElement).value) })}
-                    />
-                  </label>
-                </div>
-                <label class="alerte-field">
-                  <span class="field-label">{$t("interactions.cooldownViewer")}</span>
-                  <input
-                    type="number"
-                    min="0"
-                    max="600"
-                    value={cmdSel.cooldown_viewer_s}
-                    onchange={(e) => majCommande({ cooldown_viewer_s: Math.max(0, +(e.target as HTMLInputElement).value) })}
-                  />
-                </label>
-              </div>
-
-              <div class="modal-bloc">
-                <div class="modal-bloc-titre">{$t("interactions.testSuppression")}</div>
-                <div class="queue-actions">
-                  <button class="alerte-test" onclick={() => testerCommande(cmdSel.id)} disabled={!cmdSel.actif}>
-                    {$t("interactions.commandes.tester")}
+                <div class="cmd-conflit-btns">
+                  <button class="alerte-test" onclick={() => void onExporterCommandes()}>
+                    {$t("commun.valider")}
                   </button>
-                  <button
-                    class="alerte-toggle"
-                    onclick={() => { void supprimerCommande(cmdSel.id); }}
-                    title={$t("interactions.commandes.supprimerTitle")}
-                  >{$t("commun.supprimer")}</button>
+                  <button class="alerte-test" onclick={() => (cmdExport = false)}>
+                    {$t("commun.annuler")}
+                  </button>
                 </div>
-                <p class="hint">
-                  {$t("interactions.testHint")}
-                </p>
               </div>
-            {:else}
-              <div class="modal-bloc">
-                <p class="hint">{$t("interactions.commandes.aucuneSelection")}</p>
+            {/if}
+            {#if cmdImport}
+              <div class="cmd-conflit">
+                <span>
+                  {$t("interactions.commandes.importConflit", {
+                    cmd: "!" + cmdImport.file[0].commande,
+                  })}
+                </span>
+                <div class="cmd-conflit-btns">
+                  <button class="alerte-test" onclick={() => void trancherConflitCommande(true)}>
+                    {$t("interactions.commandes.ecraser")}
+                  </button>
+                  <button class="alerte-test" onclick={() => void trancherConflitCommande(false)}>
+                    {$t("interactions.commandes.ignorer")}
+                  </button>
+                </div>
               </div>
-          {/if}
-          </div>
-        </div>
-      </div>
-    {/if}
+            {/if}
+            {/if}
+            {#if secCommandes === "cadres"}
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("interactions.cadres.activation")}</div>
+              <button
+                class="alerte-toggle"
+                class:on={cadresChat.actif}
+                onclick={() => void sauverCadresChat({ actif: !cadresChat.actif })}
+                title={cadresChat.actif
+                  ? $t("interactions.cadres.desactiver")
+                  : $t("interactions.cadres.activer")}
+              >{cadresChat.actif ? "ON" : "OFF"}</button>
+              <p class="hint">
+                {cadresChat.actif
+                  ? $t("interactions.cadres.hintActif", { cmd: "!" + (cadresChat.commande || "…") })
+                  : $t("interactions.cadres.hintInactif")}
+              </p>
+            </div>
 
-    {#if tab === "pad"}
-      <div class="tab-body">
-        <p class="hint">
-          {$t("interactions.pad.hintIntro")}
-        </p>
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("interactions.cadres.nom")}</div>
+              <label class="alerte-field">
+                <span class="field-label">{$t("interactions.commandes.label")}</span>
+                <input
+                  value={cadresChat.commande}
+                  spellcheck="false"
+                  placeholder="cadres"
+                  onchange={async (e) => {
+                    const el = e.target as HTMLInputElement;
+                    const v = el.value.trim().replace(/^!+/, "");
+                    // Nom vide ou refusé (collision !commande/musique/fight)
+                    // → restaurer le nom courant.
+                    if (v === "" || !(await sauverCadresChat({ commande: v }))) {
+                      el.value = cadresChat.commande;
+                    }
+                  }}
+                />
+              </label>
+              <p class="hint">
+                {$t("interactions.cadres.hintCommande", { cmd: "!" + (cadresChat.commande || "…") })}
+              </p>
+            </div>
 
-        {#if padErr}
-          <div class="pad-erreur">⚠ {padErr}</div>
-        {/if}
-
-        <div class="md-layout">
-          <!-- Colonne gauche : activation + plages + grille 4×4 -->
-          <div class="md-liste">
+            <div class="modal-bloc">
+              <div class="modal-bloc-titre">{$t("commun.comportement")}</div>
+              <label class="toggle">
+                <input
+                  type="checkbox"
+                  checked={cadresChat.reponses_chat !== false}
+                  onchange={(e) => void sauverCadresChat({ reponses_chat: e.currentTarget.checked })}
+                />
+                <span>{$t("interactions.cadres.reponsesChat")}</span>
+              </label>
+              <p class="hint">
+                {$t("interactions.cadres.hintCooldown")}
+              </p>
+            </div>
+            {/if}
+            {#if secCommandes === "pad"}
             <div class="modal-bloc">
               <div class="modal-bloc-titre">{$t("interactions.pad.activation")}</div>
               <button
@@ -1663,6 +1749,7 @@
                       class:audio={mode === "audio"}
                       class:image={mode === "image"}
                       class:video={mode === "video"}
+                      class:chrono={mode === "chrono"}
                       onclick={() => (padSelCode = reservee ? null : code)}
                       title={reservee ? get(t)("interactions.pad.reservee" + code) : code}
                     >
@@ -1677,10 +1764,257 @@
                 {/each}
               </div>
             </div>
+            {/if}
           </div>
 
-          <!-- Panneau droit : config de la touche sélectionnée -->
+          <!-- Panneau droit : détail de l'outil actif (commande | touche) -->
           <div class="md-detail">
+            {#if secCommandes === "commandes"}
+            {#if cmdSel}
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.commandes.titreBloc")}</div>
+                <label class="alerte-field">
+                  <span class="field-label">{$t("interactions.commandes.label")}</span>
+                  <input
+                    value={cmdSel.commande}
+                    spellcheck="false"
+                    placeholder="hype"
+                    onchange={(e) => {
+                      const v = (e.target as HTMLInputElement).value.trim().replace(/^!+/, "");
+                      if (v === "") {
+                        // Nom vide refusé côté Rust → restaurer l'ancien nom.
+                        (e.target as HTMLInputElement).value = cmdSel.commande;
+                        return;
+                      }
+                      majCommande({ commande: v });
+                    }}
+                  />
+                </label>
+                <p class="hint">
+                  {$t("interactions.commandes.hintCommande", { cmd: "!" + (cmdSel.commande || "…") })}
+                </p>
+              </div>
+
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.media")}</div>
+                <div class="media-modes">
+                  <button
+                    class="mode-btn"
+                    class:active={modeMediaCommande(cmdSel) === "aucun"}
+                    onclick={() => majCommande({ media: undefined, media_kind: undefined })}
+                  >{$t("commun.aucun")}</button>
+                  <button
+                    class="mode-btn"
+                    class:active={modeMediaCommande(cmdSel) === "image"}
+                    onclick={() => importerMediaCommande("image")}
+                  >{$t("commun.image")}</button>
+                  <button
+                    class="mode-btn"
+                    class:active={modeMediaCommande(cmdSel) === "video"}
+                    onclick={() => importerMediaCommande("video")}
+                  >{$t("commun.video")}</button>
+                </div>
+                {#if cmdSel.media}
+                  <div class="alerte-son">
+                    <span class="alerte-son-nom">{cmdSel.media.split("/").pop()}</span>
+                    <button
+                      class="alerte-toggle"
+                      onclick={() => majCommande({ media: undefined, media_kind: undefined })}
+                      title={$t("commun.retirerMedia")}
+                    >✕</button>
+                  </div>
+                {/if}
+                {#if modeMediaCommande(cmdSel) === "video"}
+                  <label class="toggle">
+                    <input
+                      type="checkbox"
+                      checked={cmdSel.video_son !== false}
+                      onchange={(e) => majCommande({ video_son: e.currentTarget.checked })}
+                    />
+                    <span>{$t("interactions.commandes.sonVideo")}</span>
+                  </label>
+                {/if}
+                <!-- Son optionnel dans TOUS les modes : joué par-dessus
+                     (la vidéo garde son audio — mix). -->
+                <div class="alerte-son">
+                  {#if cmdSel.son}
+                    <span class="alerte-son-nom">{cmdSel.son.split("/").pop()}</span>
+                    <button
+                      class="alerte-toggle"
+                      onclick={() => majCommande({ son: undefined })}
+                      title={$t("commun.retirerSon")}
+                    >✕</button>
+                  {:else}
+                    <button class="alerte-test" onclick={importerSonCommande}>
+                      {$t("commun.importerSon")}
+                    </button>
+                  {/if}
+                </div>
+                <p class="hint">
+                  {$t("interactions.commandes.hintMedia")}
+                </p>
+              </div>
+
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.texte")}</div>
+                <label class="alerte-field">
+                  <span class="field-label">{$t("commun.texte")}</span>
+                  <input
+                    value={cmdSel.texte_template}
+                    spellcheck="false"
+                    onchange={(e) => majCommande({ texte_template: (e.target as HTMLInputElement).value })}
+                  />
+                </label>
+                <p class="hint">
+                  {$t("interactions.commandes.variablesHint")}
+                </p>
+                <p class="hint">
+                  {$t("interactions.hintCadre")}
+                </p>
+                <label class="alerte-field">
+                  <span class="field-label">{$t("commun.taille")} {cmdSel.taille_px}px</span>
+                  <input
+                    class="range"
+                    type="range"
+                    min="16"
+                    max="96"
+                    step="2"
+                    value={cmdSel.taille_px}
+                    oninput={(e) => majCommande({ taille_px: +(e.target as HTMLInputElement).value })}
+                  />
+                </label>
+                <label class="alerte-field">
+                  <span class="field-label">{$t("commun.police")}</span>
+                  <select
+                    class="police-select"
+                    value={cmdSel.police ?? ""}
+                    onchange={(e) => majCommande({ police: e.currentTarget.value })}
+                  >
+                    <option value="">{$t("interactions.bandeau.policeSysteme")}</option>
+                    {#each POLICES_TITRE as p (p.id)}
+                      <option value={p.id} style="font-family: '{p.id}', sans-serif;">{p.nom}</option>
+                    {/each}
+                  </select>
+                </label>
+                <div class="alerte-field">
+                  <span class="field-label">{$t("titreForm.style")}</span>
+                  <div class="style-boutons">
+                    <button
+                      class="style-btn"
+                      class:active={cmdSel.gras}
+                      title={$t("titreForm.gras")}
+                      onclick={() => majCommande({ gras: !cmdSel.gras })}
+                    ><b>G</b></button>
+                    <button
+                      class="style-btn"
+                      class:active={cmdSel.italique}
+                      title={$t("titreForm.italique")}
+                      onclick={() => majCommande({ italique: !cmdSel.italique })}
+                    ><i>I</i></button>
+                    <button
+                      class="style-btn"
+                      class:active={cmdSel.souligne}
+                      title={$t("titreForm.souligne")}
+                      onclick={() => majCommande({ souligne: !cmdSel.souligne })}
+                    ><u>U</u></button>
+                  </div>
+                </div>
+                <div class="alerte-field">
+                  <span class="field-label">{$t("titreForm.couleurTexte")}</span>
+                  <div class="cmd-couleur-row">
+                    <input
+                      class="couleur-input"
+                      type="color"
+                      title={$t("titreForm.couleurDebutTitle")}
+                      value={cmdSel.couleur ?? cmdGrad.from}
+                      disabled={cmdSel.couleur == null}
+                      oninput={(e) => majCommande({ couleur: e.currentTarget.value })}
+                    />
+                    {#if cmdSel.couleur != null}
+                      <button
+                        class="auto-btn"
+                        title={$t("titreForm.autoCadreTitle")}
+                        onclick={() => majCommande({ couleur: undefined })}
+                      >{$t("titreForm.autoCadre")}</button>
+                    {:else}
+                      <button
+                        class="auto-btn"
+                        title={$t("titreForm.personnaliserTitle")}
+                        onclick={() => majCommande({ couleur: cmdGrad.from })}
+                      >{$t("titreForm.personnaliser")}</button>
+                      <span class="auto-tag">{$t("titreForm.autoTag")}</span>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("commun.comportement")}</div>
+                <div class="alerte-2col">
+                  <label class="alerte-field">
+                    <span class="field-label">{$t("commun.dureeS")}</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="60"
+                      value={Math.round(cmdSel.duree_ms / 1000)}
+                      onchange={(e) => majCommande({ duree_ms: Math.max(1, +(e.target as HTMLInputElement).value) * 1000 })}
+                    />
+                  </label>
+                  <label class="alerte-field">
+                    <span class="field-label">{$t("interactions.cooldownGlobal")}</span>
+                    <input
+                      type="number"
+                      min="0"
+                      max="600"
+                      value={cmdSel.cooldown_global_s}
+                      onchange={(e) => majCommande({ cooldown_global_s: Math.max(0, +(e.target as HTMLInputElement).value) })}
+                    />
+                  </label>
+                </div>
+                <label class="alerte-field">
+                  <span class="field-label">{$t("interactions.cooldownViewer")}</span>
+                  <input
+                    type="number"
+                    min="0"
+                    max="600"
+                    value={cmdSel.cooldown_viewer_s}
+                    onchange={(e) => majCommande({ cooldown_viewer_s: Math.max(0, +(e.target as HTMLInputElement).value) })}
+                  />
+                </label>
+                <label class="toggle">
+                  <input
+                    type="checkbox"
+                    checked={cmdSel.reponses_chat !== false}
+                    onchange={(e) => majCommande({ reponses_chat: e.currentTarget.checked })}
+                  />
+                  <span>{$t("interactions.commandes.reponsesChat")}</span>
+                </label>
+              </div>
+
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">{$t("interactions.testSuppression")}</div>
+                <div class="queue-actions">
+                  <button class="alerte-test" onclick={() => testerCommande(cmdSel.id)} disabled={!cmdSel.actif}>
+                    {$t("interactions.commandes.tester")}
+                  </button>
+                  <button
+                    class="alerte-toggle"
+                    onclick={() => { void supprimerCommande(cmdSel.id); }}
+                    title={$t("interactions.commandes.supprimerTitle")}
+                  >{$t("commun.supprimer")}</button>
+                </div>
+                <p class="hint">
+                  {$t("interactions.testHint")}
+                </p>
+              </div>
+            {:else}
+              <div class="modal-bloc">
+                <p class="hint">{$t("interactions.commandes.aucuneSelection")}</p>
+              </div>
+          {/if}
+            {/if}
+            {#if secCommandes === "pad"}
             {#if padSelCode && padSel}
               <div class="modal-bloc">
                 <div class="modal-bloc-titre">{$t("interactions.pad.toucheTitre", { touche: NOMS_AFFICHAGE[padSelCode] ?? padSelCode, plage: padPlage + 1 })}</div>
@@ -1691,7 +2025,7 @@
 
               <div class="modal-bloc">
                 <div class="modal-bloc-titre">{$t("commun.media")}</div>
-                <div class="media-modes">
+                <div class="media-modes pad-modes">
                   <button
                     class="mode-btn"
                     class:active={modeMediaPad(padSel) === "aucun"}
@@ -1712,6 +2046,11 @@
                     class:active={modeMediaPad(padSel) === "video"}
                     onclick={() => onImporterMediaPad("video")}
                   >{$t("commun.video")}</button>
+                  <button
+                    class="mode-btn"
+                    class:active={modeMediaPad(padSel) === "chrono"}
+                    onclick={() => majPad({ media_type: "chrono", media: undefined, media_kind: undefined, son: undefined })}
+                  >{$t("commun.chrono")}</button>
                 </div>
 
                 {#if padSel.media}
@@ -1742,24 +2081,74 @@
                   </div>
                 {/if}
 
-                <p class="hint">
-                  {$t("interactions.pad.hintMedia")}
-                </p>
+                {#if modeMediaPad(padSel) === "chrono"}
+                  <label class="alerte-field">
+                    <span class="field-label">{$t("interactions.pad.chronoDuree")}</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="3600"
+                      value={padSel.chrono_duree_s}
+                      onchange={(e) => majPad({ chrono_duree_s: Math.max(1, Math.round(+(e.target as HTMLInputElement).value)) })}
+                    />
+                  </label>
+                  <label class="alerte-field">
+                    <span class="field-label">{$t("interactions.pad.chronoSonDepart")}</span>
+                    {#if padSel.chrono_son_depart}
+                      <span class="alerte-son-nom">{padSel.chrono_son_depart.split("/").pop()}</span>
+                      <button
+                        class="alerte-toggle"
+                        onclick={() => majPad({ chrono_son_depart: undefined })}
+                        title={$t("commun.retirerSon")}
+                      >✕</button>
+                    {:else}
+                      <button class="alerte-test" onclick={() => void onImporterSonChrono("depart")}>
+                        {$t("commun.importerSon")}
+                      </button>
+                    {/if}
+                  </label>
+                  <label class="alerte-field">
+                    <span class="field-label">{$t("interactions.pad.chronoSonFin")}</span>
+                    {#if padSel.chrono_son_fin}
+                      <span class="alerte-son-nom">{padSel.chrono_son_fin.split("/").pop()}</span>
+                      <button
+                        class="alerte-toggle"
+                        onclick={() => majPad({ chrono_son_fin: undefined })}
+                        title={$t("commun.retirerSon")}
+                      >✕</button>
+                    {:else}
+                      <button class="alerte-test" onclick={() => void onImporterSonChrono("fin")}>
+                        {$t("commun.importerSon")}
+                      </button>
+                    {/if}
+                  </label>
+                  <p class="hint">
+                    {$t("interactions.pad.hintChrono")}
+                  </p>
+                {/if}
+
+                {#if modeMediaPad(padSel) !== "chrono"}
+                  <p class="hint">
+                    {$t("interactions.pad.hintMedia")}
+                  </p>
+                {/if}
               </div>
 
               <div class="modal-bloc">
                 <div class="modal-bloc-titre">{$t("commun.comportement")}</div>
                 <div class="alerte-2col">
-                  <label class="alerte-field">
-                    <span class="field-label">{$t("commun.dureeS")}</span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="60"
-                      value={Math.round(padSel.duree_ms / 1000)}
-                      onchange={(e) => majPad({ duree_ms: Math.max(1, +(e.target as HTMLInputElement).value) * 1000 })}
-                    />
-                  </label>
+                  {#if modeMediaPad(padSel) !== "chrono"}
+                    <label class="alerte-field">
+                      <span class="field-label">{$t("commun.dureeS")}</span>
+                      <input
+                        type="number"
+                        min="1"
+                        max="60"
+                        value={Math.round(padSel.duree_ms / 1000)}
+                        onchange={(e) => majPad({ duree_ms: Math.max(1, +(e.target as HTMLInputElement).value) * 1000 })}
+                      />
+                    </label>
+                  {/if}
                   <label class="alerte-field">
                     <span class="field-label">{$t("interactions.pad.volume", { n: Math.round(padSel.volume * 100) })}</span>
                     <input
@@ -1774,24 +2163,61 @@
                   </label>
                 </div>
                 {#if modeMediaPad(padSel) === "image" || modeMediaPad(padSel) === "video"}
-                  <div class="alerte-2col">
-                    <label class="alerte-field">
-                      <span class="field-label">Bounce</span>
+                  <div class="pad-checks">
+                    <label class="pad-check">
                       <input
                         type="checkbox"
                         checked={padSel.bounce}
                         onchange={(e) => majPad({ bounce: (e.target as HTMLInputElement).checked })}
                       />
+                      <span>Bounce</span>
                     </label>
-                    <label class="alerte-field">
-                      <span class="field-label">Zoom</span>
+                    <label class="pad-check">
                       <input
                         type="checkbox"
                         checked={padSel.zoom}
                         onchange={(e) => majPad({ zoom: (e.target as HTMLInputElement).checked })}
                       />
+                      <span>Zoom</span>
                     </label>
+                    <label class="pad-check">
+                      <input
+                        type="checkbox"
+                        checked={padSel.plein_ecran}
+                        onchange={(e) => majPad({ plein_ecran: (e.target as HTMLInputElement).checked })}
+                      />
+                      <span>{$t("interactions.pad.pleinEcran")}</span>
+                    </label>
+                    {#if padSel.plein_ecran}
+                      <label class="pad-check">
+                        <input
+                          type="checkbox"
+                          checked={padSel.transparence}
+                          onchange={(e) => majPad({ transparence: (e.target as HTMLInputElement).checked })}
+                        />
+                        <span>{$t("interactions.pad.transparence")}</span>
+                      </label>
+                    {/if}
                   </div>
+                  {#if padSel.plein_ecran && padSel.transparence}
+                    <label class="alerte-field">
+                      <span class="field-label">
+                        {$t("interactions.pad.opacite", { n: Math.round(padSel.transparence_opacite * 100) })}
+                      </span>
+                      <input
+                        class="range"
+                        type="range"
+                        min="0"
+                        max="100"
+                        step="5"
+                        value={Math.round(padSel.transparence_opacite * 100)}
+                        oninput={(e) => majPad({ transparence_opacite: +(e.target as HTMLInputElement).value / 100 })}
+                      />
+                    </label>
+                  {/if}
+                  <p class="hint">
+                    {$t("interactions.pad.hintPleinEcran")}
+                  </p>
                 {/if}
               </div>
 
@@ -1816,6 +2242,40 @@
                 <p class="hint">
                   {$t("interactions.pad.hintSelection")}
                 </p>
+              </div>
+            {/if}
+            {/if}
+            {#if secCommandes === "cadres"}
+              <div class="modal-bloc">
+                <div class="modal-bloc-titre">
+                  {$t("interactions.cadres.paletteTitre", { n: cadresPalette.length })}
+                </div>
+                <p class="hint">
+                  {$t("interactions.cadres.hintPalette", { cmd: "!" + (cadresChat.commande || "…") })}
+                </p>
+                <div class="cadres-palette">
+                  {#each cadresPalette as c (c.nom)}
+                    <div
+                      class="cadres-couleur"
+                      class:en-test={cadresTestNom === c.nom}
+                      title="{c.nom} — {c.hex}"
+                    >
+                      <span class="cadres-chip" style:background={c.hex}></span>
+                      <span class="cadres-nom">{c.nom}</span>
+                      <button
+                        class="cadres-test"
+                        class:on={cadresTestNom === c.nom}
+                        disabled={!cadreActifScene}
+                        title={!cadreActifScene
+                          ? $t("interactions.cadres.pasCadre")
+                          : cadresTestNom === c.nom
+                            ? $t("interactions.cadres.stopTest")
+                            : $t("interactions.cadres.tester")}
+                        onclick={() => void testerCouleurCadres(c)}
+                      >{cadresTestNom === c.nom ? "■" : "▶"}</button>
+                    </div>
+                  {/each}
+                </div>
               </div>
             {/if}
           </div>
@@ -2137,17 +2597,15 @@
       </div>
     {/if}
 
-    {#if tab === "planning"}
-      <!-- Pleine largeur : la grille semaine + colonne jeux remplissent les
-           75rem de la modale (le max-width:42.5rem de .tab-body est levé). -->
-      <div class="tab-body tab-body-planning">
-        <PlanningTab />
-      </div>
-    {/if}
-
     {#if tab === "musique"}
       <div class="tab-body">
         <MusiqueTab />
+      </div>
+    {/if}
+
+    {#if tab === "fight"}
+      <div class="tab-body">
+        <FightTab />
       </div>
     {/if}
 
@@ -2161,8 +2619,9 @@
           <div class="modal-bloc-titre">{$t("interactions.tabPosition")}</div>
           <div class="alerte-presets">
             {#each Object.entries(PRESETS_OVERLAY) as [pos, label] (pos)}
-              <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetOverlay(pos)}>{label}</button>
+              <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetSquelette(pos, "overlay")}>{label}</button>
             {/each}
+            <button class="alerte-test" onclick={() => void testerSquelette("overlay")}>{$t("interactions.position.tester")}</button>
           </div>
           <div
             class="mini-canvas"
@@ -2173,15 +2632,15 @@
           >
             <div
               class="overlay-skeleton"
-              style="left: {ovX * scale}px; top: {ovY * scale}px; width: {ovW * scale}px; height: {ovH * scale}px;"
-              onpointerdown={onRectDown}
+              style="left: {ov.x * scale}px; top: {ov.y * scale}px; width: {ov.w * scale}px; height: {ov.h * scale}px;"
+              onpointerdown={(e) => onRectDown(e, "overlay")}
               role="presentation"
             >
               <span class="skeleton-label">{$t("interactions.position.overlay")}</span>
-              <div class="sk-handle nw" onpointerdown={(e) => onHandleDown(e, "resize-nw")} role="presentation"></div>
-              <div class="sk-handle ne" onpointerdown={(e) => onHandleDown(e, "resize-ne")} role="presentation"></div>
-              <div class="sk-handle sw" onpointerdown={(e) => onHandleDown(e, "resize-sw")} role="presentation"></div>
-              <div class="sk-handle se" onpointerdown={(e) => onHandleDown(e, "resize-se")} role="presentation"></div>
+              <div class="sk-handle nw" onpointerdown={(e) => onHandleDown(e, "resize-nw", "overlay")} role="presentation"></div>
+              <div class="sk-handle ne" onpointerdown={(e) => onHandleDown(e, "resize-ne", "overlay")} role="presentation"></div>
+              <div class="sk-handle sw" onpointerdown={(e) => onHandleDown(e, "resize-sw", "overlay")} role="presentation"></div>
+              <div class="sk-handle se" onpointerdown={(e) => onHandleDown(e, "resize-se", "overlay")} role="presentation"></div>
             </div>
           </div>
           <p class="hint">
@@ -2192,16 +2651,16 @@
               <span class="field-label">X</span>
               <input
                 type="number"
-                value={Math.round(ovX)}
-                onchange={(e) => { ovX = +(e.target as HTMLInputElement).value; void onOverlayCommit(); }}
+                value={Math.round(ov.x)}
+                onchange={(e) => { ov.x = +(e.target as HTMLInputElement).value; void onOverlayCommit("overlay"); }}
               />
             </label>
             <label class="alerte-field">
               <span class="field-label">Y</span>
               <input
                 type="number"
-                value={Math.round(ovY)}
-                onchange={(e) => { ovY = +(e.target as HTMLInputElement).value; void onOverlayCommit(); }}
+                value={Math.round(ov.y)}
+                onchange={(e) => { ov.y = +(e.target as HTMLInputElement).value; void onOverlayCommit("overlay"); }}
               />
             </label>
             <label class="alerte-field">
@@ -2210,8 +2669,8 @@
                 type="number"
                 min="80"
                 max="1920"
-                value={Math.round(ovW)}
-                onchange={(e) => { ovW = Math.max(80, +(e.target as HTMLInputElement).value); void onOverlayCommit(); }}
+                value={Math.round(ov.w)}
+                onchange={(e) => { ov.w = Math.max(80, +(e.target as HTMLInputElement).value); void onOverlayCommit("overlay"); }}
               />
             </label>
             <label class="alerte-field">
@@ -2220,8 +2679,150 @@
                 type="number"
                 min="60"
                 max="1080"
-                value={Math.round(ovH)}
-                onchange={(e) => { ovH = Math.max(60, +(e.target as HTMLInputElement).value); void onOverlayCommit(); }}
+                value={Math.round(ov.h)}
+                onchange={(e) => { ov.h = Math.max(60, +(e.target as HTMLInputElement).value); void onOverlayCommit("overlay"); }}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-bloc">
+          <div class="modal-bloc-titre">{$t("interactions.position.titreChrono")}</div>
+          <div class="alerte-presets">
+            {#each Object.entries(PRESETS_OVERLAY) as [pos, label] (pos)}
+              <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetSquelette(pos, "chrono")}>{label}</button>
+            {/each}
+            <button class="alerte-test" onclick={() => void testerSquelette("chrono")}>{$t("interactions.position.tester")}</button>
+          </div>
+          <div
+            class="mini-canvas"
+            bind:clientWidth={miniW}
+            onpointermove={onPointerMove}
+            onpointerup={onPointerUp}
+            role="presentation"
+          >
+            <div
+              class="overlay-skeleton squelette-chrono"
+              style="left: {chr.x * scale}px; top: {chr.y * scale}px; width: {chr.w * scale}px; height: {chr.h * scale}px;"
+              onpointerdown={(e) => onRectDown(e, "chrono")}
+              role="presentation"
+            >
+              <span class="skeleton-label">{$t("interactions.position.chrono")}</span>
+              <div class="sk-handle nw" onpointerdown={(e) => onHandleDown(e, "resize-nw", "chrono")} role="presentation"></div>
+              <div class="sk-handle ne" onpointerdown={(e) => onHandleDown(e, "resize-ne", "chrono")} role="presentation"></div>
+              <div class="sk-handle sw" onpointerdown={(e) => onHandleDown(e, "resize-sw", "chrono")} role="presentation"></div>
+              <div class="sk-handle se" onpointerdown={(e) => onHandleDown(e, "resize-se", "chrono")} role="presentation"></div>
+            </div>
+          </div>
+          <p class="hint">
+            {$t("interactions.position.hintChrono")}
+          </p>
+          <div class="alerte-4col">
+            <label class="alerte-field">
+              <span class="field-label">X</span>
+              <input
+                type="number"
+                value={Math.round(chr.x)}
+                onchange={(e) => { chr.x = +(e.target as HTMLInputElement).value; void onOverlayCommit("chrono"); }}
+              />
+            </label>
+            <label class="alerte-field">
+              <span class="field-label">Y</span>
+              <input
+                type="number"
+                value={Math.round(chr.y)}
+                onchange={(e) => { chr.y = +(e.target as HTMLInputElement).value; void onOverlayCommit("chrono"); }}
+              />
+            </label>
+            <label class="alerte-field">
+              <span class="field-label">{$t("commun.largeur")}</span>
+              <input
+                type="number"
+                min="80"
+                max="1920"
+                value={Math.round(chr.w)}
+                onchange={(e) => { chr.w = Math.max(80, +(e.target as HTMLInputElement).value); void onOverlayCommit("chrono"); }}
+              />
+            </label>
+            <label class="alerte-field">
+              <span class="field-label">{$t("interactions.position.hauteurRef")}</span>
+              <input
+                type="number"
+                min="60"
+                max="1080"
+                value={Math.round(chr.h)}
+                onchange={(e) => { chr.h = Math.max(60, +(e.target as HTMLInputElement).value); void onOverlayCommit("chrono"); }}
+              />
+            </label>
+          </div>
+        </div>
+
+        <div class="modal-bloc">
+          <div class="modal-bloc-titre">{$t("interactions.position.titreSplitpop")}</div>
+          <div class="alerte-presets">
+            {#each Object.entries(PRESETS_OVERLAY) as [pos, label] (pos)}
+              <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetSquelette(pos, "splitpop")}>{label}</button>
+            {/each}
+            <button class="alerte-test" onclick={() => void testerSquelette("splitpop")}>{$t("interactions.position.tester")}</button>
+          </div>
+          <div
+            class="mini-canvas"
+            bind:clientWidth={miniW}
+            onpointermove={onPointerMove}
+            onpointerup={onPointerUp}
+            role="presentation"
+          >
+            <div
+              class="overlay-skeleton squelette-splitpop"
+              style="left: {spp.x * scale}px; top: {spp.y * scale}px; width: {spp.w * scale}px; height: {spp.h * scale}px;"
+              onpointerdown={(e) => onRectDown(e, "splitpop")}
+              role="presentation"
+            >
+              <span class="skeleton-label">{$t("interactions.position.splitpop")}</span>
+              <div class="sk-handle nw" onpointerdown={(e) => onHandleDown(e, "resize-nw", "splitpop")} role="presentation"></div>
+              <div class="sk-handle ne" onpointerdown={(e) => onHandleDown(e, "resize-ne", "splitpop")} role="presentation"></div>
+              <div class="sk-handle sw" onpointerdown={(e) => onHandleDown(e, "resize-sw", "splitpop")} role="presentation"></div>
+              <div class="sk-handle se" onpointerdown={(e) => onHandleDown(e, "resize-se", "splitpop")} role="presentation"></div>
+            </div>
+          </div>
+          <p class="hint">
+            {$t("interactions.position.hintSplitpop")}
+          </p>
+          <div class="alerte-4col">
+            <label class="alerte-field">
+              <span class="field-label">X</span>
+              <input
+                type="number"
+                value={Math.round(spp.x)}
+                onchange={(e) => { spp.x = +(e.target as HTMLInputElement).value; void onOverlayCommit("splitpop"); }}
+              />
+            </label>
+            <label class="alerte-field">
+              <span class="field-label">Y</span>
+              <input
+                type="number"
+                value={Math.round(spp.y)}
+                onchange={(e) => { spp.y = +(e.target as HTMLInputElement).value; void onOverlayCommit("splitpop"); }}
+              />
+            </label>
+            <label class="alerte-field">
+              <span class="field-label">{$t("commun.largeur")}</span>
+              <input
+                type="number"
+                min="80"
+                max="1920"
+                value={Math.round(spp.w)}
+                onchange={(e) => { spp.w = Math.max(80, +(e.target as HTMLInputElement).value); void onOverlayCommit("splitpop"); }}
+              />
+            </label>
+            <label class="alerte-field">
+              <span class="field-label">{$t("interactions.position.hauteurRef")}</span>
+              <input
+                type="number"
+                min="60"
+                max="1080"
+                value={Math.round(spp.h)}
+                onchange={(e) => { spp.h = Math.max(60, +(e.target as HTMLInputElement).value); void onOverlayCommit("splitpop"); }}
               />
             </label>
           </div>
@@ -2241,12 +2842,125 @@
   .cmd-ajouter {
     margin-top: 0.25rem;
   }
+  .cmd-pack {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+  }
+  .cmd-pack .alerte-test {
+    flex: 1;
+  }
+  /* Barre de résolution des conflits d'import (un nom à la fois). */
+  .cmd-conflit {
+    margin-top: 0.4rem;
+    padding: 0.5rem 0.6rem;
+    background: color-mix(in srgb, var(--message-warn-color, #e6a23c) 15%, transparent);
+    border: 1px solid color-mix(in srgb, var(--message-warn-color, #e6a23c) 60%, transparent);
+    border-radius: var(--rayon);
+    font-size: 0.8rem;
+  }
+  .cmd-conflit-btns {
+    display: flex;
+    gap: 0.25rem;
+    margin-top: 0.4rem;
+  }
+  /* Le label du nom de pack réutilise .alerte-field : on neutralise juste
+     sa marge basse dans la barre inline. */
+  .cmd-export-field {
+    margin-bottom: 0;
+  }
+  /* Style du texte de commande (G/I/S + couleur) — recettes reprises de
+     TitreEditForm (boutons style, picker couleur, bouton auto/perso). */
+  .style-boutons {
+    display: flex;
+    gap: 0.4rem;
+  }
+  .style-btn {
+    flex: 0 0 2.2rem;
+    height: 2rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
+    color: var(--texte);
+    border: 1px solid var(--bordure-ui);
+    font: inherit;
+    font-size: 0.95rem;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  }
+  .style-btn:hover {
+    background: var(--btn-surface-hover);
+    box-shadow: var(--btn-inset-hover);
+    border-color: var(--accent-ui);
+    opacity: 1;
+  }
+  .style-btn.active {
+    background:
+      linear-gradient(
+        180deg,
+        color-mix(in srgb, var(--accent-ui) 25%, var(--fond-controle)) 0%,
+        color-mix(in srgb, var(--accent-ui) 12%, var(--fond-controle)) 100%
+      );
+    color: var(--texte);
+    border-color: var(--accent-ui);
+    opacity: 1;
+  }
+  .cmd-couleur-row {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+  }
+  /* NB : .alerte-field input (width:100%) gagnerait en spécificité sur un
+     sélecteur classe seule — d'où le préfixe .cmd-couleur-row ici. */
+  .cmd-couleur-row .couleur-input {
+    width: 1.75rem;
+    height: 1.5rem;
+    border: 1px solid var(--bordure-ui);
+    background: transparent;
+    cursor: pointer;
+    flex-shrink: 0;
+    padding: 0;
+  }
+  .cmd-couleur-row .couleur-input:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .auto-btn {
+    padding: 0.25rem 0.6rem;
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
+    color: var(--texte);
+    border: 1px solid var(--bordure-ui);
+    font: inherit;
+    font-size: 0.78rem;
+    cursor: pointer;
+    flex-shrink: 0;
+    opacity: 0.85;
+    transition: background 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+  }
+  .auto-btn:hover {
+    background: var(--btn-surface-hover);
+    border-color: var(--accent-ui);
+    opacity: 1;
+  }
+  .auto-tag {
+    font-size: 0.75rem;
+    font-style: italic;
+    opacity: 0.55;
+  }
   /* Segmented control mode média (Aucun | Image | Vidéo) */
   .media-modes {
     display: grid;
     grid-template-columns: repeat(3, 1fr);
     gap: 0.25rem;
     margin-bottom: 0.4rem;
+  }
+  /* Pad : 5 modes (Aucun | Audio | Image | Vidéo | Chrono) */
+  .media-modes.pad-modes {
+    grid-template-columns: repeat(5, 1fr);
   }
   .mode-btn {
     background: var(--btn-surface);
@@ -2348,6 +3062,7 @@
   .pad-touche.audio { background: color-mix(in srgb, var(--accent-ui) 15%, var(--fond-controle)); }
   .pad-touche.image { background: color-mix(in srgb, var(--message-ok-color) 15%, var(--fond-controle)); }
   .pad-touche.video { background: color-mix(in srgb, var(--accent-orange) 15%, var(--fond-controle)); }
+  .pad-touche.chrono { background: color-mix(in srgb, var(--message-user-action-color) 15%, var(--fond-controle)); }
   .pad-touche-nom {
     font-size: 1.1rem;
     font-weight: 600;
@@ -2360,6 +3075,71 @@
   }
   .pad-touche-badge.reservee {
     color: var(--texte);
+  }
+  .cadres-palette {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(6.5rem, 1fr));
+    gap: 0.3rem;
+    margin-top: 0.5rem;
+    max-height: 26rem;
+    overflow-y: auto;
+  }
+  .cadres-couleur {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
+    border: 1px solid var(--bordure-ui);
+    border-radius: var(--rayon-petit);
+    padding: 0.3rem 0.45rem;
+  }
+  .cadres-chip {
+    width: 1rem;
+    height: 1rem;
+    border-radius: 50%;
+    border: 1px solid var(--bordure-ui);
+    flex-shrink: 0;
+  }
+  .cadres-nom {
+    color: var(--texte);
+    font-size: 0.8rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex: 1;
+  }
+  .cadres-couleur.en-test {
+    border-color: var(--accent-ui);
+    box-shadow: 0 0 0 1px var(--accent-ui);
+  }
+  .cadres-test {
+    background: var(--btn-surface);
+    box-shadow: var(--btn-inset);
+    color: var(--texte);
+    border: 1px solid var(--bordure-ui);
+    border-radius: var(--rayon-petit);
+    width: 1.5rem;
+    height: 1.5rem;
+    padding: 0;
+    font-size: 0.6rem;
+    line-height: 1;
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.1s;
+  }
+  .cadres-test:hover:not(:disabled) {
+    background: var(--btn-surface-hover);
+    box-shadow: var(--btn-inset-hover);
+    border-color: var(--accent-ui);
+  }
+  .cadres-test.on {
+    border-color: var(--accent-ui);
+    color: var(--accent-ui);
+  }
+  .cadres-test:disabled {
+    opacity: 0.4;
+    cursor: default;
   }
   .alerte-nom {
     flex: 1;
@@ -2421,6 +3201,31 @@
     font-size: 0.8rem;
     width: 100%;
   }
+  /* Cases à cocher du pad (Bounce/Zoom/Plein écran/Transparence) :
+     horizontales — case à GAUCHE, label à droite (même pattern que
+     .ea-check de EcranAttenteModal, pas un .alerte-field vertical). */
+  .pad-checks {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem 1.1rem;
+    margin-bottom: 0.4rem;
+  }
+  .pad-check {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    font-size: 0.85rem;
+    cursor: pointer;
+    margin: 0;
+    min-width: 0;
+  }
+  .pad-check input {
+    accent-color: var(--accent-ui);
+    cursor: pointer;
+    margin: 0;
+    flex: none;
+    width: auto;
+  }
   .alerte-2col {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -2454,9 +3259,10 @@
   }
 
   /* Tabs — mêmes patterns que CadresModal (bordures var(--accent-ui), pas de
-     radius). flex-wrap + nowrap sur les labels : 8 onglets dépassent la
-     largeur sur écran vertical → retour à la ligne ENTRE les onglets (2e
-     rangée) au lieu de texte tronqué dans les boutons. */
+     radius). flex-wrap + nowrap sur les labels : retour à la ligne ENTRE
+     les onglets (2e rangée) au lieu de texte tronqué dans les boutons.
+     .tab-outil : le bouton « Position des overlays » se détache à droite —
+     c'est un outil transversal, pas une destination. */
   .tabs {
     display: flex;
     flex-wrap: wrap;
@@ -2486,6 +3292,15 @@
     opacity: 1;
     border-bottom-color: var(--accent-ui);
   }
+  .tab-outil {
+    margin-left: auto;
+  }
+  /* Séparateur discret dans le rail gauche : entre la nav outil et le
+     contenu contextuel (onglet Commandes). */
+  .md-sep {
+    border-top: 1px solid var(--bordure-ui);
+    margin: 0.15rem 0;
+  }
 
   /* Corps : scroll, colonne de contenu contenue et centrée (pas étirée sur
      les 75rem de la modale) */
@@ -2499,11 +3314,6 @@
     max-width: 42.5rem;
     width: 100%;
     margin: 0 auto;
-  }
-  /* Onglet Planning : la grille semaine + colonne jeux remplissent toute la
-     largeur de la modale (75rem) — pas de centrage à 42.5rem. */
-  .tab-body-planning {
-    max-width: none;
   }
   /* Le select police utilise la recette globale (app.css — select). */
   .police-select {
@@ -2593,6 +3403,25 @@
   }
   .overlay-skeleton:hover {
     background: color-mix(in srgb, var(--accent-ui) 18%, transparent);
+  }
+  /* Squelette DÉDIÉ du chrono 2 — teinte ambre pour le distinguer du
+     squelette partagé (accueil/alertes/commandes/pad). */
+  .overlay-skeleton.squelette-chrono {
+    background: color-mix(in srgb, var(--message-user-action-color) 12%, transparent);
+    border-color: var(--message-user-action-color);
+  }
+  .overlay-skeleton.squelette-chrono:hover {
+    background: color-mix(in srgb, var(--message-user-action-color) 18%, transparent);
+  }
+  /* Squelette DÉDIÉ du pop de validation des splits — teinte verte
+     (couleur des gains speedrun) pour le distinguer du partagé et du
+     chrono 2 (ambre). */
+  .overlay-skeleton.squelette-splitpop {
+    background: color-mix(in srgb, var(--message-ok-color) 12%, transparent);
+    border-color: var(--message-ok-color);
+  }
+  .overlay-skeleton.squelette-splitpop:hover {
+    background: color-mix(in srgb, var(--message-ok-color) 18%, transparent);
   }
   .skeleton-label {
     font-size: 0.7rem;

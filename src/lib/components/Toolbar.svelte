@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, createMusiqueWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
-  import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview } from "../stores/obs";
-  import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen } from "../stores/ui";
+  import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview, rafraichirOutputs } from "../stores/obs";
+  import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, planningModalOpen, statistiquesModalOpen, obsWebSocketModalOpen, confirmObsOutputOpen } from "../stores/ui";
   import { jcActif, toggleJustChatting } from "../stores/justChatting";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
   import { connecterKick, deconnecterKick, kickErreur as kickErreurStore, lireSlugSauve } from "../stores/kick";
@@ -18,13 +18,23 @@
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
   import { openUrl } from "@tauri-apps/plugin-opener";
+  import icoWidgets from "../../assets/ico/Widget.png";
+  import icoModules from "../../assets/ico/Modules.png";
+  import icoPerso from "../../assets/ico/Personnalistation.png";
+  import icoObs from "../../assets/ico/Obs.png";
+  import icoConnexions from "../../assets/ico/Connexion.png";
+  import icoPreview from "../../assets/ico/Previsualiqation.png";
+  import icoAttente from "../../assets/ico/Ecran d'attente.png";
+  import icoJc from "../../assets/ico/Just Chatting.png";
+  import icoInteractions from "../../assets/ico/Interaction live.png";
+  import icoErgo from "../../assets/ico/Ergonomie.png";
+  import icoDiagnostic from "../../assets/ico/Diagnostic.png";
+  import icoGuide from "../../assets/ico/Guide du streamer.png";
 
   let status = $derived($obsStatus);
   let error = $derived($obsError);
   let streaming = $derived($obsStreaming);
   let recording = $derived($obsRecording);
-  // Verrou anti double-clic : chaque toggle = une connexion OBS one-shot.
-  let outputBusy = $state(false);
   let open = $derived($openSection);
   let cx = $derived($connexions);
   let twitchErr = $derived($twitchErreur);
@@ -36,7 +46,7 @@
   // Singleton caméra : désactive le bouton de création si un widget caméra existe.
   let hasCameraWidget = $derived($sceneStore.widgets.some((w) => w.type === "camera"));
 
-  // ===== Cadre SVG unifié (section Personnalisation) =====
+  // ===== Cadre SVG unifié (section Cadre & fond) =====
   let cadre = $derived($sceneStore.cadreWidget ?? null);
   let cadreActif = $derived(!!cadre?.actif);
 
@@ -64,7 +74,7 @@
 
   async function onConnect() {
     try {
-      await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
+      await obsConnect(get(obsHost), get(obsPort), get(obsPassword), "bouton");
     } catch {
       // obsConnect a mis obsStatus=error + obsError. Skip sync captures.
       return;
@@ -73,20 +83,23 @@
     await syncCapturesOBS();
   }
 
-  // Sorties OBS : toggle stream / record (état lu au connect + après chaque
-  // toggle — pas de polling). Erreur déjà traduite dans obsError par le store.
-  async function onToggleStream() {
-    if (outputBusy) return;
-    outputBusy = true;
-    try { await toggleStreamObs(); } catch { /* obsError affiché */ }
-    outputBusy = false;
+  // Sorties OBS : confirmation avant set (démarrer ET arrêter) — la modale
+  // ConfirmObsOutputModal relit l'état réel puis appelle setStreamObs/
+  // setRecordObs. obsStreamBusy/obsRecordBusy (stores/obs) grisent pendant
+  // le RPC.
+  function onToggleStream() {
+    confirmObsOutputOpen.set("stream");
   }
-  async function onToggleRecord() {
-    if (outputBusy) return;
-    outputBusy = true;
-    try { await toggleRecordObs(); } catch { /* obsError affiché */ }
-    outputBusy = false;
+  function onToggleRecord() {
+    confirmObsOutputOpen.set("record");
   }
+
+  // Resync des libellés stream/record à l'ouverture de la section OBS :
+  // l'utilisateur a pu agir directement dans OBS depuis le dernier affichage.
+  // Ponctuel (ouverture de section), pas un timer — pas de polling.
+  $effect(() => {
+    if (open === "obs" && status === "connected") void rafraichirOutputs();
+  });
 
   // Téléchargement OBS : page officielle obsproject.com (stable — les URLs
   // d'installeur GitHub incluent le n° de version et périment). Ouvert dans
@@ -308,6 +321,9 @@
        d'édition ouverte au-dessus (elle comprime l'accordéon) —
        voir onSidebarScroll/onSidebarWheel dans le script. -->
 
+  <!-- ============ GROUPE : MA SCÈNE ============ -->
+  <div class="groupe-label">{$t("toolbar.groupeScene")}</div>
+
   <!-- Section Widgets : la carte bleue (.carte-edition.cible-widgets) est
        portée par la .section elle-même quand elle est ouverte — elle englobe
        en-tête + contenu, au même format que les autres cartes. -->
@@ -317,7 +333,7 @@
     class:cible-widgets={open === "widgets"}
   >
     <button class="header" class:ouvert={open === "widgets"} onclick={() => toggleSection("widgets")}>
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+      <img class="ico" src={icoWidgets} alt="" />
       <span>{$t("toolbar.widgets")}</span>
       <span class="chevron">›</span>
     </button>
@@ -339,7 +355,152 @@
     {/if}
   </div>
 
-  <!-- Section Connexions : carte vert foncé portée par la .section quand
+  <!-- Section Modules HUD : LANCEUR DIRECT (pas un accordéon — le clic ouvre
+       la modale master-detail des modules HUD de la scène : horloge,
+       musique en cours, objectifs du stream). Le positionnement se fait
+       aussi au drag/resize direct sur le canvas. -->
+  <div class="section sec-modules">
+    <button
+      class="header"
+      onclick={() => modulesModalOpen.set("horloge")}
+      title={$t("toolbar.modulesTitle")}
+    >
+      <img class="ico" src={icoModules} alt="" />
+      <span>{$t("toolbar.modules")}</span>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
+  <!-- Section Cadre & fond (ex-Personnalisation : cadres SVG + image de
+       fond du panneau) : carte violette portée par la .section elle-même
+       quand elle est ouverte — même mécanisme que la carte bleue de la
+       section Widgets. -->
+  <div
+    class="section sec-perso"
+    class:carte-edition={open === "personnalisation"}
+    class:cible-perso={open === "personnalisation"}
+  >
+    <button class="header" class:ouvert={open === "personnalisation"} onclick={() => toggleSection("personnalisation")}>
+      <img class="ico" src={icoPerso} alt="" />
+      <span>{$t("toolbar.personnalisation")}</span>
+      <span class="chevron">›</span>
+    </button>
+    {#if open === "personnalisation"}
+      <div class="content">
+        <!-- Galerie unique : UN cadre appliqué aux widgets ET au bord du
+             canvas (plus d'onglets depuis 2026-09-26). -->
+        <button class="action" onclick={() => cadreModalOpen.set(true)}>
+          {$t("cadresModal.titre")}
+        </button>
+        <button class="action" onclick={onImportFond}>
+          {fondImg ? $t("toolbar.fondChanger") : $t("toolbar.fond")}
+        </button>
+        {#if fondImg}
+          <button class="action" onclick={retirerFondSidebar}>
+            {$t("toolbar.fondRetirer")}
+          </button>
+        {/if}
+        <p class="hint">
+          {#if cadreActif}
+            {$t("toolbar.cadreActif")}
+          {:else}
+            {$t("toolbar.cadreInactif")}
+          {/if}
+        </p>
+      </div>
+    {/if}
+  </div>
+
+  <!-- ============ GROUPE : CONNEXIONS ============ -->
+  <div class="groupe-label">{$t("toolbar.groupeConnexions")}</div>
+
+  <!-- Section OBS : carte noir/doré portée par la .section quand elle est
+       ouverte — même mécanisme que les sections Widgets / Cadre & fond /
+       Réglages. Les couleurs d'état de l'en-tête (rouge/vert) restent
+       sémantiques et priment sur la teinte de la carte. -->
+  <div
+    class="section sec-obs"
+    class:carte-edition={open === "obs"}
+    class:cible-obs={open === "obs"}
+  >
+    <!-- En-tête coloré par l'état OBS : rouge = non connecté (OBS pas ouvert,
+         WebSocket off ou auth échouée), vert = connecté. L'utilisateur voit le
+         problème d'un coup d'œil et clique pour voir le message actionnable. -->
+    <button
+      class="header"
+      class:etat-erreur={status === "error" || status === "idle"}
+      class:etat-ok={status === "connected"}
+      class:ouvert={open === "obs"}
+      onclick={() => toggleSection("obs")}
+    >
+      <img class="ico" src={icoObs} alt="" />
+      <span>OBS</span>
+      <span class="chevron">›</span>
+    </button>
+    {#if open === "obs"}
+      <div class="content">
+        <input bind:value={$obsHost} placeholder={$t("toolbar.hote")} spellcheck="false" />
+        <input bind:value={$obsPort} placeholder={$t("toolbar.port")} spellcheck="false" />
+        <input
+          bind:value={$obsPassword}
+          type="password"
+          placeholder={$t("toolbar.motDePasse")}
+          spellcheck="false"
+        />
+        <button
+          class="action"
+          onclick={onConnect}
+          disabled={status === "connecting"}
+        >
+          {status === "connecting" ? $t("toolbar.connexionEnCours") : $t("commun.connecter")}
+        </button>
+        <!-- Sorties OBS : toggles stream + record. La pastille verte (.dot.on)
+             reflète outputActive lu au connect / après chaque toggle. -->
+        <button
+          class="action output-btn"
+          class:actif={streaming}
+          onclick={onToggleStream}
+          disabled={status !== "connected" || $obsStreamBusy}
+        >
+          <span class="dot" class:on={streaming}></span>
+          {streaming ? $t("toolbar.streamStop") : $t("toolbar.streamStart")}
+        </button>
+        <button
+          class="action output-btn"
+          class:actif={recording}
+          onclick={onToggleRecord}
+          disabled={status !== "connected" || $obsRecordBusy}
+        >
+          <span class="dot" class:on={recording}></span>
+          {recording ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
+        </button>
+        <span
+          class="obs-status"
+          class:erreur={status === "error"}
+          class:ok={status === "connected"}
+        >
+          {#if status === "connected"}
+            OBS OK
+          {:else if status === "error"}
+            {error}
+          {/if}
+        </span>
+        <!-- Fenêtre « Connexion OBS » (WebSocket) : inventaire de ce qui
+             transite par le canal + options — pour les curieux, l'utilisateur
+             non technique n'y va jamais. -->
+        <button class="action" onclick={() => obsWebSocketModalOpen.set(true)}>
+          {$t("obsWs.ouvrir")}
+        </button>
+        <!-- Lien de téléchargement officiel (navigateur système) — discret,
+             pied de la carte OBS. -->
+        <button class="lien-dl" onclick={onTelechargerObs} title={OBS_DOWNLOAD_URL}>
+          {$t("toolbar.obsTelecharger")} ↗
+        </button>
+      </div>
+    {/if}
+  </div>
+
+  <!-- Section Plateformes : carte vert foncé portée par la .section quand
        elle est ouverte — même mécanisme que les autres sections-cartes. -->
   <div
     class="section sec-connexions"
@@ -347,7 +508,7 @@
     class:cible-connexions={open === "connexions"}
   >
     <button class="header" class:ouvert={open === "connexions"} onclick={() => toggleSection("connexions")}>
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M10 13a5 5 0 0 0 7.5.5l3-3a5 5 0 0 0-7-7l-1.7 1.7"/><path d="M14 11a5 5 0 0 0-7.5-.5l-3 3a5 5 0 0 0 7 7l1.7-1.7"/></svg>
+      <img class="ico" src={icoConnexions} alt="" />
       <span>{$t("toolbar.connexions")}</span>
       <span class="chevron">›</span>
     </button>
@@ -418,179 +579,8 @@
     {/if}
   </div>
 
-  <!-- Section Interactions chat : LANCEUR DIRECT (pas un accordéon — le clic
-       ouvre la modale à onglets : Clip de bienvenue / Bandeau / Alertes).
-       Tout est centralisé dans la modale, qui s'explique elle-même. -->
-  <div class="section sec-interactions">
-    <button
-      class="header"
-      onclick={() => interactionModalOpen.set(true)}
-      title={$t("toolbar.interactionsTitle")}
-    >
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 8.5 8.5 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 8.5-8.5h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg>
-      <span>{$t("toolbar.interactions")}</span>
-      <span class="chevron">›</span>
-    </button>
-  </div>
-
-  <!-- Section Écran d'attente : LANCEUR DIRECT (pas un accordéon — le clic
-       ouvre la modale de config/contrôle BRB). Le média est affiché sur la
-       diffusion uniquement ; le chrono est détenu par Rust. -->
-  <div class="section sec-attente">
-    <button
-      class="header"
-      onclick={() => ecranAttenteModalOpen.set(true)}
-      title={$t("toolbar.ecranAttenteTitle")}
-    >
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
-      <span>{$t("ecranAttenteModal.titre")}</span>
-      <span class="chevron">›</span>
-    </button>
-  </div>
-
-  <!-- Section Modules : LANCEUR DIRECT (pas un accordéon — le clic ouvre
-       la modale master-detail des modules HUD de la scène : horloge,
-       musique en cours, objectifs du stream). Le positionnement se fait
-       aussi au drag/resize direct sur le canvas. -->
-  <div class="section sec-modules">
-    <button
-      class="header"
-      onclick={() => modulesModalOpen.set("horloge")}
-      title={$t("toolbar.modulesTitle")}
-    >
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="8" height="7" rx="1.5"/><rect x="13" y="4" width="8" height="7" rx="1.5"/><rect x="3" y="13" width="8" height="7" rx="1.5"/><rect x="13" y="13" width="8" height="7" rx="1.5"/></svg>
-      <span>{$t("toolbar.modules")}</span>
-      <span class="chevron">›</span>
-    </button>
-  </div>
-
-  <!-- Section Just Chatting : TOGGLE DIRECT (pas un accordéon — le clic
-       bascule l'overlay non-destructif de la diffusion : caméra + chat
-       seuls, la scène n'est jamais modifiée). La pastille .dot reflète
-       l'état runtime — OFF au boot, non persisté. -->
-  <div class="section sec-jc">
-    <button
-      class="header output-btn"
-      class:actif={$jcActif}
-      onclick={onToggleJC}
-      title={$t("toolbar.justChattingTitle")}
-    >
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="5" width="12" height="14" rx="2"/><circle cx="8" cy="11" r="2.5"/><path d="M15 10h6.5v6H19l-2 2v-2h-2"/></svg>
-      <span>{$t("toolbar.justChatting")}</span>
-      <span class="dot" class:on={$jcActif}></span>
-    </button>
-  </div>
-
-  <!-- Section Modération & Rôles : LANCEUR DIRECT (pas un accordéon — le clic
-       ouvre la modale à onglets : Twitch / Kick / YouTube / TikTok / Trovo).
-       Gestion des statuts/rôles : ban, timeout, VIP, modérateur, suppression
-       de messages, clear chat. -->
-  <div class="section sec-moderation">
-    <button
-      class="header"
-      onclick={() => moderationModalOpen.set(true)}
-      title={$t("toolbar.moderationTitle")}
-    >
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
-      <span>{$t("toolbar.moderation")}</span>
-      <span class="chevron">›</span>
-    </button>
-  </div>
-
-  <!-- Section Diagnostic : LANCEUR DIRECT (pas un accordéon — le clic ouvre
-       la modale de consommation : courbes CPU/RAM par processus et par
-       fonction StreamOS + compteurs d'activité, mesures réelles 1 Hz). -->
-  <div class="section sec-diagnostic">
-    <button
-      class="header"
-      onclick={() => consoModalOpen.set(true)}
-      title={$t("toolbar.diagnosticTitle")}
-    >
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg>
-      <span>{$t("toolbar.diagnostic")}</span>
-      <span class="chevron">›</span>
-    </button>
-  </div>
-
-  <!-- Section OBS : carte noir/doré portée par la .section quand elle est
-       ouverte — même mécanisme que les sections Widgets / Personnalisation /
-       Ergonomie. Les couleurs d'état de l'en-tête (rouge/vert) restent
-       sémantiques et priment sur la teinte de la carte. -->
-  <div
-    class="section sec-obs"
-    class:carte-edition={open === "obs"}
-    class:cible-obs={open === "obs"}
-  >
-    <!-- En-tête coloré par l'état OBS : rouge = non connecté (OBS pas ouvert,
-         WebSocket off ou auth échouée), vert = connecté. L'utilisateur voit le
-         problème d'un coup d'œil et clique pour voir le message actionnable. -->
-    <button
-      class="header"
-      class:etat-erreur={status === "error" || status === "idle"}
-      class:etat-ok={status === "connected"}
-      class:ouvert={open === "obs"}
-      onclick={() => toggleSection("obs")}
-    >
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"/><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/></svg>
-      <span>OBS</span>
-      <span class="chevron">›</span>
-    </button>
-    {#if open === "obs"}
-      <div class="content">
-        <input bind:value={$obsHost} placeholder={$t("toolbar.hote")} spellcheck="false" />
-        <input bind:value={$obsPort} placeholder={$t("toolbar.port")} spellcheck="false" />
-        <input
-          bind:value={$obsPassword}
-          type="password"
-          placeholder={$t("toolbar.motDePasse")}
-          spellcheck="false"
-        />
-        <button
-          class="action"
-          onclick={onConnect}
-          disabled={status === "connecting"}
-        >
-          {status === "connecting" ? $t("toolbar.connexionEnCours") : $t("commun.connecter")}
-        </button>
-        <!-- Sorties OBS : toggles stream + record. La pastille verte (.dot.on)
-             reflète outputActive lu au connect / après chaque toggle. -->
-        <button
-          class="action output-btn"
-          class:actif={streaming}
-          onclick={onToggleStream}
-          disabled={status !== "connected" || outputBusy}
-        >
-          <span class="dot" class:on={streaming}></span>
-          {streaming ? $t("toolbar.streamStop") : $t("toolbar.streamStart")}
-        </button>
-        <button
-          class="action output-btn"
-          class:actif={recording}
-          onclick={onToggleRecord}
-          disabled={status !== "connected" || outputBusy}
-        >
-          <span class="dot" class:on={recording}></span>
-          {recording ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
-        </button>
-        <span
-          class="obs-status"
-          class:erreur={status === "error"}
-          class:ok={status === "connected"}
-        >
-          {#if status === "connected"}
-            OBS OK
-          {:else if status === "error"}
-            {error}
-          {/if}
-        </span>
-        <!-- Lien de téléchargement officiel (navigateur système) — discret,
-             pied de la carte OBS. -->
-        <button class="lien-dl" onclick={onTelechargerObs} title={OBS_DOWNLOAD_URL}>
-          {$t("toolbar.obsTelecharger")} ↗
-        </button>
-      </div>
-    {/if}
-  </div>
+  <!-- ============ GROUPE : EN DIRECT ============ -->
+  <div class="groupe-label">{$t("toolbar.groupeDirect")}</div>
 
   <!-- Section Prévisualisation : accordéon standard — pliée = tout démonté
        (iframe détruite → zéro coût), ouverte = miniature live + projecteur.
@@ -607,7 +597,7 @@
       onclick={() => toggleSection("preview")}
       title={$t("toolbar.previewTitle")}
     >
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></svg>
+      <img class="ico" src={icoPreview} alt="" />
       <span>{$t("toolbar.preview")}</span>
       <span class="chevron">›</span>
     </button>
@@ -650,65 +640,109 @@
     {/if}
   </div>
 
-  <!-- Section Personnalisation (cadres SVG) : carte violette portée par la
-       .section elle-même quand elle est ouverte — même mécanisme que la
-       carte bleue de la section Widgets. -->
-  <div
-    class="section sec-perso"
-    class:carte-edition={open === "personnalisation"}
-    class:cible-perso={open === "personnalisation"}
-  >
-    <button class="header" class:ouvert={open === "personnalisation"} onclick={() => toggleSection("personnalisation")}>
-      <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><line x1="21" x2="14" y1="6" y2="6"/><line x1="10" x2="3" y1="6" y2="6"/><line x1="21" x2="12" y1="12" y2="12"/><line x1="8" x2="3" y1="12" y2="12"/><line x1="21" x2="16" y1="18" y2="18"/><line x1="4" x2="3" y1="18" y2="18"/><line x1="14" x2="14" y1="4" y2="8"/><line x1="8" x2="8" y1="10" y2="14"/><line x1="16" x2="16" y1="16" y2="20"/></svg>
-      <span>{$t("toolbar.personnalisation")}</span>
+  <!-- Section Écran d'attente : LANCEUR DIRECT (pas un accordéon — le clic
+       ouvre la modale de config/contrôle BRB). Le média est affiché sur la
+       diffusion uniquement ; le chrono est détenu par Rust. -->
+  <div class="section sec-attente">
+    <button
+      class="header"
+      onclick={() => ecranAttenteModalOpen.set(true)}
+      title={$t("toolbar.ecranAttenteTitle")}
+    >
+      <img class="ico" src={icoAttente} alt="" />
+      <span>{$t("ecranAttenteModal.titre")}</span>
       <span class="chevron">›</span>
     </button>
-    {#if open === "personnalisation"}
-      <div class="content">
-        <!-- Galerie unique : UN cadre appliqué aux widgets ET au bord du
-             canvas (plus d'onglets depuis 2026-09-26). -->
-        <button class="action" onclick={() => cadreModalOpen.set(true)}>
-          {$t("cadresModal.titre")}
-        </button>
-        <button class="action" onclick={onImportFond}>
-          {fondImg ? $t("toolbar.fondChanger") : $t("toolbar.fond")}
-        </button>
-        {#if fondImg}
-          <button class="action" onclick={retirerFondSidebar}>
-            {$t("toolbar.fondRetirer")}
-          </button>
-        {/if}
-        <p class="hint">
-          {#if cadreActif}
-            {$t("toolbar.cadreActif")}
-          {:else}
-            {$t("toolbar.cadreInactif")}
-          {/if}
-        </p>
-      </div>
-    {/if}
+  </div>
+
+  <!-- Section Just Chatting : TOGGLE DIRECT (pas un accordéon — le clic
+       bascule l'overlay non-destructif de la diffusion : caméra + chat
+       seuls, la scène n'est jamais modifiée). La pastille .dot reflète
+       l'état runtime — OFF au boot, non persisté. -->
+  <div class="section sec-jc">
+    <button
+      class="header output-btn"
+      class:actif={$jcActif}
+      onclick={onToggleJC}
+      title={$t("toolbar.justChattingTitle")}
+    >
+      <img class="ico" src={icoJc} alt="" />
+      <span>{$t("toolbar.justChatting")}</span>
+      <span class="dot" class:on={$jcActif}></span>
+    </button>
+  </div>
+
+  <!-- ============ GROUPE : INTERACTIONS ============ -->
+  <div class="groupe-label">{$t("toolbar.groupeInteractions")}</div>
+
+  <!-- Section Interactions : LANCEUR DIRECT (pas un accordéon — le clic
+       ouvre la modale à onglets : Alertes / Bienvenue / Commandes /
+       Présentation / Musique + l'outil Position des overlays).
+       Tout est centralisé dans la modale, qui s'explique elle-même. -->
+  <div class="section sec-interactions">
+    <button
+      class="header"
+      onclick={() => interactionModalOpen.set(true)}
+      title={$t("toolbar.interactionsTitle")}
+    >
+      <img class="ico" src={icoInteractions} alt="" />
+      <span>{$t("toolbar.interactions")}</span>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
+  <!-- ============ GROUPE : MA CHAÎNE ============ -->
+  <div class="groupe-label">{$t("toolbar.groupeChaine")}</div>
+
+  <!-- Section Modération : LANCEUR DIRECT (pas un accordéon — le clic
+       ouvre la modale à onglets par plateforme fonctionnelle : Twitch /
+       YouTube). Gestion des statuts/rôles : ban, timeout, VIP, modérateur,
+       suppression de messages, clear chat. -->
+  <div class="section sec-moderation">
+    <button
+      class="header"
+      onclick={() => moderationModalOpen.set(true)}
+      title={$t("toolbar.moderationTitle")}
+    >
+      <span>{$t("toolbar.moderation")}</span>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
+  <!-- Section Planning : LANCEUR DIRECT — ouvre la modale du planning
+       Twitch (Helix /schedule), extraite de la modale Interactions :
+       gestion de chaîne, pas une interaction viewer. -->
+  <div class="section sec-planning">
+    <button
+      class="header"
+      onclick={() => planningModalOpen.set(true)}
+      title={$t("toolbar.planningTitle")}
+    >
+      <span>{$t("toolbar.planning")}</span>
+      <span class="chevron">›</span>
+    </button>
+  </div>
+
+  <!-- Section Statistiques : LANCEUR DIRECT — ouvre la modale d'analyse
+       d'audience des lives (télémétrie), extraite de l'ancien Diagnostic :
+       lecture post-live de la chaîne. -->
+  <div class="section sec-statistiques">
+    <button
+      class="header"
+      onclick={() => statistiquesModalOpen.set(true)}
+      title={$t("toolbar.statistiquesTitle")}
+    >
+      <span>{$t("toolbar.statistiques")}</span>
+      <span class="chevron">›</span>
+    </button>
   </div>
 
 </aside>
 
-<!-- Pied du panneau latéral — lanceur du Guide du streamer : LANCEUR
-     DIRECT (pas un accordéon — le clic ouvre l'overlay livre
-     feuilletable, même mécanique que Modération / Diagnostic). Sibling
-     de l'aside dans .sidebar-col → fixe en bas, HORS de la zone
-     scrollable, toujours visible, juste au-dessus d'Ergonomie. -->
-<div class="section sec-guide">
-  <button
-    class="header"
-    onclick={() => guideLivreOpen.set(true)}
-    title={$t("toolbar.guideTitle")}
-  >
-    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2z"/></svg>
-    <span>{$t("toolbar.guide")}</span>
-    <span class="chevron">›</span>
-  </button>
-</div>
+<!-- ============ GROUPE : APPLICATION (pied fixe) ============ -->
+<div class="groupe-label groupe-pied">{$t("toolbar.groupeApplication")}</div>
 
-<!-- Pied du panneau latéral : section « Ergonomie » (accordéon, même
+<!-- Pied du panneau latéral : section « Réglages » (accordéon, même
      mécanique que les sections de l'aside — une seule ouverte à la fois).
      Regroupe le fond du CHROME dashboard (topbar + sidebar — le canvas
      reste opaque par-dessus, jamais touché), le placement de la fenêtre
@@ -724,7 +758,7 @@
   class:cible-ergo={open === "ergonomie"}
 >
   <button class="header" class:ouvert={open === "ergonomie"} onclick={() => toggleSection("ergonomie")}>
-    <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></svg>
+    <img class="ico" src={icoErgo} alt="" />
     <span>{$t("toolbar.ergonomie")}</span>
     <span class="dot" class:on={fondDashImg}></span>
     <span class="chevron">›</span>
@@ -776,6 +810,39 @@
       <p class="hint">{$t("toolbar.raccourcisHint")}</p>
     </div>
   {/if}
+</div>
+
+<!-- Section Performances (pied fixe) : LANCEUR DIRECT — le clic ouvre la
+     modale de consommation (ex-« Diagnostic » : courbes CPU/RAM par
+     processus et par fonction StreamOS + compteurs d'activité, mesures
+     réelles 1 Hz). Surveillance technique de l'app, groupe Application. -->
+<div class="section sec-performances">
+  <button
+    class="header"
+    onclick={() => consoModalOpen.set(true)}
+    title={$t("toolbar.diagnosticTitle")}
+  >
+    <img class="ico" src={icoDiagnostic} alt="" />
+    <span>{$t("toolbar.diagnostic")}</span>
+    <span class="chevron">›</span>
+  </button>
+</div>
+
+<!-- Pied du panneau latéral — lanceur du Guide du streamer : LANCEUR
+     DIRECT (pas un accordéon — le clic ouvre l'overlay livre
+     feuilletable, même mécanique que Modération / Performances). Sibling
+     de l'aside dans .sidebar-col → fixe en bas, HORS de la zone
+     scrollable, toujours visible, tout en bas du groupe Application. -->
+<div class="section sec-guide">
+  <button
+    class="header"
+    onclick={() => guideLivreOpen.set(true)}
+    title={$t("toolbar.guideTitle")}
+  >
+    <img class="ico" src={icoGuide} alt="" />
+    <span>{$t("toolbar.guide")}</span>
+    <span class="chevron">›</span>
+  </button>
 </div>
 
 <style>
@@ -872,14 +939,41 @@
   .sec-attente      { --accent-crochet: var(--crochet-cyan); }
   .sec-jc           { --accent-crochet: var(--crochet-orange); }
   .sec-moderation   { --accent-crochet: var(--crochet-indigo); }
-  .sec-diagnostic   { --accent-crochet: var(--crochet-teal); }
+  /* Performances (pied fixe, lanceur direct) : même ancrage que le pied
+     Ergonomie — jamais écrasé quand la liste déborde. */
+  .sec-performances { --accent-crochet: var(--crochet-teal); flex-shrink: 0; }
+  .sec-planning     { --accent-crochet: var(--crochet-indigo); }
+  .sec-statistiques { --accent-crochet: var(--crochet-teal); }
   .sec-obs          { --accent-carte: var(--carte-dore);     --accent-crochet: var(--crochet-dore); }
   .sec-preview      { --accent-carte: var(--carte-jaune);    --accent-crochet: var(--crochet-jaune); }
   .sec-perso        { --accent-carte: var(--carte-violette); --accent-crochet: var(--crochet-violet); }
   .sec-ergo         { --accent-carte: var(--carte-ardoise);  --accent-crochet: var(--crochet-ardoise); }
   /* Guide (pied fixe, lanceur direct) : crochet ardoise — même famille
-     qu'Ergonomie, les deux entrées du bas forment un bloc cohérent. */
+     que Réglages/Performances, le bloc Application forme un ensemble. */
   .sec-guide        { --accent-crochet: var(--crochet-ardoise); }
+  /* Libellé de groupe dans la sidebar : repère discret (petites
+     majuscules espacées, moitié d'opacité) — structure la liste sans
+     ajouter de carte ni de couleur au-delà des sections elles-mêmes. */
+  .groupe-label {
+    padding: 0.5rem 0.55rem 0.15rem;
+    font-size: 0.66rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.09em;
+    opacity: 0.45;
+    user-select: none;
+  }
+  /* Premier groupe : pas de marge haute (le libellé colle au haut du
+     panneau comme le faisait la première section). */
+  .groupe-label:first-child {
+    padding-top: 0.15rem;
+  }
+  /* Libellé du groupe Application : sibling de l'aside (pied fixe),
+     jamais compressé quand la liste déborde. */
+  .groupe-pied {
+    flex-shrink: 0;
+    padding-top: 0.3rem;
+  }
   /* Item de liste : icône + label + chevron à droite. Plat au repos
      (transparent, comme la maquette) — la pilule verre n'apparaît qu'au
      survol ; la section ouverte prend une pilule neutre discrète
@@ -958,6 +1052,13 @@
   }
   .ico {
     opacity: 0.85;
+  }
+  /* Icônes image (PNG détourés par _ico_trim.ps1) : boîte un cran au-dessus
+     des SVG — les glyphes néon ont besoin d'air pour rester lisibles. */
+  img.ico {
+    width: 1.15rem;
+    height: 1.15rem;
+    object-fit: contain;
   }
   .chevron {
     margin-left: auto;

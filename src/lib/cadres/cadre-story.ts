@@ -1,14 +1,14 @@
 // Cadre SVG Story — bordure romantique poussée : coins en cœur, volutes
 // filigrane qui s'échappent dans la marge, étincelles 4-pointes, petits
 // cœurs le long du bord. Tons dérivés des couleurs utilisateur :
-// couleur = vif, couleurFin = profond ; clair/pale = couleur éclaircie
-// (aucune palette figée).
+// couleurFin = vif (couleur vive unifiée), couleur = profond ; clair/pale =
+// couleur éclaircie (aucune palette figée).
 // opts.animer → étincelle voyageuse parcourant le tracé du bord
 // (animateMotion path= — recette runner cyberpunk) + 3 étincelles
 // scintillantes en marge (décor).
 
 import type { CadreOpts } from "./cadre-cyberpunk";
-import { angleVersCoords, assombrir, couleurOu, eclaircir } from "./couleurs";
+import { angleVersCoords, assombrir, couleurOu, eclaircir, stopsLiseres } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
@@ -66,11 +66,11 @@ function sparkleShape(cx: number, cy: number, r: number): string {
 
 export default function renderStory(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const vif = couleurOu(opts.couleur, "#ffffff");
+  const vif = couleurOu(opts.couleurFin, "#ffffff");
   const palette = {
     vif,
     clair: eclaircir(vif, 0.35),
-    profond: couleurOu(opts.couleurFin, assombrir(vif, 0.2)),
+    profond: couleurOu(opts.couleur, assombrir(vif, 0.2)),
     pale: eclaircir(vif, 0.75),
   };
   const blanc = "#ffffff";
@@ -210,9 +210,7 @@ export default function renderStory(opts: CadreOpts): string {
   return `<svg width="${svgW}" height="${svgH}" viewBox="${vx} ${vy} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${margin}px; left:-${margin}px; pointer-events:none; z-index:5;">
   <defs>
     <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
-      <stop offset="0%" stop-color="${palette.vif}" />
-      <stop offset="50%" stop-color="${palette.clair}" />
-      <stop offset="100%" stop-color="${palette.profond}" />
+      ${stopsLiseres(palette.profond, palette.vif)}
     </linearGradient>
     <linearGradient id="${innerGradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
       <stop offset="0%" stop-color="${blanc}" stop-opacity="0.7" />

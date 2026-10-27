@@ -738,6 +738,12 @@ impl MusiqueState {
 
     // ===== État / config =====
 
+    /// Config courante (lecture seule) — utilisée par `!cmd` pour lister
+    /// les commandes viewer actives.
+    pub fn config(&self) -> MusiqueConfig {
+        self.config.lock().unwrap().clone()
+    }
+
     /// État complet pour l'UI (config + en_cours + file + bibliothèque +
     /// progression + cooldowns actifs). `en_cours` reste sérialisé en
     /// MusiqueItem (contrat MusiqueTab/dashboard inchangé) ; le timing vit
@@ -814,6 +820,9 @@ impl MusiqueState {
         // Les 4 commandes doivent être distinctes (sinon !x déclencherait
         // deux actions — la 1ère gagne silencieusement dans on_message).
         let noms = cfg.noms_reserves();
+        if noms.iter().any(|n| n == crate::commandes::CMD_LISTE) {
+            return Err("« !cmd » est réservé à la liste des commandes".into());
+        }
         let mut dedup = noms.clone();
         dedup.sort();
         dedup.dedup();

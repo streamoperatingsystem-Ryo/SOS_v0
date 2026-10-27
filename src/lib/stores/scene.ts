@@ -12,7 +12,7 @@ import {
   type ModuleHud,
   type LigneObjectif,
 } from "../tauri";
-import { pointsClipPathCadre } from "../cadres/points";
+import { pointsClipPathCadre, pointsCercle } from "../cadres/points";
 import { hexValide, assombrir } from "../cadres/couleurs";
 import { obsHost, obsPort, obsPassword } from "./obs";
 import { t } from "./langue";
@@ -271,7 +271,7 @@ export async function createCameraWidget(): Promise<void> {
   try {
     await tauri.cameraSync(
       get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
-      null, w.x, w.y, w.largeur, w.hauteur
+      null, w.x, w.y, w.largeur, w.hauteur, w.cameraFondVert === true, true
     );
   } catch {
   }
@@ -299,7 +299,8 @@ export async function setCameraDevice(id: string, deviceId: string | null): Prom
   try {
     await tauri.cameraSync(
       get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
-      deviceId, w.x, w.y, w.largeur, w.hauteur
+      deviceId, w.x, w.y, w.largeur, w.hauteur, w.cameraFondVert === true,
+      w.cameraCachee !== true
     );
   } catch {
   }
@@ -349,13 +350,20 @@ export async function initCameraHotplug(): Promise<void> {
 }
 
 /// Points du polygone du masque caméra (coords widget-local) — la forme
-/// EXACTE du trou destination-out découpé par diffusion.html : mêmes
-/// conditions (cadre actif + strokeWidth > 0 + pas de sansCadre), même
-/// générateur (registre TS = port du vanilla JS de diffusion.html).
-/// null = pas de forme → Rust retire les filtres, caméra rectangulaire.
+/// EXACTE du trou destination-out découpé par diffusion.html.
+/// cameraForme DÉDIÉE prioritaire (découplée du cadre de scène ET de
+/// sansCadre) : "cercle" = cercle inscrit (pointsCercle, même générateur
+/// des deux côtés), "carre" = null → filtres retirés (rect). Sinon, mêmes
+/// conditions que le trou (cadre actif + strokeWidth > 0 + pas de
+/// sansCadre), même générateur (registre TS = port du vanilla JS de
+/// diffusion.html). null = pas de forme → Rust retire les filtres,
+/// caméra rectangulaire.
 function pointsMasqueCamera(scene: Scene): [number, number][] | null {
   const cam = scene.widgets.find((w) => w.type === "camera");
-  if (!cam || cam.sansCadre === true) return null;
+  if (!cam) return null;
+  if (cam.cameraForme === "cercle") return pointsCercle(cam.largeur, cam.hauteur);
+  if (cam.cameraForme === "carre") return null;
+  if (cam.sansCadre === true) return null;
   const cadre = scene.cadreWidget;
   if (!cadre || !cadre.actif || (cadre.strokeWidth || 0) <= 0) return null;
   return pointsClipPathCadre(cadre.style, cam.largeur, cam.hauteur, cadre.strokeWidth || 4);
@@ -555,12 +563,24 @@ export async function setInputViewerConfig(
 }
 
 /// Change la config d'un widget speedrun (chemins ASL/LSS + settings ASL +
-/// disposition). Merge partiel + commit. Les chemins permettent le
-/// rechargement auto au montage du widget ; les settings sont aussi globaux
-/// (moteur unique).
+/// disposition + options de layout — modale SpeedrunLayout — + métronome
+/// du splitter, dashboard seul). Merge partiel + commit. Les chemins
+/// permettent le rechargement auto au montage du widget ; les settings
+/// sont aussi globaux (moteur unique).
 export async function setSpeedrunConfig(
   id: string,
-  patch: Partial<Pick<Widget, "speedrunCheminAsl" | "speedrunCheminLss" | "speedrunSettings" | "srLayout">>
+  patch: Partial<Pick<Widget,
+    | "speedrunCheminAsl" | "speedrunCheminLss" | "speedrunSettings" | "srLayout"
+    | "srVoirTitre" | "srVoirCategorie" | "srVoirStatut" | "srVoirTimer"
+    | "srVoirPhase" | "srVoirCompteur" | "srVoirBarre"
+    | "srModeTemps" | "srModeDelta" | "srDeltaPrecision" | "srDeltaDrop"
+    | "srTimerPrecision" | "srTimerMethode" | "srCouleurTimer"
+    | "srSegBordure" | "srSegBordureEpaisseur" | "srSegBordureRayon"
+    | "srCouleurAhead" | "srCouleurBehind" | "srCouleurActif"
+    | "srNbLignes" | "srScrollAuto" | "srHauteurLigne"
+    | "srVoirPoints" | "srPointsDureePop" | "srPointsSon" | "srPointsSonVolume"
+    | "srMetronomeActif" | "srMetronomeBpm" | "srMetronomeVolume"
+  >>
 ): Promise<void> {
   sceneStore.update((s) => ({
     ...s,
@@ -629,6 +649,13 @@ export function moduleDefaut(id: ModuleId, canvasW: number, canvasH: number): Mo
     // diffusion sous les widgets (le cadre/l'opacité n'y ont pas d'effet).
     return { ...base, x: 0, y: 950 * sy, largeur: 1920 * sx, hauteur: 130 * sy,
       eqMicro: true, eqBulles: true };
+  }
+  if (id === "spots") {
+    // Effet plein canvas : le rect n'est PAS utilisé par le rendu (apexes
+    // aux coins hauts du canvas). opacite = intensité lumineuse (0-1),
+    // défaut 0.8. spotsReagir ON : no-op tant que l'équaliseur ne tourne pas.
+    return { ...base, x: 0, y: 0, largeur: canvasW, hauteur: canvasH,
+      opacite: 0.8, spotsVitesse: 1, spotsReagir: true };
   }
   return { ...base, x: 70 * sx, y: 720 * sy, largeur: 300 * sx, hauteur: 170 * sy,
     titre: "", lignes: [] };
@@ -1494,6 +1521,94 @@ export async function setWidgetSansCadre(id: string, v: boolean): Promise<void> 
   await commitScene();
 }
 
+/// Forme DÉDIÉE du widget caméra (cameraForme) : "cercle" (cercle inscrit —
+/// masque OBS + trou diffusion + clip-path DOM, mêmes points des deux
+/// côtés) / "carre" (rect, masques retirés) / "cadre" (undefined = forme du
+/// cadre de scène, comportement historique). Découplée du cadre de scène
+/// ET de sansCadre. Commit seul : syncCameraMask (appelé par commitScene)
+/// re-sync le masque — la clé change → idempotent.
+export async function setCameraForme(
+  id: string,
+  forme: "cercle" | "carre" | "cadre"
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) =>
+      w.id === id
+        ? { ...w, cameraForme: forme === "cadre" ? undefined : forme }
+        : w
+    ),
+  }));
+  await commitScene();
+}
+
+/// Anneau autour de la caméra quand cameraForme est dédiée ("cercle"/
+/// "carre"), aux couleurs du cadre de scène. Pur rendu DOM (diffusion +
+/// dashboard lisent le champ du snapshot) : commit seul, pas de Rust.
+export async function setCameraBord(id: string, v: boolean): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, cameraBord: v } : w)),
+  }));
+  await commitScene();
+}
+
+/// Incrustation « fond vert virtuel » (filtre plugin OBS background_removal
+/// sur SOS-Caméra + plaque SOS-Caméra-Fond masquée pour voir la scène
+/// derrière la personne). Le flag est persisté AVANT l'appel : le sync Rust
+/// (scene_sync_captures, boot/openScene/connexion OBS) re-applique l'état →
+/// auto-guérison si OBS était offline au toggle. Plugin absent → le Rust
+/// l'installe AUTOMATIQUEMENT (GitHub, SHA256 vérifié, aucun exe/admin).
+/// Retour : statut "applique" | "desactive" | "redemarrer-obs" (plugin posé,
+/// OBS doit redémarrer pour le charger) + erreur brute si échec.
+export async function setCameraFondVert(
+  id: string,
+  actif: boolean
+): Promise<{ statut: string; erreur: string | null }> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, cameraFondVert: actif } : w)),
+  }));
+  await commitScene();
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  try {
+    const statut = await tauri.cameraFondVertSync(
+      get(obsHost), parseInt(get(obsPort), 10), get(obsPassword), actif,
+      w?.cameraCachee !== true
+    );
+    return { statut, erreur: null };
+  } catch (e) {
+    return { statut: "erreur", erreur: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/// Masque/réaffiche la caméra côté diffusion (bouton œil au survol du
+/// widget dashboard). Persisté dans le widget (cameraCachee) AVANT
+/// l'appel OBS : commit → snapshot WS → diffusion.html retire le trou
+/// destination-out et le cadre (la zone est repeinte par le fond de
+/// scène), puis camera_sync pose l'état enabled des items SOS-Caméra +
+/// SOS-Caméra-Fond (visible = !cachee — même commande dans les deux
+/// sens, jamais RemoveInput). Non-fatal si OBS offline : l'état persisté
+/// est ré-appliqué par scene_sync_captures (auto-guérison).
+export async function setCameraCachee(id: string, cachee: boolean): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((w) => (w.id === id ? { ...w, cameraCachee: cachee } : w)),
+  }));
+  await commitScene();
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  if (!w) return;
+  try {
+    await tauri.cameraSync(
+      get(obsHost), parseInt(get(obsPort), 10), get(obsPassword),
+      null, w.x, w.y, w.largeur, w.hauteur, w.cameraFondVert === true,
+      !cachee
+    );
+  } catch {
+    // OBS offline → silencieux (auto-guérison au prochain sync).
+  }
+}
+
 /// Pose la jacquette du jeu Twitch sur la scène courante. Ordre fixe :
 /// 1) twitch_live_poser_jacquette télécharge le JPEG dans
 ///    medias/jacquette-<gameId>.jpg (écrasé) — échec ⇒ scène intacte ;
@@ -1745,7 +1860,7 @@ export async function clearFond(): Promise<void> {
 /// le média stocké n'est pas peint tant que la capture est active. Store +
 /// commit (resync transform + snapshot).
 export async function lierFondCapture(
-  kind: "camera" | "window" | "game",
+  kind: "camera" | "window" | "game" | "monitor",
   target: string | null
 ): Promise<string> {
   const s = get(sceneStore);
@@ -1872,7 +1987,7 @@ export async function setBgLoop(
 /// Met à jour le store (obsSource) + commit (qui resync OBS). Retourne le nom.
 export async function createObsTrouSource(
   id: string,
-  kind: "camera" | "window" | "game",
+  kind: "camera" | "window" | "game" | "monitor",
   target: string | null
 ): Promise<string> {
   const w = get(sceneStore).widgets.find((x) => x.id === id);
@@ -1940,7 +2055,7 @@ export async function linkExistingObsSource(
 /// Met à jour le store (obsSource) + commit.
 export async function createObsTrouFromPc(
   id: string,
-  kind: "camera" | "window" | "game",
+  kind: "camera" | "window" | "game" | "monitor",
   target: string | null
 ): Promise<string> {
   const w = get(sceneStore).widgets.find((x) => x.id === id);

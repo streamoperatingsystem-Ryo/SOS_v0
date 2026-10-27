@@ -19,21 +19,17 @@ use crate::scene::Scene;
 use serde::{Deserialize, Serialize};
 use tauri::AppHandle;
 
-const PRESET_GAMING: &str = include_str!("../resources/presets/gaming.json");
 const PRESET_GPE: &str = include_str!("../resources/presets/gaming-plein-ecran.json");
 const PRESET_G43: &str = include_str!("../resources/presets/gaming-4-3.json");
 const PRESET_JUST_CHATTING: &str = include_str!("../resources/presets/just-chatting.json");
 const PRESET_SPEEDRUN: &str = include_str!("../resources/presets/speedrun.json");
-const PRESET_MINIMAL: &str = include_str!("../resources/presets/minimal.json");
 
 /// Presets embarqués (id → JSON). L'ordre du tableau = ordre de la galerie.
 const PRESETS: &[(&str, &str)] = &[
-    ("gaming", PRESET_GAMING),
     ("gaming-plein-ecran", PRESET_GPE),
     ("gaming-4-3", PRESET_G43),
     ("just-chatting", PRESET_JUST_CHATTING),
     ("speedrun", PRESET_SPEEDRUN),
-    ("minimal", PRESET_MINIMAL),
 ];
 
 /// Métadonnées d'un preset pour la galerie (sans le contenu Scene).

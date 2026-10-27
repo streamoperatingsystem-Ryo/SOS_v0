@@ -1,10 +1,11 @@
 // Cadre SVG Cyberpunk — bordure néon avec coins biseautés, plaques HUD,
 // circuits, code-barres et diodes. Tons dérivés des couleurs utilisateur :
-// couleur = néon principal, couleurFin = néon secondaire, highlight blanc.
+// couleurFin = néon principal (couleur vive unifiée), couleur = néon
+// secondaire, highlight blanc.
 // opts.animer → un runner lumineux (UN groupe, UN animateMotion) parcourt
 // le path du bord — rien dans la zone du widget, marge extérieure seulement.
 
-import { angleVersCoords, assombrir, couleurOu } from "./couleurs";
+import { angleVersCoords, assombrir, couleurOu, stopsLiseres } from "./couleurs";
 
 export interface CadreOpts {
   largeur: number;
@@ -39,8 +40,8 @@ export function getCyberpunkClipPath(
 
 export default function renderCyberpunk(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const c1 = couleurOu(opts.couleur, "#ffffff");
-  const c2 = couleurOu(opts.couleurFin, assombrir(c1, 0.35));
+  const c1 = couleurOu(opts.couleurFin, "#ffffff");
+  const c2 = couleurOu(opts.couleur, assombrir(c1, 0.35));
   const c3 = "#ffffff";
   const angle = Number.isFinite(Number(opts.gradientAngle)) ? Number(opts.gradientAngle) : 135;
   const { x1: gx1, y1: gy1, x2: gx2, y2: gy2 } = angleVersCoords(angle);
@@ -178,9 +179,7 @@ export default function renderCyberpunk(opts: CadreOpts): string {
       <path d="${pathBorder}" />
     </clipPath>
     <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
-      <stop offset="0%" stop-color="${c1}" />
-      <stop offset="50%" stop-color="${c2}" />
-      <stop offset="100%" stop-color="${c1}" />
+      ${stopsLiseres(c2, c1)}
     </linearGradient>
     <linearGradient id="${gradInnerId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
       <stop offset="0%" stop-color="${c3}" stop-opacity="0.9" />

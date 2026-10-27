@@ -3,8 +3,8 @@
 // médaillons « orb » (anneau + croix X incurvée) sertis sur les 4 biseaux,
 // cartouches sombres à cheval (haut décalé droite, bas centré), ailerons
 // triangulaires aux milieux des arêtes latérales, nœuds aux 8 sommets.
-// Tons dérivés des couleurs utilisateur : couleur = néon principal,
-// couleurFin = profond ; clair = couleur éclaircie.
+// Tons dérivés des couleurs utilisateur : couleurFin = néon principal
+// (couleur vive unifiée), couleur = profond ; clair = couleur éclaircie.
 // Tout est centré sur le tracé du bord ou clippé dans la forme (clipPath) :
 // la marge extérieure est rognée par overflow:hidden + clip-path du parent
 // (leçon 2026-10-05) et l'intérieur du widget reste libre (règle #6) — les
@@ -14,7 +14,7 @@
 // compatible vieux CEF OBS) + pulsation SMIL des 4 orbs.
 
 import type { CadreOpts } from "./cadre-cyberpunk";
-import { angleVersCoords, assombrir, couleurOu, eclaircir } from "./couleurs";
+import { angleVersCoords, assombrir, couleurOu, eclaircir, stopsLiseres } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
@@ -53,8 +53,8 @@ export function getArenaClipPath(
 
 export default function renderArena(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const principal = couleurOu(opts.couleur, "#ffffff");
-  const profond = couleurOu(opts.couleurFin, assombrir(principal, 0.35));
+  const principal = couleurOu(opts.couleurFin, "#ffffff");
+  const profond = couleurOu(opts.couleur, assombrir(principal, 0.35));
   const clair = eclaircir(principal, 0.5);
   const angle = Number.isFinite(Number(opts.gradientAngle)) ? Number(opts.gradientAngle) : 135;
   const { x1: gx1, y1: gy1, x2: gx2, y2: gy2 } = angleVersCoords(angle);
@@ -219,8 +219,7 @@ export default function renderArena(opts: CadreOpts): string {
   return `<svg width="${svgW}" height="${svgH}" viewBox="${viewX} ${viewY} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${offset + margin}px; left:-${offset + margin}px; pointer-events:none; z-index:5;">
   <defs>
     <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
-      <stop offset="0%" stop-color="${principal}" />
-      <stop offset="100%" stop-color="${profond}" />
+      ${stopsLiseres(profond, principal)}
     </linearGradient>
     <radialGradient id="${orbGradId}" cx="35%" cy="30%" r="75%">
       <stop offset="0%" stop-color="${clair}" />

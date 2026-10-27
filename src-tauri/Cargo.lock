@@ -4573,6 +4573,7 @@ dependencies = [
  "base64 0.22.1",
  "boa_engine",
  "chrono",
+ "flate2",
  "futures-util",
  "gilrs",
  "http-body-util",

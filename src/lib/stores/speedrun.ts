@@ -2,9 +2,10 @@
 // l'état du timer, des splits, de la connexion processus et des erreurs.
 // Pattern identique à chat.ts : stores writables + initSpeedrun() au montage.
 import { writable, get } from "svelte/store";
-import { listen } from "@tauri-apps/api/event";
+import { listen, emit } from "@tauri-apps/api/event";
 import { tauri, type SpeedrunEvent, type SpeedrunConfig, type AslSettingDetail } from "../tauri";
 import { speedrunConfigModalOpen } from "./ui";
+import { t, langue, localeTag } from "./langue";
 
 // ===== Stores exposés au dashboard =====
 
@@ -83,15 +84,28 @@ export const nomsSplitsAsl = writable<Record<string, string>>({});
 /// Erreur speedrun (affichage discret). null = pas d'erreur.
 export const erreurSpeedrun = writable<string | null>(null);
 
+/// Compteur de tentatives de run — « Partie n°N » affiché dans l'export
+/// splits HTML. Restauré depuis speedrun.json (nb_tentatives) au boot par
+/// chargerPreferencesSpeedrun, +1 sur chaque event `started` (start manuel
+/// ou ASL ; undo/goto/reset ne comptent PAS comme nouvelle tentative).
+export const tentativeRun = writable<number>(0);
+
 // ===== Init =====
 
-let unlisten: (() => void) | null = null;
+// Unlisteners de TOUS les events Tauri enregistrés par initSpeedrun —
+// collectés pour le cleanup HMR : en dev, chaque ré-évaluation à chaud du
+// module empile sinon un nouveau jeu de listeners backend (les anciens
+// ne sont jamais désenregistrés) → chaque action du pop-out s'exécute N
+// fois (dialog « Enregistrer sous » ouvert en boucle sur un seul clic
+// Export, observé 2026-10-21). Prod : import.meta.hot est undefined.
+let unlistenAll: (() => void)[] | null = null;
 
 /// Initialise le store : écoute l'event Tauri speedrun:event et met à jour
 /// les stores. Idempotent — safe d'appeler plusieurs fois.
 export async function initSpeedrun() {
-  if (unlisten) return;
-  unlisten = await listen<SpeedrunEvent>("speedrun:event", (e) => {
+  if (unlistenAll) return;
+  unlistenAll = [];
+  unlistenAll.push(await listen<SpeedrunEvent>("speedrun:event", (e) => {
     const event = e.payload;
     switch (event.type) {
       case "started":
@@ -102,6 +116,13 @@ export async function initSpeedrun() {
         splits.set([]);
         cumulsSplits.set([]);
         tempsSegment.set(null);
+        // « Partie n°N » : une nouvelle tentative démarre → +1, persisté
+        // dans speedrun.json (read-modify-write, cf. persisterTentative).
+        tentativeRun.update((n) => {
+          const v = n + 1;
+          persisterTentative(v);
+          return v;
+        });
         break;
       case "split":
         if (event.index !== undefined) {
@@ -264,6 +285,61 @@ export async function initSpeedrun() {
         }
         break;
     }
+  }));
+
+  // ===== Pop-out speedrun (fenêtre détachable, 2026-10-19) =====
+  // Pattern raccourcis : la fenêtre émet speedrun-popout:action, ce store
+  // exécute (invoke Rust). Le dashboard pousse l'état moteur à la fenêtre
+  // via speedrun-popout:etat — le WS ne dit pas si le moteur tourne quand
+  // le timer est NotRunning armé (start/stop des boutons du pop-out).
+  // Handshake speedrun-popout:ready (listeners prêts → push immédiat, même
+  // mécanique que raccourcis:ready). Tout est non-fatal sans la fenêtre.
+  const pousserEtatPopout = () => {
+    emit("speedrun-popout:etat", { actif: get(estActif) }).catch(() => {});
+  };
+  estActif.subscribe(() => {
+    pousserEtatPopout();
+  });
+  unlistenAll.push(await listen<{ action: string; index?: number }>("speedrun-popout:action", (e) => {
+    const a = e.payload?.action;
+    switch (a) {
+      case "demarrer": {
+        const nb = get(totalSplits) > 0 ? get(totalSplits) : get(segmentsLss).length || 1;
+        demarrerSpeedrun(nb).catch(() => {});
+        break;
+      }
+      case "arreter":
+        arreterSpeedrun().catch(() => {});
+        break;
+      case "goto":
+        if (typeof e.payload.index === "number") {
+          allerSplit(e.payload.index).catch(() => {});
+        }
+        break;
+      case "split":
+      case "skip":
+      case "undo":
+      case "reset":
+      case "pause":
+        actionManuelle(a).catch(() => {});
+        break;
+      case "export":
+        exporterSplits().catch(() => {});
+        break;
+    }
+  }));
+  unlistenAll.push(await listen("speedrun-popout:ready", () => {
+    pousserEtatPopout();
+  }));
+
+  // Dev HMR : à chaque ré-évaluation à chaud de ce module, désenregistrer
+  // les listeners de l'ANCIENNE instance — sinon ils s'empilent côté
+  // backend (l'event part alors vers N handlers → actions du pop-out
+  // exécutées N fois). No-op en prod (import.meta.hot undefined).
+  const fns = unlistenAll;
+  import.meta.hot?.dispose(() => {
+    fns.forEach((u) => u());
+    unlistenAll = null;
   });
 }
 
@@ -275,24 +351,42 @@ export async function chargerPreferencesSpeedrun(): Promise<SpeedrunConfig | nul
     if (config.chemin_asl) cheminAsl.set(config.chemin_asl);
     if (config.chemin_lss) cheminLss.set(config.chemin_lss);
     if (config.settings) settingsAsl.set(config.settings);
+    tentativeRun.set(config.nb_tentatives ?? 0);
     return config;
   } catch {
     return null;
   }
 }
 
+/// Persiste le compteur de tentatives (nb_tentatives) dans speedrun.json.
+/// ⚠️ READ-MODIFY-WRITE OBLIGATOIRE : sauver_speedrun_config écrase TOUT
+/// le fichier — sans relecture préalable on perdrait settings_asl et les
+/// chemins ASL/LSS.
+async function persisterTentative(n: number) {
+  try {
+    const config = await tauri.speedrunLireConfig();
+    config.nb_tentatives = n;
+    await tauri.speedrunSauverConfig(config);
+  } catch {
+    // Non-fatal : le compteur sera ré-incrémenté au prochain start.
+  }
+}
+
 /// Sauve les préférences speedrun (chemins ASL/LSS + settings).
+/// Read-modify-write : speedrunSauverConfig écrase TOUT speedrun.json —
+/// sans relecture, settings_asl et nb_tentatives seraient effacés à chaque
+/// choix de fichier / toggle auto.
 export async function sauverPreferencesSpeedrun(
   cheminAslVal: string | null,
   cheminLssVal: string | null,
   settings: { start: boolean; split: boolean; reset: boolean }
 ) {
   try {
-    await tauri.speedrunSauverConfig({
-      chemin_asl: cheminAslVal ?? undefined,
-      chemin_lss: cheminLssVal ?? undefined,
-      settings,
-    });
+    const config = await tauri.speedrunLireConfig();
+    config.chemin_asl = cheminAslVal ?? undefined;
+    config.chemin_lss = cheminLssVal ?? undefined;
+    config.settings = settings;
+    await tauri.speedrunSauverConfig(config);
   } catch {
     // Non-fatal
   }
@@ -474,5 +568,335 @@ export async function restaurerSettingsAsl() {
     }
   } catch {
     // Non-fatal : si la restauration échoue, l'utilisateur reconfigurera
+  }
+}
+
+// ===== Export des splits — fichier HTML autonome (2026-10-21) =====
+// Bouton « Exporter les splits » présent dans le dashboard (CarteEdition)
+// ET le pop-out (action "export" → ce store exécute, convention satellite).
+// Génère un .html auto-portant : CSS inline, zéro ressource externe (le
+// fichier reste local — contrat vie privée — et s'ouvre hors-ligne).
+// Contenu : jeu + catégorie, « Partie n°N » (nb_tentatives), statut de la
+// run, temps total, tableau # · split · durée segment · temps total ·
+// delta vs PB (vert/rouge) — splits skippés marqués, non atteints en PB
+// muté. Exportable à tout moment : reflète l'état courant des stores.
+
+function esc(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/// "MM:SS.cc" / "H:MM:SS.cc" → secondes (même format que le store).
+function parseTempsSr(str: string | null | undefined): number {
+  if (!str || str === "--/--/--") return 0;
+  const parts = str.split(":");
+  let h = 0, m = 0, s = 0;
+  if (parts.length === 3) {
+    h = parseFloat(parts[0]) || 0;
+    m = parseFloat(parts[1]) || 0;
+    s = parseFloat(parts[2]) || 0;
+  } else if (parts.length === 2) {
+    m = parseFloat(parts[0]) || 0;
+    s = parseFloat(parts[1]) || 0;
+  } else {
+    s = parseFloat(parts[0]) || 0;
+  }
+  return h * 3600 + m * 60 + s;
+}
+
+/// Secondes → "M:SS.cc" / "H:MM:SS.cc" (pour les PB du .lss, en f64).
+function fmtTempsCs(secs: number): string {
+  if (secs < 0 || isNaN(secs)) return "—";
+  const totalCs = Math.round(secs * 100);
+  const h = Math.floor(totalCs / 360000);
+  const m = Math.floor((totalCs % 360000) / 6000);
+  const s = Math.floor((totalCs % 6000) / 100);
+  const cs = totalCs % 100;
+  const base =
+    h > 0
+      ? `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+      : `${m}:${String(s).padStart(2, "0")}`;
+  return `${base}.${String(cs).padStart(2, "0")}`;
+}
+
+/// Delta signé — format LiveSplit : "±S.d" < 60 s, "±M:SS" < 1 h,
+/// "±H:MM:SS" au-delà (décimale abandonnée ≥ 1 min).
+function fmtDeltaSr(secs: number): string {
+  const sign = secs < 0 ? "−" : "+";
+  const a = Math.abs(secs);
+  if (a < 60) return `${sign}${a.toFixed(1)}`;
+  const total = Math.floor(a);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const s = total % 60;
+  return h > 0
+    ? `${sign}${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`
+    : `${sign}${m}:${String(s).padStart(2, "0")}`;
+}
+
+/// Garde anti-réentrance : un dialog « Enregistrer sous » à la fois.
+let exportEnCours = false;
+
+/// Construit et enregistre l'export HTML via le dialog « Enregistrer sous »
+/// (commande speedrun_exporter_splits — dossier + nom choisis par
+/// l'utilisateur). Erreur affichée via erreurSpeedrun si aucun .lss.
+export async function exporterSplits() {
+  const segs = get(segmentsLss);
+  const tr = get(t);
+  if (segs.length === 0) {
+    erreurSpeedrun.set(tr("widgetSpeedrun.exportAucun"));
+    return;
+  }
+  const phase = get(phaseTimer);
+  const idx = get(indexSplitCourant);
+  const sDurees = get(splits);
+  const sCumuls = get(cumulsSplits);
+  const jeu = get(nomJeuLss);
+  const cat = get(nomCategorieLss);
+  const live = get(tempsJeu) ?? get(tempsReel);
+  const segLive = get(tempsSegment);
+  const n = get(tentativeRun);
+  // Colonne PB dans la même base de temps que la run (game time dès que
+  // l'ASL la fournit) — même règle que pbColonne côté WidgetSpeedrun.
+  const baseJeu = get(tempsJeu) != null;
+  const pbCol = (i: number): number | null =>
+    baseJeu
+      ? segs[i].pbGameTime ?? segs[i].pbRealTime
+      : segs[i].pbRealTime ?? segs[i].pbGameTime;
+
+  const celluleDelta = (cumul: number | null, pb: number | null): string => {
+    if (cumul === null || pb === null) return `<td class="temps muted">—</td>`;
+    const d = Math.round((cumul - pb) * 10) / 10;
+    const cls = d < 0 ? "d-ahead" : d > 0 ? "d-behind" : "muted";
+    return `<td class="temps ${cls}">${fmtDeltaSr(d)}</td>`;
+  };
+
+  // Meilleur segment de la run → mise en avant dorée (convention LiveSplit).
+  // Seuls les segments bouclés comptent ; 0 = durée absente/illisible.
+  let bestIdx = -1;
+  let bestVal = Infinity;
+  sDurees.forEach((d, i) => {
+    if (!sCumuls[i]) return;
+    const v = parseTempsSr(d);
+    if (v > 0 && v < bestVal) {
+      bestVal = v;
+      bestIdx = i;
+    }
+  });
+
+  const lignes = segs
+    .map((seg, i) => {
+      const fait = !!sCumuls[i];
+      const courant =
+        idx !== null && i === idx && (phase === "Running" || phase === "Paused");
+      const skippe = idx !== null && i < idx && !fait;
+      const gold = i === bestIdx;
+      const pb = pbCol(i);
+      let duree = "—";
+      let total = pb !== null ? `<span class="muted">${fmtTempsCs(pb)}</span>` : "—";
+      let delta = `<td class="temps muted">—</td>`;
+      if (fait) {
+        duree = sDurees[i] || "—";
+        total = sCumuls[i]!;
+        delta = celluleDelta(parseTempsSr(sCumuls[i]), pb);
+      } else if (courant) {
+        duree = segLive ?? "—";
+        total = live;
+        delta = celluleDelta(parseTempsSr(live), pb);
+      }
+      const tag = skippe
+        ? `<span class="tag tag-skip">${esc(tr("widgetSpeedrun.exportSkip"))}</span>`
+        : courant
+          ? `<span class="tag tag-live">${esc(tr("widgetSpeedrun.exportTagEnCours"))}</span>`
+          : "";
+      const cls = courant ? "actif" : gold ? "gold" : "";
+      return `<tr${cls ? ` class="${cls}"` : ""}><td class="num">${i + 1}</td><td class="nom">${esc(seg.nom)}${tag}</td><td class="temps${gold ? " d-gold" : ""}">${duree}</td><td class="temps">${total}</td>${delta}</tr>`;
+    })
+    .join("\n");
+
+  // Temps total d'en-tête : chrono vivant si la run tourne, sinon le dernier
+  // cumul réalisé (« — » si aucun split bouclé).
+  const dernierCumul = [...sCumuls].reverse().find((c) => !!c) ?? null;
+  const totalRun =
+    phase === "Running" || phase === "Paused" ? live : (dernierCumul ?? "—");
+  const statut =
+    phase === "Running"
+      ? tr("widgetSpeedrun.exportStatutEnCours")
+      : phase === "Paused"
+        ? tr("widgetSpeedrun.exportStatutEnPause")
+        : phase === "Ended"
+          ? tr("widgetSpeedrun.exportStatutTerminee")
+          : tr("widgetSpeedrun.exportStatutArretee");
+  const dateStr = new Date().toLocaleString(get(localeTag));
+
+  const html = `<!DOCTYPE html>
+<html lang="${esc(get(langue))}">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>${esc(jeu || "Splits")} — ${esc(tr("widgetSpeedrun.exportPartie", { n }))}</title>
+<style>
+  :root { color-scheme: dark; }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    padding: 40px 20px; color: #e8eaf2;
+    font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+    background: radial-gradient(1100px 560px at 50% -12%, #1d1733 0%, #0d0f14 58%);
+  }
+  .carte {
+    position: relative; overflow: hidden; width: min(740px, 100%);
+    background: #141824; border: 1px solid rgba(255,255,255,.07);
+    border-radius: 18px;
+    padding: clamp(18px, 4vw, 34px) clamp(16px, 5vw, 38px) clamp(18px, 4vw, 28px);
+    box-shadow: 0 24px 60px rgba(0,0,0,.5);
+  }
+  .carte::before {
+    content: ""; position: absolute; inset: 0 0 auto 0; height: 3px;
+    background: linear-gradient(90deg, #8b5cf6, #22d3ee);
+  }
+  .jeu { font-size: 26px; font-weight: 700; letter-spacing: .4px; }
+  .cat { margin-top: 4px; font-size: 14px; color: #9aa3b8; }
+  .meta { display: flex; flex-wrap: wrap; gap: 10px; margin: 18px 0 4px; }
+  .chip {
+    font-size: 11.5px; letter-spacing: .8px; text-transform: uppercase;
+    padding: 4px 12px; border-radius: 999px; color: #c4cad9;
+    border: 1px solid rgba(255,255,255,.12); background: rgba(255,255,255,.04);
+  }
+  .chip.partie { border-color: rgba(139,92,246,.55); color: #c4b5fd; }
+  .chip.statut { border-color: rgba(34,211,238,.5); color: #67e8f9; }
+  .total-label {
+    margin-top: 20px; font-size: 11px; letter-spacing: 1.6px;
+    text-transform: uppercase; color: #7d8598;
+  }
+  .total {
+    font-size: 44px; font-weight: 800; font-variant-numeric: tabular-nums;
+    margin: 2px 0 24px; letter-spacing: 1px;
+    background: linear-gradient(90deg, #f2f4fa, #9aa3b8);
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .table-wrap {
+    overflow: hidden; overflow-x: auto;
+    border: 1px solid rgba(255,255,255,.08); border-radius: 12px;
+    background: rgba(255,255,255,.02);
+  }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  thead th {
+    text-align: left; padding: 11px 10px; font-size: 10.5px;
+    letter-spacing: 1.4px; text-transform: uppercase; color: #9aa3b8;
+    border-bottom: 1px solid rgba(255,255,255,.12);
+    background: linear-gradient(90deg, rgba(139,92,246,.16), rgba(34,211,238,.09));
+  }
+  thead th:first-child { text-align: center; }
+  tbody td { padding: 10px; border-bottom: 1px solid rgba(255,255,255,.05); }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:nth-child(even) { background: rgba(255,255,255,.02); }
+  tbody tr:hover { background: rgba(255,255,255,.05); }
+  tr.actif { background: rgba(139,92,246,.12); }
+  tr.actif td:first-child { box-shadow: inset 3px 0 0 #8b5cf6; }
+  tr.gold { background: rgba(251,191,36,.05); }
+  tr.gold td.nom::before {
+    content: ""; display: inline-block; width: 7px; height: 7px;
+    margin-right: 9px; border-radius: 50%; background: #fbbf24;
+    box-shadow: 0 0 6px rgba(251,191,36,.7); vertical-align: 1px;
+  }
+  td.num {
+    width: 40px; text-align: center; color: #7d8598;
+    font-variant-numeric: tabular-nums;
+  }
+  td.nom { font-weight: 600; }
+  .temps {
+    text-align: right; white-space: nowrap;
+    font-family: "Cascadia Mono", Consolas, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+  .muted { color: #5d6474; }
+  .d-ahead { color: #4ade80; }
+  .d-behind { color: #f87171; }
+  .d-gold { color: #fbbf24; font-weight: 700; }
+  .tag {
+    display: inline-block; margin-left: 10px; padding: 1px 7px;
+    font-size: 10px; font-weight: 700; letter-spacing: 1px;
+    text-transform: uppercase; border-radius: 4px; vertical-align: middle;
+  }
+  .tag-skip { color: #fbbf24; border: 1px solid rgba(251,191,36,.45); }
+  .tag-live { color: #67e8f9; border: 1px solid rgba(103,232,249,.45); }
+  footer {
+    margin-top: 24px; text-align: center; font-size: 11px; color: #5d6474;
+  }
+  @media (max-width: 560px) {
+    body { padding: 18px 10px; }
+    .jeu { font-size: 20px; }
+    .cat { font-size: 13px; }
+    .meta { gap: 8px; }
+    .chip { font-size: 10.5px; }
+    .total { font-size: 32px; margin-bottom: 18px; }
+    thead th { padding: 9px 8px; font-size: 9.5px; letter-spacing: 1px; }
+    tbody td { padding: 9px 8px; font-size: 13px; }
+    td.num { width: 30px; }
+    .tag { margin-left: 6px; }
+    footer { font-size: 10px; }
+  }
+</style>
+</head>
+<body>
+  <main class="carte">
+    <div class="jeu">${esc(jeu || "Speedrun")}</div>
+    ${cat ? `<div class="cat">${esc(cat)}</div>` : ""}
+    <div class="meta">
+      <span class="chip partie">${esc(tr("widgetSpeedrun.exportPartie", { n }))}</span>
+      <span class="chip statut">${esc(statut)}</span>
+    </div>
+    <div class="total-label">${esc(tr("widgetSpeedrun.exportTotal"))}</div>
+    <div class="total">${esc(totalRun)}</div>
+    <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>#</th>
+          <th>${esc(tr("widgetSpeedrun.exportColSplit"))}</th>
+          <th class="temps">${esc(tr("widgetSpeedrun.exportColSegment"))}</th>
+          <th class="temps">${esc(tr("widgetSpeedrun.exportColTotal"))}</th>
+          <th class="temps">${esc(tr("widgetSpeedrun.exportColDelta"))}</th>
+        </tr>
+      </thead>
+      <tbody>
+${lignes}
+      </tbody>
+    </table>
+    </div>
+    <footer>${esc(tr("widgetSpeedrun.exportGenereLe", { date: dateStr }))}</footer>
+  </main>
+</body>
+</html>
+`;
+
+  const slug =
+    (jeu || "run")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[̀-ͯ]/g, "")
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "") || "run";
+  const d = new Date();
+  const pad = (x: number) => String(x).padStart(2, "0");
+  const nomFichier = `splits-${slug}-partie-${n}-${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}.html`;
+
+  // Anti double-déclenchement : un clic = un dialog. Les appels
+  // concurrents (listeners empilés ou clics répétés sur le pop-out, qui
+  // reste cliquable pendant le dialog modal) sont ignorés tant qu'un
+  // export est en cours.
+  if (exportEnCours) return;
+  exportEnCours = true;
+  try {
+    const chemin = await tauri.speedrunExporterSplits(html, nomFichier);
+    if (chemin) erreurSpeedrun.set(null);
+  } catch (e) {
+    erreurSpeedrun.set(String(e));
+  } finally {
+    exportEnCours = false;
   }
 }

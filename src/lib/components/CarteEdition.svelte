@@ -26,6 +26,7 @@
     setChatFiltre, setChatStyle, setChatTaillePoliceLocal,
     setSpeedrunPolice, setSpeedrunPoliceLocal, setSpeedrunConfig,
     setInputViewerConfig, setInputViewerConfigLocal, setCameraDevice, setGoalConfig,
+    setCameraForme, setCameraBord, setCameraFondVert, setCameraCachee,
     cameraDevicesLive,
     setMusiqueConfig,
     resetMorphsWidget, resetMorphsFond,
@@ -36,15 +37,16 @@
   } from "../stores/scene";
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
   import { videoRegistry } from "../stores/video";
-  import { carteEditionCible, confirmDeleteWidget, titreFondModalOpen, cadreModalOpen } from "../stores/ui";
+  import { carteEditionCible, confirmDeleteWidget, titreFondModalOpen, cadreModalOpen, speedrunLayoutModalOpen } from "../stores/ui";
   import { type ChatFiltre } from "../stores/chat";
   import {
     phaseTimer, totalSplits, segmentsLss,
     nomJeuLss, nomCategorieLss, estActif, estConnecte, nomProcessus,
     cheminAsl, cheminLss, settingsAsl, erreurSpeedrun,
     chargerAsl, chargerLss, demarrerSpeedrun, arreterSpeedrun, majSettings,
-    actionManuelle, sauverPreferencesSpeedrun,
+    actionManuelle, sauverPreferencesSpeedrun, exporterSplits,
   } from "../stores/speedrun";
+  import { testerMetronome, battementEnCours } from "../stores/metronome";
   import { tauri } from "../tauri";
   import {
     GOAL_METRIQUES, goalSuggestion,
@@ -469,11 +471,18 @@
 
   // ===== Pop-out chat =====
   let popoutOpen = $state(false);
+  // ===== Pop-out speedrun (même pattern ; event distinct pour ne pas
+  // réinitialiser le bouton de l'autre pop-out) =====
+  let srPopoutOpen = $state(false);
   onMount(async () => {
     await listen("popout-closed", () => { popoutOpen = false; });
+    await listen("speedrun-popout-closed", () => { srPopoutOpen = false; });
   });
   async function onDetacher() {
     try { popoutOpen = await tauri.chatPopoutToggle(); } catch {}
+  }
+  async function onSrDetacher() {
+    try { srPopoutOpen = await tauri.speedrunPopoutToggle(); } catch {}
   }
 
   // ===== Widget speedrun =====
@@ -534,6 +543,45 @@
     await majSettings(srStartActif, srSplitActif, srResetActif);
     if (selectedId) await setSpeedrunConfig(selectedId, { speedrunSettings: { start: srStartActif, split: srSplitActif, reset: srResetActif } });
     await sauverPreferencesSpeedrun($cheminAsl, $cheminLss, { start: srStartActif, split: srSplitActif, reset: srResetActif });
+  }
+
+  // ===== Métronome du splitter (dashboard seul) =====
+  // Toggle persisté sur le widget (même rangée que les autos) ; sliders en
+  // copies locales pendant le geste, commit au change (pattern srTaille).
+  // Volume stocké 0-1 sur le widget, affiché 0-100 % côté slider.
+  let srMetroActifVal = $derived(selectedWidget?.srMetronomeActif === true);
+  let srMetroBpmVal = $state(120);
+  let srMetroVolPct = $state(50);
+  $effect(() => {
+    srMetroBpmVal =
+      typeof selectedWidget?.srMetronomeBpm === "number" ? selectedWidget.srMetronomeBpm : 120;
+    srMetroVolPct =
+      typeof selectedWidget?.srMetronomeVolume === "number"
+        ? Math.round(selectedWidget.srMetronomeVolume * 100)
+        : 50;
+  });
+  function onSrMetroToggle() {
+    if (!selectedId) return;
+    setSpeedrunConfig(selectedId, { srMetronomeActif: !srMetroActifVal });
+  }
+  function onSrMetroBpmInput(e: Event) {
+    srMetroBpmVal = Math.round(parseFloat((e.target as HTMLInputElement).value));
+  }
+  async function onSrMetroBpmChange() {
+    if (!selectedId) return;
+    await setSpeedrunConfig(selectedId, {
+      srMetronomeBpm: Math.max(1, Math.min(400, srMetroBpmVal)),
+    });
+  }
+  function onSrMetroVolInput(e: Event) {
+    srMetroVolPct = Math.round(parseFloat((e.target as HTMLInputElement).value));
+  }
+  async function onSrMetroVolChange() {
+    if (!selectedId) return;
+    await setSpeedrunConfig(selectedId, { srMetronomeVolume: srMetroVolPct / 100 });
+  }
+  function onSrMetroTest() {
+    testerMetronome(Math.max(1, Math.min(400, srMetroBpmVal)), srMetroVolPct / 100);
   }
 
   // ===== Widget input viewer =====
@@ -604,6 +652,54 @@
     setCameraDevice(selectedId, val === "" ? null : val);
   }
 
+  // ===== Forme caméra dédiée (cameraForme) + fond vert virtuel =====
+  // "cadre" = forme du cadre de scène (historique), "cercle" = cercle
+  // inscrit, "carre" = rect — découplées du cadre de scène et de sansCadre.
+  let cameraFormeVal = $derived(
+    selectedWidget?.cameraForme === "cercle" || selectedWidget?.cameraForme === "carre"
+      ? selectedWidget.cameraForme
+      : "cadre"
+  );
+  let cameraBordVal = $derived(selectedWidget?.cameraBord === true);
+  function onCameraFormeClick(f: "cercle" | "carre" | "cadre") {
+    if (selectedId) void setCameraForme(selectedId, f);
+  }
+  function onToggleCameraBord() {
+    if (selectedId) void setCameraBord(selectedId, !cameraBordVal);
+  }
+  // Caméra masquée en diffusion (cameraCachee — mêmes effets que le bouton
+  // œil au survol : items OBS désactivés + widget ignoré par diffusion.html).
+  // La carte est la surface A de la règle « 3 surfaces » : l'action reste
+  // accessible même si un module HUD recouvre le widget sur le canvas.
+  let cameraCacheeVal = $derived(selectedWidget?.cameraCachee === true);
+  function onToggleCameraCachee() {
+    if (selectedId) void setCameraCachee(selectedId, !cameraCacheeVal);
+  }
+  // Fond vert virtuel : le flag est persisté même si l'application OBS
+  // échoue (OBS offline) → auto-guérison au prochain scene_sync_captures.
+  // Plugin absent → le Rust l'INSTALLE automatiquement (téléchargement
+  // GitHub ~50 Mo + extraction per-user) → hint « redémarre OBS ».
+  // L'erreur s'affiche en hint rouge sous le toggle.
+  let cameraFondVertVal = $derived(selectedWidget?.cameraFondVert === true);
+  let fondVertErreur = $state("");
+  let fondVertInfo = $state("");
+  let fondVertEnCours = $state(false);
+  async function onToggleCameraFondVert() {
+    if (!selectedId || fondVertEnCours) return;
+    fondVertErreur = "";
+    fondVertInfo = "";
+    fondVertEnCours = true;
+    const r = await setCameraFondVert(selectedId, !cameraFondVertVal);
+    fondVertEnCours = false;
+    if (r.erreur) {
+      fondVertErreur = r.erreur.startsWith("PLUGIN_ABSENT")
+        ? $t("carteEdition.fondVertPluginAbsent")
+        : r.erreur;
+    } else if (r.statut === "redemarrer-obs") {
+      fondVertInfo = $t("carteEdition.fondVertInstalle");
+    }
+  }
+
   // ===== Source OBS sous SOS (trou) =====
   let obsDialogOpen = $state(false);
   function onOpenObsDialog() { if (!selectedId || !selectedTrou) return; obsDialogOpen = true; }
@@ -663,6 +759,20 @@
               <p class="hint">{$t("carteEdition.aucuneCamera")}</p>
               <p class="hint">{$t("carteEdition.hintAndroidCam")}</p>
             {/if}
+            <!-- Forme dédiée caméra (cameraForme) — découplée du cadre de
+                 scène : cercle inscrit / carré / forme du cadre. -->
+            <div class="section-titre">{$t("carteEdition.sectionForme")}</div>
+            <div class="fit-buttons">
+              <button class="fit-btn" class:active={cameraFormeVal === "cadre"} onclick={() => onCameraFormeClick("cadre")}>{$t("carteEdition.formeCadreScene")}</button>
+              <button class="fit-btn" class:active={cameraFormeVal === "cercle"} onclick={() => onCameraFormeClick("cercle")}>{$t("carteEdition.formeCercle")}</button>
+              <button class="fit-btn" class:active={cameraFormeVal === "carre"} onclick={() => onCameraFormeClick("carre")}>{$t("carteEdition.formeCarre")}</button>
+            </div>
+            {#if cameraFormeVal !== "cadre"}
+              <button type="button" class="toggle-row" onclick={onToggleCameraBord}>
+                <span class="toggle-label">{$t("carteEdition.cameraBord")}</span>
+                <span class="etat-chip" class:actif={cameraBordVal}>{cameraBordVal ? $t("commun.on") : $t("commun.off")}</span>
+              </button>
+            {/if}
             <!-- Cadre sur ce widget (sansCadre) + accès modale Cadres —
                  les widgets caméra suivent les mêmes règles de cadre. -->
             <div class="section-titre">{$t("carteEdition.sectionCadre")}</div>
@@ -671,6 +781,32 @@
               <span class="etat-chip" class:actif={widgetAvecCadre}>{widgetAvecCadre ? $t("commun.on") : $t("commun.off")}</span>
             </button>
             <button class="action" onclick={onOuvrirCadres}>{$t("carteEdition.cadrePersonnaliser")}</button>
+            <!-- Visibilité de la caméra en diffusion (cameraCachee) —
+                 équivalent de l'œil d'OBS : masque sans supprimer le
+                 widget. Même action que le badge œil au survol. -->
+            <div class="section-titre">{$t("carteEdition.sectionVisibilite")}</div>
+            <button type="button" class="toggle-row" onclick={onToggleCameraCachee}>
+              <span class="toggle-label">{$t("carteEdition.cameraDiffusion")}</span>
+              <span class="etat-chip" class:actif={!cameraCacheeVal}>{cameraCacheeVal ? $t("commun.off") : $t("commun.on")}</span>
+            </button>
+            <p class="hint">{$t("carteEdition.cameraDiffusionHint")}</p>
+            <!-- Fond virtuel « fond vert virtuel » (plugin OBS local) —
+                 voir la plaque noire disparaître derrière la personne.
+                 Plugin absent → installation automatique au toggle. -->
+            <div class="section-titre">{$t("carteEdition.sectionFondVirtuel")}</div>
+            <button type="button" class="toggle-row" onclick={onToggleCameraFondVert} disabled={fondVertEnCours}>
+              <span class="toggle-label">{$t("carteEdition.fondVert")}</span>
+              <span class="etat-chip" class:actif={cameraFondVertVal}>
+                {fondVertEnCours ? $t("carteEdition.fondVertInstallation") : cameraFondVertVal ? $t("commun.on") : $t("commun.off")}
+              </span>
+            </button>
+            <p class="hint">{$t("carteEdition.fondVertHint")}</p>
+            {#if fondVertInfo}
+              <p class="hint" style="color: var(--message-ok-color);">✓ {fondVertInfo}</p>
+            {/if}
+            {#if fondVertErreur}
+              <p class="hint" style="color: var(--message-error-color);">⚠ {fondVertErreur}</p>
+            {/if}
           {:else}
             <!-- Barre d'onglets segmentée : piste encastrée à cellules
                  égales (1 rangée ; grille 2x2 quand l'onglet Lecture vidéo
@@ -797,7 +933,35 @@
                     <input type="checkbox" checked={srResetActif} onchange={onSpeedrunToggleReset} />
                     <span>{$t("widgetSpeedrun.autoReset")}</span>
                   </label>
+                  <label class="setting-toggle" class:active={srMetroActifVal}>
+                    <input type="checkbox" checked={srMetroActifVal} onchange={onSrMetroToggle} />
+                    <span>{$t("widgetSpeedrun.metronome")}</span>
+                  </label>
                 </div>
+                {#if srMetroActifVal}
+                  <!-- Battement BPM pendant la run — entendu sur le DASHBOARD
+                       uniquement, jamais dans le stream (hint ci-dessous).
+                       Le bouton Tester joue 4 tics sans attendre une run ;
+                       désactivé pendant une run (le vrai battement joue). -->
+                  {@render sliderLigne($t("widgetSpeedrun.metronomeBpm"), srMetroBpmVal, 1, 400, 1, onSrMetroBpmInput, onSrMetroBpmChange, (v) => Math.round(v) + " BPM")}
+                  {@render sliderLigne($t("widgetSpeedrun.metronomeVolume"), srMetroVolPct, 0, 100, 1, onSrMetroVolInput, onSrMetroVolChange, (v) => v + "%")}
+                  <button class="action" onclick={onSrMetroTest} disabled={$battementEnCours}>
+                    {$t("widgetSpeedrun.metronomeTest")}
+                  </button>
+                  <p class="hint">{$t("widgetSpeedrun.metronomeHint")}</p>
+                {/if}
+                <!-- Pop-out splitter : fenêtre toujours-au-dessus avec le
+                     rendu du splitter ET les contrôles de run (pattern
+                     raccourcis : la fenêtre émet, le dashboard exécute).
+                     Le widget de la scène et la diffusion restent inchangés. -->
+                <button class="action" onclick={onSrDetacher}>
+                  {srPopoutOpen ? $t("carteEdition.reattacher") : $t("carteEdition.detacher")}
+                </button>
+                <!-- Export HTML autonome de la tentative (tableau des
+                     splits) — dialog « Enregistrer sous » côté Rust. -->
+                <button class="action" onclick={() => exporterSplits().catch(() => {})}>
+                  {$t("widgetSpeedrun.exporter")}
+                </button>
                 <div class="field">
                   <span class="field-label">{$t("commun.police")}</span>
                   <select class="police-select" value={srPoliceVal} onchange={onSrPoliceChange}>
@@ -815,6 +979,10 @@
                   </select>
                 </div>
                 {@render sliderLigne($t("carteEdition.taillePolice"), srTailleVal, 8, 48, 1, onSrTailleInput, onSrTailleChange, (v) => v + "px")}
+                <!-- Layout Editor façon LiveSplit : pilote UNIQUEMENT les
+                     éléments internes du splitter (en-tête/timer/méta/
+                     segments) via les champs srXxx du widget. -->
+                <button class="action" onclick={() => speedrunLayoutModalOpen.set(true)}>{$t("speedrunLayout.ouvrir")}</button>
               {:else if isGoalWidget}
                 <div class="section-titre">{$t("carteEdition.plateforme")}</div>
                 <div class="fit-buttons">

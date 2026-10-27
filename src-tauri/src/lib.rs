@@ -1,9 +1,11 @@
 mod api_deck;
 mod alertes;
+mod cadres_cmd;
 mod commandes;
 mod config;
 mod ecran_attente;
 mod fenetre;
+mod fight;
 mod just_chatting;
 mod pad_numerique;
 mod input_viewer;
@@ -14,6 +16,7 @@ mod musique;
 mod obs;
 mod obs_trou;
 mod pc_enum;
+mod pc_thumb;
 mod presets;
 mod scene;
 mod scenes;
@@ -38,10 +41,11 @@ mod speedrun;
 mod splash;
 mod telemetrie;
 mod conso;
+mod zip_store;
 // Les commandes speedrun sont définies dans speedrun::commands (réelles sur
 // Windows, stubs sur les autres plateformes). Importées dans le scope pour
 // generate_handler!.
-use conso::conso_etat;
+use conso::{boite_noire_etat, conso_etat};
 use fenetre::{fenetre_appliquer, fenetre_etat};
 use raccourcis::{
     raccourcis_appliquer, raccourcis_etat, raccourcis_masquer, raccourcis_moniteurs,
@@ -49,8 +53,9 @@ use raccourcis::{
 use speedrun::commands::{
     speedrun_action_manuelle, speedrun_aller_split, speedrun_arreter,
     speedrun_charger_asl, speedrun_charger_lss,
-    speedrun_demarrer, speedrun_est_actif, speedrun_lire_config,
-    speedrun_maj_settings, speedrun_maj_settings_asl, speedrun_sauver_config,
+    speedrun_demarrer, speedrun_est_actif, speedrun_exporter_splits,
+    speedrun_lire_config, speedrun_maj_settings, speedrun_maj_settings_asl,
+    speedrun_sauver_config,
 };
 use telemetrie::commands::{
     audience_session, audience_sessions, telemetrie_derniers, telemetrie_etat,
@@ -70,9 +75,14 @@ fn get_scene(state: tauri::State<ScenesState>) -> scene::Scene {
 
 #[tauri::command]
 async fn update_scene(app: AppHandle, state: tauri::State<'_, ScenesState>, scene: scene::Scene) -> Result<(), String> {
-    // 1. Muter l'état unique
+    // 1. Muter l'état unique. Un cadreWidget différent = édition du cadre
+    //    par le streamer → purge de l'override « !cadres » (couleur viewer
+    //    éphémère) : la couleur du streamer prime toujours.
     {
         let mut current = state.scene.lock().unwrap();
+        if current.cadreWidget != scene.cadreWidget {
+            *state.cadres_chat.lock().unwrap() = None;
+        }
         *current = scene;
     }
     // 2. Sauver <current_id>.json + snapshot WS (chaîne unique)
@@ -85,6 +95,13 @@ async fn update_scene(app: AppHandle, state: tauri::State<'_, ScenesState>, scen
 #[tauri::command]
 fn scenes_lister(app: AppHandle) -> Result<Vec<SceneIndex>, String> {
     scenes::lister(&app)
+}
+
+/// Résumé de toutes les scènes (nb widgets, types, modules, mini-rects) —
+/// alimente le tableau enrichi « Vos scènes » (mini-map procédurale).
+#[tauri::command]
+fn scenes_resumer(app: AppHandle) -> Result<Vec<scenes::SceneResume>, String> {
+    scenes::resumer(&app)
 }
 
 #[tauri::command]
@@ -205,6 +222,59 @@ fn scene_exporter(app: AppHandle, state: tauri::State<ScenesState>, nom_pack: St
 #[tauri::command]
 fn scene_importer(app: AppHandle, state: tauri::State<ScenesState>) -> Result<Option<SceneIndex>, String> {
     scenes::importer(&app, &state)
+}
+
+/// Exporte TOUTES les scènes + TOUS les médias dans un seul .zip (dialog
+/// « Enregistrer sous » — dossier + nom choisis, un .zip existant est
+/// écrasé). Retourne Some(chemin du zip), None si annulé.
+#[tauri::command]
+async fn scenes_exporter_zip(
+    app: AppHandle,
+    state: tauri::State<'_, ScenesState>,
+) -> Result<Option<String>, String> {
+    // Dialog natif + écriture du zip (potentiellement des centaines de Mo)
+    // sur le pool bloquant Tokio — jamais sur le thread UI (même recette
+    // que les commandes d'import média).
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || scenes::exporter_tout_zip(&app, &state))
+        .await
+        .map_err(|e| format!("scenes_exporter_zip: {}", e))?
+}
+
+/// Phase 1 de l'import « tout en .zip » : dialog « Ouvrir » + analyse de
+/// l'archive SANS écriture. Retourne Some({ zipPath, scenes, conflits }) —
+/// le frontend tranche chaque conflit (« remplacer ou passer ? ») puis
+/// appelle scenes_importer_zip_appliquer — ou None si dialog annulé.
+#[tauri::command]
+async fn scenes_importer_zip(
+    app: AppHandle,
+) -> Result<Option<scenes::AnalyseZipImport>, String> {
+    tauri::async_runtime::spawn_blocking(move || scenes::choisir_et_analyser_zip(&app))
+        .await
+        .map_err(|e| format!("scenes_importer_zip: {}", e))?
+}
+
+/// Phase 2 : applique les décisions de l'UI — `remplacer` = ids de scènes
+/// locales acceptées à l'écrasement (les autres conflits sont passés).
+/// Retourne le bilan { scenesImportees, mediasRestaures, scenesSautees }.
+#[tauri::command]
+async fn scenes_importer_zip_appliquer(
+    app: AppHandle,
+    state: tauri::State<'_, ScenesState>,
+    zip_path: String,
+    remplacer: Vec<String>,
+) -> Result<scenes::BilanImportZip, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        scenes::appliquer_zip_import(
+            &app,
+            &state,
+            std::path::Path::new(&zip_path),
+            &remplacer,
+        )
+    })
+    .await
+    .map_err(|e| format!("scenes_importer_zip_appliquer: {}", e))?
 }
 
 // ===== Import média (widget + fond) =====
@@ -685,7 +755,12 @@ async fn obs_connect(
     host: String,
     port: u16,
     password: String,
+    origine: Option<String>,
 ) -> Result<(), String> {
+    // Traçage boîte noire : chaque obs_connect bascule la scène OBS sur
+    // "SOS" hors live — on veut savoir QUI appelle et à quelle cadence
+    // (2026-10-27 : 24 bascules sans intervention de l'utilisateur).
+    conso::marquer_obs_connect(origine.as_deref().unwrap_or("inconnu"));
     let (w, h) = obs::connect_and_setup(&host, port, &password).await?;
 
     // Mémoriser la résolution OBS globalement (obs_canvas.json) : appliquée à
@@ -727,26 +802,31 @@ async fn obs_refresh_diffusion(
     obs::refresh_diffusion(&host, port, &password).await
 }
 
-/// Bascule le streaming OBS (ToggleStream). One-shot connect → request → close.
-/// Retourne le nouvel état (true = en live).
+/// Met le streaming OBS dans l'état demandé (Start/StopStream explicite,
+/// idempotent — jamais ToggleStream : la direction est celle confirmée dans
+/// l'UI, pas l'inverse d'un état réel potentiellement désynchronisé).
+/// One-shot connect → statut → action si besoin → re-statut → close.
+/// Retourne l'état réel relu (true = en live).
 #[tauri::command]
-async fn obs_toggle_stream(
+async fn obs_set_stream(
     host: String,
     port: u16,
     password: String,
+    actif: bool,
 ) -> Result<bool, String> {
-    obs::toggle_stream(&host, port, &password).await
+    obs::set_stream(&host, port, &password, actif).await
 }
 
-/// Bascule l'enregistrement OBS (ToggleRecord). One-shot connect → request →
-/// close. Retourne le nouvel état (true = enregistrement en cours).
+/// Met l'enregistrement OBS dans l'état demandé. Même contrat que
+/// obs_set_stream (Start/StopRecord explicite, idempotent, état relu).
 #[tauri::command]
-async fn obs_toggle_record(
+async fn obs_set_record(
     host: String,
     port: u16,
     password: String,
+    actif: bool,
 ) -> Result<bool, String> {
-    obs::toggle_record(&host, port, &password).await
+    obs::set_record(&host, port, &password, actif).await
 }
 
 /// Lit l'état des sorties OBS (GetStreamStatus + GetRecordStatus, une
@@ -858,6 +938,80 @@ async fn chat_popout_toggle(app: AppHandle) -> Result<bool, String> {
 #[tauri::command]
 fn chat_popout_fermer(app: AppHandle) -> Result<(), String> {
     const LABEL: &str = "chat-popout";
+    if let Some(win) = app.get_webview_window(LABEL) {
+        let _ = win.close();
+    }
+    Ok(())
+}
+
+// ===== Pop-out speedrun (2026-10-19) =====
+
+/// HTML embarqué du pop-out speedrun (include_str! — recompile si le fichier change).
+const SPEEDRUN_POPOUT_HTML: &str = include_str!("../resources/speedrun-popout.html");
+
+/// Police par défaut du splitter (Rajdhani), servie par le protocol du
+/// pop-out (same-origin). Un @font-face cross-origin sur :4321 serait
+/// bloqué : les polices web exigent un Access-Control-Allow-Origin que le
+/// serveur n'envoie pas — on ne touche pas à server.rs.
+const SPEEDRUN_POPOUT_RAJDHANI: &[u8] = include_bytes!("../resources/fonts/Rajdhani.woff2");
+
+/// Ouvre ou ferme la fenêtre pop-out speedrun (toggle).
+/// - Si fermée → ouvre (always_on_top, 420×640, décorations simples).
+/// - Si ouverte → ferme (destroy). Moteur ASL inchangé.
+/// Retourne true si maintenant ouverte, false si fermée.
+/// Quand l'utilisateur ferme via la croix → emit "speedrun-popout-closed"
+/// au frontend pour que le bouton de la carte speedrun redevienne « Détacher ».
+///
+/// Navigation : custom protocol streamos-speedrun://localhost/splitter → HTML
+/// embarqué servi par register_uri_scheme_protocol. Même recette que le
+/// pop-out chat (streamos-chat) — PAS d'about:blank, PAS d'URL externe.
+/// Contrôles de run : la page émet des events Tauri (speedrun-popout:action)
+/// que le dashboard exécute (pattern raccourcis — pas de logique métier
+/// dans les fenêtres satellite). L'affichage vient du WS :4321 (frames
+/// speedrun-etat) + resync à l'ouverture (speedrun-resync), comme diffusion.html.
+#[tauri::command]
+async fn speedrun_popout_toggle(app: AppHandle) -> Result<bool, String> {
+    use tauri::webview::WebviewWindowBuilder;
+
+    const LABEL: &str = "speedrun-popout";
+
+    // Si la fenêtre existe déjà → fermer (réattacher).
+    if let Some(win) = app.get_webview_window(LABEL) {
+        let _ = win.close();
+        return Ok(false);
+    }
+
+    // ASYNC obligatoire (même piège que le pop-out chat) : sur Windows,
+    // créer une webview dans une commande sync deadlock Webview2.
+    let url = tauri::Url::parse("streamos-speedrun://localhost/splitter")
+        .map_err(|e| format!("URL invalide: {}", e))?;
+    let win = WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::CustomProtocol(url))
+        .title("Splitter pop-out")
+        .inner_size(420.0, 640.0)
+        .always_on_top(true)
+        .resizable(true)
+        .decorations(true)
+        .build()
+        .map_err(|e| format!("Création fenêtre pop-out speedrun: {}", e))?;
+
+    // Croix native → event pour remettre le bouton de la carte sur « Détacher ».
+    // Event distinct de "popout-closed" du chat (les deux boutons ne doivent
+    // pas se réinitialiser mutuellement).
+    let app_clone = app.clone();
+    win.on_window_event(move |event| {
+        if let tauri::WindowEvent::CloseRequested { .. } = event {
+            let _ = app_clone.emit("speedrun-popout-closed", ());
+        }
+    });
+
+    Ok(true)
+}
+
+/// Ferme explicitement la fenêtre pop-out speedrun si elle est ouverte.
+/// Non-fatal si déjà fermée. Moteur ASL inchangé.
+#[tauri::command]
+fn speedrun_popout_fermer(app: AppHandle) -> Result<(), String> {
+    const LABEL: &str = "speedrun-popout";
     if let Some(win) = app.get_webview_window(LABEL) {
         let _ = win.close();
     }
@@ -1014,6 +1168,10 @@ async fn obs_link_existing_source(
 /// centre + OBS_BOUNDS_SCALE_OUTER + alignment 0).
 /// device = Some(FriendlyName) → SetInputSettings video_device_id sur l'input
 /// existant (changement de device explicite) ; None → device par défaut d'OBS.
+/// fondVert = flag cameraFondVert du widget : plaque SOS-Caméra-Fond masquée +
+/// filtre background_removal (ré)asserté (chaque chemin caméra est atomique).
+/// visible = inverse de cameraCachee : false → items caméra + plaque
+/// désactivés (la même commande masque ET réaffiche — bouton œil du widget).
 /// Singleton : 1 widget caméra / scène → 1 input "SOS-Caméra".
 #[tauri::command]
 #[allow(clippy::too_many_arguments)]
@@ -1026,8 +1184,30 @@ async fn camera_sync(
     y: f64,
     w: f64,
     h: f64,
+    fond_vert: bool,
+    visible: bool,
 ) -> Result<(), String> {
-    obs_trou::camera_sync(&host, port, &password, device.as_deref(), x, y, w, h).await
+    obs_trou::camera_sync(&host, port, &password, device.as_deref(), x, y, w, h, fond_vert, visible).await
+}
+
+/// Toggle « fond vert virtuel » : filtre plugin background_removal
+/// (occ-ai/obs-backgroundremoval, 100% local) sur SOS-Caméra + plaque
+/// SOS-Caméra-Fond masquée (jamais RemoveInput) — la scène OBS apparaît
+/// derrière la personne. Plugin absent → INSTALLATION AUTOMATIQUE (GitHub,
+/// SHA256 vérifié, extraction per-user — aucun exe/admin). Retour = statut :
+/// "applique" | "desactive" | "redemarrer-obs" (plugin posé, OBS doit être
+/// redémarré pour le charger ; l'état persisté s'applique à la reconnexion).
+/// One-shot : l'état reste persisté dans le widget (cameraFondVert),
+/// scene_sync_captures le ré-applique (auto-guérison).
+#[tauri::command]
+async fn camera_fond_vert(
+    host: String,
+    port: u16,
+    password: String,
+    actif: bool,
+    visible: bool,
+) -> Result<String, String> {
+    obs_trou::camera_fond_vert(&host, port, &password, actif, visible).await
 }
 
 /// Cache l'item de scène "SOS-Caméra" (SetSceneItemEnabled false) à la
@@ -1166,6 +1346,12 @@ impl TwitchState {
             }
             None => false,
         }
+    }
+    /// Envoie un message dans le chat Twitch (PRIVMSG) — utilisé par les
+    /// modules qui produisent des messages asynchrones (arène d'emojis :
+    /// annonce de tour, expiration de lobby, fin AFK).
+    pub fn envoyer_message_chat(&self, texte: &str) -> bool {
+        self.envoyer_commande_irc(texte)
     }
 }
 
@@ -2814,27 +3000,28 @@ async fn welcome_tester_clip(
     clip_duree_ms: u64,
     display_name: String,
 ) -> Result<(), String> {
-    // Avatar + bio via Helix /users (best-effort : None si Twitch déconnecté
-    // ou fetch échoué — la carte s'affiche alors sans avatar/bio).
+    // Avatar + bio + bannière via Helix /users (best-effort : None si Twitch
+    // déconnecté ou fetch échoué — la carte s'affiche alors sans).
     let access_opt = { twitch.access.lock().unwrap().clone() };
-    let (avatar, bio) = match access_opt {
+    let (avatar, bio, banniere) = match access_opt {
         Some(access) => {
             let client = reqwest::Client::new();
             match twitch_chat::fetch_user_infos(&client, &access, &display_name.to_lowercase()).await {
-                Ok((av, b)) => (
+                Ok((av, b, ba)) => (
                     Some(av).filter(|s| !s.is_empty()),
                     Some(b).filter(|s| !s.is_empty()),
+                    Some(ba).filter(|s| !s.is_empty()),
                 ),
                 Err(e) => {
                     eprintln!("[Welcome] tester_clip: fetch avatar/bio échoué : {}", e);
-                    (None, None)
+                    (None, None, None)
                 }
             }
         }
-        None => (None, None),
+        None => (None, None, None),
     };
     state
-        .tester_clip(&clip_id, &clip_titre, clip_duree_ms, &display_name, avatar, bio)
+        .tester_clip(&clip_id, &clip_titre, clip_duree_ms, &display_name, avatar, bio, banniere)
         .await
 }
 
@@ -2929,7 +3116,8 @@ async fn welcome_lister_clips_streamer(
 /// Résout l'URL MP4 signée d'un clip Twitch (slug) via GQL.
 #[tauri::command]
 async fn welcome_resoudre_mp4(slug: String) -> Result<String, String> {
-    twitch_clips::resoudre_mp4(&slug).await
+    // Preview dashboard (~300 px dans la modale) → 360 suffit.
+    twitch_clips::resoudre_mp4(&slug, 360).await
 }
 
 /// Attribution automatique : pour chaque follower, fetch ses clips → clip aléatoire
@@ -2952,6 +3140,13 @@ async fn welcome_attribuer_auto(
     let mut succes = 0u32;
     let mut echecs = 0u32;
 
+    // Même cible que la queue welcome : 480 squelette / 720 spotlight.
+    let qualite_cible = if welcome_state.etat().utiliser_squelette {
+        480
+    } else {
+        720
+    };
+
     for f in &followers {
         let user_id = f["user_id"].as_str().unwrap_or("");
         let login = f["login"].as_str().unwrap_or("").to_lowercase();
@@ -2966,7 +3161,7 @@ async fn welcome_attribuer_auto(
             continue;
         }
 
-        match twitch_clips::clip_aleatoire_resolu(user_id, &access).await {
+        match twitch_clips::clip_aleatoire_resolu(user_id, &access, qualite_cible).await {
             Ok(Some(clip)) => {
                 let config = welcome::ViewerConfig {
                     actif: true,
@@ -2979,6 +3174,7 @@ async fn welcome_attribuer_auto(
                     display_name: display_name.clone(),
                     avatar: None,
                     bio: None,
+                    banniere: None,
                 };
                 if welcome_state.sauver_viewer_twitch(&login, config).is_err() {
                     echecs += 1;
@@ -3204,6 +3400,36 @@ fn commande_tester(
     state.tester(&id)
 }
 
+/// Exporte les commandes chat comme pack dossier portable (commandes.json +
+/// medias/). Dialog = dossier PARENT. Retourne true si exporté, false si annulé.
+#[tauri::command]
+fn commande_exporter(
+    state: tauri::State<'_, commandes::CommandesState>,
+    nom_pack: String,
+) -> Result<bool, String> {
+    state.exporter(&nom_pack)
+}
+
+/// Importe les commandes depuis un dossier pack (dialog dossier). Importe
+/// directement les noms sans conflit ; retourne conflits + réservés à trancher.
+#[tauri::command]
+fn commande_importer(
+    state: tauri::State<'_, commandes::CommandesState>,
+) -> Result<commandes::ImportCommandesResultat, String> {
+    state.importer()
+}
+
+/// Phase conflits de l'import : les commandes acceptées par l'utilisateur
+/// remplacent les existantes de même nom. Retourne le nb remplacé.
+#[tauri::command]
+fn commande_importer_ecraser(
+    state: tauri::State<'_, commandes::CommandesState>,
+    pack_dir: String,
+    commandes: Vec<commandes::CommandeConfig>,
+) -> Result<u32, String> {
+    state.importer_ecraser(&pack_dir, commandes)
+}
+
 // ===== Musique (!rs → file de lecture bibliothèque locale → diffusion) =====
 
 /// État complet musique : config + piste en cours + file + bibliothèque.
@@ -3340,6 +3566,69 @@ fn musique_volume(
     volume: f64,
 ) -> Result<(), String> {
     state.set_volume(volume as f32)
+}
+
+// ===== Emoji Arena (combat d'emojis 1v1 piloté par le chat) =====
+
+/// État complet : config + partie courante (phase lobby/combat/fin) + cooldowns.
+#[tauri::command]
+fn fight_etat(state: tauri::State<'_, fight::FightState>) -> serde_json::Value {
+    state.etat()
+}
+
+// ===== Cadres chat (!cadres <couleur> → couleur vive du cadre unifié) =====
+
+/// Config de la commande cadres (actif, nom, accusés chat).
+#[tauri::command]
+fn cadres_chat_etat(
+    state: tauri::State<'_, cadres_cmd::CadresChatState>,
+) -> cadres_cmd::CadresChatConfig {
+    state.etat()
+}
+
+/// Sauvegarde la config (nom normalisé + refus de collision commandes/
+/// musique/arène) + persiste + emit dashboard.
+#[tauri::command]
+fn cadres_chat_set_config(
+    state: tauri::State<'_, cadres_cmd::CadresChatState>,
+    config: cadres_cmd::CadresChatConfig,
+) -> Result<cadres_cmd::CadresChatConfig, String> {
+    state.set_config(config)
+}
+
+/// Palette fermée de couleurs nommées (grille affichée dans l'onglet Cadres).
+#[tauri::command]
+fn cadres_chat_palette() -> Vec<cadres_cmd::PaletteCouleur> {
+    cadres_cmd::palette()
+}
+
+/// Sauvegarde la config (noms de commandes normalisés + distincts + sans
+/// collision avec les commandes chat et la musique).
+#[tauri::command]
+fn fight_set_config(
+    state: tauri::State<'_, fight::FightState>,
+    config: fight::FightConfig,
+) -> Result<fight::FightConfig, String> {
+    state.set_config(config)
+}
+
+/// Test manuel : lance un combat factice « Streamy » vs BOT côté diffusion
+/// (le pipeline complet — timers, coups du CPU, animations — est le réel).
+#[tauri::command]
+fn fight_tester(state: tauri::State<'_, fight::FightState>) -> Result<(), String> {
+    state.tester()
+}
+
+/// Force l'arrêt : lobby → annulé, combat → fin "stop", bannière → Idle.
+#[tauri::command]
+fn fight_stop(state: tauri::State<'_, fight::FightState>) {
+    state.stop()
+}
+
+/// Bouton dashboard : prévisualise la carte d'aide sur la diffusion.
+#[tauri::command]
+fn fight_previsualiser_aide(state: tauri::State<'_, fight::FightState>) {
+    state.previsualiser_aide()
 }
 
 // ===== Input Viewer (capture globale clavier + souris → overlay diffusion) =====
@@ -3628,6 +3917,65 @@ fn position_overlay_set(
     state.set(config)
 }
 
+/// Retourne la config du squelette DÉDIÉ du chrono 2 (indépendant du
+/// squelette partagé — persistée `position_chrono.json`).
+#[tauri::command]
+fn position_chrono_etat(
+    state: tauri::State<'_, position_overlay::PositionOverlayState>,
+) -> position_overlay::PositionOverlayConfig {
+    state.etat_chrono()
+}
+
+/// Remplace la config du squelette chrono 2 + persiste
+/// (position_chrono.json) + push WS `chrono2-pos` vers la diffusion
+/// (repositionnement live, même pendant que le chrono tourne).
+#[tauri::command]
+fn position_chrono_set(
+    state: tauri::State<'_, position_overlay::PositionOverlayState>,
+    config: position_overlay::PositionOverlayConfig,
+) -> Result<(), String> {
+    state.set_chrono(config)
+}
+
+/// Retourne la config du squelette DÉDIÉ du pop de validation des splits
+/// (speedrun) — indépendant du squelette partagé, persistée
+/// `position_splitpop.json`.
+#[tauri::command]
+fn position_splitpop_etat(
+    state: tauri::State<'_, position_overlay::PositionOverlayState>,
+) -> position_overlay::PositionOverlayConfig {
+    state.etat_splitpop()
+}
+
+/// Remplace la config du squelette splitpop + persiste
+/// (position_splitpop.json) + push WS `splitpop-pos` vers la diffusion
+/// (repositionnement live, pop visible ou non).
+#[tauri::command]
+fn position_splitpop_set(
+    state: tauri::State<'_, position_overlay::PositionOverlayState>,
+    config: position_overlay::PositionOverlayConfig,
+) -> Result<(), String> {
+    state.set_splitpop(config)
+}
+
+/// Test manuel du squelette splitpop (bouton « Tester le rendu » de
+/// l'onglet Position) : frame WS `splitpop-test` → la diffusion affiche un
+/// pop factice au squelette dédié (même pipeline visuel qu'un vrai split).
+#[tauri::command]
+fn position_splitpop_test(app: AppHandle) {
+    position_overlay::tester_splitpop(&app);
+}
+
+/// Test manuel du squelette chrono 2 (bouton « Tester le rendu » de
+/// l'onglet Position) : démarre un chrono factice de 10 s — frames
+/// `chrono2-etat` réelles, squelette dédié relu à chaque frame.
+#[tauri::command]
+fn position_chrono_test(
+    state: tauri::State<'_, pad_numerique::PadNumeriqueState>,
+) {
+    state.tester_chrono();
+}
+
 /// Déclenche une alerte depuis le frontend. Utilisé par la diff des follows
 /// (pas d'event IRC pour les follows) — et c'est le point d'extension prévu
 /// pour les futures plateformes (Kick/YouTube/TikTok appelleront la même
@@ -3686,6 +4034,27 @@ fn pc_enumerate_games() -> Vec<pc_enum::WindowEntry> {
     pc_enum::enumerate_games()
 }
 
+/// Énumère les moniteurs du PC (EnumDisplayMonitors, SANS OBS) — type
+/// « Écran » du sélecteur de capture (monitor_id au format OBS).
+#[tauri::command]
+fn pc_enumerate_monitors() -> Vec<pc_enum::MonitorEntry> {
+    pc_enum::enumerate_monitors()
+}
+
+/// Miniature WGC d'une fenêtre (data URL PNG, fallback icône fenêtre).
+/// None si fenêtre disparue et sans icône — le front affiche l'emoji.
+/// À la demande : un invoke par carte de la grille du sélecteur.
+#[tauri::command]
+fn pc_window_thumbnail(hwnd: isize) -> Option<String> {
+    pc_thumb::window_thumbnail(hwnd)
+}
+
+/// Miniature WGC d'un écran (data URL PNG). None → emoji côté front.
+#[tauri::command]
+fn pc_monitor_thumbnail(hmon: isize) -> Option<String> {
+    pc_thumb::monitor_thumbnail(hmon)
+}
+
 /// Crée une source OBS de capture depuis une cible PC (caméra/fenêtre/jeu)
 /// dans la scène contenant SOS-Diffusion. Si SOS-Trou-<id> existe déjà →
 /// SetInputSettings + transform (pas de doublon). Sinon → CreateInput.
@@ -3725,6 +4094,24 @@ pub fn run() {
             tauri::http::Response::builder()
                 .header("Content-Type", "text/html; charset=utf-8")
                 .body(CHAT_POPOUT_HTML.as_bytes().to_vec())
+                .unwrap()
+        })
+        // Pop-out speedrun : custom protocol servant le HTML embarqué
+        // (include_str!) + la police par défaut (Rajdhani, same-origin —
+        // pas de blocage CORS ; routage par path comme splash::repondre).
+        // Toute URL streamos-speedrun://localhost/* : /splitter → HTML,
+        // /fonts/Rajdhani.woff2 → woff2 embarqué.
+        .register_uri_scheme_protocol("streamos-speedrun", |_ctx, request| {
+            let path = request.uri().path();
+            if path.starts_with("/fonts/") && path.ends_with("Rajdhani.woff2") {
+                return tauri::http::Response::builder()
+                    .header("Content-Type", "font/woff2")
+                    .body(SPEEDRUN_POPOUT_RAJDHANI.to_vec())
+                    .unwrap();
+            }
+            tauri::http::Response::builder()
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(SPEEDRUN_POPOUT_HTML.as_bytes().to_vec())
                 .unwrap()
         })
         // Barre de raccourcis : custom protocol servant le HTML embarqué.
@@ -3768,6 +4155,8 @@ pub fn run() {
             let state = ScenesState {
                 scene: scene.clone(),
                 current_id: current_id.clone(),
+                // Override « !cadres » : vide au boot (jamais persisté).
+                cadres_chat: Arc::new(std::sync::Mutex::new(None)),
                 snapshot_tx: snapshot_tx.clone(),
                 chat_tx: chat_tx.clone(),
                 eq: equaliseur::EqualiseurState::new(chat_tx.clone()),
@@ -3819,6 +4208,20 @@ pub fn run() {
             // 4 modules chat + remontée "musique-ended" via server.rs.
             let musique_state = musique::MusiqueState::new(handle.clone(), chat_tx.clone());
             app.manage(musique_state.clone());
+
+            // État Emoji Arena (combats d'emojis "!fight" pilotés par le
+            // chat — tour par tour, vs viewer ou BOT). Hooks on_message
+            // dans les 4 modules chat à côté du hook musique ; snapshot
+            // complet fight-state → diffusion (resync via fight-resync).
+            let fight_state = fight::FightState::new(handle.clone(), chat_tx.clone());
+            app.manage(fight_state.clone());
+
+            // État Cadres chat ("!cadres <couleur>" → couleurFin du cadre
+            // unifié). Hooks on_message dans les 4 modules chat ; la mutation
+            // passe par le dashboard (event "cadres:couleur") — écrivain
+            // unique de la scène via update_scene.
+            let cadres_chat_state = cadres_cmd::CadresChatState::new(handle.clone());
+            app.manage(cadres_chat_state.clone());
 
             // État Input Viewer (capture globale clavier + souris → overlay
             // diffusion). Inactif au boot — démarré par le bouton ON/OFF des
@@ -3898,7 +4301,17 @@ pub fn run() {
             // nommés : splitter, input viewer…), par processus (WebView2,
             // OBS, jeu), compteurs d'activité. Tap passif sur chat_tx +
             // échantillonneur dédié — non énergivore, historique en mémoire.
-            conso::demarrer(chat_tx.clone());
+            // + boîte noire : journal persistant 5 s (survit à un gel).
+            let boite_noire = match conso::chemin_boite_noire(&handle) {
+                Ok(p) => p,
+                Err(e) => {
+                    // Dégradé : chemin vide → la boucle mesure mais n'écrit
+                    // rien. Ne bloque JAMAIS le boot.
+                    eprintln!("[Conso] ERR chemin boîte noire: {}", e);
+                    std::path::PathBuf::new()
+                }
+            };
+            conso::demarrer(chat_tx.clone(), boite_noire);
 
             // Fenêtre principale : applique écran + mode persistés
             // (fenetre.json — section Ergonomie) SANS la montrer
@@ -4102,14 +4515,16 @@ pub fn run() {
             import_alerte_media,
             obs_connect,
             obs_refresh_diffusion,
-            obs_toggle_stream,
-            obs_toggle_record,
+            obs_set_stream,
+            obs_set_record,
             obs_outputs_status,
             obs_projecteur_moniteurs,
             obs_projecteur_preview,
             obs_projecteur_fermer,
             chat_popout_toggle,
             chat_popout_fermer,
+            speedrun_popout_toggle,
+            speedrun_popout_fermer,
             raccourcis_moniteurs,
             raccourcis_etat,
             raccourcis_appliquer,
@@ -4120,6 +4535,7 @@ pub fn run() {
             app_redemarrer,
             scene_sync_captures,
             scenes_lister,
+            scenes_resumer,
             scene_creer,
             scene_ouvrir,
             scene_renommer,
@@ -4137,6 +4553,9 @@ pub fn run() {
             langue_sauver,
             scene_exporter,
             scene_importer,
+            scenes_exporter_zip,
+            scenes_importer_zip,
+            scenes_importer_zip_appliquer,
             obs_enumerate_targets,
             obs_create_trou_source,
             obs_sync_trous,
@@ -4146,9 +4565,13 @@ pub fn run() {
             camera_sync,
             camera_hide,
             camera_mask_sync,
+            camera_fond_vert,
             pc_enumerate_cameras,
             pc_enumerate_windows,
             pc_enumerate_games,
+            pc_enumerate_monitors,
+            pc_window_thumbnail,
+            pc_monitor_thumbnail,
             obs_create_trou_from_pc,
             twitch_connecter,
             twitch_annuler_device_flow,
@@ -4255,6 +4678,9 @@ pub fn run() {
             commande_set_config,
             commande_supprimer,
             commande_tester,
+            commande_exporter,
+            commande_importer,
+            commande_importer_ecraser,
             musique_etat,
             musique_set_config,
             musique_importer,
@@ -4268,6 +4694,14 @@ pub fn run() {
             musique_file_ajouter,
             musique_tester,
             musique_volume,
+            fight_etat,
+            fight_set_config,
+            fight_tester,
+            fight_stop,
+            fight_previsualiser_aide,
+            cadres_chat_etat,
+            cadres_chat_set_config,
+            cadres_chat_palette,
             input_viewer_set_actif,
             input_viewer_etat_actif,
             pad_etat,
@@ -4294,6 +4728,12 @@ pub fn run() {
             alerte_declencher,
             position_overlay_etat,
             position_overlay_set,
+            position_chrono_etat,
+            position_chrono_set,
+            position_splitpop_etat,
+            position_splitpop_set,
+            position_splitpop_test,
+            position_chrono_test,
             speedrun_charger_asl,
             speedrun_charger_lss,
             speedrun_demarrer,
@@ -4305,11 +4745,13 @@ pub fn run() {
             speedrun_sauver_config,
             speedrun_maj_settings_asl,
             speedrun_aller_split,
+            speedrun_exporter_splits,
             telemetrie_etat,
             telemetrie_derniers,
             audience_sessions,
             audience_session,
-            conso_etat
+            conso_etat,
+            boite_noire_etat
         ])
         .run(tauri::generate_context!())
         .expect("erreur lors du lancement de StreamOS v0");

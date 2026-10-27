@@ -196,6 +196,8 @@ alert(get(t)("scenes.creationRefusee", { erreur: String(e) }));
 | `twitchDevice` | `src/lib/components/TwitchDeviceModal.svelte` |
 | `dupliquerModal` | `src/lib/components/DupliquerSceneModal.svelte` |
 | `confirmSupprWidget` | `src/lib/components/ConfirmDeleteWidgetModal.svelte` |
+| `confirmOuvrirScene` | `src/lib/components/ConfirmOuvrirSceneModal.svelte` |
+| `confirmObsOutput` | `src/lib/components/ConfirmObsOutputModal.svelte` |
 | `gizmo` | `src/lib/components/Gizmo3D.svelte` (labels « Miroir H/V ») |
 | `guides` | `src/lib/components/AlignmentGuides.svelte` (label « CENTRE » — via `get(t)` au dessin) |
 | `playerBar` | `src/lib/components/PlayerBar.svelte` (tooltips le cas échéant) |

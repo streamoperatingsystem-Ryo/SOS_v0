@@ -69,7 +69,18 @@ let cleEcranCourante = "";
 tailleUi.subscribe((v) => {
   try {
     if (!cleEcranCourante) {
-      localStorage.setItem(LS_TAILLE, String(v));
+      // Avant initTailleUi : ne JAMAIS écraser une map par un nombre nu
+      // (le set initial du module écrirait "100" par-dessus
+      // {"1920x1080":110} et perdrait le cran de chaque écran) —
+      // fusionner sous la clé "" (repli legacy) si le LS est déjà une
+      // map ; format nombre-seul conservé sinon.
+      const p: unknown = JSON.parse(localStorage.getItem(LS_TAILLE) ?? "null");
+      if (p && typeof p === "object") {
+        (p as Record<string, number>)[""] = v;
+        localStorage.setItem(LS_TAILLE, JSON.stringify(p));
+      } else {
+        localStorage.setItem(LS_TAILLE, String(v));
+      }
       return;
     }
     const p: unknown = JSON.parse(localStorage.getItem(LS_TAILLE) ?? "{}");

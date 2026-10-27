@@ -133,6 +133,7 @@
 <div
   class="sel-overlay"
   bind:this={overlayEl}
+  data-widget-id={w.id}
   style="left:{w.x}px; top:{w.y}px; width:{w.largeur}px; height:{w.hauteur}px; --hs:{scale > 0 ? 1 / scale : 1};"
   onpointermove={onpointermove}
   onpointerup={onpointerup}

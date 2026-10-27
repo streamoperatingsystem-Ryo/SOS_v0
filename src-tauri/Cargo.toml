@@ -49,6 +49,10 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 # Speedrun splitter — moteur de script JavaScript (remplace Roslyn C#).
 # Boa est un moteur JS pur Rust, sans dépendances C/C++ (~5MB vs LiveSplit .NET ~50MB).
 boa_engine = "0.20"
+# Lecteur ZIP de l'import « tout en .zip » (zip_store.rs) : inflate raw
+# (méthode 8) pour lire aussi les zips compressés par Windows/7-Zip —
+# nos exports restent « stored » (méthode 0, écriture maison sans dep).
+flate2 = "1"
 
 [target.'cfg(windows)'.dependencies]
 # Module équaliseur — capture WASAPI loopback (sortie par défaut ≈ « Desktop
@@ -72,6 +76,22 @@ windows = { version = "0.58", features = [
     # Diagnostic — GPU par processus via compteurs PDH « GPU Engine »
     # (vendor-agnostic Intel/AMD/NVIDIA, WDDM — PdhAddEnglishCounterW)
     "Win32_System_Performance",
+    # Miniatures du sélecteur de capture (pc_thumb) : Windows Graphics
+    # Capture one-shot (frame pool D3D11) + icône fenêtre fallback +
+    # énumération moniteurs (EnumDisplayMonitors / EnumDisplayDevices).
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_System_Com",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_WinRT",
+    "Win32_System_WinRT_Direct3D11",
+    "Win32_System_WinRT_Graphics_Capture",
+    "Graphics_Capture",
+    "Graphics_DirectX",
+    "Graphics_DirectX_Direct3D11",
+    "Foundation",
 ] }
 
 [features]

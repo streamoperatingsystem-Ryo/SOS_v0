@@ -6,6 +6,18 @@
 /// Désormais, un seul réglage dans l'onglet "Squelette de position" pilote les
 /// deux overlays via ce state partagé.
 ///
+/// Le chrono 2 (deuxième chronomètre déclenché par une touche du pad
+/// numérique) a son PROPRE squelette dédié, indépendant du squelette partagé :
+/// persisté dans `position_chrono.json`, poussé vers la diffusion via la
+/// frame WS `chrono2-pos`.
+///
+/// Le pop de validation des splits (speedrun) a AUSSI son squelette dédié :
+/// il se déclenche à chaque split pendant une run — fréquence incompatible
+/// avec le cadre partagé des alertes (collisions visuelles quasi garanties).
+/// Persisté `position_splitpop.json`, poussé via la frame WS `splitpop-pos`.
+/// Resync `splitpop-resync` à la (re)connexion WS car les events speedrun
+/// ne portent pas la position (contrairement aux frames `chrono2-etat`).
+///
 /// Flux :
 ///   1. Modale (onglet "Squelette de position") → `position_overlay_set` →
 ///      `set()` persiste `position_overlay.json` + émet WS `position-overlay-config`
@@ -48,6 +60,29 @@ impl Default for PositionOverlayConfig {
     }
 }
 
+/// Squelette dédié du chrono 2 — défaut haut-centre (référence 1920×1080).
+pub fn defaut_chrono() -> PositionOverlayConfig {
+    PositionOverlayConfig {
+        x: 760.0,
+        y: 80.0,
+        largeur: 400.0,
+        hauteur: 120.0,
+    }
+}
+
+/// Squelette dédié du pop de validation des splits — défaut haut-centre
+/// (reprend l'ancien défaut JS `splitPopGeo`, référence 1920×1080).
+/// Le pop se déclenche à CHAQUE split pendant une run : un squelette dédié
+/// évite les collisions avec les alertes qui partagent l'autre cadre.
+pub fn defaut_splitpop() -> PositionOverlayConfig {
+    PositionOverlayConfig {
+        x: 660.0,
+        y: 60.0,
+        largeur: 600.0,
+        hauteur: 120.0,
+    }
+}
+
 /// État partagé du squelette de position. Clonable (Arc internes) — passé aux
 /// commandes Tauri et lu par welcome.rs / alertes.rs via `app.state::<Self>()`.
 #[derive(Clone)]
@@ -55,16 +90,29 @@ pub struct PositionOverlayState {
     pub app: AppHandle,
     pub chat_tx: broadcast::Sender<String>,
     config: Arc<Mutex<PositionOverlayConfig>>,
+    /// Squelette DÉDIÉ du chrono 2 — indépendant du squelette partagé
+    /// (welcome/alertes/commandes/pad). Persisté `position_chrono.json`.
+    config_chrono: Arc<Mutex<PositionOverlayConfig>>,
+    /// Squelette DÉDIÉ du pop de validation des splits (speedrun) —
+    /// indépendant du squelette partagé (le pop arrive à chaque split et
+    /// pouvait chevaucher les alertes). Persisté `position_splitpop.json`,
+    /// poussé vers la diffusion via la frame WS `splitpop-pos`.
+    config_splitpop: Arc<Mutex<PositionOverlayConfig>>,
 }
 
 impl PositionOverlayState {
     /// Crée l'état + charge `position_overlay.json` (absent → défaut).
     pub fn new(app: AppHandle, chat_tx: broadcast::Sender<String>) -> Self {
         let config = load_file(&app).unwrap_or_default();
+        let config_chrono = load_file_chrono(&app).unwrap_or_else(|_| defaut_chrono());
+        let config_splitpop =
+            load_file_splitpop(&app).unwrap_or_else(|_| defaut_splitpop());
         let state = Self {
             app,
             chat_tx,
             config: Arc::new(Mutex::new(config)),
+            config_chrono: Arc::new(Mutex::new(config_chrono)),
+            config_splitpop: Arc::new(Mutex::new(config_splitpop)),
         };
         // NB : une SEULE lecture lock() → clone. Plusieurs .lock() du même
         // Mutex dans une même expression (ex. args d'un eprintln!) gardent le
@@ -117,6 +165,93 @@ impl PositionOverlayState {
         app.try_state::<Self>().map(|s| s.inner().clone())
     }
 
+    // ===== Chrono 2 — squelette dédié =====
+
+    /// Snapshot du squelette chrono 2 (pour l'UI dashboard).
+    pub fn etat_chrono(&self) -> PositionOverlayConfig {
+        self.config_chrono.lock().unwrap().clone()
+    }
+
+    /// Remplace le squelette chrono 2 + persiste (`position_chrono.json`)
+    /// + push WS `chrono2-pos` (repositionnement live de la diffusion)
+    /// + émet event Tauri `position-chrono:etat`.
+    pub fn set_chrono(&self, cfg: PositionOverlayConfig) -> Result<(), String> {
+        {
+            let mut c = self.config_chrono.lock().unwrap();
+            *c = cfg.clone();
+        }
+        self.save_chrono_to_disk()?;
+        self.emit_ws_chrono();
+        self.emit_etat_chrono();
+        Ok(())
+    }
+
+    /// Émet `chrono2-pos` sur le WS :4321 (position du squelette chrono 2 —
+    /// la diffusion l'applique à la racine overlay chrono, visible ou non).
+    pub fn emit_ws_chrono(&self) {
+        let cfg = self.config_chrono.lock().unwrap().clone();
+        let msg = serde_json::json!({
+            "type": "chrono2-pos",
+            "config": {
+                "x": cfg.x,
+                "y": cfg.y,
+                "largeur": cfg.largeur,
+                "hauteur": cfg.hauteur,
+            },
+        });
+        let _ = self.chat_tx.send(msg.to_string());
+    }
+
+    /// Émet l'état chrono vers le dashboard (event Tauri `position-chrono:etat`).
+    pub fn emit_etat_chrono(&self) {
+        let cfg = self.etat_chrono();
+        let _ = self.app.emit("position-chrono:etat", &cfg);
+    }
+
+    // ===== Pop de validation des splits — squelette dédié =====
+
+    /// Snapshot du squelette splitpop (pour l'UI dashboard).
+    pub fn etat_splitpop(&self) -> PositionOverlayConfig {
+        self.config_splitpop.lock().unwrap().clone()
+    }
+
+    /// Remplace le squelette splitpop + persiste (`position_splitpop.json`)
+    /// + push WS `splitpop-pos` (repositionnement live de la diffusion)
+    /// + émet event Tauri `position-splitpop:etat`.
+    pub fn set_splitpop(&self, cfg: PositionOverlayConfig) -> Result<(), String> {
+        {
+            let mut c = self.config_splitpop.lock().unwrap();
+            *c = cfg.clone();
+        }
+        self.save_splitpop_to_disk()?;
+        self.emit_ws_splitpop();
+        self.emit_etat_splitpop();
+        Ok(())
+    }
+
+    /// Émet `splitpop-pos` sur le WS :4321 (position du squelette splitpop —
+    /// la diffusion l'applique au root du pop, visible ou non).
+    pub fn emit_ws_splitpop(&self) {
+        let cfg = self.config_splitpop.lock().unwrap().clone();
+        let msg = serde_json::json!({
+            "type": "splitpop-pos",
+            "config": {
+                "x": cfg.x,
+                "y": cfg.y,
+                "largeur": cfg.largeur,
+                "hauteur": cfg.hauteur,
+            },
+        });
+        let _ = self.chat_tx.send(msg.to_string());
+    }
+
+    /// Émet l'état splitpop vers le dashboard (event Tauri
+    /// `position-splitpop:etat`).
+    pub fn emit_etat_splitpop(&self) {
+        let cfg = self.etat_splitpop();
+        let _ = self.app.emit("position-splitpop:etat", &cfg);
+    }
+
     // ===== Persistance =====
 
     fn save_to_disk(&self) -> Result<(), String> {
@@ -127,6 +262,28 @@ impl PositionOverlayState {
             .map_err(|e| format!("Serialize position_overlay.json: {}", e))?;
         fs::write(&path, json)
             .map_err(|e| format!("Écrire position_overlay.json: {}", e))?;
+        Ok(())
+    }
+
+    fn save_chrono_to_disk(&self) -> Result<(), String> {
+        let cfg = self.config_chrono.lock().unwrap().clone();
+        let dir = data_dir(&self.app)?;
+        let path = dir.join("position_chrono.json");
+        let json = serde_json::to_string_pretty(&cfg)
+            .map_err(|e| format!("Serialize position_chrono.json: {}", e))?;
+        fs::write(&path, json)
+            .map_err(|e| format!("Écrire position_chrono.json: {}", e))?;
+        Ok(())
+    }
+
+    fn save_splitpop_to_disk(&self) -> Result<(), String> {
+        let cfg = self.config_splitpop.lock().unwrap().clone();
+        let dir = data_dir(&self.app)?;
+        let path = dir.join("position_splitpop.json");
+        let json = serde_json::to_string_pretty(&cfg)
+            .map_err(|e| format!("Serialize position_splitpop.json: {}", e))?;
+        fs::write(&path, json)
+            .map_err(|e| format!("Écrire position_splitpop.json: {}", e))?;
         Ok(())
     }
 }
@@ -143,4 +300,56 @@ fn load_file(app: &AppHandle) -> Result<PositionOverlayConfig, String> {
     let cfg: PositionOverlayConfig = serde_json::from_str(&content)
         .map_err(|e| format!("Parse position_overlay.json: {}", e))?;
     Ok(cfg)
+}
+
+/// Charge `position_chrono.json` (absent → défaut haut-centre).
+fn load_file_chrono(app: &AppHandle) -> Result<PositionOverlayConfig, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("position_chrono.json");
+    if !path.exists() {
+        return Ok(defaut_chrono());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Lire position_chrono.json: {}", e))?;
+    let cfg: PositionOverlayConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("Parse position_chrono.json: {}", e))?;
+    Ok(cfg)
+}
+
+/// Charge `position_splitpop.json` (absent → défaut haut-centre 600×120).
+fn load_file_splitpop(app: &AppHandle) -> Result<PositionOverlayConfig, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("position_splitpop.json");
+    if !path.exists() {
+        return Ok(defaut_splitpop());
+    }
+    let content = fs::read_to_string(&path)
+        .map_err(|e| format!("Lire position_splitpop.json: {}", e))?;
+    let cfg: PositionOverlayConfig = serde_json::from_str(&content)
+        .map_err(|e| format!("Parse position_splitpop.json: {}", e))?;
+    Ok(cfg)
+}
+
+/// Re-émet la frame `splitpop-pos` vers la diffusion (resync à la
+/// (re)connexion WS — les events speedrun ne portent PAS la position du
+/// pop, contrairement aux frames `chrono2-etat` ; la diffusion envoie
+/// `splitpop-resync` à l'ouverture). Appelée par server.rs. No-op si le
+/// state n'est pas encore enregistré.
+pub fn reemit_splitpop(app: &AppHandle) {
+    let Some(state) = app.try_state::<PositionOverlayState>() else {
+        return;
+    };
+    state.emit_ws_splitpop();
+}
+
+/// Test manuel du pop de validation des splits (bouton « Tester le rendu »
+/// de l'onglet Squelette de position) : émet `splitpop-test` → la diffusion
+/// affiche un pop factice au squelette dédié, via le même code path visuel
+/// qu'un vrai split. No-op si le state n'est pas enregistré.
+pub fn tester_splitpop(app: &AppHandle) {
+    let Some(state) = app.try_state::<PositionOverlayState>() else {
+        return;
+    };
+    let msg = serde_json::json!({ "type": "splitpop-test" });
+    let _ = state.chat_tx.send(msg.to_string());
 }

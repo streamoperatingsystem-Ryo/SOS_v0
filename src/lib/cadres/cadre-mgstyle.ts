@@ -7,7 +7,7 @@
 // jamais n'obscurcit le contenu (règle AGENTS.md).
 
 import type { CadreOpts } from "./cadre-cyberpunk";
-import { angleVersCoords, couleurOu } from "./couleurs";
+import { angleVersCoords, couleurOu, stopsLiseres } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
@@ -170,8 +170,7 @@ export default function renderMGStyle(opts: CadreOpts): string {
   return `<svg width="${svgW}" height="${svgH}" viewBox="${viewX} ${viewY} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${offset + margin}px; left:-${offset + margin}px; pointer-events:none; z-index:5;">
   <defs>
     <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
-      <stop offset="0%" stop-color="${cPrincipal}" />
-      <stop offset="100%" stop-color="${cAccent}" />
+      ${stopsLiseres(cPrincipal, cAccent)}
     </linearGradient>
     <clipPath id="${clipId}">
       <path d="${borderPath}" />

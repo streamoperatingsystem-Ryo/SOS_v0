@@ -5,8 +5,9 @@
 // chaque arête un motif symétrique : pointe-étoile centrale rentrante,
 // griffes-crocs pleines en éventail vers les coins et fines balayures
 // effilées, plus des équerres de visée arrondies en retrait des coins.
-// couleur = encre (noir dense conseillé), couleurFin = ton profond du
-// dégradé ; clair = couleur éclaircie (équerres, lueur du voyageur).
+// couleurFin = encre (couleur vive unifiée — noir dense conseillé),
+// couleur = ton profond du dégradé ; clair = couleur éclaircie (équerres,
+// lueur du voyageur).
 // Tout est centré sur le tracé ou clippé dans la forme : la marge
 // extérieure est rognée par overflow:hidden + clip-path du parent
 // (leçon 2026-10-05) ; les décors restent dans la bande du bord, le
@@ -15,7 +16,7 @@
 // mpath, compatible vieux CEF OBS) + respiration SMIL des griffes.
 
 import type { CadreOpts } from "./cadre-cyberpunk";
-import { angleVersCoords, assombrir, couleurOu, eclaircir } from "./couleurs";
+import { angleVersCoords, assombrir, couleurOu, eclaircir, stopsLiseres } from "./couleurs";
 
 function clampStrokeWidth(sw: number): number {
   const n = Number(sw);
@@ -142,8 +143,8 @@ function equerre(
 
 export default function renderTribal(opts: CadreOpts): string {
   const { largeur, hauteur } = opts;
-  const principal = couleurOu(opts.couleur, "#111111");
-  const profond = couleurOu(opts.couleurFin, assombrir(principal, 0.4));
+  const principal = couleurOu(opts.couleurFin, "#111111");
+  const profond = couleurOu(opts.couleur, assombrir(principal, 0.4));
   const clair = eclaircir(principal, 0.4);
   const angle = Number.isFinite(Number(opts.gradientAngle)) ? Number(opts.gradientAngle) : 135;
   const { x1: gx1, y1: gy1, x2: gx2, y2: gy2 } = angleVersCoords(angle);
@@ -207,8 +208,7 @@ export default function renderTribal(opts: CadreOpts): string {
   return `<svg width="${svgW}" height="${svgH}" viewBox="${viewX} ${viewY} ${svgW} ${svgH}" preserveAspectRatio="none" style="position:absolute; top:-${offset + margin}px; left:-${offset + margin}px; pointer-events:none; z-index:5;">
   <defs>
     <linearGradient id="${gradId}" x1="${gx1}%" y1="${gy1}%" x2="${gx2}%" y2="${gy2}%">
-      <stop offset="0%" stop-color="${principal}" />
-      <stop offset="100%" stop-color="${profond}" />
+      ${stopsLiseres(profond, principal)}
     </linearGradient>
     <clipPath id="${clipId}">
       <path d="${borderPath}" />

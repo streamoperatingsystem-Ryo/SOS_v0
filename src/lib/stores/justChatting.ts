@@ -24,7 +24,7 @@ import {
   type JcLayout,
   type Scene,
 } from "../tauri";
-import { pointsClipPathCadre } from "../cadres/points";
+import { pointsClipPathCadre, pointsCercle } from "../cadres/points";
 import {
   sceneStore,
   syncCapturesOBS,
@@ -154,19 +154,26 @@ async function syncObsJC(): Promise<void> {
     // device = null : ne pas toucher aux settings d'un input existant.
     await tauri.cameraSync(
       host, port, password, null,
-      l.camera.x * cw, l.camera.y * ch, jcW, jcH
+      l.camera.x * cw, l.camera.y * ch, jcW, jcH, cam.cameraFondVert === true,
+      cam.cameraCachee !== true
     );
   } catch {
     // OBS offline → auto-guérison au prochain scene_sync_captures.
   }
   try {
-    // Mêmes conditions de forme que pointsMasqueCamera (cadre actif +
+    // Mêmes conditions de forme que pointsMasqueCamera (cameraForme
+    // dédiée prioritaire — cercle aux dims JC, puis cadre actif +
     // strokeWidth > 0 + pas de sansCadre), dims = rect JC.
     const cadre = scene.cadreWidget;
-    const points =
-      cam.sansCadre === true || !cadre?.actif || (cadre.strokeWidth || 0) <= 0
-        ? null
-        : pointsClipPathCadre(cadre.style, jcW, jcH, cadre.strokeWidth || 4);
+    let points: [number, number][] | null;
+    if (cam.cameraForme === "cercle") {
+      points = pointsCercle(jcW, jcH);
+    } else if (cam.cameraForme === "carre" || cam.sansCadre === true
+      || !cadre?.actif || (cadre.strokeWidth || 0) <= 0) {
+      points = null;
+    } else {
+      points = pointsClipPathCadre(cadre.style, jcW, jcH, cadre.strokeWidth || 4);
+    }
     await tauri.cameraMaskSync(
       host, port, password, points, jcW, jcH, "remplir", 1
     );

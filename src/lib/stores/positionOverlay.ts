@@ -16,6 +16,16 @@
 //      alerte-config en lisant la position depuis le state unifié — garantit
 //      que la position est appliquée même si diffusion reconnecte après un
 //      changement.
+//
+// Le chrono 2 (deuxième chronomètre du pad numérique) a son PROPRE squelette
+// dédié, indépendant du squelette partagé (position_chrono.json) :
+// `positionChrono` + sauverPositionChrono — frame WS `chrono2-pos`, event
+// Tauri `position-chrono:etat`.
+//
+// Le pop de validation des splits (speedrun) a AUSSI son squelette dédié
+// (position_splitpop.json) : `positionSplitpop` + sauverPositionSplitpop —
+// frame WS `splitpop-pos`, event `position-splitpop:etat`. Dédié car le pop
+// arrive à chaque split et pouvait chevaucher les alertes du cadre partagé.
 import { writable } from "svelte/store";
 import { listen } from "@tauri-apps/api/event";
 import { tauri, type PositionOverlayConfig } from "../tauri";
@@ -28,7 +38,30 @@ const DEFAUT: PositionOverlayConfig = {
   hauteur: 352,
 };
 
+/// Défaut du squelette chrono 2 (miroir de defaut_chrono — haut-centre).
+const DEFAUT_CHRONO: PositionOverlayConfig = {
+  x: 760,
+  y: 80,
+  largeur: 400,
+  hauteur: 120,
+};
+
+/// Défaut du squelette splitpop (miroir de defaut_splitpop — haut-centre,
+/// reprend l'ancien défaut JS splitPopGeo).
+const DEFAUT_SPLITPOP: PositionOverlayConfig = {
+  x: 660,
+  y: 60,
+  largeur: 600,
+  hauteur: 120,
+};
+
 export const positionOverlay = writable<PositionOverlayConfig>({ ...DEFAUT });
+
+/// Squelette DÉDIÉ du chrono 2 (indépendant du squelette partagé).
+export const positionChrono = writable<PositionOverlayConfig>({ ...DEFAUT_CHRONO });
+
+/// Squelette DÉDIÉ du pop de validation des splits (speedrun).
+export const positionSplitpop = writable<PositionOverlayConfig>({ ...DEFAUT_SPLITPOP });
 
 let listenersBound = false;
 
@@ -42,12 +75,22 @@ export async function initPositionOverlay(): Promise<void> {
     positionOverlay.set(e.payload);
   });
 
+  await listen<PositionOverlayConfig>("position-chrono:etat", (e) => {
+    positionChrono.set(e.payload);
+  });
+
+  await listen<PositionOverlayConfig>("position-splitpop:etat", (e) => {
+    positionSplitpop.set(e.payload);
+  });
+
 }
 
 /// Charge la config initiale depuis Rust. À appeler après initPositionOverlay.
 export async function chargerPositionOverlay(): Promise<void> {
   try {
     positionOverlay.set(await tauri.positionOverlayEtat());
+    positionChrono.set(await tauri.positionChronoEtat());
+    positionSplitpop.set(await tauri.positionSplitpopEtat());
   } catch {
   }
 }
@@ -63,7 +106,33 @@ export async function sauverPositionOverlay(
   }
 }
 
+/// Remplace le squelette chrono 2 (store local + persiste via Rust
+/// position_chrono.json + push WS chrono2-pos — repositionnement live).
+export async function sauverPositionChrono(
+  cfg: PositionOverlayConfig,
+): Promise<void> {
+  positionChrono.set(cfg);
+  try {
+    await tauri.positionChronoSet(cfg);
+  } catch {
+  }
+}
+
+/// Remplace le squelette splitpop (store local + persiste via Rust
+/// position_splitpop.json + push WS splitpop-pos — repositionnement live).
+export async function sauverPositionSplitpop(
+  cfg: PositionOverlayConfig,
+): Promise<void> {
+  positionSplitpop.set(cfg);
+  try {
+    await tauri.positionSplitpopSet(cfg);
+  } catch {
+  }
+}
+
 /// Remet à zéro (après déconnexion / reset).
 export function resetPositionOverlay(): void {
   positionOverlay.set({ ...DEFAUT });
+  positionChrono.set({ ...DEFAUT_CHRONO });
+  positionSplitpop.set({ ...DEFAUT_SPLITPOP });
 }

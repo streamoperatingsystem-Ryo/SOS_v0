@@ -2,13 +2,17 @@
 // Index léger (ids + noms) + scène courante. Une seule scène en RAM
 // (sceneStore dans scene.ts). Pas de préchargement des autres scènes.
 import { writable, get } from "svelte/store";
-import { tauri, type SceneIndex } from "../tauri";
+import { tauri, type SceneIndex, type SceneResume } from "../tauri";
 import { loadScene, selectWidget, syncCapturesOBS } from "./scene";
 import { t } from "./langue";
 
 export const scenesIndexStore = writable<SceneIndex[]>([]);
 export const currentSceneIdStore = writable<string>("");
 export const currentSceneNomStore = writable<string>("");
+/// Résumés de toutes les scènes (nb widgets, types, modules, mini-rects)
+/// indexés par id — alimente le tableau enrichi « Vos scènes » (mini-map
+/// procédurale). Rechargé à chaque ouverture du tableau.
+export const scenesResumeStore = writable<Record<string, SceneResume>>({});
 
 /// Charge l'index des scènes depuis Rust (ids + noms seulement).
 export async function loadScenesIndex(): Promise<void> {
@@ -17,6 +21,17 @@ export async function loadScenesIndex(): Promise<void> {
     scenesIndexStore.set(idx);
   } catch (e) {
     console.error("loadScenesIndex:", e);
+  }
+}
+
+/// Recharge les résumés de toutes les scènes depuis le disque (petits
+/// fichiers JSON — coût négligeable). Appelé à l'ouverture de « Vos scènes ».
+export async function loadScenesResume(): Promise<void> {
+  try {
+    const list = await tauri.scenesResumer();
+    scenesResumeStore.set(Object.fromEntries(list.map((r) => [r.id, r])));
+  } catch (e) {
+    console.error("loadScenesResume:", e);
   }
 }
 
@@ -149,6 +164,20 @@ export async function exportScene(): Promise<void> {
   }
 }
 
+/// Exporte TOUTES les scènes + TOUS les médias dans un seul .zip (dialog
+/// « Enregistrer sous » — dossier + nom choisis, un .zip existant est
+/// écrasé). Le zip contient le miroir scenes/+medias/ ET un pack par scène.
+export async function exportToutZip(): Promise<void> {
+  try {
+    const chemin = await tauri.scenesExporterZip();
+    if (chemin) {
+      alert(get(t)("scenes.exportZipOk", { chemin }));
+    }
+  } catch (e) {
+    alert(get(t)("scenes.exportRefuse", { erreur: String(e) }));
+  }
+}
+
 /// Importe une scène depuis un .json (dialog Ouvrir). Si importé, recharge l'UI.
 export async function importScene(): Promise<void> {
   try {
@@ -159,6 +188,51 @@ export async function importScene(): Promise<void> {
       await loadScene();
       selectWidget(null);
     }
+  } catch (e) {
+    alert(get(t)("commun.importRefuse", { erreur: String(e) }));
+  }
+}
+
+/// Importe une sauvegarde complète depuis un .zip (dialog « Ouvrir »).
+/// Phase 1 (Rust) : analyse de l'archive sans rien écrire → scènes +
+/// conflits (ids déjà présents localement). Chaque conflit est tranché
+/// ici par un confirm() : OK = remplacer la scène locale, Annuler = la
+/// garder. Phase 2 (Rust) : application + restauration des médias.
+/// Les scènes locales absentes du zip ne sont jamais touchées.
+export async function importToutZip(): Promise<void> {
+  try {
+    const analyse = await tauri.scenesImporterZip();
+    if (!analyse) return; // dialog annulé
+    const remplacer: string[] = [];
+    for (const c of analyse.conflits) {
+      const ok = confirm(
+        get(t)("scenes.importZipConflit", {
+          nom: c.nomArchive,
+          nomLocal: c.nomLocal,
+        })
+      );
+      if (ok) remplacer.push(c.id);
+    }
+    const bilan = await tauri.scenesImporterZipAppliquer(
+      analyse.zipPath,
+      remplacer
+    );
+    // Reload complet : nouvelles scènes dans l'index, scène courante
+    // rechargée depuis le disque côté Rust (elle a pu être remplacée).
+    await loadScenesIndex();
+    await loadCurrentScene();
+    await loadScene();
+    selectWidget(null);
+    // Sync captures OBS : la scène rechargée peut avoir des trous/widgets
+    // caméra différents de l'ancienne version.
+    await syncCapturesOBS();
+    alert(
+      get(t)("scenes.importZipOk", {
+        scenes: bilan.scenesImportees,
+        medias: bilan.mediasRestaures,
+        sautees: bilan.scenesSautees,
+      })
+    );
   } catch (e) {
     alert(get(t)("commun.importRefuse", { erreur: String(e) }));
   }

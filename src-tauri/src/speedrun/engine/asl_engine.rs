@@ -572,6 +572,124 @@ impl EngineInner {
         }
     }
 
+    /// Rejoue la file d'actions TimerModel poussées par le script pendant les
+    /// appels de méthode (V.TimerModel.Split/UndoSplit/SkipSplit/Reset/Pause/
+    /// Start — sémantique LiveSplit : l'appel agit immédiatement sur le
+    /// timer). Les events résultants sont retournés dans l'ordre, à émettre
+    /// par le callback de poll_tick (plusieurs actions par tick possibles :
+    //  ex. MGS F.BackupSplitCheck peut split-puis-skip dans le même split()).
+    fn appliquer_actions_timer(&mut self) -> Vec<SpeedrunEvent> {
+        let mut events = Vec::new();
+        for action in self.script_ctx.drain_timer_actions() {
+            let event = match action.as_str() {
+                "split" => self.faire_split(),
+                "undo" => self.appliquer_undo(),
+                "skip" => self.appliquer_skip(),
+                "reset" => self.appliquer_reset(),
+                // LiveSplit : Pause() n'agit qu'en run — NOTRE timer.pause()
+                // démarre depuis NotRunning (comportement bouton manuel),
+                // il ne faut pas qu'un script arme le timer en pause.
+                "pause" if matches!(
+                    self.timer.state.current_phase,
+                    TimerPhase::Running | TimerPhase::Paused
+                ) =>
+                {
+                    self.appliquer_pause()
+                }
+                "start" => self.appliquer_start(),
+                _ => None,
+            };
+            if let Some(e) = event {
+                events.push(e);
+            }
+        }
+        events
+    }
+
+    /// Démarre le timer si NotRunning (auto ASL start()=true, action manuelle
+    /// ou TimerModel.Start). Dispatche timer.OnStart aux handlers abonnés —
+    //  MGS y exécute F.TimerOnStart (SetStateCodes + purge du log FPS).
+    fn appliquer_start(&mut self) -> Option<SpeedrunEvent> {
+        if self.timer.state.current_phase != TimerPhase::NotRunning {
+            return None;
+        }
+        self.timer.start();
+        let index = self.timer.state.current_split_index;
+        self.appeler_handler("onStart");
+        self.script_ctx.dispatch_timer_event("OnStart", "null");
+        Some(SpeedrunEvent::Started { index })
+    }
+
+    /// Skip du segment courant : index +1 sans temps enregistré (manuel ou
+    /// TimerModel.SkipSplit — MGS : skips auto Kevin/Nickita, backup skips).
+    fn appliquer_skip(&mut self) -> Option<SpeedrunEvent> {
+        let phase = self.timer.state.current_phase;
+        if phase != TimerPhase::Running && phase != TimerPhase::Paused {
+            return None;
+        }
+        let skipped = self.timer.state.current_split_index.max(0) as usize;
+        self.timer.skip_split();
+        // Le segment sauté ne compte pas : aucun temps enregistré.
+        if skipped < self.temps_segs.len() {
+            self.temps_segs[skipped] = None;
+            self.cumuls_segs[skipped] = None;
+        }
+        let index = self.timer.state.current_split_index;
+        Some(SpeedrunEvent::SplitSkipped { index })
+    }
+
+    /// Undo du dernier split : le segment défait redevient actif (manuel ou
+    /// TimerModel.UndoSplit — MGS : backtracking des clés PAL). La durée
+    /// enregistrée du segment est lue AVANT undo pour que le chrono de
+    /// segment reparte de d_k, puis l'entrée est effacée.
+    fn appliquer_undo(&mut self) -> Option<SpeedrunEvent> {
+        if self.timer.state.current_phase == TimerPhase::NotRunning
+            || self.timer.state.current_split_index <= 0
+        {
+            return None;
+        }
+        let undone = (self.timer.state.current_split_index - 1).max(0) as usize;
+        let duree = self.temps_segs.get(undone).copied().flatten();
+        if undone < self.temps_segs.len() {
+            self.temps_segs[undone] = None;
+            self.cumuls_segs[undone] = None;
+        }
+        self.timer.undo_split(duree);
+        let index = self.timer.state.current_split_index;
+        Some(SpeedrunEvent::SplitUndone { index })
+    }
+
+    /// Reset complet : timer → NotRunning, purge des temps de la tentative,
+    /// méthode onReset + event timer.OnReset dispatché aux handlers abonnés
+    /// (MGS F.ResetRunVars y vide CompletedSplits/LatestSplits — sans ça,
+    /// les codes déjà tirés restent "Repeat split" jusqu'au rechargement du
+    /// script, c.-à-d. tous les splits mangés à la run suivante).
+    fn appliquer_reset(&mut self) -> Option<SpeedrunEvent> {
+        // Un index armé en NotRunning compte comme un état à reset.
+        if self.timer.state.current_phase == TimerPhase::NotRunning
+            && self.timer.state.armed_index.is_none()
+        {
+            return None;
+        }
+        let phase_avant = format!("\"{:?}\"", self.timer.state.current_phase);
+        self.timer.reset();
+        self.temps_segs.iter_mut().for_each(|t| *t = None);
+        self.cumuls_segs.iter_mut().for_each(|t| *t = None);
+        self.appeler_handler("onReset");
+        self.script_ctx.dispatch_timer_event("OnReset", &phase_avant);
+        Some(SpeedrunEvent::Reset)
+    }
+
+    /// Pause/reprise (toggle) — TimerModel.Pause ou action manuelle.
+    fn appliquer_pause(&mut self) -> Option<SpeedrunEvent> {
+        self.timer.pause();
+        match self.timer.state.current_phase {
+            TimerPhase::Paused => Some(SpeedrunEvent::Paused),
+            TimerPhase::Running => Some(SpeedrunEvent::Resumed),
+            _ => None,
+        }
+    }
+
     /// Une itération de polling. Retourne un event si quelque chose s'est passé.
     /// `callback` permet d'émettre des events supplémentaires dans le même
     /// tick (ex: Reset avant Disconnected quand le processus meurt).
@@ -654,17 +772,11 @@ impl EngineInner {
             // Sortie du jeu : le timer reset → émettre Reset pour que
             // l'affichage (store + diffusion) suive le timer Rust. Couvre
             // aussi l'armement d'un split (armed_index effacé par reset).
-            if self.timer.state.current_phase != TimerPhase::NotRunning
-                || self.timer.state.armed_index.is_some()
-            {
-                self.timer.reset();
-                // Purger les temps de la tentative morte (latence corrigée :
-                // ils survivaient à la mort du processus et risquaient de
-                // se mélanger avec la run suivante au resync/undo).
-                self.temps_segs.iter_mut().for_each(|t| *t = None);
-                self.cumuls_segs.iter_mut().for_each(|t| *t = None);
-                self.appeler_handler("onReset");
-                callback(SpeedrunEvent::Reset);
+            // appliquer_reset purge aussi les temps de la tentative morte
+            // (ils risquaient de se mélanger avec la run suivante au
+            // resync/undo) et dispatch timer.OnReset aux handlers abonnés.
+            if let Some(reset_event) = self.appliquer_reset() {
+                callback(reset_event);
             }
             self.process = None;
             self.init_completed = false;
@@ -763,11 +875,13 @@ impl EngineInner {
             ) {
                 Ok(result) => {
                     if result == "true" && self.settings.start {
-                        self.timer.start();
-                        let index = self.timer.state.current_split_index;
-                        log::info!("[ASL] Timer démarré (split #{})", index);
-                        self.appeler_handler("onStart");
-                        return Some(SpeedrunEvent::Started { index });
+                        let event = self.appliquer_start();
+                        if let Some(SpeedrunEvent::Started { index }) = &event {
+                            log::info!("[ASL] Timer démarré (split #{})", index);
+                        }
+                        if event.is_some() {
+                            return event;
+                        }
                     }
                     // E8 Bug A — log throttle si start() retourne false
                     // (diagnostic auto-start : settings.start=false ou script
@@ -787,6 +901,13 @@ impl EngineInner {
             }
         }
 
+        // Actions TimerModel différées poussées pendant update/start
+        // (V.TimerModel.Reset() etc. — rejouées immédiatement, sémantique
+        // LiveSplit où l'appel agit directement sur le timer).
+        for event in self.appliquer_actions_timer() {
+            callback(event);
+        }
+
         // isLoading + gameTime + split + reset
         if phase == TimerPhase::Running || phase == TimerPhase::Paused {
             // isLoading
@@ -800,7 +921,12 @@ impl EngineInner {
                     &self.settings,
                 ) {
                     Ok(result) => {
-                        let is_paused = result == "true";
+                        // Convert.ToBoolean : un watcher numérique non nul
+                        // est truthy (MGS isLoading renvoie
+                        // M["TimerActive"].Current, un int 0/1 — avant, "1"
+                        // n'égalait pas "true" → isLoading toujours faux).
+                        let is_paused = result == "true"
+                            || result.parse::<f64>().map(|v| v != 0.0).unwrap_or(false);
                         self.timer.state.set_is_game_time_paused(is_paused);
                     }
                     Err(e) => log::warn!("[ASL] Error in isLoading: {}", e),
@@ -818,8 +944,20 @@ impl EngineInner {
                     &self.settings,
                 ) {
                     Ok(result) => {
+                        // Un TimeSpan sérialise en nombre de secondes via son
+                        // toJSON (script_bridge). Garde-fou {TotalSeconds} si
+                        // le script renvoie l'objet brut — avant ce cas,
+                        // parse::<f64> échouait à chaque tick → game_time
+                        // resté None → timer en RTA pur ≠ LiveSplit.
                         if let Ok(gt) = result.parse::<f64>() {
                             self.timer.state.set_game_time(gt);
+                        } else if let Ok(v) =
+                            serde_json::from_str::<serde_json::Value>(&result)
+                        {
+                            if let Some(gt) = v.get("TotalSeconds").and_then(|t| t.as_f64())
+                            {
+                                self.timer.state.set_game_time(gt);
+                            }
                         }
                     }
                     Err(e) => log::warn!("[ASL] Error in gameTime: {}", e),
@@ -853,17 +991,37 @@ impl EngineInner {
                     Some(&proc_json),
                     &self.settings,
                 ) {
-                    Ok(result) => do_split = result == "true",
+                    Ok(result) => {
+                        do_split = result == "true";
+                        // Erreur JS avalée par le wrapper (retour "null") —
+                        // ex : méthode C# non émulée (Array.Remove avant le
+                        // shim) qui faisait perdre les splits watchers en
+                        // silence. Log throttle ~1/s (même compteur que
+                        // start/init — phases mutuellement exclusives).
+                        if result == "null" {
+                            self.ticks_attente_attach =
+                                self.ticks_attente_attach.wrapping_add(1);
+                            if self.ticks_attente_attach % 15 == 0 {
+                                if let Some(err) = self.script_ctx.derniere_erreur() {
+                                    log::warn!("[ASL] split() erreur JS avalée : {}", err);
+                                }
+                            }
+                        }
+                    }
                     Err(e) => log::warn!("[ASL] Error in split: {}", e),
                 }
             }
 
+            // Actions TimerModel différées poussées pendant isLoading /
+            // gameTime / reset / split : MGS y passe pour ses splits backup
+            // (F.ManualSplit → V.TimerModel.Split()), les skips auto et les
+            // undo de backtracking PAL — rejouées dans l'ordre sur le timer.
+            for event in self.appliquer_actions_timer() {
+                callback(event);
+            }
+
             if do_reset && self.settings.reset {
-                self.timer.reset();
-                self.temps_segs.iter_mut().for_each(|t| *t = None);
-                self.cumuls_segs.iter_mut().for_each(|t| *t = None);
-                self.appeler_handler("onReset");
-                return Some(SpeedrunEvent::Reset);
+                return self.appliquer_reset();
             } else if do_split && self.settings.split {
                 if let Some(event) = self.faire_split() {
                     return Some(event);
@@ -919,6 +1077,11 @@ impl EngineInner {
         // f64 pour l'etat (resync) et la sauvegarde PB.
         self.cumuls_segs[seg_idx] = Some(self.timer.state.seg_start);
         self.appeler_handler("onSplit");
+        // Event timer.OnSplit (sémantique LiveSplit EventHandlerT : l'arg
+        // est la phase résultante) — couvre splits auto, manuels et actions
+        // TimerModel rejouées.
+        let phase_json = format!("\"{:?}\"", self.timer.state.current_phase);
+        self.script_ctx.dispatch_timer_event("OnSplit", &phase_json);
         let cumul = self.timer.state.current_time().format();
         let time = timer::format_time(seg_dur);
         if self.timer.state.current_phase == TimerPhase::Ended {
@@ -966,18 +1129,35 @@ impl EngineInner {
             }
         };
         let dernier = run.segments.last()?;
-        let pb_final = dernier.pb_real_time.or(dernier.pb_game_time);
         // Base de temps de la run : game time si initialisé, sinon RTA.
         let run_game_time = self.timer.state.is_game_time_initialized();
-        // Colonne PB du .lss : game time si le PB existe SANS real time.
-        let pb_game_time = pb_final.is_some() && dernier.pb_real_time.is_none();
-        if pb_final.is_some() && pb_game_time != run_game_time {
-            log::warn!(
-                "[ASL] Sauvegarde PB annulée : base de temps .lss ({}) ≠ run ({})",
-                if pb_game_time { "game time" } else { "real time" },
-                if run_game_time { "game time" } else { "real time" }
-            );
-            return None;
+        // Comparaison dans la colonne du .lss correspondant à la base de la
+        // run (sémantique LiveSplit : PB en game time vs run en game time).
+        // Quand le .lss porte les deux colonnes, un run GT qui bat le PB GT
+        // sauvegarde — avant, le check « real d'abord » annulait tout run GT
+        // sur un .lss à deux colonnes (cas MGS).
+        let pb_final = if run_game_time {
+            dernier.pb_game_time.or(dernier.pb_real_time)
+        } else {
+            dernier.pb_real_time.or(dernier.pb_game_time)
+        };
+        // Un PB existe mais la colonne de la base de la run est absente :
+        // comparer GT vs RTA mélangerait les bases → pas de sauvegarde.
+        if pb_final.is_some() {
+            let colonne_absente = if run_game_time {
+                dernier.pb_game_time.is_none()
+            } else {
+                dernier.pb_real_time.is_none()
+            };
+            if colonne_absente {
+                log::warn!(
+                    "[ASL] Sauvegarde PB annulée : colonne {} absente du .lss \
+                     (PB en {} uniquement) — bases non mélangeables",
+                    if run_game_time { "GameTime" } else { "RealTime" },
+                    if run_game_time { "RealTime" } else { "GameTime" },
+                );
+                return None;
+            }
         }
         // Sauver si PB absent (première run de référence) ou battu.
         if let Some(pb) = pb_final {
@@ -1041,84 +1221,49 @@ impl EngineInner {
     /// thread moteur (pas d'accès concurrent). Les phases invalides sont
     /// ignorées silencieusement (le timer fait déjà les gardes).
     fn handle_action_manuelle(&mut self, action: ActionManuelle) -> Option<SpeedrunEvent> {
-        let phase_before = self.timer.state.current_phase;
         match action {
             ActionManuelle::Start => {
-                if phase_before == TimerPhase::NotRunning {
-                    self.timer.start();
-                    let index = self.timer.state.current_split_index;
+                let event = self.appliquer_start();
+                if let Some(SpeedrunEvent::Started { index }) = &event {
                     log::info!("[ASL] Timer démarré (manuel) — split #{}", index);
-                    self.appeler_handler("onStart");
-                    return Some(SpeedrunEvent::Started { index });
                 }
-                None
+                event
             }
             ActionManuelle::Split => {
-                if phase_before == TimerPhase::Running {
-                    if let Some(event) = self.faire_split() {
-                        match &event {
-                            SpeedrunEvent::Ended { cumul, .. } => {
-                                log::info!("[ASL] Run terminée (manuel) — {}", cumul);
-                            }
-                            SpeedrunEvent::Split { index, time, .. } => {
-                                log::info!("[ASL] Split (manuel) #{} — {}", index, time);
-                            }
-                            _ => {}
-                        }
-                        return Some(event);
+                // faire_split() refuse hors phase Running (garde du timer) —
+                // le check de phase de l'ancien code est couvert.
+                let event = self.faire_split();
+                match &event {
+                    Some(SpeedrunEvent::Ended { cumul, .. }) => {
+                        log::info!("[ASL] Run terminée (manuel) — {}", cumul);
                     }
+                    Some(SpeedrunEvent::Split { index, time, .. }) => {
+                        log::info!("[ASL] Split (manuel) #{} — {}", index, time);
+                    }
+                    _ => {}
                 }
-                None
+                event
             }
             ActionManuelle::Skip => {
-                if phase_before == TimerPhase::Running || phase_before == TimerPhase::Paused {
-                    let skipped = self.timer.state.current_split_index.max(0) as usize;
-                    self.timer.skip_split();
-                    // Le segment sauté ne compte pas : aucun temps enregistré.
-                    if skipped < self.temps_segs.len() {
-                        self.temps_segs[skipped] = None;
-                        self.cumuls_segs[skipped] = None;
-                    }
-                    let index = self.timer.state.current_split_index;
+                let event = self.appliquer_skip();
+                if let Some(SpeedrunEvent::SplitSkipped { index }) = &event {
                     log::info!("[ASL] Split skip (manuel) → #{}", index);
-                    return Some(SpeedrunEvent::SplitSkipped { index });
                 }
-                None
+                event
             }
             ActionManuelle::Undo => {
-                if phase_before != TimerPhase::NotRunning
-                    && self.timer.state.current_split_index > 0
-                {
-                    // Durée du segment défait (lue dans temps_segs AVANT
-                    // undo — seg_start recule de d_k, le chrono réaffiche
-                    // d_k au lieu de repartir de zéro). L'entrée est ensuite
-                    // effacée : le temps reprendra sa place au prochain split.
-                    let undone = (self.timer.state.current_split_index - 1).max(0) as usize;
-                    let duree = self.temps_segs.get(undone).copied().flatten();
-                    if undone < self.temps_segs.len() {
-                        self.temps_segs[undone] = None;
-                        self.cumuls_segs[undone] = None;
-                    }
-                    self.timer.undo_split(duree);
-                    let index = self.timer.state.current_split_index;
+                let event = self.appliquer_undo();
+                if let Some(SpeedrunEvent::SplitUndone { index }) = &event {
                     log::info!("[ASL] Split undo (manuel) → #{}", index);
-                    return Some(SpeedrunEvent::SplitUndone { index });
                 }
-                None
+                event
             }
             ActionManuelle::Reset => {
-                // Un index armé en NotRunning compte comme un état à reset.
-                if phase_before != TimerPhase::NotRunning
-                    || self.timer.state.armed_index.is_some()
-                {
-                    self.timer.reset();
-                    self.temps_segs.iter_mut().for_each(|t| *t = None);
-                    self.cumuls_segs.iter_mut().for_each(|t| *t = None);
-                    self.appeler_handler("onReset");
+                let event = self.appliquer_reset();
+                if event.is_some() {
                     log::info!("[ASL] Reset (manuel)");
-                    return Some(SpeedrunEvent::Reset);
                 }
-                None
+                event
             }
             ActionManuelle::GoTo { index } => {
                 let total = self.timer.state.total_splits;
@@ -1138,18 +1283,13 @@ impl EngineInner {
             }
             ActionManuelle::Pause => {
                 // pause() est un toggle : Running → Paused, Paused → Running
-                self.timer.pause();
-                match self.timer.state.current_phase {
-                    TimerPhase::Paused => {
-                        log::info!("[ASL] Pause (manuel)");
-                        Some(SpeedrunEvent::Paused)
-                    }
-                    TimerPhase::Running => {
-                        log::info!("[ASL] Resume (manuel)");
-                        Some(SpeedrunEvent::Resumed)
-                    }
-                    _ => None,
+                let event = self.appliquer_pause();
+                match &event {
+                    Some(SpeedrunEvent::Paused) => log::info!("[ASL] Pause (manuel)"),
+                    Some(SpeedrunEvent::Resumed) => log::info!("[ASL] Resume (manuel)"),
+                    _ => {}
                 }
+                event
             }
         }
     }

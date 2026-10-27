@@ -71,6 +71,12 @@ pub struct EcranAttenteConfig {
     /// l'utilisateur. None/vide = créer « SOS Audio Écran d'attente ».
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_audio: Option<String>,
+    /// Couper les sources audio « bureau » de la scène SOS pendant l'écran
+    /// d'attente (défaut true). false = l'audio bureau continue de passer
+    /// dans le stream pendant l'attente. Option de la modale « Connexion
+    /// OBS » (WebSocket) — persistée ici avec le reste de la config.
+    #[serde(default = "default_true")]
+    pub muter_bureau: bool,
     /// Centre horizontal de la carte minuteur (px canvas diffusion).
     /// Défaut 960 (centre 1920×1080). Positionnée par drag dans la modale.
     #[serde(default = "default_minuteur_x")]
@@ -164,6 +170,7 @@ impl Default for EcranAttenteConfig {
             media_kind: None,
             media_nom: None,
             source_audio: None,
+            muter_bureau: true,
             minuteur_x: default_minuteur_x(),
             minuteur_y: default_minuteur_y(),
             minuteur_echelle: default_minuteur_echelle(),
@@ -437,8 +444,15 @@ impl EcranAttenteState {
             return;
         }
         tauri::async_runtime::spawn(async move {
-            if let Err(e) =
-                configurer_audio(&host, port, &password, config.source_audio.as_deref(), config.volume).await
+            if let Err(e) = configurer_audio(
+                &host,
+                port,
+                &password,
+                config.source_audio.as_deref(),
+                config.volume,
+                config.muter_bureau,
+            )
+            .await
             {
                 eprintln!("[EcranAttente] config audio OBS (non-fatal): {}", e);
             }
@@ -536,7 +550,9 @@ pub async fn lister_sources_audio(
 ///   3. `SetSceneItemEnabled false` sur les items `wasapi_output_capture`
 ///      de la scène SOS dont le nom contient « desktop » ou « bureau »
 ///      (sauf la source dédiée) — l'audio du bureau ne fuit plus dans le
-///      stream pendant l'attente.
+///      stream pendant l'attente. Étape sautée quand `muter_bureau` vaut
+///      false (option de la modale « Connexion OBS ») — la restauration au
+///      stop reste inconditionnelle (idempotente).
 ///
 /// Porté de l'ancienne app (`configurer_audio_ecran_attente`). Seule la
 /// scène « SOS » est touchée — jamais les autres scènes de l'utilisateur.
@@ -546,6 +562,7 @@ async fn configurer_audio(
     password: &str,
     source_audio: Option<&str>,
     volume: f32,
+    muter_bureau: bool,
 ) -> Result<(), String> {
     let (mut write, mut read) = crate::obs::connect(host, port, password).await?;
 
@@ -600,6 +617,11 @@ async fn configurer_audio(
         .await?;
 
         // 3. Muter les sources audio bureau de la scène SOS (sauf la nôtre).
+        //    Option muter_bureau (modale « Connexion OBS ») : false = skip —
+        //    l'utilisateur garde son audio bureau pendant l'écran d'attente.
+        if !muter_bureau {
+            return Ok(nom_source);
+        }
         let items = crate::obs::rpc(
             &mut write,
             &mut read,

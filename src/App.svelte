@@ -2,9 +2,9 @@
   import { onMount, onDestroy } from "svelte";
   import { listen, emit, emitTo } from "@tauri-apps/api/event";
   import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore, syncCapturesOBS, initCameraHotplug } from "./lib/stores/scene";
-  import { loadScenesIndex, loadCurrentScene, exportScene, importScene } from "./lib/stores/scenes";
-  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, titreFondModalOpen, speedrunConfigModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen } from "./lib/stores/ui";
-  import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, toggleStreamObs, toggleRecordObs } from "./lib/stores/obs";
+  import { loadScenesIndex, loadCurrentScene, exportScene, exportToutZip, importScene, importToutZip } from "./lib/stores/scenes";
+  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, planningModalOpen, statistiquesModalOpen, titreFondModalOpen, speedrunConfigModalOpen, speedrunLayoutModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, confirmOuvrirSceneModalOpen, confirmObsOutputOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, obsWebSocketModalOpen } from "./lib/stores/ui";
+  import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsAutoConnect, rafraichirOutputs, obsBootDeclenche } from "./lib/stores/obs";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
   import { initTwitchLive } from "./lib/stores/twitchLive";
   import { initPlanning } from "./lib/stores/planning";
@@ -29,14 +29,20 @@
   import CadresModal from "./lib/components/CadresModal.svelte";
   import InteractionViewerModal from "./lib/components/InteractionViewerModal.svelte";
   import ModerationModal from "./lib/components/ModerationModal.svelte";
+  import PlanningModal from "./lib/components/PlanningModal.svelte";
+  import StatistiquesModal from "./lib/components/StatistiquesModal.svelte";
   import TitreModal from "./lib/components/TitreModal.svelte";
   import TitreFondModal from "./lib/components/TitreFondModal.svelte";
   import SpeedrunConfigModal from "./lib/components/SpeedrunConfigModal.svelte";
+  import SpeedrunLayoutModal from "./lib/components/SpeedrunLayoutModal.svelte";
   import PresetsModal from "./lib/components/PresetsModal.svelte";
   import ConsoModal from "./lib/components/ConsoModal.svelte";
   import DupliquerSceneModal from "./lib/components/DupliquerSceneModal.svelte";
+  import ConfirmOuvrirSceneModal from "./lib/components/ConfirmOuvrirSceneModal.svelte";
+  import ConfirmObsOutputModal from "./lib/components/ConfirmObsOutputModal.svelte";
   import EcranAttenteModal from "./lib/components/EcranAttenteModal.svelte";
   import ModulesModal from "./lib/components/ModulesModal.svelte";
+  import ObsWebSocketModal from "./lib/components/ObsWebSocketModal.svelte";
   import GuideLivre from "./lib/components/GuideLivre.svelte";
   import Drapeau from "./lib/components/Drapeau.svelte";
   import { chargerPresets } from "./lib/stores/presets";
@@ -44,10 +50,11 @@
   import { initBandeau, chargerBandeau } from "./lib/stores/bandeau";
   import { chargerAlertes } from "./lib/stores/alertes";
   import { initPositionOverlay, chargerPositionOverlay } from "./lib/stores/positionOverlay";
-  import { initPad, chargerPad } from "./lib/stores/padNumerique";
+  import { initPad, chargerPad, chrono2Etat } from "./lib/stores/padNumerique";
   import { initPresentation, chargerPresentation } from "./lib/stores/presentation";
   import { ecranAttenteStore, initEcranAttente, chargerEcranAttente, toggleEcranAttente } from "./lib/stores/ecranAttente";
   import { jcActif, initJustChatting, chargerJustChatting, toggleJustChatting } from "./lib/stores/justChatting";
+  import { initCadresChat, chargerCadresChat } from "./lib/stores/cadresChat";
   import { fondSidebar } from "./lib/stores/fondSidebar";
   import { fondDash } from "./lib/stores/fondDash";
   import { gradientCadre } from "./lib/cadres/registre";
@@ -59,6 +66,8 @@
   let serverOk = $state(false);
   // Dropdown langue topbar (bouton « Langue » du groupe outils à droite).
   let languesOuvert = $state(false);
+  let exportMenuOuvert = $state(false);
+  let importMenuOuvert = $state(false);
   // Timer auto-reconnect OBS (nettoyé au destroy/HMR pour éviter l'accumulation
   // d'intervals lors des reloads Vite en dev).
   let obsReconnectTimer: ReturnType<typeof setInterval> | null = null;
@@ -77,11 +86,31 @@
   let obsErr = $derived($obsError);
   let obsStream = $derived($obsStreaming);
   let obsRecord = $derived($obsRecording);
+  // Plateformes « migrées » : toute plateforme connectée quitte le groupe
+  // de gauche pour se ranger à droite, à côté de « Vos scènes »
+  // (.tb-connectes). OBS n'en fait PAS partie : il a sa section dédiée
+  // .tb-obs (icône + stream/record) à place FIXE — ses contrôles doivent
+  // rester prévisibles, et l'état .err rouge garde sa visibilité à gauche.
+  let obsOn = $derived(obsSt === "connected");
+  let nbPlats = $derived(
+    (cx.twitch ? 1 : 0) +
+      (cx.kick ? 1 : 0) +
+      (cx.youtube ? 1 : 0) +
+      (cx.tiktok ? 1 : 0)
+  );
+  // Libellé « ce qui est connecté » en toutes lettres — un compteur nu
+  // (« 2 en ligne ») se confondrait avec les directs/viewers.
+  let connectesLabelKey = $derived(
+    nbPlats === 1 ? "app.connectesPlat" : "app.connectesPlats"
+  );
   // État écran d'attente (BRB) : pillule header quand actif + pastille barre
   // de raccourcis. temps_restant descend à chaque tick Rust 1 Hz — l'effect
   // de push raccourcis suit eaActif (bool) pour ne pas émettre à chaque tick.
   let ea = $derived($ecranAttenteStore);
   let eaActif = $derived(ea?.actif ?? false);
+  // Chrono 2 (touche chrono du pad numérique) : pillule header quand actif
+  // (event Rust chrono2:etat, tick 10 Hz — le texte pilule suit à la seconde).
+  let chrono2 = $derived($chrono2Etat);
   // Just Chatting : pillule header quand actif + pastille barre raccourcis.
   let jcOn = $derived($jcActif);
 
@@ -170,6 +199,27 @@
   function fermerLangues() {
     languesOuvert = false;
   }
+  // Menu du bouton Exporter : même mécanique que le sélecteur Langue
+  // (toggle + fermeture par sélection, clic extérieur, Escape).
+  function toggleExport() {
+    exportMenuOuvert = !exportMenuOuvert;
+  }
+  function fermerExport() {
+    exportMenuOuvert = false;
+  }
+  // Menu du bouton Importer : même mécanique (pack dossier existant ou
+  // archive .zip complète).
+  function toggleImport() {
+    importMenuOuvert = !importMenuOuvert;
+  }
+  function fermerImport() {
+    importMenuOuvert = false;
+  }
+  function fermerMenusTopbar() {
+    fermerLangues();
+    fermerExport();
+    fermerImport();
+  }
   async function choisirLangue(id: Langue) {
     fermerLangues();
     await setLangue(id);
@@ -223,18 +273,17 @@
         // OBS est one-shot (pas de déconnexion) : clic = re-connect + re-sync,
         // comme le bouton « Connecter » de la section OBS.
         try {
-          await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
+          await obsConnect(get(obsHost), get(obsPort), get(obsPassword), "raccourci");
           await syncCapturesOBS();
         } catch {
         }
         break;
       case "obs-stream":
-        // Toggle sortie OBS stream (one-shot : connect → ToggleStream → close).
-        // Erreur traduite dans obsError par le store — pas de throw ici.
-        try { await toggleStreamObs(); } catch {}
+        // Confirmation d'abord (dashboard) — la modale appelle le toggle.
+        confirmObsOutputOpen.set("stream");
         break;
       case "obs-record":
-        try { await toggleRecordObs(); } catch {}
+        confirmObsOutputOpen.set("record");
         break;
       case "modale-interactions": interactionModalOpen.set(true); break;
       case "modale-moderation": moderationModalOpen.set(true); break;
@@ -287,30 +336,22 @@
   });
 
   // ===== Boutons topbar : sorties OBS (stream / record) =====
-  // busy par bouton = anti double-clic (chaque toggle = UNE connexion OBS
-  // one-shot). L'erreur est traduite dans obsError par le store → catch
-  // silencieux ici (même pattern que dispatchRaccourcis obs-stream/record).
-  let streamBusy = $state(false);
-  let recordBusy = $state(false);
-  async function onToggleStreamTop() {
-    if (streamBusy) return;
-    streamBusy = true;
-    try {
-      await toggleStreamObs();
-    } catch {
-    } finally {
-      streamBusy = false;
-    }
+  // Confirmation avant set (démarrer ET arrêter) — la modale
+  // ConfirmObsOutputModal relit l'état réel puis appelle setStreamObs/
+  // setRecordObs. obsStreamBusy/obsRecordBusy (stores/obs) grisent pendant
+  // le RPC.
+  function onToggleStreamTop() {
+    confirmObsOutputOpen.set("stream");
   }
-  async function onToggleRecordTop() {
-    if (recordBusy) return;
-    recordBusy = true;
-    try {
-      await toggleRecordObs();
-    } catch {
-    } finally {
-      recordBusy = false;
-    }
+  function onToggleRecordTop() {
+    confirmObsOutputOpen.set("record");
+  }
+
+  // Resync des pastilles stream/record au retour de focus : l'utilisateur a
+  // pu agir dans OBS pendant que la fenêtre était en arrière-plan. Ponctuel
+  // (geste OS), pas un timer — pas de polling. Non-fatal en interne.
+  function onFocusFenetre() {
+    if (get(obsStatus) === "connected") void rafraichirOutputs();
   }
 
   // ===== Boutons topbar : Arrêter / Redémarrer / Refresh OBS =====
@@ -350,8 +391,12 @@
   // aussi la race boot : le sync du onMount (step 6) peut s'exécuter avant la
   // fin de obsConnect → ici on est sûr que OBS est connecté.
   async function bootObs() {
+    // Option « connexion auto » de la modale Connexion OBS : OFF = bootObs
+    // n'appelle pas obsConnect — l'utilisateur connecte à la main (section
+    // OBS). Le refresh + sync captures sont sauté avec (ils exigent OBS).
+    if (!get(obsAutoConnect)) return;
     try {
-      await obsConnect(get(obsHost), get(obsPort), get(obsPassword));
+      await obsConnect(get(obsHost), get(obsPort), get(obsPassword), "boot");
       // obsConnect a mis obsStatus=connected. Refresh direct (pas de race).
       await refreshDiffusion();
       // Sync captures + masque caméra : non-fatal (OBS offline ou scène SOS
@@ -393,7 +438,12 @@
     await listen<string>("server_ready", () => {
       serverOk = true;
       serverError = null;
-      bootObs();
+      // Un SEUL boot OBS par instance de module : l'event n'est émis qu'une
+      // fois par processus Rust, mais le garde couvre un serveur relancé.
+      if (!get(obsBootDeclenche)) {
+        obsBootDeclenche.set(true);
+        bootObs();
+      }
     });
 
     // 2. Le boot OBS est géré par bootObs() ci-dessus (server_ready / fallback fetch).
@@ -431,7 +481,7 @@
     //     live pour la carte d'édition et l'aperçu dashboard des widgets goal).
     await initObjectifs();
 
-    // 3e. Squelette de position unifié (clip de bienvenue + alertes) :
+    // 3e. Position des overlays unifiée (clip de bienvenue + alertes) :
     //     init listener + charge la config initiale depuis Rust.
     await initPositionOverlay();
     await chargerPositionOverlay();
@@ -460,6 +510,14 @@
     await initJustChatting();
     await chargerJustChatting();
 
+    // 3f-sexies. Commande cadres (« !cadres <couleur> » → couleur vive du
+    //     cadre unifié) : la couleur viewer est appliquée côté Rust via un
+    //     override éphémère injecté dans les snapshots WS (jamais persisté
+    //     — la couleur du streamer prime au redémarrage). Ici : listener
+    //     cadres:update + état initial (config + palette).
+    await initCadresChat();
+    await chargerCadresChat();
+
     // 3f-quinquies. Hot-plug caméras : listener "camera:devices" (tâche Rust
     //     3 s tant qu'un widget caméra existe) → refresh du sélecteur +
     //     auto-sélection d'un device fraîchement branché (Android en mode
@@ -484,11 +542,18 @@
     await listen("raccourcis:ready", () => pushRaccourcisConnexions());
 
     // 4. Fallback : si :4321 déjà up (event manqué), boot OBS maintenant.
+    //    `serverOk` est TOUJOURS restauré (il pilote l'indicateur de la top
+    //    bar) ; seul le boot OBS est gardé par instance de module — un
+    //    remontage du frontend ne doit pas rejouer obsConnect (bascule de
+    //    scène OBS).
     const up = await checkServerUp();
-    if (up && !serverOk) {
+    if (up) {
       serverOk = true;
       serverError = null;
-      bootObs();
+      if (!get(obsBootDeclenche)) {
+        obsBootDeclenche.set(true);
+        bootObs();
+      }
     }
 
     // 4b. Auto-reconnect OBS : tant que non connecté, retente toutes les 20s.
@@ -547,6 +612,8 @@
     // propagation à prévenir, plusieurs <svelte:window onkeydown> coexistent).
     if (e.key === "Escape") {
       if (languesOuvert) fermerLangues();
+      if (exportMenuOuvert) fermerExport();
+      if (importMenuOuvert) fermerImport();
       return;
     }
     if (e.key !== "Delete") return;
@@ -561,9 +628,13 @@
   }
 </script>
 
-<!-- Clic hors du menu Langue → ferme le dropdown.
+<!-- Clic hors des menus Langue/Exporter → ferme le dropdown ouvert.
      onkeydown : touche Suppr → confirmation suppression widget (handler onSupprKey). -->
-<svelte:window onclick={fermerLangues} onkeydown={onSupprKey} />
+<svelte:window
+  onclick={fermerMenusTopbar}
+  onkeydown={onSupprKey}
+  onfocus={onFocusFenetre}
+/>
 
 <main
   class:fond-dash={!!fondDashUrl}
@@ -589,53 +660,75 @@
   </div>
   <header>
     <img class="logo-img" src={logoSOS} alt="StreamOS" />
-    <!-- Groupe 1 : identité + connexions — chaque état est un bouton qui
-         ouvre sa section de la barre latérale (connexions / obs). -->
-    <div class="tb-groupe tb-connexions">
-      <button
-        class="indicateur plat-twitch tb-ico"
-        class:on={cx.twitch}
-        class:off={!cx.twitch}
-        onclick={() => openSectionExplicit("connexions")}
-        title={cx.twitch && login ? `Twitch : ${login}` : "Twitch"}
-        aria-label={cx.twitch && login ? `Twitch : ${login}` : "Twitch"}
-      >
-        <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="#9146ff" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/><rect x="9" y="4" width="1" height="3" fill="#9146ff"/><rect x="6" y="4" width="1" height="3" fill="#9146ff"/></svg>
-      </button>
-      <button
-        class="indicateur plat-kick tb-ico"
-        class:on={cx.kick}
-        class:off={!cx.kick}
-        onclick={() => openSectionExplicit("connexions")}
-        title={cx.kick && kickSl ? `Kick : ${kickSl}` : "Kick"}
-        aria-label={cx.kick && kickSl ? `Kick : ${kickSl}` : "Kick"}
-      >
-        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="#53fc18" d="M5 2h4v6h2V6h2V4h2V2h4v6h-2v2h-2v4h2v2h2v6h-4v-2h-2v-2h-2v4H5z"/></svg>
-      </button>
-      <button
-        class="indicateur plat-youtube tb-ico"
-        class:on={cx.youtube}
-        class:off={!cx.youtube}
-        onclick={() => openSectionExplicit("connexions")}
-        title={cx.youtube && ytLogin ? `YouTube : ${ytLogin}` : "YouTube"}
-        aria-label={cx.youtube && ytLogin ? `YouTube : ${ytLogin}` : "YouTube"}
-      >
-        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4" fill="#ff0033"/><path d="M10 9.5l5 2.5-5 2.5z" fill="#fff"/></svg>
-      </button>
-      <button
-        class="indicateur plat-tiktok tb-ico"
-        class:on={cx.tiktok}
-        class:off={!cx.tiktok}
-        onclick={() => openSectionExplicit("connexions")}
-        title={cx.tiktok && ttUser ? `TikTok : ${ttUser}` : "TikTok"}
-        aria-label={cx.tiktok && ttUser ? `TikTok : ${ttUser}` : "TikTok"}
-      >
-        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="#25f4ee" d="M16.5 3c.3 1.8 1.6 3.2 3.5 3.5v3.1c-1.4 0-2.7-.5-3.7-1.2v6.3a5.6 5.6 0 1 1-5.6-5.6c.4 0 .8 0 1.2.1v3.2a2.5 2.5 0 1 0 1.4 2.3V3h3.2z"/></svg>
-      </button>
+    <!-- Boutons de connexion : UN snippet, DEUX emplacements. Déconnecté →
+         groupe de gauche (.tb-connexions) ; connecté → groupe de droite
+         (.tb-connectes, à côté de « Vos scènes »). Les classes on/off restent
+         branchées sur l'état réel — la position ne fait que refléter .on. -->
+    {#snippet connIco(plat: "twitch" | "kick" | "youtube" | "tiktok")}
+      {#if plat === "twitch"}
+        <button
+          class="indicateur plat-twitch tb-ico"
+          class:on={cx.twitch}
+          class:off={!cx.twitch}
+          onclick={() => openSectionExplicit("connexions")}
+          title={cx.twitch && login ? `Twitch : ${login}` : "Twitch"}
+          aria-label={cx.twitch && login ? `Twitch : ${login}` : "Twitch"}
+        >
+          <svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path fill="#9146ff" d="M3 1L1.5 3.5V13H4.5V15H6L8 13H10.5L13.5 10V1H3ZM12 9.5L10 11.5H7L5 13.5V11.5H3V2H12V9.5Z"/><rect x="9" y="4" width="1" height="3" fill="#9146ff"/><rect x="6" y="4" width="1" height="3" fill="#9146ff"/></svg>
+        </button>
+      {:else if plat === "kick"}
+        <button
+          class="indicateur plat-kick tb-ico"
+          class:on={cx.kick}
+          class:off={!cx.kick}
+          onclick={() => openSectionExplicit("connexions")}
+          title={cx.kick && kickSl ? `Kick : ${kickSl}` : "Kick"}
+          aria-label={cx.kick && kickSl ? `Kick : ${kickSl}` : "Kick"}
+        >
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="#53fc18" d="M5 2h4v6h2V6h2V4h2V2h4v6h-2v2h-2v4h2v2h2v6h-4v-2h-2v-2h-2v4H5z"/></svg>
+        </button>
+      {:else if plat === "youtube"}
+        <button
+          class="indicateur plat-youtube tb-ico"
+          class:on={cx.youtube}
+          class:off={!cx.youtube}
+          onclick={() => openSectionExplicit("connexions")}
+          title={cx.youtube && ytLogin ? `YouTube : ${ytLogin}` : "YouTube"}
+          aria-label={cx.youtube && ytLogin ? `YouTube : ${ytLogin}` : "YouTube"}
+        >
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="5" width="20" height="14" rx="4" fill="#ff0033"/><path d="M10 9.5l5 2.5-5 2.5z" fill="#fff"/></svg>
+        </button>
+      {:else if plat === "tiktok"}
+        <button
+          class="indicateur plat-tiktok tb-ico"
+          class:on={cx.tiktok}
+          class:off={!cx.tiktok}
+          onclick={() => openSectionExplicit("connexions")}
+          title={cx.tiktok && ttUser ? `TikTok : ${ttUser}` : "TikTok"}
+          aria-label={cx.tiktok && ttUser ? `TikTok : ${ttUser}` : "TikTok"}
+        >
+          <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><path fill="#25f4ee" d="M16.5 3c.3 1.8 1.6 3.2 3.5 3.5v3.1c-1.4 0-2.7-.5-3.7-1.2v6.3a5.6 5.6 0 1 1-5.6-5.6c.4 0 .8 0 1.2.1v3.2a2.5 2.5 0 1 0 1.4 2.3V3h3.2z"/></svg>
+        </button>
+      {/if}
+    {/snippet}
+    <!-- Groupe 1 : identité + connexions — n'affiche que les plateformes NON
+         connectées (chacune ouvre sa section de la barre latérale). Toutes
+         connectées → le groupe n'est pas rendu : la gauche reste au logo. -->
+    {#if nbPlats < 4}
+      <div class="tb-groupe tb-connexions">
+        {#if !cx.twitch}{@render connIco("twitch")}{/if}
+        {#if !cx.kick}{@render connIco("kick")}{/if}
+        {#if !cx.youtube}{@render connIco("youtube")}{/if}
+        {#if !cx.tiktok}{@render connIco("tiktok")}{/if}
+      </div>
+    {/if}
+    <!-- Groupe OBS dédié : icône d'état + sorties (stream/record) soudées —
+         place fixe, jamais migrée. -->
+    <div class="tb-groupe tb-obs">
       <button
         class="indicateur plat-obs tb-ico"
-        class:on={obsSt === "connected"}
-        class:off={obsSt !== "connected"}
+        class:on={obsOn}
+        class:off={!obsOn}
         class:err={obsSt === "idle" || obsSt === "error"}
         onclick={() => openSectionExplicit("obs")}
         title={obsErr ?? $t("app.obsTitle")}
@@ -643,8 +736,37 @@
       >
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="#e8e8e8" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7a5 5 0 0 1 4.3 2.5M16.8 14a5 5 0 0 1-4.8 3M7.2 14a5 5 0 0 1-.2-4.3"/></svg>
       </button>
+      <!-- Sorties OBS : stream + record (vert = prêt à démarrer, rouge = actif) -->
+      <button
+        class="output-btn"
+        class:actif={obsStream}
+        onclick={onToggleStreamTop}
+        disabled={!obsOn || $obsStreamBusy}
+        title={!obsOn
+          ? $t("app.obsDabord")
+          : obsStream
+            ? $t("app.streamStop")
+            : $t("app.streamStart")}
+        aria-label={obsStream ? $t("app.streamStop") : $t("app.streamStart")}
+      >
+        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>
+      </button>
+      <button
+        class="output-btn"
+        class:actif={obsRecord}
+        onclick={onToggleRecordTop}
+        disabled={!obsOn || $obsRecordBusy}
+        title={!obsOn
+          ? $t("app.obsDabord")
+          : obsRecord
+            ? $t("commun.arreterEnregistrement")
+            : $t("commun.demarrerEnregistrement")}
+        aria-label={obsRecord ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
+      >
+        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3.5" fill="#f43f5e"/></svg>
+      </button>
     </div>
-    <!-- Groupe 2 : diffusion + transport. Diffusion = statut pur (bouton
+    <!-- Groupe 2 : diffusion + pillules live. Diffusion = statut pur (bouton
          désactivé — pas de navigation). -->
     <div class="tb-groupe tb-live">
       <button
@@ -674,6 +796,19 @@
           {ea.en_pause ? $t("app.attentePause") : $t("app.attente")} {formatTempsAttente(ea.temps_restant)}
         </button>
       {/if}
+      <!-- Pillule Chrono 2 : visible seulement quand le chrono déclenché par
+           le pad numérique tourne. Clic → modale Interactions Live (onglet Pad
+           numérique, là où la touche chrono se configure). -->
+      {#if chrono2}
+        <button
+          class="indicateur plat-attente"
+          title={$t("app.chrono2Title")}
+          onclick={() => interactionModalOpen.set(true)}
+        >
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 3"/></svg>
+          {$t("app.chrono2")} {formatTempsAttente(chrono2.ecoule_ms / 1000)}
+        </button>
+      {/if}
       <!-- Pillule Just Chatting : visible seulement quand l'overlay est
            actif. Clic → coupe le mode (même toggle que la Toolbar). -->
       {#if jcOn}
@@ -686,50 +821,69 @@
           {$t("toolbar.justChatting")}
         </button>
       {/if}
-      <!-- Sorties OBS : stream + record (vert = prêt à démarrer, rouge = actif) -->
-      <button
-        class="output-btn"
-        class:actif={obsStream}
-        onclick={onToggleStreamTop}
-        disabled={obsSt !== "connected" || streamBusy}
-        title={obsSt !== "connected"
-          ? $t("app.obsDabord")
-          : obsStream
-            ? $t("app.streamStop")
-            : $t("app.streamStart")}
-        aria-label={obsStream ? $t("app.streamStop") : $t("app.streamStart")}
-      >
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>
-      </button>
-      <button
-        class="output-btn"
-        class:actif={obsRecord}
-        onclick={onToggleRecordTop}
-        disabled={obsSt !== "connected" || recordBusy}
-        title={obsSt !== "connected"
-          ? $t("app.obsDabord")
-          : obsRecord
-            ? $t("commun.arreterEnregistrement")
-            : $t("commun.demarrerEnregistrement")}
-        aria-label={obsRecord ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
-      >
-        <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3.5" fill="#f43f5e"/></svg>
-      </button>
     </div>
+    <!-- Groupe « connectés » : les plateformes connectées quittent le groupe
+         de gauche et se rangent ici — poussé à droite avec .tb-outils
+         (margin-left:auto), les icônes arrivent juste avant « Vos scènes ».
+         Libellé « Plateforme(s) connectée(s) ▸ » : nomme CE qui est connecté
+         — jamais un compteur nu (« 2 en ligne » se lirait « en direct »).
+         Masqué <1200px (même palier). -->
+    {#if nbPlats > 0}
+      <div class="tb-groupe tb-connectes">
+        <span class="connectes-label">{$t(connectesLabelKey)}<svg class="connectes-fleche" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 12h15"/><path d="M13 5l7 7-7 7"/></svg></span>
+        {#if cx.twitch}{@render connIco("twitch")}{/if}
+        {#if cx.kick}{@render connIco("kick")}{/if}
+        {#if cx.youtube}{@render connIco("youtube")}{/if}
+        {#if cx.tiktok}{@render connIco("tiktok")}{/if}
+      </div>
+    {/if}
     <!-- Groupe outils : scènes (Vos scènes = dropdown SceneBar, + Scène,
          Exporter, Importer) puis contrôle app (Arrêter / Redémarrer /
          Refresh OBS) puis Langue. Poussé à droite (margin-left: auto). -->
     <div class="tb-groupe tb-outils">
       <SceneBar />
       <button class="indicateur tb-action" onclick={() => presetsModalOpen.set("creation")} title={$t("sceneBar.nouvelle")} aria-label={$t("sceneBar.nouvelle")}>+ <span class="tb-label">{$t("sceneBar.nouvelle")}</span></button>
-      <button class="indicateur tb-action" onclick={exportScene} title={$t("commun.exporter")} aria-label={$t("commun.exporter")}>
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-        <span class="tb-label">{$t("commun.exporter")}</span>
-      </button>
-      <button class="indicateur tb-action" onclick={importScene} title={$t("commun.importer")} aria-label={$t("commun.importer")}>
-        <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-        <span class="tb-label">{$t("commun.importer")}</span>
-      </button>
+      <!-- Bouton Exporter → dropdown : « Scène courante » (export pack
+           existant, inchangé) ou « Tout exporter (.zip) » (toutes les
+           scènes + tous les médias en un zip). Recette .ctx-menu du
+           sélecteur Langue : ancrage absolu sous le bouton. -->
+      <div
+        class="export-wrap"
+        role="presentation"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.stopPropagation()}
+      >
+        <button class="indicateur tb-action" onclick={toggleExport} title={$t("commun.exporter")} aria-label={$t("commun.exporter")} aria-haspopup="menu" aria-expanded={exportMenuOuvert}>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+          <span class="tb-label">{$t("commun.exporter")}</span>
+        </button>
+        {#if exportMenuOuvert}
+          <div class="export-dropdown ctx-menu" role="menu">
+            <button class="ctx-item" role="menuitem" onclick={() => { fermerExport(); exportScene(); }}>{$t("scenes.exportSceneCourante")}</button>
+            <button class="ctx-item" role="menuitem" onclick={() => { fermerExport(); exportToutZip(); }}>{$t("scenes.exportToutZip")}</button>
+          </div>
+        {/if}
+      </div>
+      <!-- Bouton Importer → dropdown : « Pack dossier » (import unitaire
+           existant, inchangé) ou « Archive .zip » (restauration complète
+           d'une sauvegarde exportée — conflits tranchés un par un). -->
+      <div
+        class="import-wrap"
+        role="presentation"
+        onclick={(e) => e.stopPropagation()}
+        onkeydown={(e) => e.stopPropagation()}
+      >
+        <button class="indicateur tb-action" onclick={toggleImport} title={$t("commun.importer")} aria-label={$t("commun.importer")} aria-haspopup="menu" aria-expanded={importMenuOuvert}>
+          <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+          <span class="tb-label">{$t("commun.importer")}</span>
+        </button>
+        {#if importMenuOuvert}
+          <div class="import-dropdown ctx-menu" role="menu">
+            <button class="ctx-item" role="menuitem" onclick={() => { fermerImport(); importScene(); }}>{$t("scenes.importPackDossier")}</button>
+            <button class="ctx-item" role="menuitem" onclick={() => { fermerImport(); importToutZip(); }}>{$t("scenes.importToutZip")}</button>
+          </div>
+        {/if}
+      </div>
       <button class="ctrl-btn ctrl-arreter" onclick={onArreter} title={$t("app.arreterApp")} aria-label={$t("app.arreterApp")}>
         <svg class="ico" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>
       </button>
@@ -815,14 +969,25 @@
   <CadresModal />
 {/if}
 
-<!-- Modale Interactions chat (onglets : Clip de bienvenue / Bandeau / Alertes) -->
+<!-- Modale Interactions (onglets : Alertes / Bienvenue / Commandes /
+     Présentation / Musique + outil Position des overlays) -->
 {#if $interactionModalOpen}
   <InteractionViewerModal onFermer={() => interactionModalOpen.set(false)} />
 {/if}
 
-<!-- Modale Modération & Rôles (onglets : Twitch / Kick / YouTube / TikTok / Trovo) -->
+<!-- Modale Modération & Rôles (onglets : plateformes fonctionnelles) -->
 {#if $moderationModalOpen}
   <ModerationModal onFermer={() => moderationModalOpen.set(false)} />
+{/if}
+
+<!-- Modale Planning Twitch (Helix /schedule) — lanceur « Ma chaîne » -->
+{#if $planningModalOpen}
+  <PlanningModal onFermer={() => planningModalOpen.set(false)} />
+{/if}
+
+<!-- Modale Statistiques d'audience (télémétrie des lives) — lanceur « Ma chaîne » -->
+{#if $statistiquesModalOpen}
+  <StatistiquesModal onFermer={() => statistiquesModalOpen.set(false)} />
 {/if}
 
 <!-- Modale d'édition du titre d'un widget (double-clic haut/bas d'un widget) -->
@@ -838,6 +1003,11 @@
   <SpeedrunConfigModal onFermer={() => speedrunConfigModalOpen.set(false)} />
 {/if}
 
+<!-- Modale « Créer votre layout » du splitter speedrun (bouton carte d'édition) -->
+{#if $speedrunLayoutModalOpen}
+  <SpeedrunLayoutModal onFermer={() => speedrunLayoutModalOpen.set(false)} />
+{/if}
+
 <!-- Modale galerie de presets de scènes (bouton « + Scène » / 1er lancement) -->
 {#if $presetsModalOpen}
   <PresetsModal mode={$presetsModalOpen} />
@@ -848,10 +1018,28 @@
   <DupliquerSceneModal />
 {/if}
 
-<!-- Modale Diagnostic (consommation : CPU/RAM par processus + sous-systèmes +
+<!-- Modale de confirmation d'ouverture d'une scène masquée (clic gauche sur
+     une pastille au titre orange) -->
+{#if $confirmOuvrirSceneModalOpen}
+  <ConfirmOuvrirSceneModal />
+{/if}
+
+<!-- Modale de confirmation des sorties OBS (stream / record — démarrer et
+     arrêter). Posée par la Toolbar, la topbar et la barre de raccourcis. -->
+{#if $confirmObsOutputOpen}
+  <ConfirmObsOutputModal />
+{/if}
+
+<!-- Modale Performances (consommation : CPU/RAM par processus + sous-systèmes +
      activité — polling 1 Hz uniquement tant qu'elle est montée) -->
 {#if $consoModalOpen}
   <ConsoModal onFermer={() => consoModalOpen.set(false)} />
+{/if}
+
+<!-- Modale « Connexion OBS » (WebSocket) — inventaire + options du canal
+     OBS. Lanceur : section OBS de la Toolbar (crochet doré). -->
+{#if $obsWebSocketModalOpen}
+  <ObsWebSocketModal />
 {/if}
 
 <!-- Modale Écran d'attente (BRB) — gère son propre {#if $ecranAttenteModalOpen}
@@ -933,6 +1121,61 @@
   .tb-outils {
     margin-left: auto;
   }
+  /* Groupe « connectés » : icônes migrées + étiquette compteur. Placé juste
+     avant .tb-outils → poussé à droite avec lui (margin-left:auto), les
+     icônes s'alignent contre « Vos scènes ». Petit « pop » à l'arrivée de
+     chaque icône — même esprit que scenes-pop/ctx-pop (keyframes locaux). */
+  .tb-connectes {
+    gap: 0.35rem;
+    /* Le cluster droit ne pousse qu'UNE fois : quand le groupe connectés
+       existe, C'EST LUI qui porte l'auto (sinon il flotterait au milieu de
+       la barre, collé aux pillules live) et .tb-outils renonce au sien. */
+    margin-left: auto;
+  }
+  .tb-connectes + .tb-outils {
+    margin-left: 0;
+  }
+  .connectes-label {
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--message-ok-color);
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+  /* Flèche verte « → » entre le libellé et les icônes : mieux définie
+     qu'un glyphe ▸ — stroke vert --message-ok-color, taille calée sur le
+     label, jamais rognée par le wrap. */
+  .connectes-fleche {
+    width: 0.8rem;
+    height: 0.8rem;
+    color: var(--message-ok-color);
+    margin-left: 0.25rem;
+    flex-shrink: 0;
+  }
+  @keyframes conn-pop {
+    from {
+      opacity: 0;
+      transform: translateX(0.35rem);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  .tb-connectes .indicateur {
+    animation: conn-pop 0.15s ease-out;
+  }
+  /* Section OBS dédiée : icône d'état + sorties stream/record soudées dans
+     un même liseré — se lit comme UNE zone « OBS », distincte des
+     plateformes migrables et des pillules live. Place fixe. */
+  .tb-obs {
+    gap: 0.35rem;
+    padding: 0.15rem;
+    border: 1px solid var(--bordure-ui);
+    border-radius: var(--rayon-petit);
+  }
   /* État de connexion : bouton icône de la même famille que Stream (verre
      + inset + rayon global). Gris au repos — la bordure ne prend la
      couleur plateforme (--plat-*) QUE connecté (.on) ; OBS déconnecté
@@ -974,13 +1217,35 @@
     height: 0.95rem;
     flex-shrink: 0;
   }
-  /* Bordure = couleur plateforme UNIQUEMENT connecté (.on). Déconnecté =
-     bordure neutre --bordure-ui-active. .err = couleur d'erreur. */
-  .indicateur.plat-twitch.on { border-color: var(--plat-twitch); }
-  .indicateur.plat-kick.on { border-color: var(--plat-kick); }
-  .indicateur.plat-youtube.on { border-color: var(--plat-youtube); }
-  .indicateur.plat-tiktok.on { border-color: var(--plat-tiktok); }
-  .indicateur.plat-obs.on { border-color: var(--plat-obs); }
+  /* Connecté (.on) : bordure + FOND teinté + glow couleur plateforme —
+     recette .dot.plat-*.on d'app.css (color-mix, jamais de rgba en dur).
+     L'icône marque garde sa couleur pleine (le grayscale n'est que sur
+     .off) : la pilule se lit d'un coup d'œil à droite de la topbar. */
+  .indicateur.plat-twitch.on {
+    border-color: var(--plat-twitch);
+    background: color-mix(in srgb, var(--plat-twitch) 14%, var(--btn-surface));
+    box-shadow: var(--btn-inset), 0 0 8px color-mix(in srgb, var(--plat-twitch) 45%, transparent);
+  }
+  .indicateur.plat-kick.on {
+    border-color: var(--plat-kick);
+    background: color-mix(in srgb, var(--plat-kick) 14%, var(--btn-surface));
+    box-shadow: var(--btn-inset), 0 0 8px color-mix(in srgb, var(--plat-kick) 45%, transparent);
+  }
+  .indicateur.plat-youtube.on {
+    border-color: var(--plat-youtube);
+    background: color-mix(in srgb, var(--plat-youtube) 14%, var(--btn-surface));
+    box-shadow: var(--btn-inset), 0 0 8px color-mix(in srgb, var(--plat-youtube) 45%, transparent);
+  }
+  .indicateur.plat-tiktok.on {
+    border-color: var(--plat-tiktok);
+    background: color-mix(in srgb, var(--plat-tiktok) 14%, var(--btn-surface));
+    box-shadow: var(--btn-inset), 0 0 8px color-mix(in srgb, var(--plat-tiktok) 45%, transparent);
+  }
+  .indicateur.plat-obs.on {
+    border-color: var(--plat-obs);
+    background: color-mix(in srgb, var(--plat-obs) 14%, var(--btn-surface));
+    box-shadow: var(--btn-inset), 0 0 8px color-mix(in srgb, var(--plat-obs) 35%, transparent);
+  }
   .indicateur.plat-obs.err,
   .indicateur.plat-diffusion.err {
     opacity: 1;
@@ -1006,8 +1271,19 @@
   .indicateur.pause {
     opacity: 0.6;
   }
-  .langue-wrap {
+  .langue-wrap,
+  .export-wrap,
+  .import-wrap {
     position: relative;
+  }
+  /* Dropdowns des boutons Exporter/Importer : même recette que
+     .langues-dropdown — ancrage absolu sous le bouton. */
+  .export-dropdown,
+  .import-dropdown {
+    position: absolute;
+    top: calc(100% + 0.25rem);
+    right: 0;
+    white-space: nowrap;
   }
   .langue-btn {
     background: var(--btn-surface);
@@ -1215,6 +1491,11 @@
     }
     .langue-btn .lg-court {
       display: inline;
+    }
+    /* Libellé « X connecté(s) » masqué : les icônes seules suffisent —
+       même palier que les libellés Exporter/Importer/Langue. */
+    .connectes-label {
+      display: none;
     }
   }
   /* <800px : le logo (décoratif, ~90px de boîte) disparaît — l'espace

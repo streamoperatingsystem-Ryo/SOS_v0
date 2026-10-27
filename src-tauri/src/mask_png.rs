@@ -119,37 +119,25 @@ fn chunk_png(sortie: &mut Vec<u8>, type_: &[u8; 4], donnees: &[u8]) {
     sortie.extend_from_slice(&crc32(&entree_crc).to_be_bytes());
 }
 
-/// Encode une couverture alpha en PNG RGBA (blanc + alpha, profondeur 8,
-/// non entrelacé). Chaque scanline = octet filtre 0 + w×4 octets. Le flux
-/// zlib est en deflate « stored » : en-tête 0x78 0x01, blocs ≤ 65535 octets
-/// (LEN u16 LE + NLEN = !LEN), Adler-32 des données brutes en fin.
-pub fn encoder_png_rgba(couverture: &[u8], w: u32, h: u32) -> Vec<u8> {
-    debug_assert_eq!(couverture.len(), w as usize * h as usize);
-    let w = w as usize;
-
-    let mut png = Vec::with_capacity(64 + w * h as usize * 4);
+/// Assemble le PNG final : signature + IHDR (w×h, RGBA profondeur 8,
+/// non entrelacé) + IDAT (zlib « stored » de `brut` = scanlines déjà
+/// filtrées : octet filtre 0 + pixels par ligne) + IEND. Partagé par
+/// encoder_png_rgba (masque caméra) et encoder_png_pixels (miniatures).
+fn assembler_png(brut: &[u8], w: u32, h: u32) -> Vec<u8> {
+    let mut png = Vec::with_capacity(64 + brut.len());
     png.extend_from_slice(&[0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A]);
 
     // IHDR : dims, profondeur 8, couleur 6 (RGBA), deflate, filtre 0, entrelacement 0.
     let mut ihdr = Vec::with_capacity(13);
-    ihdr.extend_from_slice(&(w as u32).to_be_bytes());
+    ihdr.extend_from_slice(&w.to_be_bytes());
     ihdr.extend_from_slice(&h.to_be_bytes());
     ihdr.extend_from_slice(&[8, 6, 0, 0, 0]);
     chunk_png(&mut png, b"IHDR", &ihdr);
 
-    // Données brutes : scanlines filtrées (filtre 0 = aucune prédiction).
-    let mut brut = Vec::with_capacity((w * 4 + 1) * h as usize);
-    for y in 0..h as usize {
-        brut.push(0);
-        for x in 0..w {
-            brut.extend_from_slice(&[255, 255, 255, couverture[y * w + x]]);
-        }
-    }
-
     // zlib « stored » : blocs bruts + Adler-32 final (big-endian).
     let mut zlib = Vec::with_capacity(brut.len() + (brut.len() / 65535 + 1) * 5 + 8);
     zlib.extend_from_slice(&[0x78, 0x01]);
-    let mut reste: &[u8] = &brut;
+    let mut reste: &[u8] = brut;
     loop {
         let taille = reste.len().min(65535);
         let dernier = taille == reste.len();
@@ -162,10 +150,44 @@ pub fn encoder_png_rgba(couverture: &[u8], w: u32, h: u32) -> Vec<u8> {
             break;
         }
     }
-    zlib.extend_from_slice(&adler32(&brut).to_be_bytes());
+    zlib.extend_from_slice(&adler32(brut).to_be_bytes());
     chunk_png(&mut png, b"IDAT", &zlib);
     chunk_png(&mut png, b"IEND", &[]);
     png
+}
+
+/// Encode une couverture alpha en PNG RGBA (blanc + alpha, profondeur 8,
+/// non entrelacé). Chaque scanline = octet filtre 0 + w×4 octets. Le flux
+/// zlib est en deflate « stored » : en-tête 0x78 0x01, blocs ≤ 65535 octets
+/// (LEN u16 LE + NLEN = !LEN), Adler-32 des données brutes en fin.
+pub fn encoder_png_rgba(couverture: &[u8], w: u32, h: u32) -> Vec<u8> {
+    debug_assert_eq!(couverture.len(), w as usize * h as usize);
+    let w = w as usize;
+
+    // Données brutes : scanlines filtrées (filtre 0 = aucune prédiction).
+    let mut brut = Vec::with_capacity((w * 4 + 1) * h as usize);
+    for y in 0..h as usize {
+        brut.push(0);
+        for x in 0..w {
+            brut.extend_from_slice(&[255, 255, 255, couverture[y * w + x]]);
+        }
+    }
+    assembler_png(&brut, w as u32, h)
+}
+
+/// Encode des pixels RGBA bruts (w×h×4 octets, row-major) en PNG — même
+/// conteneur deflate « stored » qu'encoder_png_rgba. Utilisé par les
+/// miniatures WGC du sélecteur de capture (pc_thumb) : la vignette reste
+/// modeste (≤ 256 px de large) donc l'absence de compression est ok.
+pub fn encoder_png_pixels(pixels: &[u8], w: u32, h: u32) -> Vec<u8> {
+    debug_assert_eq!(pixels.len(), w as usize * h as usize * 4);
+    let stride = w as usize * 4;
+    let mut brut = Vec::with_capacity((stride + 1) * h as usize);
+    for y in 0..h as usize {
+        brut.push(0);
+        brut.extend_from_slice(&pixels[y * stride..(y + 1) * stride]);
+    }
+    assembler_png(&brut, w, h)
 }
 
 #[cfg(test)]

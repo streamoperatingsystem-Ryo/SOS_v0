@@ -360,3 +360,46 @@ pub async fn speedrun_maj_settings_asl(
     .await
     .map_err(|e| format!("speedrun_maj_settings_asl: {}", e))?
 }
+
+/// Exporte les splits d'une tentative dans un fichier .html autonome (CSS
+/// inline — le HTML complet est généré par le frontend, qui possède les
+/// données de run et les libellés i18n). Dialog « Enregistrer sous » :
+/// l'utilisateur choisit le dossier ET le nom (nom daté suggéré).
+/// spawn_blocking obligatoire : dialog natif + I/O — sync = thread
+/// principal gelé (même raison que speedrun_charger_asl).
+/// Retourne Some(chemin) si écrit, None si dialog annulé.
+#[tauri::command]
+pub async fn speedrun_exporter_splits(
+    app_handle: AppHandle,
+    html: String,
+    nom_fichier: String,
+) -> Result<Option<String>, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        use tauri_plugin_dialog::DialogExt;
+        let file = app_handle
+            .dialog()
+            .file()
+            .add_filter("Page HTML", &["html"])
+            .set_file_name(&nom_fichier)
+            .blocking_save_file();
+        let Some(file) = file else {
+            return Ok(None); // dialog annulé
+        };
+        let mut dest = file
+            .into_path()
+            .map_err(|e| format!("Chemin invalide: {}", e))?;
+        // .html forcé si l'utilisateur a retiré l'extension dans le dialog.
+        let ext_html = dest
+            .extension()
+            .and_then(|e| e.to_str())
+            .is_some_and(|e| e.eq_ignore_ascii_case("html") || e.eq_ignore_ascii_case("htm"));
+        if !ext_html {
+            dest.set_extension("html");
+        }
+        std::fs::write(&dest, &html)
+            .map_err(|e| format!("Écrire {}: {}", dest.display(), e))?;
+        Ok(Some(dest.to_string_lossy().to_string()))
+    })
+    .await
+    .map_err(|e| format!("speedrun_exporter_splits: {}", e))?
+}

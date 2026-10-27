@@ -322,6 +322,28 @@ pub struct Widget {
     /// type "camera". None = device par défaut du système.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cameraDeviceId: Option<String>,
+    /// Forme DÉDIÉE du widget caméra : "cercle" ou "carre" découplée du
+    /// cadre de scène ; None = suit le cadre de scène (comportement
+    /// historique). Le cercle est inscrit dans le rect (diamètre min(w,h),
+    /// centré) — trou diffusion et masque OBS partagent le même polygone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cameraForme: Option<String>,
+    /// Anneau/bordure autour de la caméra quand cameraForme est "cercle"
+    /// ou "carre" (couleurs du cadre de scène). false = découpe nue.
+    #[serde(default)]
+    pub cameraBord: bool,
+    /// Incrustation « fond vert virtuel » (filtre plugin OBS
+    /// background_removal sur SOS-Caméra, 100% local). true = la plaque
+    /// noire SOS-Caméra-Fond est masquée et le filtre actif.
+    #[serde(default)]
+    pub cameraFondVert: bool,
+    /// Caméra masquée côté diffusion (bouton œil au survol du widget
+    /// dashboard) : les items OBS SOS-Caméra + SOS-Caméra-Fond sont
+    /// désactivés ET diffusion.html ignore le widget (pas de trou
+    /// destination-out, pas de cadre SVG — la zone est repeinte par le
+    /// fond de scène). Persisté : ré-appliqué par scene_sync_captures.
+    #[serde(default)]
+    pub cameraCachee: bool,
     /// Mode d'affichage des widgets type "input-viewer" : "clavier" (défaut),
     /// "souris", "numpad" ou "manette".
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -367,6 +389,109 @@ pub struct Widget {
     /// (façon LiveSplit horizontal), colonne sinon. "colonne"/"ligne" forcent.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub srLayout: Option<String>,
+    /// ===== Options de layout du splitter (modale SpeedrunLayout, 2026-10-13)
+    /// ===== Toutes Option<> — absent = défaut actuel (rendu identique).
+    /// Éléments visibles : titre du jeu / catégorie / pastille statut /
+    /// timer / pastille de phase / compteur « x / total » / barre de
+    /// progression. None = visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srVoirTitre: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srVoirCategorie: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srVoirStatut: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srVoirTimer: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srVoirPhase: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srVoirCompteur: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srVoirBarre: Option<bool>,
+    /// Colonne « temps » des lignes de split : "cumul" (défaut — split time
+    /// façon LiveSplit) | "segment" (durée de segment — comportement
+    /// d'avant 2026-10-13).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srModeTemps: Option<String>,
+    /// Colonne « delta » : "cumul" (défaut — run vs PB cumulé) | "segment"
+    /// (temps gagné/perdu sur CE segment vs sa durée PB — SegmentDelta
+    /// LiveSplit) | "off" (colonne masquée).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srModeDelta: Option<String>,
+    /// Précision du delta : "dixieme" (défaut) | "centieme" | "seconde".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srDeltaPrecision: Option<String>,
+    /// Drop des décimales du delta au-delà d'1 min (LiveSplit
+    /// with_decimal_dropping). None = true (défaut).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srDeltaDrop: Option<bool>,
+    /// Précision du timer principal : "centieme" (défaut) | "dixieme" |
+    /// "seconde".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srTimerPrecision: Option<String>,
+    /// Méthode de temps du timer : "auto" (défaut — game time si dispo,
+    /// sinon real) | "real" | "game".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srTimerMethode: Option<String>,
+    /// Couleur custom du timer (hex). None/vide = --sr-grad-from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srCouleurTimer: Option<String>,
+    /// Bordures colorées des lignes de split. None = visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srSegBordure: Option<bool>,
+    /// Épaisseur des bordures de split (px). None = 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srSegBordureEpaisseur: Option<u32>,
+    /// Rayon des bordures de split (px). None = var(--rayon-petit).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srSegBordureRayon: Option<u32>,
+    /// Couleurs custom des bordures/delta (hex). None/vide = variables
+    /// sémantiques (--message-ok-color / --message-error-color) ou
+    /// --sr-grad-from pour l'actif.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srCouleurAhead: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srCouleurBehind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srCouleurActif: Option<String>,
+    /// Nombre de lignes de split visibles (façon visual_split_count
+    /// LiveSplit). None/0 = toutes.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srNbLignes: Option<u32>,
+    /// Scroll auto vers le split actif. None = activé.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srScrollAuto: Option<bool>,
+    /// Hauteur des lignes de split (px). None/0 = auto (padding).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srHauteurLigne: Option<u32>,
+    /// ===== Points de validation (bandeau par-dessus le splitter) =====
+    /// Afficher les points numérotés de validation des splits.
+    /// None = visible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srVoirPoints: Option<bool>,
+    /// Durée du gros pop à l'activation d'un point (secondes). None = 3.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srPointsDureePop: Option<u64>,
+    /// Son joué côté diffusion à l'activation d'un point
+    /// ("medias/<uuid>.<ext>"). None = silence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srPointsSon: Option<String>,
+    /// Volume du son des points (0.0-1.0). None = 1.0.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srPointsSonVolume: Option<f32>,
+    /// ===== Métronome du splitter (dashboard SEUL, 2026-10-19) =====
+    /// Battement BPM joué pendant la run (start ASL/manuel → il joue ;
+    /// pause/reset/fin → il s'arrête). Interprété côté dashboard par le
+    /// store metronome.ts (Web Audio) — JAMAIS envoyé à la diffusion.
+    /// Activer/désactiver. None = désactivé.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srMetronomeActif: Option<bool>,
+    /// Tempo du battement (1-400). None = 120.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srMetronomeBpm: Option<u32>,
+    /// Volume du battement (0.0-1.0). None = 0.5.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub srMetronomeVolume: Option<f32>,
     /// Plateforme suivie par un widget type "goal" :
     /// "twitch" | "youtube" | "kick" | "tiktok". None = non configuré.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -561,6 +686,15 @@ pub struct ModuleHud {
     /// résolution automatique.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub eqCouleurFin: Option<String>,
+    /// Spots : multiplicateur de vitesse d'animation (balayage des
+    /// faisceaux + cycle des couleurs). None = 1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spotsVitesse: Option<f64>,
+    /// Spots : pulser l'intensité sur le spectre audio (frames
+    /// `eq-spectrum` — nécessite le module équaliseur actif pour que la
+    /// capture tourne ; sinon balayage d'ambiance normal). None = true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spotsReagir: Option<bool>,
 }
 
 /// Modules HUD d'une scène — un emplacement fixe par module (singletons).
@@ -579,6 +713,13 @@ pub struct ScenesModules {
     /// Spectre calculé côté Rust (equaliseur.rs, capture WASAPI).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub equaliseur: Option<ModuleHud>,
+    /// Spots lumineux : deux faisceaux « moving head » animés sur le fond
+    /// (couche canvas `#spots-canvas` dans #bg, SOUS les widgets, trous
+    /// évidés comme le fond — la lumière ne passe jamais sur les widgets).
+    /// x/y/largeur/hauteur inutilisés : effet plein canvas ; `opacite`
+    /// sert d'intensité lumineuse. Zéro state Rust — rendu 100 % diffusion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spots: Option<ModuleHud>,
 }
 
 /// Scène unique (source de vérité). canvasW/canvasH = résolution OBS lue

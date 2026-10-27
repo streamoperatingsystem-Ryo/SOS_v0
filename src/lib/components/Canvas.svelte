@@ -8,7 +8,7 @@
     commitScene, setWidgetMediaPaused, resetMediaTransformation,
     resetMediaEffets, resetMorphsWidget, importMedia, clearWidgetMedia,
     setWidgetTrou, deleteObsTrouSource, transformerEnFlottant,
-    transformerEnWidget, mettreWidgetPlan, widgetPleinEcran,
+    transformerEnWidget, mettreWidgetPlan, widgetPleinEcran, setCameraCachee,
   } from "../stores/scene";
   import {
     setCarteEdition, titreFondModalOpen, titreModalOpen, confirmDeleteWidget,
@@ -120,6 +120,17 @@
     return () => clearInterval(timer);
   });
   let hasFond = $derived(bgMedia.length > 0 || !!bgObsSource || !!bgSlidesList);
+  // ===== Spots lumineux (modules.spots) — aperçu statique, pas de carte =====
+  // Effet plein canvas rendu en diffusion ; ici deux cônes figés sur le
+  // fond (même tilt que .bg-layer) pour marquer que le module est actif.
+  // Pas de carte ModuleHud : un rectangle plein canvas bloquerait le drag.
+  let spotsModule = $derived($sceneStore.modules?.spots);
+  let spotsActif = $derived(spotsModule?.actif === true);
+  let spotsOpacite = $derived(
+    typeof spotsModule?.opacite === "number"
+      ? Math.min(1, Math.max(0, spotsModule.opacite))
+      : 0.8
+  );
   // ===== Aides contextuelles (presets guidés — dashboard uniquement) =====
   // Encadrés jaune-orangé auto-masqués : aideFond disparaît dès qu'un média
   // ou une capture OBS est lié au fond ; aideObjectifs disparaît quand
@@ -327,10 +338,11 @@
 
   function onCanvasContextMenu(e: MouseEvent) {
     e.preventDefault();
-    // Clic droit sur un widget (ou son titre/poignées, tous dans .widget) :
-    // menu WIDGET — le widget est sélectionné pour que les actions qui
-    // visent selectedId (importMedia, carte, touche Suppr) tombent juste.
-    const wEl = (e.target as HTMLElement).closest(".widget");
+    // Clic droit sur un widget (ou ses annexes : badge de survol .wbadge,
+    // poignées .sel-overlay — toutes portent data-widget-id) : menu
+    // WIDGET — le widget est sélectionné pour que les actions qui visent
+    // selectedId (importMedia, carte, touche Suppr) tombent juste.
+    const wEl = (e.target as HTMLElement).closest("[data-widget-id]");
     const wId = wEl instanceof HTMLElement ? (wEl.dataset.widgetId ?? null) : null;
     if (wEl && !wId) return;
     if (wId) selectWidget(wId);
@@ -401,6 +413,13 @@
   async function ctxWgDupliquer(id: string) { fermerFondMenu(); await dupliquerWidget(id); }
   async function ctxWgDevant(id: string) { fermerFondMenu(); await mettreWidgetPlan(id, "avant"); }
   async function ctxWgDerriere(id: string) { fermerFondMenu(); await mettreWidgetPlan(id, "arriere"); }
+  // Œil caméra : l'état est lu AVANT fermerFondMenu (ctxWidgetId → null
+  // vide ctxWidget). Action → ferme le menu (pattern établi).
+  async function ctxWgCameraCachee(id: string) {
+    const cachee = ctxWidget?.cameraCachee === true;
+    fermerFondMenu();
+    await setCameraCachee(id, !cachee);
+  }
   async function ctxWgPleinEcran(id: string) { fermerFondMenu(); await widgetPleinEcran(id); }
   async function ctxWgResetTransfo(id: string) { fermerFondMenu(); await resetMediaTransformation(id); }
   async function ctxWgResetEffets(id: string) { fermerFondMenu(); await resetMediaEffets(id); }
@@ -717,6 +736,17 @@
         </div>
       {/if}
 
+      <!-- Module « Spots lumineux » : aperçu STATIQUE (la diffusion anime
+           les faisceaux + cycle de couleurs). Même tilt que .bg-layer —
+           la lumière est posée sur le fond. pointer-events:none : hors du
+           chemin du drag/sélection, comme .bg-titre. -->
+      {#if spotsActif}
+        <div class="spots-preview" style={bgTiltStyle + "opacity:" + spotsOpacite + ";"}>
+          <div class="spot-ph gauche"></div>
+          <div class="spot-ph droite"></div>
+        </div>
+      {/if}
+
       <!-- Titre du fond de l'application (intérieur haut/bas) — hors .bg-layer
            pour ne pas être clippé par overflow:hidden. Au-dessus du fond
            (z-index 1), sous les widgets. Gradient de texte reprenant les
@@ -749,7 +779,7 @@
            drag/resize propres, config via la modale Modules. -->
       {#each MODULE_IDS as id (id)}
         {@const m = $sceneStore.modules?.[id]}
-        {#if m?.actif}
+        {#if m?.actif && id !== "spots"}
           <ModuleHud {id} {m} {scale} />
         {/if}
       {/each}
@@ -897,9 +927,19 @@
        via la modale ConfirmDeleteWidgetModal. -->
   <CtxMenu x={fondMenuX} y={fondMenuY} onclose={fermerFondMenu}>
     <button class="ctx-item" role="menuitem" onclick={() => ctxWgTitre(ctxWidget!.id)}>{$t("titreModal.titreWidget")}</button>
-    <button class="ctx-item" role="menuitem" onclick={() => ctxWgDupliquer(ctxWidget!.id)}>{$t("carteEdition.dupliquerWidget")}</button>
-    <button class="ctx-item" role="menuitem" onclick={() => ctxWgPleinEcran(ctxWidget!.id)}>{ctxWidget?.pleinEcran ? $t("carteEdition.pleinEcranOff") : $t("carteEdition.pleinEcran")}</button>
     {#if wgType !== "camera"}
+      <!-- Caméra exclue : dupliquerWidget refuse (singleton figé) —
+           l'entrée serait un no-op silencieux. -->
+      <button class="ctx-item" role="menuitem" onclick={() => ctxWgDupliquer(ctxWidget!.id)}>{$t("carteEdition.dupliquerWidget")}</button>
+    {/if}
+    <button class="ctx-item" role="menuitem" onclick={() => ctxWgPleinEcran(ctxWidget!.id)}>{ctxWidget?.pleinEcran ? $t("carteEdition.pleinEcranOff") : $t("carteEdition.pleinEcran")}</button>
+    {#if wgType === "camera"}
+      <!-- Œil caméra (même action que le badge de survol) — la caméra
+           n'a pas de −/+ (plage réservée z=5000) mais l'œil est un verbe
+           du menu comme du badge (règle « 3 surfaces » : aucune action
+           exclusive au badge). -->
+      <button class="ctx-item" role="menuitem" onclick={() => ctxWgCameraCachee(ctxWidget!.id)}>{ctxWidget?.cameraCachee === true ? $t("widget.cameraAfficher") : $t("widget.cameraMasquer")}</button>
+    {:else}
       <!-- Plan (mêmes actions que les boutons -/+ au survol) — caméra
            exclue : plage réservée z=5000 (mettreWidgetPlan est no-op dessus). -->
       <button class="ctx-item" role="menuitem" onclick={() => ctxWgDevant(ctxWidget!.id)}>{$t("carteEdition.premierPlan")}</button>
@@ -1010,6 +1050,51 @@
     /* Conteneur de requête pour le font-size cqw de la pastille
        .msg-pill (.lecture-obs-fond) — recette app.css. */
     container-type: inline-size;
+  }
+  /* ===== Spots lumineux — aperçu statique (dashboard) ===== */
+  /* Couche fond : mêmes règles que .bg-layer (z 0, overflow caché), sans
+     pointer-events. Les cônes figés annoncent l'effet animé de diffusion
+     (couleurs fluo = contenu de l'effet, pas des tokens UI). */
+  .spots-preview {
+    position: absolute;
+    inset: 0;
+    overflow: hidden;
+    z-index: 0;
+    pointer-events: none;
+  }
+  .spot-ph {
+    position: absolute;
+    top: -4%;
+    width: 30%;
+    height: 120%;
+    transform-origin: 50% 0;
+    clip-path: polygon(46% 0, 54% 0, 100% 100%, 0 100%);
+    filter: blur(8px);
+    /* FIXE : pas d'animation côté dashboard — l'aperçu doit être un
+       placeholder sans coût, l'animation n'existe qu'en diffusion. */
+  }
+  .spot-ph::before {
+    content: "";
+    position: absolute;
+    top: -6%;
+    left: 38%;
+    width: 24%;
+    height: 8%;
+    border-radius: 50%;
+    background: inherit;
+    filter: blur(6px);
+  }
+  .spot-ph.gauche {
+    left: 1%;
+    transform: rotate(16deg);
+    background: linear-gradient(180deg,
+      rgba(16, 185, 60, 0.55), rgba(16, 185, 60, 0.18) 55%, transparent 88%);
+  }
+  .spot-ph.droite {
+    right: 1%;
+    transform: rotate(-16deg);
+    background: linear-gradient(180deg,
+      rgba(191, 0, 255, 0.55), rgba(191, 0, 255, 0.16) 55%, transparent 88%);
   }
   /* ===== Titres du fond de l'application ===== */
   /* Positionnés à l'intérieur du canvas : haut/bas centrés horizontalement,

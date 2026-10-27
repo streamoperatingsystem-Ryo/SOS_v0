@@ -395,7 +395,8 @@ impl PresentationState {
     /// puis émet `presentation-clip-play`. Le titre/durée sont repris du clip
     /// connu dans `courant` (meilleure info que rien).
     pub async fn clip_jouer(&self, slug: &str) -> Result<(), String> {
-        let mp4_url = twitch_clips::resoudre_mp4(slug).await?;
+        // Lecteur quasi plein écran (~88 % du canvas) → qualité maximale.
+        let mp4_url = twitch_clips::resoudre_mp4(slug, 1080).await?;
         let (titre, duree_ms) = {
             let courant = self.courant.lock().unwrap();
             courant

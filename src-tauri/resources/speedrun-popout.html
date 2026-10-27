@@ -1,0 +1,1001 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Splitter pop-out</title>
+    <style>
+      /* Fond + palette en dur — NE PAS dépendre de theme-sos.css (non chargé
+         ici). Valeurs = tokens du thème glace (src/theme/tokens.css) :
+         fond #08080f, texte #e5e7eb, gris #8b8fa3, vert #22c55e (ok),
+         rouge #c0392b (error), ambre #f59e0b (user-action). */
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      :root {
+        --texte: #e5e7eb;
+        --gris: #8b8fa3;
+        --message-ok-color: #22c55e;
+        --message-error-color: #c0392b;
+        --message-user-action-color: #f59e0b;
+        --rayon-petit: 8px;
+        /* Gradient du splitter : couleur du cadre de scène (lue dans le
+           snapshot, comme les bulles du pop-out chat), sinon gris défaut. */
+        --sr-grad-from: #e0e0e0;
+        --sr-grad-to: #9a9a9a;
+        --sr-ombre: #000;
+        --sr-timer-couleur: var(--sr-grad-from);
+        --sr-couleur-ahead: var(--message-ok-color);
+        --sr-couleur-behind: var(--message-error-color);
+        --sr-couleur-actif: var(--sr-grad-from);
+        --sr-seg-bw: 1px;
+        --sr-seg-br: var(--rayon-petit);
+        --sr-seg-lh: 0px;
+        --sr-police: Rajdhani;
+      }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: #08080f;
+        color: var(--texte);
+        font-family: var(--sr-police, "Rajdhani"), system-ui, sans-serif;
+        font-size: 20px;
+        overflow: hidden;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      /* Rajdhani (police par défaut du splitter) servie par le protocol
+         streamos-speedrun lui-même (/fonts/Rajdhani.woff2 — same-origin,
+         PAS de blocage CORS qu'un @font-face cross-origin sur :4321
+         subirait). Fallback system-ui. Une police custom du widget
+         (srPolice ≠ Rajdhani) n'est pas embarquée ici → fallback. */
+      @font-face {
+        font-family: 'Rajdhani';
+        font-style: normal;
+        font-weight: 400;
+        font-display: swap;
+        src: url(/fonts/Rajdhani.woff2) format('woff2');
+      }
+
+      .sr-root {
+        display: flex;
+        flex-direction: column;
+        gap: 0.3em;
+        padding: 0.8em 10px;
+        height: 100%;
+      }
+
+      /* ===== En-tête (port diffusion.html) ===== */
+      .sr-header {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        gap: 2px;
+        position: relative;
+        min-height: 0;
+      }
+      .sr-titre-jeu {
+        font-size: 0.75em;
+        font-weight: 600;
+        color: var(--texte);
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-align: center;
+        max-width: 100%;
+        text-shadow: 0 1px 2px #000, 0 0 1px #000;
+      }
+      .sr-cat {
+        color: var(--gris);
+        font-weight: 400;
+        font-size: 0.7em;
+      }
+      .sr-placeholder {
+        color: var(--gris);
+        font-style: italic;
+        font-weight: 400;
+      }
+      .sr-status {
+        position: absolute;
+        top: 0;
+        right: 0;
+        font-size: 0.7em;
+        flex-shrink: 0;
+      }
+      .sr-status .ok { color: var(--message-ok-color); }
+      .sr-status .attente { color: var(--message-user-action-color); }
+
+      /* ===== Timer ===== */
+      .sr-timer {
+        text-align: center;
+        margin: 0 0.8em;
+        padding: 0.15em 0.5em;
+        background: rgba(255, 255, 255, 0.04);
+        border-radius: var(--rayon-petit);
+      }
+      .sr-timer .sr-timer-valeur {
+        font-size: 1.9em;
+        font-weight: 700;
+        font-variant-numeric: tabular-nums;
+        letter-spacing: 0.04em;
+        line-height: 1;
+        color: var(--sr-timer-couleur);
+        text-shadow: 0 2px 4px var(--sr-ombre);
+      }
+      .sr-timer.sr-running .sr-timer-valeur {
+        filter: drop-shadow(0 0 0.4em rgba(255, 255, 255, 0.35));
+      }
+
+      /* ===== Phase pill + compteur ===== */
+      .sr-meta {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 0.5em;
+      }
+      .sr-phase-pill {
+        font-size: 0.65em;
+        font-weight: 600;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        padding: 0.06em 0.5em;
+        border-radius: 999px;
+        color: var(--gris);
+        background: rgba(255, 255, 255, 0.06);
+      }
+      .sr-phase-pill.sr-running { color: var(--message-ok-color); background: rgba(34, 197, 94, 0.15); }
+      .sr-phase-pill.sr-paused { color: var(--message-user-action-color); background: rgba(245, 158, 11, 0.15); }
+      .sr-phase-pill.sr-ended { color: var(--message-ok-color); background: rgba(34, 197, 94, 0.2); }
+      .sr-compteur {
+        font-size: 0.7em;
+        color: var(--gris);
+        font-variant-numeric: tabular-nums;
+        text-shadow: 0 1px 2px #000;
+      }
+
+      /* ===== Barre de progression ===== */
+      .sr-barre {
+        height: 0.2em;
+        border-radius: 999px;
+        background: rgba(255, 255, 255, 0.1);
+        overflow: hidden;
+      }
+      .sr-barre-fill {
+        height: 100%;
+        border-radius: 999px;
+        background: linear-gradient(90deg, var(--sr-grad-from), var(--sr-grad-to));
+        transition: width 0.3s ease;
+      }
+
+      /* ===== Splits (port diffusion.html) ===== */
+      .sr-splits {
+        display: flex;
+        flex-direction: column;
+        gap: 0.2em;
+        overflow-y: auto;
+        flex: 1;
+        min-height: 0;
+        padding-top: 0.25em;
+        scrollbar-width: thin;
+        scrollbar-color: rgba(255, 255, 255, 0.2) transparent;
+      }
+      .sr-splits::-webkit-scrollbar { width: 5px; }
+      .sr-splits::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.2); border-radius: 999px; }
+      .sr-splits::-webkit-scrollbar-track { background: transparent; }
+      .sr-seg {
+        display: flex;
+        align-items: center;
+        gap: 0.4em;
+        padding: 0.4em;
+        font-size: 0.78em;
+        border: var(--sr-seg-bw) solid transparent;
+        border-radius: var(--sr-seg-br);
+        min-height: var(--sr-seg-lh, 0px);
+        background: linear-gradient(135deg, rgba(255, 255, 255, 0.03), #000000);
+        transition: background 0.15s ease, box-shadow 0.15s ease, border-color 0.15s ease;
+        cursor: pointer;
+      }
+      .sr-seg-actif {
+        background: linear-gradient(135deg, var(--sr-grad-from), #000000);
+        border-color: var(--sr-couleur-actif);
+        box-shadow:
+          0 0 0.6em 0.15em var(--sr-couleur-actif),
+          inset 0 0 0.5em rgba(255, 255, 255, 0.08);
+        color: var(--texte);
+      }
+      .sr-seg-done { color: var(--gris); opacity: 0.6; }
+      .sr-seg-nom {
+        flex: 1;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+        text-shadow: 0 1px 2px #000, 0 0 1px #000;
+      }
+      .sr-seg-time {
+        font-variant-numeric: tabular-nums;
+        color: var(--sr-grad-from);
+        font-size: 0.9em;
+        font-weight: 600;
+        text-shadow: 0 1px 2px #000;
+        min-width: 4.5em;
+        text-align: right;
+        flex-shrink: 0;
+      }
+      .sr-seg-pb {
+        font-variant-numeric: tabular-nums;
+        color: var(--gris);
+        font-size: 0.9em;
+        text-shadow: 0 1px 2px #000;
+        min-width: 5em;
+        text-align: right;
+        flex-shrink: 0;
+      }
+      .sr-delta-off .sr-seg-pb { display: none; }
+      .sr-seg-pb.delta-ahead { color: var(--sr-couleur-ahead); }
+      .sr-seg-pb.delta-behind { color: var(--sr-couleur-behind); }
+      .sr-seg-pb.delta-ahead,
+      .sr-seg-pb.delta-behind { font-weight: 700; }
+      .sr-seg.sr-seg-ahead { border-color: var(--sr-couleur-ahead); }
+      .sr-seg.sr-seg-behind { border-color: var(--sr-couleur-behind); }
+
+      /* ===== Contrôles de run (spécifique pop-out — pas dans la diffusion) */
+      .sr-ctrls {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.25em;
+        padding-top: 0.3em;
+      }
+      .sr-ctrls button {
+        flex: 1 1 auto;
+        min-width: 4.2em;
+        font-family: inherit;
+        font-size: 0.62em;
+        font-weight: 600;
+        padding: 0.45em 0.6em;
+        border-radius: var(--rayon-petit);
+        border: 1px solid rgba(255, 255, 255, 0.14);
+        background: rgba(255, 255, 255, 0.05);
+        color: var(--texte);
+        cursor: pointer;
+        transition: background 0.12s ease, border-color 0.12s ease;
+      }
+      .sr-ctrls button:hover:not(:disabled) {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.25);
+      }
+      .sr-ctrls button:disabled { opacity: 0.38; cursor: default; }
+      .sr-ctrls button.start { color: var(--message-ok-color); border-color: rgba(34, 197, 94, 0.4); }
+      .sr-ctrls button.stop { color: var(--message-error-color); border-color: rgba(192, 57, 43, 0.5); }
+      .sr-ctrls button.split { color: var(--sr-grad-from); }
+      .sr-ctrls button.export { color: var(--sr-grad-to); border-color: rgba(139, 92, 246, 0.4); }
+    </style>
+  </head>
+  <body>
+    <div class="sr-root" id="srRoot">
+      <div class="sr-header" id="srHeader">
+        <div class="sr-titre-jeu" id="srTitre"></div>
+        <div class="sr-cat" id="srCat"></div>
+        <span class="sr-status" id="srStatus"></span>
+      </div>
+      <div class="sr-timer" id="srTimer"><span class="sr-timer-valeur" id="srTimerVal">00:00.00</span></div>
+      <div class="sr-meta" id="srMeta">
+        <span class="sr-phase-pill sr-ready" id="srPill">Ready</span>
+        <span class="sr-compteur" id="srCompteur"></span>
+      </div>
+      <div class="sr-barre" id="srBarre"><div class="sr-barre-fill" id="srBarreFill" style="width:0%"></div></div>
+      <div class="sr-splits" id="srSplits"></div>
+      <div class="sr-ctrls">
+        <button id="btnDemarrer" class="start" title="Démarrer le splitter">&#9654; Start</button>
+        <button id="btnArreter" class="stop" title="Arrêter le splitter">&#9632; Stop</button>
+        <button id="btnSplit" class="split">Split</button>
+        <button id="btnSkip">Skip</button>
+        <button id="btnUndo">Undo</button>
+        <button id="btnReset">Reset</button>
+        <button id="btnPause">Pause</button>
+        <button id="btnExport" class="export" title="Exporter les splits en HTML">Export</button>
+      </div>
+    </div>
+    <script>
+      // Pop-out speedrun : 3e rendu du splitter (dashboard + diffusion + ici).
+      // AFFICHAGE : WS :4321 (frames speedrun-etat) — mêmes events que
+      // diffusion.html, resync demandé à la connexion (speedrun-resync) :
+      // une fenêtre ouverte en pleine run retrouve phase + index + temps.
+      // CONTRÔLES : events Tauri vers le dashboard (pattern raccourcis —
+      // pas de logique métier dans les fenêtres satellite) : la page émet
+      // speedrun-popout:action, le store speedrun.ts exécute (invoke Rust).
+      // ÉTAT MOTEUR (actif/inactif) : poussé par le dashboard via
+      // speedrun-popout:etat (le WS ne le dit pas en NotRunning armé).
+      // Bloc de rendu dupliqué VOLONTAIREMENT depuis diffusion.html — pas de
+      // module JS partagé entre les pages statiques (convention pop-out chat).
+
+      var TAURI = window.__TAURI__;
+
+      // Neutralise le menu contextuel natif de la webview (parité dashboard).
+      window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+      // ===== État consolidé (entry-like diffusion.html) =====
+      var E = {
+        srPhase: "NotRunning",
+        srIndex: null,
+        srSplitTimes: [],
+        srSplitCumuls: [],
+        srSegTime: null,
+        srRealTime: "00:00.00",
+        srGameTime: null,
+        srNomJeu: "",
+        srNomCategorie: "",
+        srSegments: [],
+        srTotalSplits: 0,
+        srConnecte: false,
+        srProcessus: null
+      };
+      // Moteur actif (poussé par le dashboard) — différent de la phase :
+      // NotRunning + moteur ON = armé/en attente du jeu.
+      var moteurActif = false;
+      // Options de layout du 1er widget speedrun du snapshot (défauts =
+      // rendu standard ; le pop-out n'est lié à aucun widget précis —
+      // majorité simple, comme le chat pop-out pour chatStyle).
+      var opts = {
+        voirTitre: true, voirCat: true, voirStatut: true, voirTimer: true,
+        voirPhase: true, voirCompteur: true, voirBarre: true,
+        modeTemps: "cumul", modeDelta: "cumul", deltaPrec: "dixieme",
+        deltaDrop: true, timerPrec: "centieme", timerMethode: "auto",
+        couleurTimer: "", couleurAhead: "", couleurBehind: "", couleurActif: "",
+        segBordure: true, segBordEp: 1, segBordRayon: -1,
+        nbLignes: 0, scrollAuto: true, hauteurLigne: 0
+      };
+      var optsKey = "";
+
+      function escapeHtml(s) {
+        return String(s)
+          .replace(/&/g, "&" + "amp;")
+          .replace(/</g, "&" + "lt;")
+          .replace(/>/g, "&" + "gt;")
+          .replace(/"/g, "&" + "quot;");
+      }
+
+      // ===== Formats (port exact diffusion.html) =====
+      function srParseTime(str) {
+        if (!str || str === "--/--/--") return 0;
+        var parts = str.split(":");
+        var h = 0, m = 0, s = 0;
+        if (parts.length === 3) {
+          h = parseFloat(parts[0]) || 0;
+          m = parseFloat(parts[1]) || 0;
+          s = parseFloat(parts[2]) || 0;
+        } else if (parts.length === 2) {
+          m = parseFloat(parts[0]) || 0;
+          s = parseFloat(parts[1]) || 0;
+        } else {
+          s = parseFloat(parts[0]) || 0;
+        }
+        return h * 3600 + m * 60 + s;
+      }
+      function srFormatSegment(secs) {
+        if (secs < 0 || isNaN(secs)) return "--/--/--";
+        var totalCs = Math.round(secs * 100);
+        var h = Math.floor(totalCs / 360000);
+        var m = Math.floor((totalCs % 360000) / 6000);
+        var s = Math.floor((totalCs % 6000) / 100);
+        var cs = totalCs % 100;
+        if (h > 0) {
+          return h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") + "." + String(cs).padStart(2, "0");
+        }
+        return String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0") + "." + String(cs).padStart(2, "0");
+      }
+      function srFormatDelta(secs, o) {
+        var sign = secs < 0 ? "-" : "+";
+        var a = Math.abs(secs);
+        var dec = (o && o.deltaPrec === "centieme") ? 2
+          : (o && o.deltaPrec === "seconde") ? 0 : 1;
+        if (a < 60) return sign + a.toFixed(dec);
+        var drop = !o || o.deltaDrop !== false;
+        var arr = (dec > 0 && !drop) ? a.toFixed(dec) : String(Math.floor(a));
+        var total = Math.floor(Number(arr));
+        var frac = arr.indexOf(".") >= 0 ? "." + arr.split(".")[1] : "";
+        var h = Math.floor(total / 3600);
+        var m = Math.floor((total % 3600) / 60);
+        var s = total % 60;
+        var base = h > 0
+          ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
+          : m + ":" + String(s).padStart(2, "0");
+        return sign + base + frac;
+      }
+      function srFormatCumul(secs) {
+        if (secs < 0 || isNaN(secs)) return "";
+        var total = Math.round(secs);
+        var h = Math.floor(total / 3600);
+        var m = Math.floor((total % 3600) / 60);
+        var s = total % 60;
+        if (h > 0) {
+          return h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0");
+        }
+        return m + ":" + String(s).padStart(2, "0");
+      }
+      function srFormatTimerPrec(str, prec) {
+        if (!str) return str;
+        if (prec === "centieme" || !prec) return str;
+        var secs = srParseTime(str);
+        if (isNaN(secs) || secs < 0) return str;
+        var totalCs = Math.round(secs * 100);
+        var v = prec === "seconde"
+          ? Math.round(totalCs / 100) * 100
+          : Math.round(totalCs / 10) * 10;
+        var h = Math.floor(v / 360000);
+        var m = Math.floor((v % 360000) / 6000);
+        var s = Math.floor((v % 6000) / 100);
+        var frac = prec === "seconde" ? "" : "." + Math.floor((v % 100) / 10);
+        var base = h > 0
+          ? h + ":" + String(m).padStart(2, "0") + ":" + String(s).padStart(2, "0")
+          : m + ":" + String(s).padStart(2, "0");
+        return base + frac;
+      }
+      function srPhaseLabel(phase) {
+        switch (phase) {
+          case "Running": return "Running";
+          case "Paused": return "Paused";
+          case "Ended": return "Finished";
+          default: return "Ready";
+        }
+      }
+      function srPhaseCls(phase) {
+        switch (phase) {
+          case "Running": return "running";
+          case "Paused": return "paused";
+          case "Ended": return "ended";
+          default: return "ready";
+        }
+      }
+
+      // ===== Options depuis le snapshot (1er widget speedrun) =====
+      function majOptsDepuisSnapshot(scene) {
+        if (!scene || !scene.widgets) return;
+        var w = null;
+        for (var i = 0; i < scene.widgets.length; i++) {
+          if ((scene.widgets[i].type || "media") === "speedrun") { w = scene.widgets[i]; break; }
+        }
+        var c = scene.cadreWidget;
+        if (!c || !c.actif || (c.strokeWidth || 0) <= 0) c = null;
+        var key = w
+          ? [w.srVoirTitre, w.srVoirCategorie, w.srVoirStatut, w.srVoirTimer,
+             w.srVoirPhase, w.srVoirCompteur, w.srVoirBarre, w.srModeTemps,
+             w.srModeDelta, w.srDeltaPrecision, w.srDeltaDrop, w.srTimerPrecision,
+             w.srTimerMethode, w.srCouleurTimer, w.srCouleurAhead, w.srCouleurBehind,
+             w.srCouleurActif, w.srSegBordure, w.srSegBordureEpaisseur,
+             w.srSegBordureRayon, w.srNbLignes, w.srScrollAuto, w.srHauteurLigne].join("|")
+          : "no-widget";
+        key += "|" + (c ? [c.couleur, c.couleurFin].join("|") : "");
+        if (key === optsKey) return;
+        optsKey = key;
+        if (w) {
+          opts.voirTitre = w.srVoirTitre !== false;
+          opts.voirCat = w.srVoirCategorie !== false;
+          opts.voirStatut = w.srVoirStatut !== false;
+          opts.voirTimer = w.srVoirTimer !== false;
+          opts.voirPhase = w.srVoirPhase !== false;
+          opts.voirCompteur = w.srVoirCompteur !== false;
+          opts.voirBarre = w.srVoirBarre !== false;
+          opts.modeTemps = w.srModeTemps === "segment" ? "segment" : "cumul";
+          opts.modeDelta = (w.srModeDelta === "segment" || w.srModeDelta === "off")
+            ? w.srModeDelta : "cumul";
+          opts.deltaPrec = w.srDeltaPrecision || "dixieme";
+          opts.deltaDrop = w.srDeltaDrop !== false;
+          opts.timerPrec = w.srTimerPrecision || "centieme";
+          opts.timerMethode = w.srTimerMethode || "auto";
+          opts.couleurTimer = w.srCouleurTimer || "";
+          opts.couleurAhead = w.srCouleurAhead || "";
+          opts.couleurBehind = w.srCouleurBehind || "";
+          opts.couleurActif = w.srCouleurActif || "";
+          opts.segBordure = w.srSegBordure !== false;
+          opts.segBordEp = w.srSegBordureEpaisseur || 1;
+          opts.segBordRayon = (typeof w.srSegBordureRayon === "number")
+            ? w.srSegBordureRayon : -1;
+          opts.nbLignes = w.srNbLignes || 0;
+          opts.scrollAuto = w.srScrollAuto !== false;
+          opts.hauteurLigne = w.srHauteurLigne || 0;
+        }
+        // Gradient = couleur du cadre de scène (parité bulles pop-out chat).
+        var root = document.documentElement;
+        if (c) {
+          root.style.setProperty("--sr-grad-from", c.couleur || "#e0e0e0");
+          root.style.setProperty("--sr-grad-to", c.couleurFin || c.couleur || "#9a9a9a");
+        } else {
+          root.style.setProperty("--sr-grad-from", "#e0e0e0");
+          root.style.setProperty("--sr-grad-to", "#9a9a9a");
+        }
+        // Police du widget (seule Rajdhani est embarquée — une police custom
+        // retombe proprement sur system-ui).
+        if (w && w.srPolice) {
+          root.style.setProperty("--sr-police", w.srPolice);
+        } else {
+          root.style.setProperty("--sr-police", "Rajdhani");
+        }
+        root.style.setProperty("--sr-timer-couleur", opts.couleurTimer || "var(--sr-grad-from)");
+        root.style.setProperty("--sr-couleur-ahead", opts.couleurAhead || "var(--message-ok-color)");
+        root.style.setProperty("--sr-couleur-behind", opts.couleurBehind || "var(--message-error-color)");
+        root.style.setProperty("--sr-couleur-actif", opts.couleurActif || "var(--sr-grad-from)");
+        root.style.setProperty("--sr-seg-bw",
+          (opts.segBordure === false ? 0 : opts.segBordEp) + "px");
+        if (opts.segBordRayon >= 0) {
+          root.style.setProperty("--sr-seg-br", opts.segBordRayon + "px");
+        } else {
+          root.style.removeProperty("--sr-seg-br");
+        }
+        if (opts.hauteurLigne > 0) {
+          root.style.setProperty("--sr-seg-lh", opts.hauteurLigne + "px");
+        } else {
+          root.style.removeProperty("--sr-seg-lh");
+        }
+        // Toggles de visibilité (display direct).
+        var el;
+        el = document.getElementById("srTimer");
+        if (el) el.style.display = opts.voirTimer === false ? "none" : "";
+        el = document.getElementById("srPill");
+        if (el) el.style.display = opts.voirPhase === false ? "none" : "";
+        el = document.getElementById("srCompteur");
+        if (el) el.style.display = opts.voirCompteur === false ? "none" : "";
+        el = document.getElementById("srBarre");
+        if (el) el.style.display = opts.voirBarre === false ? "none" : "";
+        el = document.getElementById("srMeta");
+        if (el) el.style.display = (opts.voirPhase === false && opts.voirCompteur === false) ? "none" : "";
+        el = document.getElementById("srHeader");
+        if (el) el.style.display =
+          (opts.voirTitre === false && opts.voirCat === false && opts.voirStatut === false)
+            ? "none" : "";
+        document.getElementById("srRoot").classList.toggle("sr-delta-off", opts.modeDelta === "off");
+        toutRafraichir();
+      }
+
+      // ===== Rendu (ports diffusion.html) =====
+      function srRecreerSplits(segments) {
+        var splitsEl = document.getElementById("srSplits");
+        var html = "";
+        for (var i = 0; i < segments.length; i++) {
+          var seg = segments[i];
+          html += '<div class="sr-seg" data-idx="' + i + '">' +
+            '<span class="sr-seg-nom">' + escapeHtml(seg.nom || "") + '</span>' +
+            '<span class="sr-seg-time"></span>' +
+            '<span class="sr-seg-pb"></span>' +
+            '</div>';
+        }
+        splitsEl.innerHTML = html;
+      }
+
+      function srMajHeader() {
+        var el;
+        var html = "";
+        if (opts.voirTitre && (E.srNomJeu || !(opts.voirCat && E.srNomCategorie))) {
+          html += E.srNomJeu
+            ? escapeHtml(E.srNomJeu)
+            : '<span class="sr-placeholder">Aucun splits chargé</span>';
+        }
+        el = document.getElementById("srTitre");
+        if (el && el.innerHTML !== html) el.innerHTML = html;
+        el = document.getElementById("srCat");
+        var cat = (opts.voirCat && E.srNomCategorie) ? E.srNomCategorie : "";
+        if (el && el.textContent !== cat) el.textContent = cat;
+        el = document.getElementById("srStatus");
+        var st = "";
+        if (opts.voirStatut) {
+          if (E.srConnecte) {
+            st = '<span class="ok" title="' + escapeHtml(E.srProcessus || "connecté") + '">●</span>';
+          } else if (moteurActif) {
+            st = '<span class="attente" title="en attente…">○</span>';
+          }
+        }
+        if (el && el.innerHTML !== st) el.innerHTML = st;
+      }
+
+      function srMajTimerEtPhase() {
+        var brut = (opts.timerMethode === "real")
+          ? E.srRealTime
+          : (E.srGameTime || E.srRealTime);
+        var t = srFormatTimerPrec(brut || "00:00.00", opts.timerPrec);
+        var el = document.getElementById("srTimerVal");
+        if (el && el.textContent !== t) el.textContent = t;
+        var timerEl = document.getElementById("srTimer");
+        if (timerEl) {
+          var cls = "sr-timer sr-" + srPhaseCls(E.srPhase);
+          if (timerEl.className !== cls) timerEl.className = cls;
+        }
+        var pill = document.getElementById("srPill");
+        if (pill) {
+          var label = srPhaseLabel(E.srPhase);
+          if (pill.textContent !== label) pill.textContent = label;
+          var pillCls = "sr-phase-pill sr-" + srPhaseCls(E.srPhase);
+          if (pill.className !== pillCls) pill.className = pillCls;
+        }
+        var compteur = document.getElementById("srCompteur");
+        if (compteur) {
+          var ct = E.srTotalSplits > 0
+            ? ((E.srIndex !== null ? E.srIndex : 0) + " / " + E.srTotalSplits)
+            : "";
+          if (compteur.textContent !== ct) compteur.textContent = ct;
+        }
+        var fill = document.getElementById("srBarreFill");
+        if (fill) {
+          var pct = (E.srTotalSplits > 0 && E.srIndex !== null)
+            ? Math.min(1, E.srIndex / E.srTotalSplits) * 100
+            : 0;
+          var pctStr = pct + "%";
+          if (fill.style.width !== pctStr) fill.style.width = pctStr;
+        }
+      }
+
+      function srMajSegmentsVisuel() {
+        var splitsEl = document.getElementById("srSplits");
+        var segs = splitsEl.querySelectorAll(".sr-seg");
+        var idx = E.srIndex;
+        var visStart = 0;
+        var visEnd = segs.length;
+        if (opts.nbLignes > 0 && segs.length > opts.nbLignes) {
+          visStart = Math.max(0, Math.min((idx !== null ? idx : 0) - 1, segs.length - opts.nbLignes));
+          visEnd = visStart + opts.nbLignes;
+        }
+        for (var j = 0; j < segs.length; j++) {
+          var segDef = (E.srSegments && j < E.srSegments.length)
+            ? E.srSegments[j] : null;
+          // Durée PB du segment = pb[j] − pb[j−1] (PB stockés en CUMUL).
+          var segPb = null;
+          if (segDef) {
+            var pbCur = (segDef.pbRealTime != null) ? segDef.pbRealTime : segDef.pbGameTime;
+            if (pbCur != null) {
+              if (j === 0) {
+                segPb = pbCur;
+              } else {
+                var prev = E.srSegments[j - 1];
+                var pbPrev = prev ? ((prev.pbRealTime != null) ? prev.pbRealTime : prev.pbGameTime) : null;
+                if (pbPrev != null) segPb = pbCur - pbPrev;
+              }
+            }
+          }
+          var pbCumul = null;
+          if (segDef) {
+            pbCumul = (segDef.pbRealTime != null) ? segDef.pbRealTime : segDef.pbGameTime;
+          }
+          var enregistre = (E.srSplitTimes && j < E.srSplitTimes.length)
+            ? E.srSplitTimes[j] : "";
+          var cumulRec = (E.srSplitCumuls && j < E.srSplitCumuls.length)
+            ? E.srSplitCumuls[j] : null;
+          var estActif = (idx !== null && j === idx);
+          var enCours = estActif &&
+            (E.srPhase === "Running" || E.srPhase === "Paused");
+          // Delta (modes cumul/segment/off — port diffusion).
+          var deltaTxt = "";
+          var deltaSens = "";
+          var dd = null;
+          if (opts.modeDelta !== "off" && idx !== null && j <= idx) {
+            if (opts.modeDelta === "segment") {
+              var dur = null;
+              if (j < idx) {
+                var cPrev = j > 0
+                  ? ((E.srSplitCumuls && j - 1 < E.srSplitCumuls.length)
+                      ? E.srSplitCumuls[j - 1] : null)
+                  : "0:00";
+                if (cumulRec && cPrev) dur = srParseTime(cumulRec) - srParseTime(cPrev);
+              } else if (enCours) {
+                dur = srParseTime(E.srSegTime);
+              }
+              if (dur !== null && segPb !== null) {
+                dd = Math.round((dur - segPb) * 10) / 10;
+              }
+            } else if (pbCumul !== null) {
+              var cumulSecs = null;
+              if (j < idx && cumulRec) {
+                cumulSecs = srParseTime(cumulRec);
+              } else if (enCours) {
+                cumulSecs = srParseTime(E.srGameTime || E.srRealTime);
+              }
+              if (cumulSecs !== null) {
+                dd = Math.round((cumulSecs - pbCumul) * 10) / 10;
+              }
+            }
+          }
+          if (dd !== null) {
+            deltaTxt = srFormatDelta(dd, opts);
+            deltaSens = dd < 0 ? "ahead" : dd > 0 ? "behind" : "";
+          }
+          var segCls = "sr-seg";
+          if (estActif) segCls += " sr-seg-actif";
+          else if (idx !== null && j < idx) segCls += " sr-seg-done";
+          if (deltaSens === "ahead") segCls += " sr-seg-ahead";
+          else if (deltaSens === "behind") segCls += " sr-seg-behind";
+          if (segs[j].className !== segCls) segs[j].className = segCls;
+          var vis = (j >= visStart && j < visEnd);
+          var visDisplay = vis ? "" : "none";
+          if (segs[j].style.display !== visDisplay) segs[j].style.display = visDisplay;
+          // Colonne temps : cumul (défaut) | durée de segment.
+          var timeEl = segs[j].querySelector(".sr-seg-time");
+          if (timeEl) {
+            var segTime;
+            if (opts.modeTemps === "segment") {
+              if (estActif) {
+                segTime = E.srSegTime || "00:00.00";
+              } else if (idx !== null && j < idx && enregistre) {
+                segTime = enregistre;
+              } else {
+                segTime = (segPb !== null) ? srFormatSegment(segPb) : "";
+              }
+            } else {
+              segTime = "";
+              if (idx !== null && j < idx && cumulRec) {
+                segTime = srFormatCumul(srParseTime(cumulRec));
+              } else if (enCours) {
+                segTime = srFormatCumul(srParseTime(E.srGameTime || E.srRealTime));
+              } else {
+                segTime = (pbCumul !== null) ? srFormatCumul(pbCumul) : "";
+              }
+            }
+            if (timeEl.textContent !== segTime) timeEl.textContent = segTime;
+          }
+          // Colonne delta.
+          var pbEl = segs[j].querySelector(".sr-seg-pb");
+          if (pbEl) {
+            if (pbEl.textContent !== deltaTxt) pbEl.textContent = deltaTxt;
+            var pbCls = "sr-seg-pb" +
+              (deltaSens === "ahead" ? " delta-ahead" : deltaSens === "behind" ? " delta-behind" : "");
+            if (pbEl.className !== pbCls) pbEl.className = pbCls;
+          }
+        }
+        // Scroll auto vers le segment actif.
+        if (opts.scrollAuto && splitsEl && idx !== null && idx >= 0 && idx < segs.length) {
+          var actif = segs[idx];
+          var target = actif.offsetTop - (splitsEl.clientHeight - actif.offsetHeight) / 2;
+          if (target >= 0 && Math.abs(splitsEl.scrollTop - target) > 1) {
+            splitsEl.scrollTop = target;
+          }
+        } else if (splitsEl && idx === null) {
+          splitsEl.scrollTop = 0;
+        }
+      }
+
+      function srMajCtrls() {
+        var enCours = moteurActif;
+        document.getElementById("btnDemarrer").disabled = enCours;
+        document.getElementById("btnArreter").disabled = !enCours;
+        document.getElementById("btnSplit").disabled = !enCours;
+        document.getElementById("btnSkip").disabled = !enCours;
+        document.getElementById("btnUndo").disabled = !enCours;
+        document.getElementById("btnReset").disabled = !enCours;
+        document.getElementById("btnPause").disabled = !enCours;
+        document.getElementById("btnPause").textContent =
+          E.srPhase === "Paused" ? "Resume" : "Pause";
+      }
+
+      function toutRafraichir() {
+        srMajHeader();
+        srMajTimerEtPhase();
+        srMajSegmentsVisuel();
+        srMajCtrls();
+      }
+
+      // ===== majSpeedrunEtat (port du switch diffusion.html) =====
+      function majSpeedrunEtat(etat) {
+        switch (etat.type) {
+          case "started":
+            E.srPhase = "Running";
+            E.srIndex = (etat.index !== undefined) ? etat.index : 0;
+            E.srSplitTimes = [];
+            E.srSplitCumuls = [];
+            E.srSegTime = "00:00.00";
+            break;
+          case "split":
+            if (etat.index !== undefined) E.srIndex = etat.index;
+            if (etat.time && etat.index !== undefined) {
+              var segIdx = etat.index - 1;
+              while (E.srSplitTimes.length <= segIdx) E.srSplitTimes.push("");
+              E.srSplitTimes[segIdx] = etat.time;
+            }
+            if (etat.cumul && etat.index !== undefined) {
+              var cumIdx = etat.index - 1;
+              while (E.srSplitCumuls.length <= cumIdx) E.srSplitCumuls.push(null);
+              E.srSplitCumuls[cumIdx] = etat.cumul;
+            }
+            E.srSegTime = "00:00.00";
+            break;
+          case "splitSkipped":
+            if (etat.index !== undefined) E.srIndex = etat.index;
+            E.srSegTime = "00:00.00";
+            break;
+          case "splitUndone":
+            if (etat.index !== undefined) {
+              E.srIndex = etat.index;
+              if (etat.index < E.srSplitTimes.length) E.srSplitTimes[etat.index] = "";
+              if (etat.index < E.srSplitCumuls.length) E.srSplitCumuls[etat.index] = null;
+            }
+            E.srSegTime = null;
+            break;
+          case "reset":
+            E.srPhase = "NotRunning";
+            E.srIndex = null;
+            E.srGameTime = null;
+            E.srRealTime = "00:00.00";
+            E.srSplitTimes = [];
+            E.srSplitCumuls = [];
+            E.srSegTime = null;
+            break;
+          case "ended":
+            E.srPhase = "Ended";
+            if (etat.index !== undefined) {
+              E.srIndex = etat.index;
+              if (etat.time) {
+                var lastIdx = etat.index - 1;
+                while (E.srSplitTimes.length <= lastIdx) E.srSplitTimes.push("");
+                E.srSplitTimes[lastIdx] = etat.time;
+              }
+              if (etat.cumul) {
+                var lastCumIdx = etat.index - 1;
+                while (E.srSplitCumuls.length <= lastCumIdx) E.srSplitCumuls.push(null);
+                E.srSplitCumuls[lastCumIdx] = etat.cumul;
+              }
+            }
+            E.srSegTime = null;
+            break;
+          case "goto":
+            if (etat.phase) E.srPhase = etat.phase;
+            if (etat.index !== undefined) E.srIndex = etat.index;
+            E.srSplitTimes = [];
+            E.srSplitCumuls = [];
+            E.srSegTime =
+              (etat.phase === "Running" || etat.phase === "Paused")
+                ? "00:00.00" : null;
+            break;
+          case "etat":
+            if (etat.phase) E.srPhase = etat.phase;
+            E.srIndex =
+              (etat.index !== undefined && etat.index >= 0) ? etat.index : null;
+            E.srSplitTimes = (etat.splitTimes || []).map(function (t) { return t || ""; });
+            E.srSplitCumuls = (etat.splitCumuls || []).map(function (t) { return t || null; });
+            if (etat.realTime) E.srRealTime = etat.realTime;
+            E.srGameTime = etat.gameTime || etat.realTime || null;
+            E.srSegTime = etat.segmentTime || null;
+            break;
+          case "gameTime":
+            if (etat.time) E.srGameTime = etat.time;
+            break;
+          case "time":
+            if (etat.realTime) E.srRealTime = etat.realTime;
+            if (etat.gameTime !== undefined && etat.gameTime !== null) {
+              E.srGameTime = etat.gameTime;
+            } else if (etat.realTime) {
+              E.srGameTime = etat.realTime;
+            }
+            if (etat.segmentTime !== undefined) E.srSegTime = etat.segmentTime;
+            break;
+          case "paused":
+            E.srPhase = "Paused";
+            break;
+          case "resumed":
+            E.srPhase = "Running";
+            break;
+          case "stopped":
+            E.srPhase = "NotRunning";
+            E.srIndex = null;
+            E.srGameTime = null;
+            E.srRealTime = "00:00.00";
+            E.srConnecte = false;
+            E.srProcessus = null;
+            E.srSplitTimes = [];
+            E.srSplitCumuls = [];
+            E.srSegTime = null;
+            moteurActif = false;
+            break;
+          case "connected":
+            E.srConnecte = true;
+            if (etat.process) E.srProcessus = etat.process;
+            break;
+          case "disconnected":
+            E.srConnecte = false;
+            E.srProcessus = null;
+            E.srPhase = "NotRunning";
+            E.srIndex = null;
+            E.srGameTime = null;
+            E.srRealTime = "00:00.00";
+            E.srSplitTimes = [];
+            E.srSplitCumuls = [];
+            E.srSegTime = null;
+            break;
+          case "lss":
+            E.srNomJeu = etat.nomJeu || "";
+            E.srNomCategorie = etat.nomCategorie || "";
+            E.srSegments = etat.segments || [];
+            E.srTotalSplits = E.srSegments.length;
+            srRecreerSplits(E.srSegments);
+            break;
+          default:
+            break;
+        }
+        toutRafraichir();
+      }
+
+      // ===== Contrôles : events vers le dashboard (pattern raccourcis) =====
+      function emitAction(action, extra) {
+        if (!TAURI || !TAURI.event || !TAURI.event.emit) return;
+        var payload = { action: action };
+        if (extra) {
+          for (var k in extra) payload[k] = extra[k];
+        }
+        TAURI.event.emit("speedrun-popout:action", payload);
+      }
+      document.getElementById("btnDemarrer").addEventListener("click", function () {
+        emitAction("demarrer");
+      });
+      document.getElementById("btnArreter").addEventListener("click", function () {
+        emitAction("arreter");
+      });
+      document.getElementById("btnSplit").addEventListener("click", function () {
+        emitAction("split");
+      });
+      document.getElementById("btnSkip").addEventListener("click", function () {
+        emitAction("skip");
+      });
+      document.getElementById("btnUndo").addEventListener("click", function () {
+        emitAction("undo");
+      });
+      document.getElementById("btnReset").addEventListener("click", function () {
+        emitAction("reset");
+      });
+      document.getElementById("btnPause").addEventListener("click", function () {
+        emitAction("pause");
+      });
+      // Export HTML de la tentative : le dashboard génère le fichier +
+      // ouvre le dialog « Enregistrer sous » (aucune logique ici).
+      document.getElementById("btnExport").addEventListener("click", function () {
+        emitAction("export");
+      });
+      // Clic sur une ligne : armer (NotRunning) ou retry de segment —
+      // la garde d'activité vit côté dashboard (allerSplit → moteur).
+      document.getElementById("srSplits").addEventListener("click", function (e) {
+        if (!moteurActif) return;
+        var seg = e.target.closest ? e.target.closest(".sr-seg") : null;
+        if (!seg) return;
+        var idx = parseInt(seg.getAttribute("data-idx"), 10);
+        if (!isNaN(idx)) emitAction("goto", { index: idx });
+      });
+
+      // ===== État moteur poussé par le dashboard =====
+      if (TAURI && TAURI.event && TAURI.event.listen) {
+        TAURI.event.listen("speedrun-popout:etat", function (e) {
+          var actif = !!(e && e.payload && e.payload.actif);
+          if (actif !== moteurActif) {
+            moteurActif = actif;
+            toutRafraichir();
+          }
+        });
+        // Handshake : listeners prêts → le dashboard pousse l'état moteur
+        // (la fenêtre peut être créée avant la fin de l'init dashboard —
+        // sans ça, Start/Stop resteraient dans le mauvais état jusqu'au
+        // prochain changement. Même mécanique que raccourcis:ready).
+        TAURI.event.emit("speedrun-popout:ready");
+      }
+
+      // ===== WS :4321 (frames speedrun-etat + snapshot) =====
+      var WS_URL = "ws://127.0.0.1:4321/ws";
+
+      function connect() {
+        var ws = new WebSocket(WS_URL);
+
+        ws.onopen = function () {
+          // Resync complet : une fenêtre ouverte en pleine run (ou un
+          // reboot du serveur) retrouve LSS + phase + index + temps.
+          ws.send(JSON.stringify({ type: "speedrun-resync" }));
+        };
+        ws.onclose = function () {
+          setTimeout(connect, 2000);
+        };
+        ws.onerror = function () {};
+        ws.onmessage = function (ev) {
+          try {
+            var msg = JSON.parse(ev.data);
+            if (msg.type === "speedrun-etat" && msg.etat) {
+              majSpeedrunEtat(msg.etat);
+            } else if (msg.type === "snapshot" && msg.scene) {
+              majOptsDepuisSnapshot(msg.scene);
+            }
+          } catch (e) {}
+        };
+      }
+
+      connect();
+      toutRafraichir();
+    </script>
+  </body>
+</html>

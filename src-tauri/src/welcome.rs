@@ -1,7 +1,7 @@
 /// Clips de bienvenue — détection 1er message + file d'attente + émission WS.
 ///
 /// Flux :
-///   1. Module chat (twitch_chat.rs, etc.) appelle `on_message(plateforme, cle, display, avatar)`.
+///   1. Module chat (twitch_chat.rs, etc.) appelle `on_message(plateforme, cle, display, avatar, bio, banniere)`.
 ///   2. Si cle est dans le registre (streamer enregistré) + actif + pas vu cette session
 ///      + config globale active → ajoute à `seen` + enfile dans la queue.
 ///   3. `avancer()` pop le prochain clip → émet `{"type":"welcome-clip-play",...}` sur chat_tx
@@ -118,6 +118,10 @@ pub struct ViewerConfig {
     /// Bio Twitch (description de la chaîne), mise à jour à la volée.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bio: Option<String>,
+    /// Bannière de chaîne (offline_image_url Helix), mise à jour à la volée.
+    /// Fond plein écran du mode spotlight (floutée si on retombe sur l'avatar).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub banniere: Option<String>,
 }
 
 /// Item dans la file d'attente.
@@ -130,6 +134,8 @@ pub struct QueueItem {
     pub avatar: Option<String>,
     /// Bio Twitch (description de la chaîne) du viewer.
     pub bio: Option<String>,
+    /// Bannière de chaîne (offline_image_url) — fond spotlight.
+    pub banniere: Option<String>,
     pub plateforme: String,
     pub clip_id: String,
     pub clip_titre: String,
@@ -213,6 +219,7 @@ impl WelcomeState {
         display_name: &str,
         avatar: Option<String>,
         bio: Option<String>,
+        banniere: Option<String>,
     ) {
         // 1. Config globale active ?
         if !self.config_globale.lock().unwrap().actif {
@@ -252,6 +259,7 @@ impl WelcomeState {
             display_name: display_name.to_string(),
             avatar: avatar.clone(),
             bio: bio.clone(),
+            banniere: banniere.clone(),
             plateforme: plateforme.to_string(),
             clip_id: config.clip_id.clone(),
             clip_titre: config.clip_titre.clone(),
@@ -281,8 +289,9 @@ impl WelcomeState {
             });
         }
 
-        // Mettre à jour l'avatar + la bio dans le registre si on en a (cache).
-        if avatar.is_some() || bio.is_some() {
+        // Mettre à jour l'avatar + la bio + la bannière dans le registre si
+        // on en a (cache).
+        if avatar.is_some() || bio.is_some() || banniere.is_some() {
             let mut registry = self.registry.lock().unwrap();
             if let Some(m) = registry.get_mut(plateforme) {
                 if let Some(c) = m.get_mut(cle) {
@@ -291,6 +300,9 @@ impl WelcomeState {
                     }
                     if let Some(b) = bio {
                         c.bio = Some(b);
+                    }
+                    if let Some(ba) = banniere {
+                        c.banniere = Some(ba);
                     }
                     c.display_name = display_name.to_string();
                 }
@@ -357,8 +369,11 @@ impl WelcomeState {
     /// avant sur la page d'accueil du viewer (étagère favoris, non-fatal).
     async fn jouer_item_async(&self, item: QueueItem) {
         let spotlight = !self.config_globale.lock().unwrap().utiliser_squelette;
+        // Hauteur MP4 cible : squelette = carte ~320 px (480 couvre),
+        // spotlight = colonne ~800 px de la carte 85 % (720).
+        let qualite_cible = if spotlight { 720 } else { 480 };
         let (mp4_res, favoris) = tokio::join!(
-            crate::twitch_clips::resoudre_mp4(&item.clip_id),
+            crate::twitch_clips::resoudre_mp4(&item.clip_id, qualite_cible),
             async {
                 if spotlight && item.plateforme == "twitch" {
                     crate::twitch_clips::favoris_channel(&item.login, 6).await
@@ -402,7 +417,13 @@ impl WelcomeState {
         plateforme: &str,
         login: &str,
     ) {
-        match crate::twitch_clips::resoudre_mp4(clip_id).await {
+        // Même cible que jouer_item_async : 480 squelette / 720 spotlight.
+        let qualite_cible = if self.config_globale.lock().unwrap().utiliser_squelette {
+            480
+        } else {
+            720
+        };
+        match crate::twitch_clips::resoudre_mp4(clip_id, qualite_cible).await {
             Ok(url) => {
                 // Mettre à jour l'item dans la queue (s'il y est encore).
                 let mut found = false;
@@ -440,8 +461,9 @@ impl WelcomeState {
     /// Émet welcome-clip-play pour un item dont l'URL MP4 est résolue + démarre timer.
     /// `favoris` = streamers mis en avant par le viewer (vide hors spotlight).
     fn jouer_item(&self, mut item: QueueItem, favoris: Vec<crate::twitch_clips::StreamerFavori>) {
-        // Fallback avatar/bio depuis le registre (cache) si absents de l'item.
-        if item.avatar.is_none() || item.bio.is_none() {
+        // Fallback avatar/bio/bannière depuis le registre (cache) si absents
+        // de l'item.
+        if item.avatar.is_none() || item.bio.is_none() || item.banniere.is_none() {
             let registry = self.registry.lock().unwrap();
             if let Some(c) = registry.get(&item.plateforme).and_then(|m| m.get(&item.login)) {
                 if item.avatar.is_none() {
@@ -449,6 +471,9 @@ impl WelcomeState {
                 }
                 if item.bio.is_none() {
                     item.bio = c.bio.clone();
+                }
+                if item.banniere.is_none() {
+                    item.banniere = c.banniere.clone();
                 }
             }
         }
@@ -470,6 +495,7 @@ impl WelcomeState {
                 "display_name": item.display_name,
                 "avatar": item.avatar,
                 "bio": item.bio,
+                "banniere": item.banniere,
             },
             "clip": {
                 "mp4_url": item.clip_mp4_url,
@@ -525,6 +551,7 @@ impl WelcomeState {
     /// démarre un timer qui émet welcome-clip-stop à la fin. N'interfère pas
     /// avec la queue réelle (current est mis à jour pour que le timer soit
     /// annulable via stop, mais la queue n'est pas modifiée).
+    #[allow(clippy::too_many_arguments)]
     pub async fn tester_clip(
         &self,
         clip_id: &str,
@@ -533,6 +560,7 @@ impl WelcomeState {
         display_name: &str,
         avatar: Option<String>,
         bio: Option<String>,
+        banniere: Option<String>,
     ) -> Result<(), String> {
         // Mode d'affichage courant (squelette / spotlight) — lu avant le
         // join! pour savoir s'il faut fetcher les favoris du viewer.
@@ -541,8 +569,10 @@ impl WelcomeState {
 
         // Résoudre l'URL MP4 + fetch favoris en parallèle (spotlight Twitch
         // uniquement — non-fatal, liste vide sinon).
+        // Même cible que la queue : 480 squelette / 720 spotlight.
+        let qualite_cible = if utiliser_squelette { 480 } else { 720 };
         let (mp4_res, favoris) = tokio::join!(
-            crate::twitch_clips::resoudre_mp4(clip_id),
+            crate::twitch_clips::resoudre_mp4(clip_id, qualite_cible),
             async {
                 if utiliser_squelette {
                     Vec::new()
@@ -562,14 +592,15 @@ impl WelcomeState {
         // Pousser la config overlay (garantit position/taille courante).
         self.emit_overlay_config();
 
-        // Fallback avatar/bio depuis le registre (cache) si absents.
+        // Fallback avatar/bio/bannière depuis le registre (cache) si absents.
         let login = display_name.to_lowercase();
-        let (avatar, bio) = {
+        let (avatar, bio, banniere) = {
             let registry = self.registry.lock().unwrap();
             let cached = registry.get("twitch").and_then(|m| m.get(&login));
             (
                 avatar.or_else(|| cached.and_then(|c| c.avatar.clone())),
                 bio.or_else(|| cached.and_then(|c| c.bio.clone())),
+                banniere.or_else(|| cached.and_then(|c| c.banniere.clone())),
             )
         };
 
@@ -581,6 +612,7 @@ impl WelcomeState {
                 "display_name": display_name,
                 "avatar": avatar.clone(),
                 "bio": bio.clone(),
+                "banniere": banniere.clone(),
             },
             "clip": {
                 "mp4_url": mp4_url,
@@ -603,6 +635,7 @@ impl WelcomeState {
             display_name: display_name.to_string(),
             avatar,
             bio,
+            banniere,
             plateforme: "twitch".to_string(),
             clip_id: clip_id.to_string(),
             clip_titre: clip_titre.to_string(),

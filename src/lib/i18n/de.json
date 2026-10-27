@@ -28,6 +28,7 @@
     "pause": "Pause",
     "image": "Bild",
     "video": "Video",
+    "chrono": "Timer",
     "debut": "Anfang",
     "fin": "Ende",
     "apercu": "Vorschau",
@@ -69,6 +70,87 @@
     "erreurAuth": "OBS-Passwort fehlt oder ist ungültig. In OBS: Tools → WebSocket Server Settings → Show Connect Info, Passwort kopieren und oben in das Feld einfügen.",
     "erreurInjoignable": "OBS ist nicht erreichbar. Bitte prüfen, ob OBS geöffnet ist und der WebSocket-Server aktiviert ist (Tools → WebSocket Server Settings)."
   },
+  "obsWs": {
+    "ouvrir": "WebSocket & Optionen",
+    "titre": "OBS-Verbindung — das WebSocket",
+    "hint": "Alles, was über den OBS-Kanal läuft — für Neugierige. Nichts davon ist nötig: das Wichtigste regelt sich in der OBS-Sektion.",
+    "blocCestQuoi": "Was ist ein WebSocket?",
+    "intro": {
+      "p1": "Ein WebSocket ist ein bidirektionaler Kommunikationskanal, der einmal zwischen zwei Programmen geöffnet wird: Beide Seiten können jederzeit sprechen, ohne die Verbindung für jede Nachricht neu aufzubauen. 2011 für Webbrowser geboren (RFC 6455), ist es heute der Standard, um Software fernzusteuern.",
+      "p2": "OBS Studio bringt seit Version 28 (2022) einen obs-websocket-v5-Server mit: Über diesen Kanal spricht StreamOS mit OBS — so wie es ein Stream Deck täte. Vor OBS 28 war dieser Server ein separates Plugin mit einem inkompatiblen Protokoll (v4): StreamOS setzt daher OBS 28 oder neuer voraus.",
+      "p3": "Die Besonderheit von StreamOS: keine Dauerverbindung. Jede Aktion — eine Capture verschieben, den Stream starten, die Kamera wechseln — öffnet ein kurzes Gespräch, sendet ihre Anfrage und schließt wieder. Dutzende kurze Anrufe statt einer offenen Leitung: Wird OBS geschlossen und neu gestartet, geht nichts verloren — die nächste Aktion läuft von selbst weiter."
+    },
+    "blocEtat": "Verbindungsstatus",
+    "connexion": {
+      "ok": "Verbunden",
+      "enCours": "Verbinde…",
+      "hs": "Nicht verbunden"
+    },
+    "version": "Protokoll: obs-websocket v5 — OBS Studio 28 oder neuer erforderlich.",
+    "blocInventaire": "Was über das OBS-WebSocket läuft",
+    "inventaireHint": "Der Punkt spiegelt den tatsächlichen Status jeder Funktion wider. Dieses Panel ist kein Hauptschalter: Jede Funktion wird in ihrer eigenen Sektion gesteuert.",
+    "groupe": {
+      "diffusion": "Ausgabe & Captures",
+      "direct": "Live",
+      "modes": "Modi & Overlays"
+    },
+    "etat": {
+      "actif": "aktiv",
+      "inactif": "inaktiv",
+      "aLaDemande": "auf Abruf",
+      "liees": "{n} verknüpft"
+    },
+    "feat": {
+      "diffusion": {
+        "nom": "Ausgabequelle",
+        "desc": "Die Szene „SOS“ und die Browserquelle „SOS-Diffusion“ — die Seite, die die Zuschauer sehen, pixelgenau auf die OBS-Auflösung ausgerichtet."
+      },
+      "captures": {
+        "nom": "Capture-Fenster",
+        "desc": "Jedes ausgestanzte Widget verknüpft ein Fenster, ein Spiel oder einen Bildschirm in OBS — die Quelle folgt dem Widget bei jeder Bewegung."
+      },
+      "camera": {
+        "nom": "Kamera",
+        "desc": "Die Quelle „SOS-Caméra“, die per Maskenfilter direkt in OBS auf die Form des Rahmens zugeschnitten wird."
+      },
+      "fond": {
+        "nom": "App oder Spiel als Hintergrund",
+        "desc": "Eine Vollbild-Capture kann das Hintergrundmedium ersetzen — eine eigene Quelle pro Szene."
+      },
+      "direct": {
+        "nom": "Stream und Aufnahme",
+        "desc": "Die Start/Stopp-Buttons der OBS-Sektion steuern beide Ausgänge; ihr Status wird bei jeder Aktion neu gelesen."
+      },
+      "projecteur": {
+        "nom": "Vorschau-Projektor",
+        "desc": "Öffnet den OBS-Projektor auf dem gewählten Bildschirm — das Gegenstück zum Rechtsklick „Projektor öffnen“ in OBS."
+      },
+      "attente": {
+        "nom": "Wartebildschirm",
+        "desc": "Beim Start richtet StreamOS eine eigene Audioquelle in OBS ein — und kann den Desktop-Ton stummschalten (unten einstellbar)."
+      },
+      "jc": {
+        "nom": "Just Chatting",
+        "desc": "Positioniert die Kamera neu und blendet die anderen Captures in OBS für die Dauer des Modus aus — ohne die Szene anzufassen."
+      }
+    },
+    "blocReglages": "Einstellungen",
+    "reglages": {
+      "autoConnect": "Beim Start automatisch mit OBS verbinden",
+      "autoConnectDesc": "Abwählen, um OBS nur manuell über die OBS-Sektion zu verbinden.",
+      "fermerProj": "OBS-Projektoren beim Verbinden schließen",
+      "fermerProjDesc": "OBS öffnet die Projektorfenster der letzten Sitzung erneut; StreamOS schließt sie standardmäßig.",
+      "muterBureau": "Desktop-Ton während des Wartebildschirms stummschalten",
+      "muterBureauDesc": "Abwählen, damit der Desktop-Ton während des Wartebildschirms weiter im Stream läuft."
+    },
+    "blocHors": "Was NICHT über diesen Kanal läuft",
+    "hors": {
+      "l1": "Der Ausgabeserver (Port 4321): StreamOS' eigenes WebSocket — er liefert die Seite, die die Browserquelle liest.",
+      "l2": "Die Chats von Twitch, YouTube, Kick und TikTok: WebSockets und APIs der Plattformen.",
+      "l3": "Der Equalizer: aus dem Windows-Audio berechnet — obs-websocket liefert keine Audiopegel.",
+      "l4": "Capture-Miniaturen, Hardware-Erkennung und das Schließen der Projektorfenster: Windows-APIs."
+    }
+  },
   "scenes": {
     "creationRefusee": "Szenen-Erstellung abgelehnt: {erreur}",
     "ouvertureRefusee": "Szenen-Öffnen abgelehnt: {erreur}",
@@ -80,6 +162,13 @@
     "nomPackPrompt": "Name des Pakets?",
     "nomPackVide": "Paketname leer",
     "exportRefuse": "Export abgelehnt: {erreur}",
+    "exportSceneCourante": "Aktuelle Szene exportieren",
+    "exportToutZip": "Alles exportieren (.zip)",
+    "exportZipOk": "Export abgeschlossen: {chemin}",
+    "importPackDossier": "Ordnerpaket importieren",
+    "importToutZip": "Alles importieren (.zip)",
+    "importZipConflit": "„{nom}“ existiert bereits hier („{nomLocal}“).\n\nOK = durch die Sicherungsversion ersetzen\nAbbrechen = aktuelle Version behalten",
+    "importZipOk": "Import abgeschlossen: {scenes} Szene(n) wiederhergestellt, {medias} Medien, {sautees} übersprungen",
     "importRefuse": "Import abgelehnt: {erreur}"
   },
   "scene": {
@@ -127,6 +216,21 @@
     "titre": "Dieses Widget löschen?",
     "hint": "Diese Aktion kann nicht rückgängig gemacht werden."
   },
+  "confirmOuvrirScene": {
+    "titre": "Diese Szene öffnen?",
+    "hintNom": "Die Szene „{nom}“ wird im Stream angezeigt.",
+    "hintGenerique": "Diese Szene wird im Stream angezeigt."
+  },
+  "confirmObsOutput": {
+    "titreStreamStart": "Stream starten?",
+    "hintStreamStart": "Die OBS-Übertragung startet auf dem in OBS konfigurierten Dienst.",
+    "titreStreamStop": "Stream stoppen?",
+    "hintStreamStop": "Die laufende Übertragung wird beendet.",
+    "titreRecordStart": "Aufnahme starten?",
+    "hintRecordStart": "OBS beginnt mit der Aufnahme der Ausgabe.",
+    "titreRecordStop": "Aufnahme stoppen?",
+    "hintRecordStop": "Die laufende Aufnahme wird beendet und die Datei abgeschlossen."
+  },
   "gizmo": {
     "hautBas": "Oben/unten: {deg}°",
     "gaucheDroite": "Links/rechts: {deg}°",
@@ -152,15 +256,19 @@
     "titreFond": "App oder Spiel als Hintergrund",
     "titreWidget": "OBS-Quelle verknüpfen",
     "hintFond": "Die Aufnahme füllt den gesamten Szenenhintergrund hinter Ihren Widgets. Sie kann jederzeit geändert oder entfernt werden.",
-    "hintWidget": "Die Aufnahme (Kamera, Fenster oder Spiel) wird hinter dem Overlay platziert und durch das Aufnahmefenster des Widgets sichtbar.",
+    "hintWidget": "Die Aufnahme (Kamera, Fenster, Spiel oder Bildschirm) wird hinter dem Overlay platziert und durch das Aufnahmefenster des Widgets sichtbar.",
     "choisirType": "Quellentyp wählen:",
     "kind": {
       "camera": "Kamera",
       "window": "Fenster",
-      "game": "Spiel"
+      "game": "Spiel",
+      "monitor": "Bildschirm"
     },
     "retour": "Zurück",
-    "aucuneCible": "Kein PC-Ziel dieses Typs."
+    "aucuneCible": "Kein PC-Ziel dieses Typs.",
+    "filtrer": "Filtern…",
+    "ecranN": "Bildschirm {n}",
+    "principal": "primär"
   },
   "inputBinding": {
     "titre": "Controller-Tastenbelegung",
@@ -191,9 +299,14 @@
   "sceneBar": {
     "vosScenes": "Ihre Szenen",
     "nouvelle": "Szene",
-    "afficherTitre": "Titel anzeigen",
-    "masquerTitre": "Titel ausblenden",
-    "supprimerConfirm": "Löschen?"
+    "afficherScene": "Diese Szene anzeigen",
+    "masquerScene": "Diese Szene ausblenden!",
+    "supprimerConfirm": "Löschen?",
+    "nbWidgets": "Widgets: {n}",
+    "antenne": "Live",
+    "illisible": "Datei nicht lesbar",
+    "groupeMasquees": "Ausgeblendete Szenen",
+    "groupeVisibles": "Sichtbare Szenen"
   },
   "canvas": {
     "captureFond": "App-/Spielaufnahme als Hintergrund — von OBS gerendert",
@@ -206,10 +319,8 @@
     "aideCadres": "Linksklick auf Hintergrund oder Widget → „Rahmen anpassen…“ (linkes Panel)"
   },
   "consoModal": {
-    "titre": "Diagnose",
-    "tabApp": "Anwendung",
-    "tabAudience": "Publikum",
-    "hint": "Echte Messwerte, jede Sekunde aktualisiert. Die Kurven decken die letzten 5 Minuten ab — zum Ablesen eines Punkts darüberfahren. Nichts wird gespeichert: Alles bleibt im Arbeitsspeicher.",
+    "titre": "Leistung",
+    "hint": "Echte Messwerte, jede Sekunde aktualisiert. Die Kurven decken die letzten 5 Minuten ab — zum Ablesen eines Punkts darüberfahren. Nur die Blackbox wird auf die Festplatte geschrieben (lokal, wird nie gesendet).",
     "indisponible": "Messung nicht verfügbar — das Backend antwortet nicht.",
     "collecte": "Erfassung läuft — die Kurven erscheinen in wenigen Sekunden.",
     "meta": "{coeurs} Kerne • {s} s Verlauf",
@@ -226,7 +337,18 @@
     "ilYA": "vor {s} s",
     "courbe": "Kurve {nom}",
     "mo": "MB",
-    "go": "GB"
+    "go": "GB",
+    "boiteNoire": "Blackbox",
+    "sousTitreBoiteNoire": "Protokoll auf Ihrer Festplatte (1 Punkt / 5 s): übersteht einen Einfrierer oder Stromausfall. Wird nie gesendet.",
+    "boiteNoireVide": "Noch kein Punkt aufgezeichnet.",
+    "boiteNoireMeta": "{n} Punkte über {min} Min.",
+    "boiteNoireAge": "Letzter aufgezeichneter Punkt: vor {s} s",
+    "obsMuet": "OBS stumm {s} s",
+    "colHeure": "Zeit",
+    "colRamApp": "RAM App",
+    "colCpuApp": "CPU App",
+    "colRamSysteme": "RAM System",
+    "obsConnect": "OBS-Verbindungen: {n} · letzter Ursprung „{origine}“"
   },
   "audience": {
     "periode": "Zeitraum",
@@ -345,7 +467,83 @@
     "disposition": "Anordnung",
     "dispoAuto": "Auto",
     "dispoColonne": "Spalte",
-    "dispoLigne": "Zeile"
+    "dispoLigne": "Zeile",
+    "metronome": "Metronom",
+    "metronomeBpm": "BPM",
+    "metronomeVolume": "Lautstärke",
+    "metronomeTest": "Takt testen",
+    "metronomeHint": "Takt läuft während des Runs: startet mit dem Start, stoppt bei Pause, Reset und Ende. Nur hier, auf Ihrem Dashboard hörbar — nie im Stream.",
+    "exporter": "Splits exportieren",
+    "exportAucun": "Keine Splits zum Exportieren geladen",
+    "exportPartie": "Versuch Nr. {n}",
+    "exportStatutEnCours": "Läuft",
+    "exportStatutEnPause": "Pausiert",
+    "exportStatutTerminee": "Beendet",
+    "exportStatutArretee": "Gestoppt",
+    "exportTotal": "Gesamtzeit",
+    "exportColSplit": "Split",
+    "exportColSegment": "Segment",
+    "exportColTotal": "Gesamt",
+    "exportColDelta": "Δ vs. PB",
+    "exportSkip": "Skip",
+    "exportTagEnCours": "läuft",
+    "exportGenereLe": "Exportiert aus StreamOS am {date}"
+  },
+  "speedrunLayout": {
+    "titre": "Layout erstellen",
+    "hint": "Wie LiveSplits Layout Editor: steuert nur die inneren Elemente des Splitters. Sofortige Anwendung.",
+    "ouvrir": "Layout erstellen…",
+    "aucunWidget": "Wähle ein Speedrun-Widget, um sein Layout zu bearbeiten.",
+    "secGeneral": "Allgemein",
+    "disposition": "Anordnung",
+    "taillePolice": "Basisgröße",
+    "secEntete": "Kopfzeile",
+    "titreJeu": "Spieltitel",
+    "categorie": "Kategorie",
+    "pastilleStatut": "Statuspunkt",
+    "secTimer": "Timer",
+    "timerVisible": "Timer anzeigen",
+    "timerPrecision": "Genauigkeit",
+    "precSecondes": "Sekunden",
+    "precDixiemes": "Zehntel",
+    "precCentiemes": "Hundertstel",
+    "timerMethode": "Zeitmethode",
+    "methodeAuto": "Auto (Spiel > real)",
+    "methodeReal": "Echtzeit",
+    "methodeGame": "Spielzeit",
+    "timerCouleur": "Timerfarbe",
+    "couleurAuto": "Auto",
+    "secMeta": "Meta",
+    "phasePill": "Phasen-Anzeige",
+    "compteur": "Zähler „x / total“",
+    "barre": "Fortschrittsbalken",
+    "secSegments": "Segmente",
+    "colTemps": "Zeitspalte",
+    "tempsCumul": "Kumuliert (Split-Zeit)",
+    "tempsSegment": "Segmentdauer",
+    "colDelta": "Delta-Spalte",
+    "deltaCumul": "Kumuliert (Run vs PB)",
+    "deltaSegment": "Pro Segment",
+    "deltaOff": "Ausgeblendet",
+    "deltaPrecision": "Delta-Genauigkeit",
+    "deltaDrop": "Dezimalen ≥ 1 Min ausblenden",
+    "segBordure": "Segment-Rahmen",
+    "segBordEp": "Stärke (px)",
+    "segBordRayon": "Radius (px, leer = auto)",
+    "couleurAhead": "Farbe „vorne“",
+    "couleurBehind": "Farbe „hinten“",
+    "couleurActif": "Farbe aktiver Split",
+    "nbLignes": "Sichtbare Zeilen (0 = alle)",
+    "scrollAuto": "Auto-Scroll zum Aktiven",
+    "hauteurLigne": "Zeilenhöhe (px, leer = auto)",
+    "secPoints": "Validierungspunkte",
+    "pointsVisibles": "Validierungspunkte anzeigen",
+    "pointsHint": "Bei jedem geschafften Split: stylischer Pop für einige Sekunden an der Position des gemeinsamen Skeletts (Tab Position) — nummerierter Punkt + Abstand zum PB, grün = vor PB, rot = dahinter. Ein übersprungener Split ist rot.",
+    "pointsDureePop": "Pop-Dauer (s)",
+    "pointsSon": "Aktivierungston",
+    "pointsSonImporter": "Ton importieren",
+    "pointsSonRetirer": "Entfernen",
+    "pointsSonVolume": "Tonlautstärke {n} %"
   },
   "titreForm": {
     "textesParPosition": "Texte pro Position",
@@ -375,6 +573,12 @@
     "apercuVide": "Titel erscheinen hier"
   },
   "toolbar": {
+    "groupeScene": "Meine Szene",
+    "groupeConnexions": "Verbindungen",
+    "groupeDirect": "Live",
+    "groupeInteractions": "Interaktionen",
+    "groupeChaine": "Mein Kanal",
+    "groupeApplication": "App",
     "widgets": "Widgets",
     "creerWidget": "Widget erstellen",
     "creerChat": "Chat-Widget erstellen",
@@ -384,19 +588,23 @@
     "creerGoal": "Ziel-Widget erstellen",
     "creerMusique": "Musik-Widget erstellen",
     "hintEdition": "Widget oder Hintergrund zum Bearbeiten anklicken",
-    "connexions": "Verbindungen",
+    "connexions": "Plattformen",
     "chatOn": "Chat AN",
     "chatOff": "Chat AUS",
-    "interactions": "Live-Interaktionen",
-    "interactionsTitle": "Live-Interaktionen öffnen (Begrüßungsclips, Alerts, Zeitplan…)",
+    "interactions": "Interaktionen",
+    "interactionsTitle": "Interaktionen öffnen (Alerts, Begrüßungsclips, Befehle, Musik…)",
     "ecranAttente": "Wartebildschirm",
     "ecranAttenteTitle": "Wartebildschirm öffnen (Medium + Timer auf der Ausgabe)",
     "justChatting": "Just Chatting",
     "justChattingTitle": "Just Chatting umschalten (nur Kamera + Chat in der Ausgabe — die Szene wird nicht verändert)",
-    "moderation": "Kanal",
-    "moderationTitle": "Kanal-Steuerung",
-    "diagnostic": "Diagnose",
-    "diagnosticTitle": "Diagnose öffnen (Verbrauch, Publikum)",
+    "moderation": "Moderation",
+    "moderationTitle": "Moderation öffnen (Community, Rollen, Live-Steuerung)",
+    "planning": "Zeitplan",
+    "planningTitle": "Twitch-Zeitplan öffnen (Stream-Slots, Urlaub)",
+    "statistiques": "Statistiken",
+    "statistiquesTitle": "Zuschauerstatistiken der Streams öffnen",
+    "diagnostic": "Leistung",
+    "diagnosticTitle": "App-Leistung öffnen (CPU-/RAM-Verbrauch, Aktivität)",
     "preview": "Vorschau",
     "previewTitle": "Live-Miniatur der Ausgabe + OBS-Projektor — die Kopfzeile schaltet die Miniatur ein/aus",
     "previewFenetre": "Fenster",
@@ -412,13 +620,13 @@
     "streamStop": "Stream stoppen",
     "streamStart": "Stream starten",
     "obsTelecharger": "OBS Studio herunterladen",
-    "personnalisation": "Personalisierung",
+    "personnalisation": "Rahmen & Hintergrund",
     "fondChanger": "Hintergrundbild ändern",
     "fond": "Hintergrundbild",
     "fondRetirer": "Hintergrundbild entfernen",
     "fondDash": "Dashboard-Hintergrund",
     "fondDashTitle": "Hintergrundbild für das Dashboard importieren (der Canvas bleibt unberührt)",
-    "ergonomie": "Ergonomie",
+    "ergonomie": "Einstellungen",
     "guide": "Streamer-Guide",
     "guideTitle": "Guide öffnen — was StreamOS für Sie tut",
     "cadreActif": "Aktiver Rahmen (Widgets + App-Rand)",
@@ -440,7 +648,7 @@
       "fullscreen": "Vollbild"
     },
     "demarrageHint": "Monitor und Anzeigemodus beim Start — sofort angewendet. Im Fenstermodus werden letzte Position und Größe wiederhergestellt.",
-    "modules": "Module",
+    "modules": "HUD-Module",
     "modulesTitle": "HUD-Module der Szene öffnen (Uhr, laufende Musik, Stream-Ziele)"
   },
   "modules": {
@@ -458,13 +666,15 @@
       "horloge": "Uhr",
       "musique": "Laufende Musik",
       "objectifs": "Stream-Ziele",
-      "equaliseur": "Equalizer"
+      "equaliseur": "Equalizer",
+      "spots": "Lichtspots"
     },
     "hint": {
       "horloge": "Datum und Uhrzeit durch einen Strich getrennt, in Canvas-Pixeln. Kann auch direkt auf dem Canvas verschoben/vergrößert werden.",
       "musique": "Karte „Läuft gerade“ + Zeit-/Fortschritts-Bubble — gespeist aus der Musikwarteschlange (!rs).",
       "objectifs": "Zeilen „Metrik — Wert / Ziel“ mit Fortschrittsbalken. Jede Zeile = eine gemessene Metrik oder ein verknüpftes Twitch-Ziel.",
-      "equaliseur": "Audio-Spektrum-Overlay unten in der Übertragung: transluzente Neonbalken + Blasen, unter den Widgets. Wird nur in der Übertragung (OBS) gerendert — hier nur als positionierbarer Platzhalter."
+      "equaliseur": "Audio-Spektrum-Overlay unten in der Übertragung: transluzente Neonbalken + Blasen, unter den Widgets. Wird nur in der Übertragung (OBS) gerendert — hier nur als positionierbarer Platzhalter.",
+      "spots": "Zwei Bühnenstrahler in den oberen Ecken der Übertragung: langsames Schwenken, Neonfarben — sie beleuchten den Hintergrund, ohne je über die Widgets zu laufen. Wird nur in der Übertragung gerendert — statische Vorschau auf dem Canvas."
     },
     "horloge": {
       "date": "Datum anzeigen (TT / MM / JJ)",
@@ -495,6 +705,12 @@
       "couleursAuto": "Auto-Farben (Szenenrahmen)",
       "hintMicro": "Das Spektrum stammt vom Windows-Standard-Audioausgang (≈ „Desktop Audio“ in OBS); die Stimme fehlt ohne OBS-Monitoring — daher die eigene Mikrofonaufnahme.",
       "placeholder": "Equalizer — wird in der Übertragung gerendert"
+    },
+    "spots": {
+      "intensite": "Lichtintensität",
+      "vitesse": "Geschwindigkeit (Schwenk + Farben)",
+      "reagir": "Auf Musik reagieren",
+      "hintReagir": "Das Pulsieren nutzt das Audiospektrum — das Equalizer-Modul muss aktiv sein, um den Ton zu erfassen; sonst schwenken die Spots als Ambiente."
     }
   },
   "app": {
@@ -509,17 +725,24 @@
     "eaTitleActif": "Wartebildschirm aktiv — zum Öffnen der Steuerung klicken",
     "attentePause": "Warte (Pause)",
     "attente": "Warte",
+    "chrono2": "Timer",
+    "chrono2Title": "Timer 2 läuft — klicken, um Live-Interaktionen zu öffnen (Tab Nummernfeld)",
     "obsDabord": "Zuerst OBS verbinden (OBS-Abschnitt in der Seitenleiste)",
     "streamStop": "Streaming stoppen",
     "streamStart": "Streaming starten",
     "arreterApp": "Anwendung beenden",
     "redemarrerApp": "Anwendung neu starten",
     "refreshObs": "OBS / SOS-Diffusion aktualisieren",
-    "tailleUi": "Schriftgröße der Oberfläche"
+    "tailleUi": "Schriftgröße der Oberfläche",
+    "connectesPlat": "Plattform verbunden",
+    "connectesPlats": "Plattformen verbunden"
   },
   "widget": {
     "chatActif": "Chat aktiv",
     "camera": "Kamera",
+    "cameraMasquer": "Kamera ausblenden",
+    "cameraAfficher": "Kamera einblenden",
+    "cameraCachee": "Kamera ausgeblendet",
     "inputViewerObs": "Ihr Input Viewer wird in OBS angezeigt",
     "videoLectureObs": "Ihr Video läuft in OBS"
   },
@@ -531,6 +754,20 @@
     "deviceDefaut": "(Standardgerät)",
     "aucuneCamera": "Keine Kamera erkannt. Webcam prüfen?",
     "hintAndroidCam": "Android-Telefon: per USB anschließen, dann „Webcam“ in den USB-Optionen des Telefons wählen (Android 14+).",
+    "sectionForme": "Form",
+    "formeCadreScene": "Szenenrahmen",
+    "formeCercle": "Kreis",
+    "formeCarre": "Quadrat",
+    "cameraBord": "Rahmen um die Kamera",
+    "sectionVisibilite": "Sichtbarkeit",
+    "cameraDiffusion": "Kamera in der Ausgabe",
+    "cameraDiffusionHint": "Blendet die Kamera auf OBS-Seite aus, ohne das Widget zu löschen — wie das Auge in OBS. Der Bereich verschwindet vollständig (kein leerer Rahmen).",
+    "sectionFondVirtuel": "Virtueller Hintergrund",
+    "fondVert": "Virtueller Greenscreen",
+    "fondVertHint": "Das OBS-Plugin „Background Removal“ (kostenlos, 100 % lokal) wird beim ersten Aktivieren automatisch installiert. Die OBS-Szene scheint hinter dir durch.",
+    "fondVertInstalle": "Plugin installiert — OBS neu starten und neu verbinden: Der Greenscreen aktiviert sich von selbst.",
+    "fondVertInstallation": "Installation…",
+    "fondVertPluginAbsent": "Plugin „Background Removal“ nicht installiert — installiere es und aktiviere den Greenscreen erneut.",
     "tabContenu": "Inhalt",
     "tabTransformation": "Transformation",
     "tabEffets": "Effekte",
@@ -678,7 +915,8 @@
     }
   },
   "moderationModal": {
-    "titre": "Kanal",
+    "titre": "Moderation",
+    "plateformesBientot": "Kick, TikTok und Trovo kommen bald",
     "connecterTwitch": "Twitch verbinden zum Moderieren.",
     "scopesManquants": "Fehlende Scopes für die Moderation.",
     "reconnecter": "Twitch für die Moderation neu verbinden",
@@ -689,6 +927,7 @@
     "secBannis": "Gebannt",
     "secMessages": "Nachrichten",
     "secUnfollows": "Unfollows",
+    "secDirect": "Live-Steuerung",
     "chaine": "Kanal",
     "aucunType": "keine",
     "viewersLive": "Live-Zuschauer",
@@ -789,21 +1028,21 @@
     "bientot": "Bald verfügbar"
   },
   "interactions": {
-    "titre": "Live-Interaktionen",
-    "tabBienvenue": "Begrüßungsclip",
+    "titre": "Interaktionen",
+    "tabBienvenue": "Begrüßung",
     "tabBandeau": "Erste-Nachricht-Banner",
     "tabAlertes": "Alerts",
     "tabCommandes": "Befehle",
-    "tabPad": "Numpad",
+    "tabPad": "Soundboard",
     "tabPresentation": "Präsentation",
-    "tabPlanning": "Zeitplan",
     "tabMusique": "Musik",
-    "tabPosition": "Positions-Skelett",
+    "tabFight": "Arena",
+    "tabPosition": "Overlay-Position",
     "bienvenue": {
       "secFile": "Warteschlange",
       "secAttribution": "Zuweisung",
       "actifs": "Aktivierte Begrüßungsclips",
-      "utiliserSquelette": "Positions-Skelett verwenden",
+      "utiliserSquelette": "Overlay-Position verwenden",
       "utiliserSqueletteHint": "Deaktiviert: schwarzer Vollbild-Schleier, Avatar als 3-s-Intro, dann zentrierter Clip (85 % des Bildschirms)",
       "dureeAffichage": "Anzeigedauer",
       "naturelle": "Natürlich",
@@ -854,7 +1093,7 @@
       "testMessage": "Dies ist meine erste Nachricht!"
     },
     "alertes": {
-      "hintIntro": "Twitch, YouTube, Kick und TikTok: Follows, Subs, Raids, Bits, Gifts und Spenden lösen Alerts in der Ausgabe aus. Twitch-Follows werden in Echtzeit erkannt (EventSub). Wählen Sie links einen Typ, um Medium, Text und Verhalten einzustellen. Position/Größe des Overlays wird im Tab „Positions-Skelett“ eingestellt (mit den Begrüßungsclips geteilt).",
+      "hintIntro": "Twitch, YouTube, Kick und TikTok: Follows, Subs, Raids, Bits, Gifts und Spenden lösen Alerts in der Ausgabe aus. Twitch-Follows werden in Echtzeit erkannt (EventSub). Wählen Sie links einen Typ, um Medium, Text und Verhalten einzustellen. Position/Größe des Overlays wird im Werkzeug „Overlay-Position“ eingestellt (mit den Begrüßungsclips geteilt).",
       "desactiverType": "Diesen Alert-Typ deaktivieren",
       "activerType": "Diesen Alert-Typ aktivieren",
       "variablesHint": "Variablen: {vars}",
@@ -871,7 +1110,8 @@
       }
     },
     "commandes": {
-      "hintIntro": "Im Chat getippte Befehle (z. B. !hype). Wenn ein Zuschauer den Befehl tippt, erscheint er als Overlay in der Ausgabe (gleiche Engine wie Alerts: Warteschlange, Cooldowns, SVG-Rahmen). Position/Größe wird im Tab „Positions-Skelett“ eingestellt.",
+      "navChat": "Chat-Befehle",
+      "hintIntro": "Im Chat getippte Befehle (z. B. !hype). Wenn ein Zuschauer den Befehl tippt, erscheint er als Overlay in der Ausgabe (gleiche Engine wie Alerts: Warteschlange, Cooldowns, SVG-Rahmen). Position/Größe wird im Werkzeug „Overlay-Position“ eingestellt.",
       "activer": "Diesen Befehl aktivieren",
       "desactiver": "Diesen Befehl deaktivieren",
       "titreBloc": "Befehl",
@@ -881,7 +1121,36 @@
       "tester": "Befehl testen",
       "supprimerTitle": "Diesen Befehl löschen",
       "aucuneSelection": "Kein Befehl ausgewählt — erstellen Sie einen.",
-      "defautTemplate": "{pseudo} startet {commande}!"
+      "defautTemplate": "{pseudo} startet {commande}!",
+      "nomPackPrompt": "Paketname?",
+      "nomPackVide": "Paketname leer",
+      "exportRefuse": "Export abgelehnt: {erreur}",
+      "importConflit": "„{cmd}\" existiert bereits — durch den Befehl aus dem Paket ersetzen?",
+      "ecraser": "Überschreiben",
+      "ignorer": "Ignorieren",
+      "importReserves": "Für Musik reservierte Namen, ignoriert: {noms}",
+      "hintMedia": "Bild = Bild + Text · Video = Video (Ton inklusive) + Text · Kein = Symbol + Text · Ein importierter Sound wird in allen Modi darüber abgespielt.",
+      "sonVideo": "Videoton",
+      "reponsesChat": "Chat-Bestätigung (nur Twitch)"
+    },
+    "cadres": {
+      "navCadres": "Rahmen",
+      "hintIntro": "Ein Zuschauer tippt « !cadres <farbe> » in den Chat, um die Leuchtfarbe (Verlaufsende) des Szenenrahmens zu ändern — z. B. « !cadres green ». Funktioniert auf allen verbundenen Plattformen; die Bestätigung wird nur auf Twitch gepostet. Form und Position des Rahmens bleiben unverändert.",
+      "activation": "Aktivierung",
+      "activer": "Rahmen-Befehl aktivieren",
+      "desactiver": "Rahmen-Befehl deaktivieren",
+      "hintActif": "{cmd} <farbe> antwortet im Chat.",
+      "hintInactif": "Der Befehl wird im Chat ignoriert.",
+      "nom": "Befehl",
+      "hintCommande": "Zuschauer tippen {cmd} <farbe>. Der Name darf keinen bestehenden Chat-, Musik- oder Arena-Befehl verwenden.",
+      "reponsesChat": "Chat-Bestätigungen (nur Twitch)",
+      "hintCooldown": "Obligatorischer globaler Cooldown: 60 Sekunden zwischen zwei Änderungen (nicht deaktivierbar).",
+      "paletteTitre": "Verfügbare Farben ({n})",
+      "hintPalette": "Geschlossene Liste: der Zuschauer tippt den englischen NAMEN — z. B. {cmd} violet. Die Farbe ersetzt das Verlaufsende des aktiven Rahmens.",
+      "sauveKo": "Speichern fehlgeschlagen: {erreur}",
+      "tester": "Diese Farbe auf der Szene testen",
+      "stopTest": "Test beenden (stellt die Farbe wieder her)",
+      "pasCadre": "Kein aktiver Rahmen auf der Szene — Test deaktiviert"
     },
     "musique": {
       "titreInfo": "So funktioniert es",
@@ -935,8 +1204,63 @@
       "confirmer": "Bestätigen",
       "annuler": "Abbrechen"
     },
+    "fight": {
+      "titreInfo": "Emoji-Arena — 1v1-Kämpfe per Chat gesteuert",
+      "intro": "Ein Zuschauer tippt „!fight“, um eine Herausforderung zu starten: offen (das erste „!accept“ tritt bei), gezielt („!fight @name“ — der Herausgeforderte nimmt an oder lehnt ab) oder gegen den Computer („!fight bot“). Beide Emojis erscheinen unten in der Ausgabe mit ihren Lebensbalken.",
+      "introCoups": "Rundenbasiert: Der aktive Spieler hat einige Sekunden, um einen Zug zu tippen — schnell (sicher, wenig Schaden), schwer (riskant, viel Schaden) oder Spezial (Lebensraub, einmal pro Kampf). Eine nicht gespielte Runde wird automatisch übersprungen (Anti-AFK), und der Kampf ist zeitlich begrenzt: Bei Zeitablauf gewinnt der höchste HP-Stand.",
+      "introMulti": "Plattformübergreifend: Ein Twitch-Zuschauer kann in derselben Arena gegen einen Kick-, YouTube- oder TikTok-Zuschauer kämpfen. Außerhalb von Twitch wird keine Antwort im Chat gepostet — das Overlay zeigt alles (Herausforderungen, Runden, Ergebnisse).",
+      "enCours": "Kampf",
+      "aucunePartie": "Kein Kampf läuft — ein Zuschauer kann „!fight“ im Chat tippen.",
+      "phaseLobby": "Herausforderung ausstehend",
+      "phaseCombat": "Kampf läuft",
+      "phaseFin": "Kampf beendet",
+      "phaseIdle": "Wartend",
+      "tester": "Testen (vs BOT)",
+      "stop": "Stopp erzwingen",
+      "confirmStop": "Den laufenden Kampf oder die Herausforderung abbrechen?",
+      "reglages": "Einstellungen",
+      "actif": "Arena aktiv (Kampfbefehle antworten im Chat)",
+      "commandeFight": "Herausforderung starten",
+      "commandeAccept": "Annehmen",
+      "commandeRefuse": "Ablehnen",
+      "commandeA": "Schneller Angriff",
+      "commandeB": "Schwerer Angriff",
+      "commandeC": "Spezialangriff",
+      "commandeFf": "Aufgeben",
+      "commandeStop": "Stopp erzwingen (Mods)",
+      "vieMax": "Lebenspunkte",
+      "dureeLobby": "Wartezeit Gegner (s)",
+      "dureeTour": "Zeit pro Runde (s)",
+      "dureeMatch": "Max. Kampfdauer (s)",
+      "cooldown": "Cooldown pro Zuschauer (s, 0 = aus)",
+      "reponsesChat": "Chat-Bestätigungen (nur Twitch)",
+      "annonceTour": "Jeden Zug im Chat ankündigen (Twitch)",
+      "rappelTour": "An die letzten 5 Sekunden erinnern (Twitch)",
+      "animationsReduites": "Animationen reduzieren (Treffer, Erschütterungen)",
+      "accueilTitre": "Begrüßungsnachricht für den Chat",
+      "copierAccueil": "Nachricht kopieren",
+      "previsualiserAide": "Hilfe anzeigen",
+      "copieOk": "Nachricht kopiert",
+      "copieKo": "Kopieren fehlgeschlagen",
+      "specialUtilise": "Spezial verbraucht",
+      "enregistrer": "Einstellungen speichern",
+      "sauveOk": "Einstellungen gespeichert",
+      "sauveKo": "Speichern fehlgeschlagen",
+      "testOk": "Testkampf in der Ausgabe gestartet",
+      "testKo": "Test konnte nicht gestartet werden (läuft bereits ein Kampf?)",
+      "cooldownsActifs": "Zuschauer im Cooldown ({n}):",
+      "hintModeration": "Der Stopp-Befehl im Chat ist Ihnen und Ihren Moderatoren vorbehalten. Befehlsnamen müssen eindeutig sein und dürfen keinen vorhandenen Chat- oder Musik-Befehl übernehmen (und umgekehrt).",
+      "confirmer": "Bestätigen",
+      "annuler": "Abbrechen",
+      "gagnant": "Gewinner: {pseudo}",
+      "egalite": "Perfektes Unentschieden!",
+      "matchAfk": "Kampf abgebrochen — Inaktivität",
+      "matchStop": "Kampf von einem Moderator gestoppt",
+      "vs": "VS",
+      "bot": "BOT"
+    },
     "pad": {
-      "hintIntro": "Numpad: 16 Tasten × 3 Bereiche. Eine Taste des Ziffernblocks löst einen Sound, ein Bild oder ein Video als Overlay in der Ausgabe aus. + und - des Numpads wechseln den Bereich. Position/Größe wird im Tab „Positions-Skelett“ eingestellt (mit Begrüßungsclips/Alerts/Befehlen geteilt). Audio wird auf beiden Seiten abgespielt: Ausgabe (OBS nimmt für die Zuschauer auf) + Dashboard (hörbar auf Ihrem PC).",
+      "hintIntro": "Numpad: 16 Tasten × 3 Bereiche. Eine Taste des Ziffernblocks löst einen Sound, ein Bild oder ein Video als Overlay in der Ausgabe aus. + und - des Numpads wechseln den Bereich. Position/Größe wird im Werkzeug „Overlay-Position“ eingestellt (mit Begrüßungsclips/Alerts/Befehlen geteilt). Audio wird auf beiden Seiten abgespielt: Ausgabe (OBS nimmt für die Zuschauer auf) + Dashboard (hörbar auf Ihrem PC).",
       "activation": "Aktivierung",
       "desactiver": "Pad deaktivieren",
       "activer": "Pad aktivieren",
@@ -952,7 +1276,15 @@
       "toucheTitre": "Taste {touche} (Bereich {plage})",
       "hintTouche": "Diese Numpad-Taste drücken, um das Medium auszulösen.",
       "hintMedia": "Audio = nur Sound (Ausgabe + Dashboard) · Bild = Bild + separater Sound · Video = Video (Ton inklusive, Ausgabe).",
+      "hintChrono": "Der Timer startet beim Drücken der Taste bei null, erscheint in der Ausgabe an der Position seines eigenen Skeletts (Tab Positionsskelett) und verschwindet bei Erreichen der Zieldauer. Ein erneuter Druck setzt ihn auf null zurück.",
+      "chronoDuree": "Zieldauer (s)",
+      "chronoSonDepart": "Startton",
+      "chronoSonFin": "Endton",
       "volume": "Lautstärke {n} %",
+      "pleinEcran": "Vollbild",
+      "transparence": "Transparenz",
+      "opacite": "Deckkraft {n}%",
+      "hintPleinEcran": "Vollbild: Das Medium bedeckt die gesamte Ausgabe-Canvas, ohne Rahmen. Mit Transparenz bleibt die Szene dahinter sichtbar (Überlagerung).",
       "tester": "Taste testen",
       "reinitialiserTitle": "Diese Taste zurücksetzen",
       "testHint": "Der Test löst die Taste in der Ausgabe aus + spielt lokales Audio.",
@@ -992,10 +1324,18 @@
       "aucunePresentation": "Keine aktive Präsentation — starten Sie eine über Suche oder Favoriten."
     },
     "position": {
+      "titreOutil": "Gemeinsame Overlays positionieren",
       "hintIntro": "Position und Größe des gemeinsamen Skeletts der Overlays „Begrüßungsclip“ und „Alerts“. Ziehen zum Verschieben, Ecken zum Skalieren. Die Position wird live auf die Ausgabe angewendet.",
       "overlay": "Overlay",
       "hintGlisser": "Ziehen zum Verschieben · Ecken zum Skalieren · Canvas {w}×{h}",
       "hauteurRef": "Höhe (Ref.)",
+      "tester": "Rendering testen",
+      "titreChrono": "Timer 2 (eigenes Skelett)",
+      "chrono": "Timer 2",
+      "hintChrono": "Position des zweiten Timers, ausgelöst über eine Timer-Taste des Nummernfelds. Unabhängig vom gemeinsamen Overlay-Skelett.",
+      "titreSplitpop": "Split-Pop (eigenes Skelett)",
+      "splitpop": "Split-Pop",
+      "hintSplitpop": "Position des Validierungs-Pops, der bei jedem absolvierten Split während eines Speedruns erscheint. Unabhängig vom gemeinsamen Skelett: Der Pop erscheint oft und darf keine Alerts überdecken.",
       "pos": {
         "haut-gauche": "Oben-links",
         "haut-centre": "Oben-Mitte",
@@ -1012,7 +1352,11 @@
     "testSuppression": "Test & Löschung",
     "testHint": "Der Test umgeht Cooldowns. Ohne Medium: Symbol + Text."
   },
+  "statistiques": {
+    "titre": "Statistiken"
+  },
   "planning": {
+    "titre": "Zeitplan",
     "connecterTwitch": "Twitch verbinden, um den Zeitplan zu verwalten.",
     "scopesManquants": "Fehlende Twitch-Rechte für den Zeitplan (channel:manage:schedule). Konto neu verbinden, um sie zu erteilen.",
     "reconnecter": "Twitch neu verbinden",
@@ -1078,6 +1422,7 @@
     "tournezPages": "Blättern Sie um",
     "chapitres": {
       "comprendre": "StreamOS verstehen",
+      "vieprivee": "Ihre Daten, bei Ihnen",
       "reglages": "Die drei Start-Einstellungen",
       "reperer": "Sich in der App zurechtfinden",
       "chat": "Der Chat",
@@ -1102,7 +1447,26 @@
         "l1": "**Dynamische und interaktive** Szenen: ein Spiel oder fünfzig — der Wechsel ist flüssig, mit oder ohne Stream Deck — und alles wird **gespeichert**, Widget für Widget, bis zum App-Hintergrund.",
         "l2": "Regelmäßig erweiterte **dekorative Rahmen**, die Ihrem Stream Tiefe verleihen.",
         "l3": "Importieren Sie Ihre **Medien** im Handumdrehen, neigen Sie sie in **3D**, formen Sie sie nach Belieben.",
+        "l4": "Manche Einstellungen sind **nur für Sie**: das **Metronom** des Splitters ist nur auf dem Dashboard hörbar, nie im Stream. Andere sind **für Ihre Zuschauer**: Alerts, Banner, Wartebild — nur in der Diffusion sichtbar.",
         "note": "Element verschieben oder skalieren: Die Ausgabe in OBS aktualisiert sich **live**."
+      },
+      "vieprivee": {
+        "titre": "Ihre Daten bleiben bei Ihnen",
+        "p1": "StreamOS **hat keine eigenen Server** und sammelt nichts: Alles, was die App speichert, bleibt auf Ihrem PC — und verlässt ihn nie.",
+        "l1": "Ihre **Szenen, Einstellungen und Statistiken** sind lokale Dateien im App-Ordner — für Sie einsehbar.",
+        "l2": "Ihre **Konten** liegen im **Windows-Tresor**, niemals in einer Klartext-Datei.",
+        "l3": "Was ins Netz geht: ausschließlich zu den Plattformen, die **Sie** verbinden (Twitch, YouTube, Kick, TikTok).",
+        "l4": "**Keine Tracker**, keine Nutzungsanalysen, keine gesendeten Berichte: Ihre Zuschauerdaten dienen nur Ihnen.",
+        "note": "Das ist der Unterschied zu Online-Regien: Hier gibt es nichts zu verkaufen."
+      },
+      "sauvegardes": {
+        "titre": "Ihre Dateien, Ihre Regeln",
+        "p1": "Jede Szene ist eine **Datei auf Ihrem PC**, die bei jeder Änderung **automatisch gespeichert** wird — Sie müssen nie ans Speichern denken.",
+        "l1": "Oben im Fenster verwandeln die Schaltflächen **Exportieren / Importieren** eine Szene in einen **portablen Ordner** (Szene + Medien): Ihr Backup, überall hin mitnehmbar.",
+        "l2": "**Importieren** Sie ein Paket jederzeit zurück — auf einem anderen PC, nach einer Neuinstallation oder einfach als Rückfall.",
+        "l3": "**Duplizieren** Sie eine Szene (Rechtsklick auf ihren Namen), bevor Sie sie verändern: Das Original bleibt unangetastet.",
+        "l4": "Sensible Aktionen **erfordern eine Bestätigung**: Szene oder Widget löschen, versteckte Szene öffnen — nichts geht versehentlich verloren.",
+        "note": "Profi-Tipp: Exportieren Sie Ihre fertigen Szenen — Ihre Absicherung für den Notfall."
       },
       "premierPas": {
         "titre": "Erster Schritt",
@@ -1144,27 +1508,27 @@
       },
       "barreLaterale": {
         "titre": "Die Seitenleiste von oben nach unten",
-        "p1": "Alles wird über das **linke Panel** gesteuert. Es öffnet sich jeweils nur ein Abschnitt; die anderen sind einfache Schaltflächen, die ein Fenster öffnen.",
-        "l1": "**Widgets**: ein Widget erstellen (Medium, Chat, Kamera, Input Viewer, Speedrun, Ziel, Musik).",
-        "l2": "**Verbindungen**: Twitch, YouTube, Kick, TikTok — ein grüner Punkt pro verbundener Plattform.",
-        "l3": "**Live-Interaktionen**, **Wartebildschirm**, **Just Chatting**, **Kanal**, **Diagnose**: die Fenster zur Stream-Steuerung.",
-        "l4": "**OBS**: Verbindung, Stream und Aufnahme.",
-        "l5": "**Vorschau**: Miniatur dessen, was Ihre Zuschauer sehen.",
-        "l6": "**Personalisierung**: Rahmen und Hintergrundbild. Ganz unten der **Streamer-Guide** (dieses Buch), direkt über **Ergonomie**: Dashboard-Hintergrund, Fenster und Shortcut-Leiste.",
-        "note": "Jeder geöffnete Abschnitt übernimmt die Farbe seiner Karte: blau für Widgets, grün für Verbindungen, gold für OBS…"
+        "p1": "Alles wird über das **linke Panel** gesteuert, in **sechs Gruppen** geordnet. Es öffnet sich jeweils nur ein Abschnitt; die anderen Einträge sind einfache Schaltflächen, die ein Fenster öffnen.",
+        "l1": "**Meine Szene**: **Widgets** (Medium, Chat, Kamera, Input Viewer, Speedrun, Ziel, Musik), **HUD-Module** (Uhr, laufende Musik, Stream-Ziele) und **Rahmen & Hintergrund** (SVG-Rahmen, Hintergrundbild).",
+        "l2": "**Verbindungen**: **OBS** (Verbindung, Stream, Aufnahme), dann **Plattformen** (Twitch, YouTube, Kick, TikTok — ein grüner Punkt pro verbundener Plattform).",
+        "l3": "**Live**: **Vorschau** (was Ihre Zuschauer sehen), **Wartebildschirm** und **Just Chatting**.",
+        "l4": "**Interaktionen**: Alerts, Begrüßungsclips, Befehle und Soundboard, Präsentation, vom Chat gewünschte Musik.",
+        "l5": "**Mein Kanal**: **Moderation** (Rollen, Banns, Live-Steuerung), Twitch-**Zeitplan** und Zuschauer-**Statistiken**.",
+        "l6": "Ganz unten, **App**: **Einstellungen** (Dashboard-Hintergrund, Fenster, Shortcut-Leiste), **Leistung** (App-Verbrauch) und der **Streamer-Guide** (dieses Buch).",
+        "note": "Jeder geöffnete Abschnitt übernimmt die Farbe seiner Karte: blau für Widgets, grün für Plattformen, gold für OBS…"
       },
       "scenes": {
         "titre": "Ihre Szenen",
         "p1": "Die obere Leiste listet **Ihre Szenen**. Klicken Sie auf „**Ihre Szenen**“ zum Aufklappen, dann auf einen Namen zum Öffnen: Die Ausgabe schaltet sofort um.",
         "l1": "„**Szene**“ erstellt eine neue Szene, aus einer Vorlage oder einer leeren Seite.",
-        "l2": "Ein **Rechtsklick** auf eine Szene: **Umbenennen**, **Duplizieren**, **Titel anzeigen / ausblenden**, **Löschen**.",
+        "l2": "Ein **Rechtsklick** auf eine Szene: **Umbenennen**, **Duplizieren**, **Szene anzeigen / ausblenden**, **Löschen**.",
         "l3": "**Ziehen** Sie eine Szene, um ihre Reihenfolge in der Leiste zu ändern.",
         "l4": "Das Löschen fragt immer nach einer Bestätigung — nichts geht versehentlich verloren.",
         "note": "Jede Szene behält ihre eigenen Widgets, ihren Hintergrund und ihren Rahmen: Beim Wechsel wird nichts vermischt."
       },
       "plateformes": {
         "titre": "Jede Plattform verbinden",
-        "p1": "Abschnitt **Verbindungen** der Seitenleiste. Jede Zeile hat ihren Punkt: grau = getrennt, grün = online.",
+        "p1": "Abschnitt **Plattformen** (Gruppe **Verbindungen**) der Seitenleiste. Jede Zeile hat ihren Punkt: grau = getrennt, grün = online.",
         "l1": "**Twitch** und **YouTube**: Klicken Sie auf **Verbinden**, ein Code erscheint — geben Sie ihn auf der angegebenen Webseite ein, fertig. In StreamOS wird nie ein Passwort getippt.",
         "l2": "**Kick**: Geben Sie Ihren Kanalnamen ein (wie er in der Adresse kick.com/… erscheint), dann **Verbinden**.",
         "l3": "**TikTok**: Geben Sie Ihren Nutzernamen ein, dann **Verbinden**. Der Live muss laufen.",
@@ -1207,29 +1571,29 @@
       "cadres": {
         "titre": "SVG-Rahmen",
         "p1": "**Eine einzige Einstellung** kleidet alle Widgets und den Szenenrand: gleicher Stil, gleiche Farbe, überall.",
-        "p2": "Öffnen Sie den Rahmen-Dialog im Abschnitt **Personalisierung** der Seitenleiste: Das gewählte Modell wird live auf die Ausgabe angewendet.",
+        "p2": "Öffnen Sie den Rahmen-Dialog im Abschnitt **Rahmen & Hintergrund** der Seitenleiste: Das gewählte Modell wird live auf die Ausgabe angewendet.",
         "note": "Alerts und Banner übernehmen automatisch die **Farben des aktiven Rahmens**."
       },
       "cadresModale": {
         "titre": "Das Fenster „Ihre Rahmen“",
         "p1": "Neun Stile zur Wahl — Abgerundet, Quadrat, MGStyle, Cyberpunk, Story, Thin Line, Sechseck, Arena, Tribal — jeder mit seiner Farbe und Stärke.",
-        "e1": "Seitenleiste → **Personalisierung** → „**Ihre Rahmen**“. Klicken Sie einen Stil in der Galerie: Die Vorschau aktualisiert sich.",
+        "e1": "Seitenleiste → **Rahmen & Hintergrund** → „**Ihre Rahmen**“. Klicken Sie einen Stil in der Galerie: Die Vorschau aktualisiert sich.",
         "e2": "Stellen Sie die **Stärke** und den Farb-**Verlauf** ein. Aktivieren Sie „**Animation**“, wenn sich der Verlauf bewegen soll.",
         "e3": "Klicken Sie auf „**Rahmen aktiviert**“: Er gilt für alle Ihre Widgets. „**App-Rand**“ legt denselben Rahmen um die ganze Ausgabe.",
         "note": "Ein Widget kann eine Ausnahme sein: in seiner Karte „**Rahmen dieses Widgets entfernen**“."
       },
       "alertes": {
         "titre": "Alerts & Begrüßungsclip",
-        "p1": "Seitenleiste → „**Live-Interaktionen**“. Dieses Fenster bündelt alles, was während des Streams auf Ihre Zuschauer reagiert.",
+        "p1": "Seitenleiste → „**Interaktionen**“. Dieses Fenster bündelt alles, was während des Streams auf Ihre Zuschauer reagiert.",
         "l1": "Tab **Alerts**: Follow, Raid, Sub, Resub, verschenkter Sub, Bits (Twitch) — plus TikTok-Gifts, Kick-Subs/-Raids und YouTube-SuperChats/-Mitglieder. Wählen Sie links einen Typ, dann sein Medium, seinen Text und aktivieren Sie ihn. „**Alert in der Ausgabe testen**“ spielt ihn ab, ohne auf einen echten Follow zu warten.",
-        "l2": "Tab **Begrüßungsclip**: ein Clip, der abgespielt wird, wenn ein Follower im Chat ankommt. „**Automatische Zuweisung**“ gibt jedem einen Clip; Sie können den Clip auch von Hand wählen, Zuschauer für Zuschauer.",
-        "l3": "Tab **Positions-Skelett**: Ziehen Sie das Overlay dorthin, wo Sie es auf dem Bildschirm wollen — die Position gilt für Alerts, Clips und Befehle.",
+        "l2": "Tab **Begrüßung**: ein Clip, der abgespielt wird, wenn ein Follower im Chat ankommt. „**Automatische Zuweisung**“ gibt jedem einen Clip; Sie können den Clip auch von Hand wählen, Zuschauer für Zuschauer.",
+        "l3": "Werkzeug „**Overlay-Position**“ (oben im Fenster): Ziehen Sie das Overlay dorthin, wo Sie es auf dem Bildschirm wollen — die Position gilt für Alerts, Clips und Befehle.",
         "note": "Alles läuft auf der **OBS-Ausgabe**, nie im Dashboard: Prüfen Sie es über die Vorschau."
       },
       "bandeau": {
         "titre": "Erste-Nachricht-Banner",
         "p1": "Ein Banner hebt die **erste Nachricht** jedes Zuschauers in Ihrem Chat hervor, plattformübergreifend. Genug, um jeden Neuankömmling zu begrüßen.",
-        "e1": "**Live-Interaktionen** → Tab **Erste-Nachricht-Banner** → „**Erste-Nachricht-Banner aktiviert**“ ankreuzen.",
+        "e1": "**Interaktionen** → Tab **Begrüßung** → „**Erste-Nachricht-Banner**“ → „**Erste-Nachricht-Banner aktiviert**“ ankreuzen.",
         "e2": "Wählen Sie **Oben** oder **Unten** am Bildschirm und die **Anzeigedauer** (2 bis 20 Sekunden).",
         "e3": "„**Banner testen**“ zeigt ein fiktives Banner in der Ausgabe zur Kontrolle.",
         "note": "Neuer Stream? „**Sitzung zurücksetzen**“ macht alle Zuschauer wieder zu „Ersten“ — sonst löst ein Stammzuschauer das Banner nie erneut aus."
@@ -1266,16 +1630,24 @@
       "plusLoin": {
         "titre": "Und außerdem…",
         "p1": "Die Haupttour ist geschafft. Der Rest entdeckt sich in der App, jedes Fenster erklärt, was es tut.",
-        "l1": "**Kanal**: Twitch- und YouTube-Moderation — bannen, VIP, Moderatoren, Stream-Titel und -Kategorie, Werbung, Shield-Modus.",
-        "l2": "**Live-Interaktionen** → **Befehle**, **Numpad**, **Präsentation**, Twitch-**Zeitplan**, **Musik** auf Wunsch Ihrer Zuschauer mit „!rs“.",
+        "l1": "**Moderation**: Twitch- und YouTube-Moderation — bannen, VIP, Moderatoren, Stream-Titel und -Kategorie, Werbung, Shield-Modus.",
+        "l2": "**Interaktionen** → **Befehle** (Chat und **Soundboard**), **Präsentation**, **Musik** auf Wunsch Ihrer Zuschauer mit „!rs“. Der Twitch-**Zeitplan** hat einen eigenen Eintrag in „Mein Kanal“.",
         "l3": "**Ziel**-Widgets (Follower, Subs…), **Speedrun** (Chrono-Splitter), **Input Viewer** (Tastatur, Maus, Controller auf dem Bildschirm).",
-        "l4": "**Diagnose**: CPU- und Speicherverbrauch von StreamOS, live.",
-        "l5": "**Ergonomie** → **Shortcut-Leiste**: eine kleine Leiste, immer sichtbar, sogar über dem Spiel.",
+        "l4": "**Leistung**: CPU- und Speicherverbrauch von StreamOS, live — und **Statistiken** für das Publikum Ihrer Streams.",
+        "l5": "**Einstellungen** → **Shortcut-Leiste**: eine kleine Leiste, immer sichtbar, sogar über dem Spiel.",
         "l6": "Der **Sprach**-Wähler oben: Die App spricht acht Sprachen."
+      },
+      "websocket": {
+        "titre": "Unter der Haube: das WebSocket",
+        "p1": "Wie spricht StreamOS mit OBS? Über ein **WebSocket**: einen Kommunikationskanal zwischen den beiden Programmen, über den jede Seite jederzeit Nachrichten senden kann.",
+        "l1": "OBS bringt diesen Kanal seit **Version 28** mit — deshalb ist eine aktuelle Version nötig.",
+        "l2": "StreamOS hält **keine Leitung offen**: Jede Aktion ist ein kurzer Austausch, dann schließt die Verbindung.",
+        "l3": "Captures, Kamera, Stream, Projektor, Wartebildschirm… **fast alles, was OBS berührt**, läuft über diesen Kanal.",
+        "note": "Mehr Details? OBS-Sektion → „**WebSocket & Optionen**“: das komplette Inventar in Echtzeit."
       },
       "fin": {
         "titre": "Jetzt sind Sie dran",
-        "p1": "Der Rest entdeckt sich Abschnitt für Abschnitt in der **Seitenleiste**: Verbindungen, Widgets, Personalisierung… **Happy Streaming!**"
+        "p1": "Der Rest entdeckt sich Abschnitt für Abschnitt in der **Seitenleiste**: Verbindungen, Widgets, Einstellungen… **Happy Streaming!**"
       }
     }
   }
