@@ -35,7 +35,8 @@ use windows::Win32::Media::MediaFoundation::{
     MFT_OUTPUT_STREAM_PROVIDES_SAMPLES, MFVideoFormat_ARGB32, MFVideoFormat_AV1,
     MFVideoFormat_H264, MFVideoFormat_HEVC, MFVideoFormat_I420, MFVideoFormat_IYUV,
     MFVideoFormat_NV12, MFVideoFormat_RGB32, MFVideoFormat_YUY2, MFVideoInterlace_Progressive,
-    MF_EVENT_FLAG_NO_WAIT, MF_E_NO_EVENTS_AVAILABLE, MF_E_TRANSFORM_NEED_MORE_INPUT, MF_LOW_LATENCY,
+    MF_EVENT_FLAG_NO_WAIT, MF_E_NO_EVENTS_AVAILABLE, MF_E_TRANSFORM_NEED_MORE_INPUT,
+    MF_E_TRANSFORM_STREAM_CHANGE, MF_LOW_LATENCY,
     MF_MT_AVG_BITRATE, MF_MT_FRAME_RATE, MF_MT_FRAME_SIZE, MF_MT_INTERLACE_MODE, MF_MT_MAJOR_TYPE,
     eAVEncH264VLevel4_1, MF_MT_ALL_SAMPLES_INDEPENDENT, MF_MT_DEFAULT_STRIDE, MF_MT_MPEG2_LEVEL,
     MF_MT_MPEG2_PROFILE, MF_MT_SAMPLE_SIZE, MF_SA_D3D11_BINDFLAGS, MF_SA_D3D11_USAGE,
@@ -131,7 +132,11 @@ impl EncodeurMft {
             .map(|v| v != 0)
             .unwrap_or(false);
 
-        let (device, manager) = if d3d11_aware {
+        // Diagnostic : SOS_MFT_NO_D3D=1 force le chemin mémoire sans
+        // gestionnaire (certains MFT refusent alors les samples mémoire).
+        let forcer_sans_d3d = std::env::var_os("SOS_MFT_NO_D3D").is_some();
+
+        let (device, manager) = if d3d11_aware && !forcer_sans_d3d {
             let device = match contexte {
                 Some(c) => c.device().clone(),
                 None => creer_device_d3d11()?,
@@ -506,6 +511,28 @@ impl EncodeurMft {
                     }
                 }
                 Err(e) if e.code() == MF_E_TRANSFORM_NEED_MORE_INPUT => break,
+                Err(e) if e.code() == MF_E_TRANSFORM_STREAM_CHANGE => {
+                    // Comportement normal d'un MFT matériel : le type de
+                    // sortie a changé, il faut le renégocier puis réessayer.
+                    let nouveau = unsafe { self.transform.GetOutputAvailableType(0, 0) }.map_err(
+                        |e| {
+                            ErreurEncodage::Mft(format!(
+                                "GetOutputAvailableType : {}",
+                                e.message()
+                            ))
+                        },
+                    )?;
+                    unsafe { self.transform.SetOutputType(0, &nouveau, 0) }.map_err(|e| {
+                        ErreurEncodage::Mft(format!(
+                            "SetOutputType (renégociation) : {}",
+                            e.message()
+                        ))
+                    })?;
+                    if debug_actif() {
+                        eprintln!("[mft] stream change → type de sortie renégocié");
+                    }
+                    continue;
+                }
                 Err(e) => {
                     if debug_actif() {
                         eprintln!(

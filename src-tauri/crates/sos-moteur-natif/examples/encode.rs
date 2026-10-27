@@ -17,6 +17,7 @@ use sos_moteur_natif::color::bgra_vers_nv12;
 use sos_moteur_natif::encode::detect::{lister_tous, EncodeurDispo};
 use sos_moteur_natif::encode::mft::EncodeurMft;
 use sos_moteur_natif::encode::{Codec, PaquetEncode};
+use sos_moteur_natif::gpu::ContexteGpu;
 
 fn main() {
     let mut args = std::env::args().skip(1);
@@ -27,7 +28,7 @@ fn main() {
     let frames: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(120);
     let fps: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(30);
     let kbps: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(6000);
-    let forcer_logiciel = args.next().as_deref() == Some("logiciel");
+    let mode = args.next().unwrap_or_default();
 
     // --- Capture ---
     let moniteurs = match enumerer_moniteurs() {
@@ -101,10 +102,26 @@ fn main() {
         );
     }
 
-    let choisi = if forcer_logiciel {
-        encodeurs.iter().find(|e| !e.materiel).unwrap_or(&encodeurs[0])
+    // Contexte GPU dédié pour tester QSV sur l'adaptateur Intel (index 1).
+    let contexte_intel = if mode == "intel" {
+        match ContexteGpu::creer(Some(1)) {
+            Ok(c) => Some(c),
+            Err(e) => {
+                eprintln!("Contexte Intel impossible : {e}");
+                std::process::exit(3);
+            }
+        }
     } else {
-        encodeurs.iter().find(|e| e.materiel).unwrap_or(&encodeurs[0])
+        None
+    };
+
+    let choisi = match mode.as_str() {
+        "logiciel" => encodeurs.iter().find(|e| !e.materiel).unwrap_or(&encodeurs[0]),
+        "intel" => encodeurs
+            .iter()
+            .find(|e| e.nom.contains("Quick Sync"))
+            .unwrap_or(&encodeurs[0]),
+        _ => encodeurs.iter().find(|e| e.materiel).unwrap_or(&encodeurs[0]),
     };
     println!(
         "\nEncodeur retenu : {} [{}]",
@@ -122,6 +139,7 @@ fn main() {
         fps,
         kbps,
         &nv12,
+        contexte_intel.as_ref(),
     ) {
         Ok(v) => v,
         Err(e) if choisi.materiel => {
@@ -132,7 +150,7 @@ fn main() {
                 .ok_or_else(|| "aucun encodeur logiciel de secours".to_string());
             match secours.and_then(|s| {
                 println!("Bascule sur : {} [logiciel]", s.nom);
-                essayer(s, frame.largeur, frame.hauteur, fps, kbps, &nv12)
+                essayer(s, frame.largeur, frame.hauteur, fps, kbps, &nv12, None)
             }) {
                 Ok(v) => v,
                 Err(e2) => {
@@ -237,9 +255,18 @@ fn essayer(
     fps: u32,
     kbps: u32,
     nv12: &[u8],
+    contexte: Option<&ContexteGpu>,
 ) -> Result<(EncodeurMft, Vec<PaquetEncode>), String> {
-    let mut encodeur = EncodeurMft::nouveau(dispo.activate(), Codec::H264, largeur, hauteur, fps, kbps)
-        .map_err(|e| e.to_string())?;
+    let mut encodeur = EncodeurMft::nouveau_avec(
+        dispo.activate(),
+        Codec::H264,
+        largeur,
+        hauteur,
+        fps,
+        kbps,
+        contexte,
+    )
+    .map_err(|e| e.to_string())?;
     let paquets = encodeur.encoder(nv12, 0).map_err(|e| e.to_string())?;
     Ok((encodeur, paquets))
 }

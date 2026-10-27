@@ -29,6 +29,7 @@ use crate::gpu::ContexteGpu;
 /// Convertisseur BGRA → NV12 attaché à un contexte GPU.
 pub struct ConvertisseurNv12 {
     device: ID3D11Device,
+    context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
     video_device: ID3D11VideoDevice,
     video_context: ID3D11VideoContext,
     enumerateur: ID3D11VideoProcessorEnumerator,
@@ -88,6 +89,7 @@ impl ConvertisseurNv12 {
 
         Ok(Self {
             device: contexte.device().clone(),
+            context: contexte.context().clone(),
             video_device,
             video_context,
             enumerateur,
@@ -219,5 +221,39 @@ impl ConvertisseurNv12 {
             .map_err(|e| ErreurEncodage::Gpu(format!("VideoProcessorBlt : {}", e.message())))?;
 
         Ok(nv12)
+    }
+
+    /// Variante pour les encodeurs qui refusent une surface « render target » :
+    /// copie GPU vers une texture NV12 sans bind flags.
+    pub fn convertir_pour_encodeur(
+        &self,
+        bgra: &ID3D11Texture2D,
+    ) -> Result<ID3D11Texture2D, ErreurEncodage> {
+        let rendu = self.convertir(bgra)?;
+
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: self.largeur,
+            Height: self.hauteur,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: 0,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+
+        let mut cible: Option<ID3D11Texture2D> = None;
+        unsafe { self.device.CreateTexture2D(&desc, None, Some(&mut cible)) }.map_err(|e| {
+            ErreurEncodage::Gpu(format!("CreateTexture2D NV12 plain : {}", e.message()))
+        })?;
+        let cible = cible.ok_or_else(|| ErreurEncodage::Gpu("texture NV12 nulle".into()))?;
+
+        unsafe { self.context.CopyResource(&cible, &rendu) };
+        Ok(cible)
     }
 }

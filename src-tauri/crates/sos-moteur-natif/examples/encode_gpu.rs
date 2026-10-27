@@ -91,7 +91,7 @@ fn main() {
         }
     };
     let debut_conv = Instant::now();
-    let texture_nv12 = match convertisseur.convertir(&texture_bgra) {
+    let texture_nv12 = match convertisseur.convertir_pour_encodeur(&texture_bgra) {
         Ok(t) => t,
         Err(e) => {
             eprintln!("Conversion GPU impossible : {e}");
