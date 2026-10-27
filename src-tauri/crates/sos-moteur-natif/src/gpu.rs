@@ -64,6 +64,75 @@ impl fmt::Display for ErreurGpu {
 
 impl std::error::Error for ErreurGpu {}
 
+/// Format de texture du moteur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Format {
+    /// BGRA8 4:4:4 — sortie de WGC et des renderers.
+    Bgra8,
+    /// NV12 semi-planar 4:2:0 — entrée de l'encodeur.
+    Nv12,
+}
+
+impl Format {
+    /// Format DXGI correspondant.
+    #[cfg(windows)]
+    pub fn dxgi(self) -> windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT {
+        use windows::Win32::Graphics::Dxgi::Common::{
+            DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_NV12,
+        };
+        match self {
+            Format::Bgra8 => DXGI_FORMAT_B8G8R8A8_UNORM,
+            Format::Nv12 => DXGI_FORMAT_NV12,
+        }
+    }
+
+    /// `true` si le format est semi-planar (plan Y puis plan UV entrelacé).
+    pub fn semi_planar(self) -> bool {
+        matches!(self, Format::Nv12)
+    }
+
+    /// Taille d'une texture en octets (Y + UV pour NV12).
+    pub fn taille_octets(self, largeur: u32, hauteur: u32) -> u64 {
+        let pixels = largeur as u64 * hauteur as u64;
+        match self {
+            Format::Bgra8 => pixels * 4,
+            Format::Nv12 => pixels + pixels / 2,
+        }
+    }
+}
+
+/// Description d'une texture du moteur (format + dimensions).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DescTexture {
+    pub format: Format,
+    pub largeur: u32,
+    pub hauteur: u32,
+}
+
+impl DescTexture {
+    /// Valide les dimensions : non nulles, et paires pour NV12 (4:2:0).
+    pub fn new(format: Format, largeur: u32, hauteur: u32) -> Result<Self, ErreurGpu> {
+        if largeur == 0 || hauteur == 0 {
+            return Err(ErreurGpu::Dxgi("dimensions nulles".into()));
+        }
+        if format.semi_planar() && (largeur % 2 != 0 || hauteur % 2 != 0) {
+            return Err(ErreurGpu::Dxgi(format!(
+                "NV12 exige des dimensions paires : {largeur}x{hauteur}"
+            )));
+        }
+        Ok(Self {
+            format,
+            largeur,
+            hauteur,
+        })
+    }
+
+    /// Taille de la texture en octets.
+    pub fn taille_octets(&self) -> u64 {
+        self.format.taille_octets(self.largeur, self.hauteur)
+    }
+}
+
 /// Nom lisible d'un `VendorId` DXGI. Ne devine jamais : inconnu = « Inconnu ».
 pub fn vendor_nom(vendor_id: u32) -> &'static str {
     match vendor_id {
@@ -218,6 +287,94 @@ impl ContexteGpu {
     pub fn adaptateur_index(&self) -> Option<u32> {
         self.adaptateur_index
     }
+
+    /// Crée une texture `DEFAULT` selon la description.
+    ///
+    /// Aucun accès CPU (chemin zéro-copie) ; bind `RENDER_TARGET`, qui sert
+    /// de cible au video processor comme au compositeur.
+    pub fn creer_texture(
+        &self,
+        desc: &DescTexture,
+    ) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, ErreurGpu> {
+        use windows::Win32::Graphics::Direct3D11::{
+            ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+
+        let desc_d3d = D3D11_TEXTURE2D_DESC {
+            Width: desc.largeur,
+            Height: desc.hauteur,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: desc.format.dxgi(),
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+
+        let mut texture: Option<ID3D11Texture2D> = None;
+        unsafe { self.device.CreateTexture2D(&desc_d3d, None, Some(&mut texture)) }
+            .map_err(|e| ErreurGpu::Dxgi(e.message()))?;
+        texture.ok_or_else(|| ErreurGpu::Dxgi("texture nulle".into()))
+    }
+}
+
+/// Pool de textures de même description, servi en round-robin.
+///
+/// Aucune synchronisation GPU : l'appelant garantit qu'une texture n'est
+/// plus utilisée quand elle revient dans la rotation.
+#[cfg(windows)]
+pub struct PoolTextures {
+    desc: DescTexture,
+    textures: Vec<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D>,
+    suivant: usize,
+}
+
+#[cfg(windows)]
+impl PoolTextures {
+    /// Crée `nombre` textures identiques (au moins 1).
+    pub fn nouveau(
+        contexte: &ContexteGpu,
+        desc: DescTexture,
+        nombre: usize,
+    ) -> Result<Self, ErreurGpu> {
+        if nombre == 0 {
+            return Err(ErreurGpu::Dxgi("pool vide".into()));
+        }
+        let mut textures = Vec::with_capacity(nombre);
+        for _ in 0..nombre {
+            textures.push(contexte.creer_texture(&desc)?);
+        }
+        Ok(Self {
+            desc,
+            textures,
+            suivant: 0,
+        })
+    }
+
+    /// Rend la texture suivante (rotation circulaire).
+    pub fn suivante(&mut self) -> &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D {
+        let index = self.suivant;
+        self.suivant = (self.suivant + 1) % self.textures.len();
+        &self.textures[index]
+    }
+
+    pub fn desc(&self) -> DescTexture {
+        self.desc
+    }
+
+    pub fn len(&self) -> usize {
+        self.textures.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.textures.is_empty()
+    }
 }
 
 /// Convertit une chaîne UTF-16 terminée par zéro (description DXGI).
@@ -262,5 +419,37 @@ mod tests {
             logiciel: true,
         };
         assert!(!a.materiel());
+    }
+
+    #[test]
+    fn formats_dxgi_et_tailles() {
+        assert_eq!(Format::Bgra8.taille_octets(1360, 768), 1360 * 768 * 4);
+        assert_eq!(Format::Nv12.taille_octets(1360, 768), 1360 * 768 * 3 / 2);
+        assert!(Format::Nv12.semi_planar());
+        assert!(!Format::Bgra8.semi_planar());
+    }
+
+    #[test]
+    fn desc_refuse_les_dimensions_invalides() {
+        assert!(DescTexture::new(Format::Bgra8, 0, 768).is_err());
+        assert!(DescTexture::new(Format::Nv12, 1361, 768).is_err());
+        assert!(DescTexture::new(Format::Nv12, 1360, 768).is_ok());
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn pool_alterne_et_se_libere() {
+        let Ok(contexte) = ContexteGpu::creer(None) else {
+            eprintln!("pool : pas de device D3D11, test ignore");
+            return;
+        };
+        let desc = DescTexture::new(Format::Nv12, 320, 240).expect("desc valide");
+        let mut pool = PoolTextures::nouveau(&contexte, desc, 2).expect("pool");
+        assert_eq!(pool.len(), 2);
+        let a = pool.suivante().as_raw() as isize;
+        let b = pool.suivante().as_raw() as isize;
+        let c = pool.suivante().as_raw() as isize;
+        assert_ne!(a, b);
+        assert_eq!(a, c);
     }
 }
