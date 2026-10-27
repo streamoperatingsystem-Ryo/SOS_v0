@@ -7,8 +7,14 @@
 > ⚠️ **Aucun chiffre de ce fichier n'est mesuré.** Toute valeur est une
 > **cible** du plan, jamais un résultat observé. Ne pas citer ces nombres
 > comme acquis.
+>
+> **Doc de feature — contrat technique.** Les règles figées (protocole
+> d'exécution, contrat vie privée, contrats caméra/cadres) restent dans
+> `AGENTS.md` et priment sur ce document.
 
-## Objectif
+---
+
+## 1. Objectif
 
 Faire de StreamOS un **diffuseur autonome** : capturer, composer, encoder et
 diffuser/enregistrer **sans OBS**, en rendu pixel perfect jusqu'en 4K, avec
@@ -23,7 +29,7 @@ fonctionnel** : les deux modes coexistent et se basculent à la volée.
 > navigateur dans la sortie, la composition à la demande, le fan-out de
 > capture et le culling d'occlusion.
 
-### Cibles mesurables (plan §1.2 — à confirmer par les mesures P0)
+### 1.1 Cibles mesurables (plan §1.2 — à confirmer par les mesures P0)
 
 | Critère | Cible |
 |---|---|
@@ -35,8 +41,11 @@ fonctionnel** : les deux modes coexistent et se basculent à la volée.
 | Latence capture→encode | ≤ OBS − 1 frame |
 | Démarrage à l'enregistrement | ≤ 5 s |
 | Compatibilité | NVIDIA, AMD, Intel (iGPU et dGPU), encodeur logiciel en secours |
+| Diagnostic lisible | pilote, encodeur (matériel/logiciel), barres et verdict affichés ; `N/A` si non mesurable |
 
-## Décisions tranchées (session du 2026-10-27)
+---
+
+## 2. Décisions tranchées (session du 2026-10-27)
 
 | # | Décision | Conséquence |
 |---|---|---|
@@ -48,7 +57,9 @@ fonctionnel** : les deux modes coexistent et se basculent à la volée.
 | D6 | Diagnostic moteur dans la section **Diagnostic existante** | onglet « Moteur », lisible par un non-expert |
 | D7 | Priorité : capture + enregistrement fluides, moins lourds qu'OBS | gouverneur de dégradation |
 
-## Architecture — trois anneaux + règle de dépendance
+---
+
+## 3. Architecture — trois anneaux + règle de dépendance
 
 ```
 Anneau 0 : CONTRATS   sos-scene (Scene, Widget, CadreConfig, ModuleHud,
@@ -72,7 +83,7 @@ Anneau 3 : APPLI      commandes Tauri, bus d'état, WS :4321, machine de mode
   + `src-tauri/src/moteur/{mod,obs}.rs`. Workspace pour que le moteur se
   compile et se teste **sans Tauri** (`cargo test -p sos-moteur-natif`).
 
-### Trait `Moteur` (contrat de l'anneau 2)
+### 3.1 Trait `Moteur` (contrat de l'anneau 2)
 
 ```rust
 pub trait Moteur: Send + Sync {
@@ -92,7 +103,15 @@ pub trait Moteur: Send + Sync {
 `cadres_animes`, `audio_par_app`, `roi_encode`, `multi_format`, `hdr`, `srt`,
 `ndi`…).
 
-### Trait `Sink` — un seul encode, N sorties
+**Sémantique obligatoire :**
+
+- `appliquer_scene` **ne bloque pas** (file bornée, drop-oldest) et est
+  **différentielle** : un déplacement de widget ne recrée ni la session de
+  capture, ni la texture, ni l'encodeur.
+- `appliquer_scene` est **idempotente** : deux fois la même scène = aucun effet.
+- `arreter` est appelable dans n'importe quel état, plusieurs fois.
+
+### 3.2 Trait `Sink` — un seul encode, N sorties
 
 ```rust
 pub trait Sink: Send {
@@ -105,7 +124,22 @@ pub trait Sink: Send {
 **MVP = `FileSink` + `PreviewSink`.** RTMP/SRT arrivent ensuite **sans
 réécriture** : ce sont des sinks supplémentaires, pas un second encodeur.
 
-## Mode dual — états et règles de sécurité
+- `TeeSink` diffuse le même paquet à tous ; un sink en erreur est retiré sans
+  arrêter les autres.
+- L'ordre des paquets est garanti ; aucun sink ne peut ralentir l'encodeur
+  au-delà de sa file (drop-oldest + compteur `drops_sink`).
+
+### 3.3 `RuntimeState`
+
+Instantané (pas un bus) des données éphémères nécessaires au rendu :
+`just_chatting`, `alertes`, `commandes`, `welcome`, `bandeau`,
+`ecran_attente`, `presentation`, `fight`, `pad`, `cadres_chat`, `chat`
+(`Arc<ChatBuffer>`), `goals`, `modules`. Produit par le domaine, consommé par
+le moteur. **Aucune logique métier dans le moteur.**
+
+---
+
+## 4. Mode dual — états et règles de sécurité
 
 ```
 Inactif ──basculer(natif)──► TeardownObs ──► InitNatif ──► ActifNatif
@@ -134,18 +168,186 @@ Inactif ──basculer(natif)──► TeardownObs ──► InitNatif ──►
 > 4. **Zéro régression OBS.** Tout lot laisse le mode OBS strictement
 >    identique (mêmes appels, même ordre, mêmes contrats).
 
-## Support matériel
+### 4.1 Ordre de teardown (impératif)
 
-- **Détection d'encodeur** au démarrage de sortie : énumération des MFT
-  (`MFT_ENUM_FLAG_HARDWARE`), choix par constructeur, repli **logiciel**
-  obligatoire — jamais d'échec silencieux faute d'encodeur.
-- **Matrice de capacités** à détecter au démarrage (plan §6.1) et **matrice de
-  test** à remplir par l'utilisateur, une ligne par machine (§6.4).
-- Pièges matériels documentés dans le code (§6.3) : ne pas les redécouvrir.
-- Vendor IDs attendus : `0x10DE` NVIDIA, `0x1002` AMD, `0x8086` Intel,
-  `0x1414` Microsoft (logiciel / WARP).
+1. Arrêter les sorties (fermer les sinks → finaliser le fMP4).
+2. Arrêter l'encodeur.
+3. Arrêter le compositeur.
+4. Arrêter les sessions de capture (refcount → 0).
+5. Arrêter l'audio.
+6. Libérer le device D3D11 et le pool.
+7. Joindre tous les threads (timeout 3 s, puis détachement loggé).
 
-## Rendu natif
+### 4.2 Séquence de propriété caméra
+
+- **OBS → natif :** `SetSceneItemEnabled false` sur l'item caméra (jamais
+  `RemoveInput`), attendre la libération du capteur (retry 250 ms × 8), puis
+  ouvrir en Media Foundation.
+- **Natif → OBS :** fermer la session MF, puis `camera_sync` pour réactiver
+  l'item.
+- Échec d'acquisition → `MoteurEtat::Erreur("camera occupee")` + message UI
+  explicite, **jamais** de bascule silencieuse.
+
+---
+
+## 5. Threads et files
+
+| Thread | Entrée | Sortie | File | Politique |
+|---|---|---|---|---|
+| `moteur-controle` | commandes | état | 64 | drop-oldest |
+| `moteur-capture-<id>` | source | texture partagée | 3 | drop-oldest |
+| `moteur-composite` | textures | texture de sortie | — | cadencé horloge |
+| `moteur-encode` | texture NV12 | `PaquetEncode` | 8 | drop-oldest + compteur |
+| `moteur-audio` | WASAPI | PCM 48 kHz | 16 | drop-oldest |
+| `moteur-output` | paquets | sinks | 32 | bloque le sink, jamais l'encodeur |
+| `moteur-watchdog` | compteurs | actions | — | 1 Hz |
+
+**Règles :**
+
+- Nommage obligatoire via `conso::nommer_thread("Moteur …")` → visible dans
+  le diagnostic (sous-systèmes).
+- Aucun `.lock()` double dans une expression (piège Mutex non réentrant).
+- Aucun appel bloquant sur le thread UI Tauri.
+- Zéro thread quand le moteur est `Inactif`.
+
+---
+
+## 6. Horloge et cadencement
+
+- Horloge **monotone** (`QueryPerformanceCounter`), jamais l'heure système.
+- `fps_cible` = fps de sortie (CFR pour l'encodeur).
+- **FPS par source** : chaque session a son `MinUpdateInterval` (WGC) et son
+  consommateur peut échantillonner moins souvent.
+- Si une source n'a pas de nouvelle frame : **réutiliser la dernière**
+  (cache de texture), jamais bloquer.
+- `pts_us`/`dts_us` calculés depuis l'horloge + `frame_index × (1e6/fps)`
+  pour garantir la CFR exigée par l'encodeur.
+- Audio horodaté séparément (§13) ; l'offset A/V est un réglage explicite.
+
+---
+
+## 7. Capture
+
+### 7.1 Registre
+
+```rust
+struct CleSource { kind: KindSource, cible: String }
+// "monitor:<id>" | "window:<hwnd>" | "camera:<device>"
+```
+
+- `HashMap<CleSource, Session>` avec **refcount** : un widget, le fond,
+  l'aperçu et l'enregistrement partagent la même session.
+- Refcount → 0 : session arrêtée **et** texture rendue au pool.
+- Une source ne peut pas être capturée deux fois (conflit d'accès exclusif
+  caméra, coût GPU inutile ailleurs).
+
+### 7.2 Modes
+
+| Cible | Mode principal | Fallback |
+|---|---|---|
+| Moniteur | DXGI Desktop Duplication | WGC moniteur |
+| Fenêtre | WGC `CreateFromWindow` | DXGI + BitBlt/PrintWindow |
+| Jeu (borderless) | WGC | — |
+| Caméra | Media Foundation Source Reader | DirectShow |
+| Média (vidéo) | MF Source Reader | FFmpeg logiciel |
+
+### 7.3 Réglages WGC
+
+- `IsCursorCaptureEnabled` : piloté par la scène (défaut : oui).
+- `IsBorderRequired` (Win11) : `false` si supporté — jamais de bordure jaune.
+- `MinUpdateInterval` : dérivé du FPS par consommateur.
+- `CreateFreeThreaded` : obligatoire (pas d'exigence MTA).
+- Frame pool : **4 buffers** (leçon de l'archive : 2 provoque des drops).
+
+### 7.4 DXGI
+
+- `AcquireNextFrame(timeout)` événementiel ; `ACCESS_LOST` → recréer la
+  duplication (résolution changée, verrouillage de session).
+- `GetFrameDirtyRects` / `GetFrameMoveRects` exploités par la composition à
+  la demande (§9.3).
+- **Jamais** de copie de frame en CPU.
+
+### 7.5 Culling d'occlusion
+
+Une session dont **tous** les consommateurs sont entièrement couverts par un
+calque opaque supérieur est **arrêtée** (refcount logique), puis relancée au
+dévoilement. Levier majeur sur PC anciens.
+
+### 7.6 Erreurs
+
+`ErreurMoteur::Capture { source, cause }` → l'UI affiche la source fautive et
+propose un repli (autre mode, autre cible). Jamais de crash, jamais de
+fenêtre noire.
+
+---
+
+## 8. GPU
+
+- **Un seul adaptateur** pour capture + composition + encodage (politique par
+  défaut). Deux adaptateurs = copie inter-GPU explicite, comptée et affichée.
+- Sélection : adaptateur qui possède l'écran capturé ; sinon le plus capable
+  (VRAM, FL) ; le logiciel seul est refusé (le moteur exige un GPU).
+- Feature level **11_0** minimum ; 10_0 accepté avec dégradation documentée
+  (pas de compute, masques simplifiés).
+- Formats internes : **BGRA8** pour la composition, **NV12** pour l'encodeur.
+  Conversion **en shader** (ou `ID3D11VideoProcessor`) — jamais en CPU.
+- Espace couleur : composition en sRGB, conversion explicite en fin de
+  chaîne. HDR hors périmètre v1 (tonemap SDR documenté).
+- Pool de textures : 2 sorties + 1 par source active + 1 par calque
+  rasterisé. Budget 4K documenté (~200 Mio à 4 sources).
+
+---
+
+## 9. Compositeur
+
+### 9.1 Contrat d'ordre (figé par l'existant)
+
+| Plage z | Contenu |
+|---|---|
+| 0 … N-1 | widgets (ordre `w.z` de la scène) |
+| 5000 | caméra (réservée) |
+| 8000 / 9000 | modules HUD |
+| 9000 | aides dashboard (non diffusées) |
+| 9990 | écran d'attente |
+| 9993 | arène, pop de splits |
+| 9995 | pad numérique |
+| 9996 | commandes |
+| 9997 | alertes |
+| 9998 | bandeau premier message |
+| 9999 | clip de bienvenue |
+| 10000-10004 | présentation |
+
+Le compositeur **consomme ce tableau**, il ne réinvente pas d'ordre.
+
+### 9.2 Transforms
+
+Les formules de `fit` (ajuster/remplir/étirer), `zoom`, `rotation`, `offsets`,
+`miroir` H/V, `crop` et `crop ratio` sont **celles de `diffusion.html`**
+(`applyMediaStyle`, `mediaTransform`, `dessinerOffscreen`). Toute divergence
+est un bug de conformité (§21), pas une liberté d'implémentation.
+
+### 9.3 Composition à la demande
+
+1. Chaque calque porte un **rect sale** (dirty rect).
+2. Un calque sale ⇒ seules ses zones sont recomposées ; les autres sont
+   recopiées depuis la texture précédente (`CopySubresourceRegion`).
+3. Aucun calque sale ⇒ la frame de sortie est **réutilisée telle quelle**
+   (l'encodeur reçoit la même texture).
+4. Les dirty rects DXGI sont propagés au calque correspondant.
+5. Les animations (cadres, overlays, texte) déclarent leur rect sale à chaque
+   frame où elles changent.
+
+### 9.4 Masques
+
+- Polygones issus de `svgPathEnPoints` / `pointsClipPathCadre` /
+  `pointsCercle` (mêmes générateurs que le dashboard et `diffusion.html`).
+- Rendu : **stencil** ou **SDF** selon la taille ; jamais de PNG régénéré.
+- Le masque caméra et la découpe du cadre partagent **exactement** le même
+  polygone (leçon « zéro dérive » 2026-09-29 / 2026-10-22).
+
+---
+
+## 10. Rendu natif
 
 - **Aucun Chromium/WebView2 dans le chemin de sortie** (D1). Le rendu est
   reconstruit en natif : texte (DirectWrite), vecteurs (paths + tessellation +
@@ -160,7 +362,55 @@ Inactif ──basculer(natif)──► TeardownObs ──► InitNatif ──►
   SSIM ≥ 0,995 sur 10 scènes. Une régression visuelle doit être **détectée
   automatiquement**, pas à l'œil.
 
-### Chat — ce qui change, ce qui ne change pas (D4)
+### 10.1 Interface `Renderer`
+
+```rust
+pub trait Renderer: Send {
+    fn rendre(&mut self, ctx: &mut ContexteRendu, calque: &Calque);
+    fn rects_sales(&self) -> &[Rect];
+    fn detruire(&mut self);
+}
+```
+
+| Type de widget / calque | Renderer |
+|---|---|
+| `media` | média (fit/zoom/rot/offset/miroir/morph/carrousel/PlayerBar) |
+| `chat` | texte riche + images (badges, avatars, emotes) |
+| `camera` | texture caméra + masque + anneau |
+| `input-viewer` | vectoriel + texte (skins) |
+| `speedrun` | texte + layout |
+| `goal` | texte + barre |
+| `musique` | texte + skin |
+| `trou` | **aucun** (le concept disparaît) |
+| fond | média/capture + titres |
+| modules | horloge/objectifs (texte), équaliseur/spots (canvas GPU) |
+| overlays | un renderer par overlay |
+
+### 10.2 Texte
+
+- DirectWrite : `IDWriteTextLayout` → rasterisation glyphe par glyphe →
+  atlas (LRU, clé police + taille + style).
+- Emojis : COLR/CPAL via DirectWrite ; fallback atlas Twemoji embarqué.
+- Emotes BTTV/7TV/FFZ : images déjà résolues par le domaine (`EmoteSeg.url`)
+  → textures, comme avatars et badges.
+- Interdits : rendu par frame dans une texture plein écran, allocation par
+  message.
+
+### 10.3 Vectoriel
+
+- `lyon` : tessellation CPU des paths (une fois par forme), gradients en
+  shader.
+- Timeline d'animation : sous-ensemble SMIL (`animateMotion` sur `path`,
+  `animateTransform`, `animate` opacité), horloge propre, boucle propre.
+
+### 10.4 Média
+
+- MF Source Reader (hardware) → texture ; fallback FFmpeg logiciel → upload.
+- PlayerBar, pause/seek, boucle, carrousel (fondu borné à la moitié de
+  l'intervalle) : mêmes contrats que `carrousel.md`.
+- Morphs : shader bulge/pinch, mêmes paramètres normalisés (0-1).
+
+### 10.5 Chat — ce qui change, ce qui ne change pas (D4)
 
 | Aspect | Sort |
 |---|---|
@@ -170,14 +420,115 @@ Inactif ──basculer(natif)──► TeardownObs ──► InitNatif ──►
 > La question du chat n'est donc **pas une question produit** : c'est un choix
 > d'implémentation du renderer.
 
-## Diagnostic « Moteur » — onglet de `ConsoModal.svelte`
+---
+
+## 11. Encodeurs
+
+### 11.1 Détection
+
+1. `EnumAdapters1` → adaptateurs (`VendorId`).
+2. `MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER, MFT_ENUM_FLAG_HARDWARE |
+   MFT_ENUM_FLAG_SORTANDFILTER, …)` par couple (NV12 → H264/HEVC/AV1).
+3. `MF_SA_D3D11_AWARE` vérifié → sinon copie CPU (secours seulement).
+4. Choix : hardware D3D11-aware sur l'adaptateur de capture → hardware autre
+   adaptateur → logiciel Microsoft.
+5. Persistance dans `moteur.json` + exposition au diagnostic.
+
+### 11.2 MFT
+
+- `IMFTransform` + `MFCreateDXGISurfaceBuffer` sur une texture **NV12** →
+  zéro copie.
+- Conversion BGRA → NV12 en GPU (shader planaire ou `ID3D11VideoProcessor`).
+- Attributs : `MF_MT_AVG_BITRATE`, `MF_MT_FRAME_SIZE`, `MF_MT_FRAME_RATE`,
+  `MF_MT_INTERLACE_MODE = Progressive`, `MF_LOW_LATENCY = TRUE`,
+  `CODECAPI_AVEncCommonRateControlMode = CBR` (ou VBR selon preset),
+  `CODECAPI_AVEncMPVGOPSize` (GOP), `CODECAPI_AVEncCommonQuality`.
+- Relire la configuration **effective** après création (les pilotes AMD
+  anciens ignorent certains réglages) et l'afficher dans le diagnostic.
+
+### 11.3 Politique
+
+- **Un seul encodeur** par sortie. L'aperçu ne crée jamais de second encodeur.
+- Pas de B-frames en mode faible latence ; IDR à la demande (reconnexion).
+- Échec d'initialisation → repli immédiat dans l'ordre de la détection,
+  journalisé et affiché (`encodeur_repli`).
+
+---
+
+## 12. Sorties
+
+### 12.1 `FileSink`
+
+- **fMP4** par défaut : `moov` vide + fragments, lisible après coupure.
+- Écriture tamponnée + `sync_data` périodique (5 s) — leçon boîte noire.
+- Disque plein / erreur I/O → sink retiré, état `Erreur`, les autres sinks
+  continuent.
+
+### 12.2 Sidecar FFmpeg
+
+- Binaire existant : `src-tauri/binaries/ffmpeg-<triple>.exe`
+  (`externalBin`, permission `shell:allow-execute` déjà posée).
+- Protocole : bitstream sur **stdin** (`-f h264|hevc|av1 -i pipe:0`), audio
+  PCM sur un **named pipe** (pattern `audioNamedPipe`), sortie RTMP/SRT.
+- Args minimaux, **jamais de clé de flux dans les logs**.
+- `stderr` parsé pour l'état (connexion, erreurs) ; reconnexion avec backoff.
+- **Aucune frame brute dans le pipe** : uniquement le bitstream.
+
+---
+
+## 13. Audio
+
+- Loopback WASAPI (sortie par défaut) + micro + **loopback par processus**
+  (Windows ≥ 10 2004, `ActivateAudioInterfaceAsync` +
+  `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`).
+- Mixage : gains par source, mute, limiteur simple, resampling vers 48 kHz
+  stéréo.
+- Horodatage par paquet ; offset A/V explicite (réglage + diagnostic).
+- L'équaliseur (`equaliseur.rs`) réutilise la même capture : **une seule**
+  session WASAPI partagée, pas deux.
+- Le routage audio OBS de l'écran d'attente (mute des items `desktop|bureau`)
+  est remplacé par un **mute de source** dans le mixeur natif.
+
+---
+
+## 14. Gouverneur
+
+**Entrées :** GPU busy (PDH), profondeur de file d'encodage, drops,
+`QueryPerformanceCounter` vs budget frame.
+**Sorties (ordre strict) :**
+
+1. FPS de capture des sources non critiques : 60 → 30 → 15.
+2. Résolution de composition : 4K → 1440p → 1080p.
+3. Preset encodeur : qualité → équilibré → vitesse.
+4. Résolution d'encodage (dernier recours).
+
+**Règles :** hystérésis (pas d'oscillation), raison **toujours** exposée
+(`MoteurDiag.degradation`), remontée progressive quand la marge revient,
+jamais de drop silencieux.
+
+---
+
+## 15. Support matériel
+
+- **Détection d'encodeur** au démarrage de sortie : énumération des MFT
+  (`MFT_ENUM_FLAG_HARDWARE`), choix par constructeur, repli **logiciel**
+  obligatoire — jamais d'échec silencieux faute d'encodeur.
+- **Matrice de capacités** à détecter au démarrage (plan §6.1) et **matrice de
+  test** à remplir par l'utilisateur, une ligne par machine (§6.4).
+- Pièges matériels documentés dans le code (§6.3) : ne pas les redécouvrir.
+- Vendor IDs attendus : `0x10DE` NVIDIA, `0x1002` AMD, `0x8086` Intel,
+  `0x1414` Microsoft (logiciel / WARP).
+
+---
+
+## 16. Diagnostic « Moteur » — onglet de `ConsoModal.svelte`
 
 > Exigence utilisateur (2026-10-27) : dans la section Diagnostic existante,
 > afficher **clairement, pour un non-expert**, ce que le moteur consomme —
 > et **tourne-t-on avec le pilote graphique, lequel, en matériel ou en
 > logiciel ?**
 
-### Principe
+### 16.1 Principe
 
 - **Aucune valeur fabriquée.** Mesure échouée → `N/A`, **jamais `0`**.
 - **Une phrase de verdict** en tête, pas seulement des chiffres.
@@ -188,7 +539,7 @@ Inactif ──basculer(natif)──► TeardownObs ──► InitNatif ──►
 - **Découplage strict** : le moteur écrit des atomics, le diagnostic lit. Le
   moteur ne dépend **jamais** du diagnostic.
 
-### Ce qui existe déjà (à réutiliser, pas à réécrire)
+### 16.2 Ce qui existe déjà (à réutiliser, pas à réécrire)
 
 | Élément | Fichier |
 |---|---|
@@ -211,7 +562,7 @@ d'étages.
 > sans un seul appel supplémentaire → « GPU NVIDIA : 43 % » + « StreamOS :
 > 12 % ».
 
-### Données ajoutées
+### 16.3 Données ajoutées
 
 | Donnée | Source | Coût |
 |---|---|---|
@@ -226,7 +577,7 @@ d'étages.
 | Résolution effective, raison de dégradation | gouverneur | continu |
 | GPU total par adaptateur | PDH, agrégation par `luid_` | 1 Hz, modale ouverte |
 
-### Modèle
+### 16.4 Modèle
 
 `crates/sos-moteur-api/src/diag.rs` (partagé, **sans tauri**) :
 `InfosAdaptateur { vendor_id, vendor_nom, description, vram_mio,
@@ -241,7 +592,7 @@ lit **sans jamais bloquer** le moteur. Commande `moteur_diag() -> MoteurDiag`
 (synchrone, instantanée) ; `ConsoEtat` gagne `moteur: Option<MoteurDiag>` pour
 n'avoir **qu'un seul aller-retour par seconde**.
 
-### UI — ordre de lecture, du verdict vers le détail
+### 16.5 UI — ordre de lecture, du verdict vers le détail
 
 1. **Bandeau verdict**, une phrase colorée par état :
    « Encodage matériel NVIDIA (NVENC) — GPU 14 %, CPU moteur 3 %. » /
@@ -265,14 +616,14 @@ Contraintes UI : tokens `--t-*` uniquement (aucune couleur en dur), rem pour le
 chrome, 8 locales (`conso.moteur.*`), libellés compris par un non-expert
 (« Pilote graphique », « Encodage matériel », « Images perdues »).
 
-### Boîte noire — champs ajoutés
+### 16.6 Boîte noire — champs ajoutés
 
 `boite_noire.jsonl` gagne, de façon **additive** (rétro-compatibilité des
 lignes existantes) : `moteur_actif`, `encodeur`, `materiel`, `fps_composite`,
 `drops`, `gpu_moteur_pct`, `degradation`. C'est la seule trace qui survit à un
 gel : elle doit dire **quel étage** a lâché, pas seulement que l'app a gelé.
 
-### Règles
+### 16.7 Règles
 
 1. Aucune valeur inventée ; `N/A` explicite.
 2. Aucun polling hors modale.
@@ -282,7 +633,54 @@ gel : elle doit dire **quel étage** a lâché, pas seulement que l'app a gelé.
 5. Toute nouvelle mesure doit être documentée dans
    `docs/features/diagnostic.md`.
 
-## Invariants
+---
+
+## 17. Configuration `moteur.json`
+
+Chemin : `%APPDATA%\com.streamos.v0\moteur.json`.
+
+```json
+{
+  "mode": "obs",
+  "encodeur_choisi": "NVIDIA H.264 Encoder MFT",
+  "adaptateur_luid": 123456,
+  "codec": "h264",
+  "debit_kbps": 6000,
+  "preset": "equilibre",
+  "fps": 60,
+  "canvas": [1920, 1080],
+  "audio": { "loopback": true, "micro": true, "offset_ms": 0 }
+}
+```
+
+- Lecture non fatale : fichier absent/cassé → défauts (`mode: "obs"`).
+- Écriture atomique (tmp + rename), pattern `config.rs`.
+- Toute clé inconnue est ignorée (rétro-compatibilité).
+
+---
+
+## 18. Erreurs
+
+```rust
+pub enum ErreurMoteur {
+    Capture { source: String, cause: String },
+    Gpu(String),
+    Encodeur(String),
+    Sortie(String),
+    Audio(String),
+    CameraOccupee,
+    BasculeRefusee(String),
+    Interne(String),
+}
+```
+
+- Chaque variante a un message UI dédié (i18n `moteur.erreur.*`, 8 locales).
+- Aucune erreur ne doit laisser un thread orphelin ni un fichier corrompu.
+- Journalisation (`log::error`) **sans** clé de flux ni donnée utilisateur.
+
+---
+
+## 19. Invariants
 
 1. Aucune frame brute ne traverse le CPU entre la capture et l'encodeur.
 2. Aucun thread actif quand le moteur est inactif.
@@ -305,7 +703,44 @@ gel : elle doit dire **quel étage** a lâché, pas seulement que l'app a gelé.
 8. ❌ Dupliquer la géométrie des cadres dans une 4ᵉ implémentation sans test de
    conformité.
 
-## Lots et gates
+---
+
+## 20. Tests
+
+| Niveau | Contenu | Gate |
+|---|---|---|
+| Unitaire | horloge, files, gouverneur, détection d'encodeur (mock), transforms | `cargo test -p sos-moteur-natif` |
+| Conformité | 10 scènes de référence, horloge figée, SSIM ≥ 0,995 / diff ≤ 2/255 | obligatoire en P3+ |
+| Charge | 1080p60 3 sources 30 min, 4K 10 min, drops = 0 | gate P2 |
+| Robustesse | coupure disque, perte DXGI, caméra débranchée, pilote qui refuse | pas de crash |
+| Matériel | matrice §6.4 du plan, une ligne par machine | gate P5 |
+
+**Harnais de conformité :** `tests/conformance/` — scènes JSON versionnées,
+rendu de référence `diffusion.html` (animations figées à t=0 et t=1 s),
+comparateur SSIM + heatmap, sortie dans `target/conformance/<scene>/`.
+
+---
+
+## 21. Matrice de capacités OBS vs natif
+
+| Fonction | Mode OBS (aujourd'hui) | Mode natif (v1) |
+|---|---|---|
+| Capture écran/fenêtre | source OBS | WGC/DXGI |
+| Caméra | `SOS-Caméra` dshow | Media Foundation |
+| Masque caméra | filtre PNG | stencil/SDF |
+| Cadres SVG | `diffusion.html` | vectoriel (2 styles, refonte ensuite) |
+| Chat | DOM | texte natif |
+| Médias | `<video>` | MF Source Reader |
+| Alertes / commandes / welcome / BRB / présentation / arène | DOM + CSS | renderers natifs |
+| Stream / record | `StartStream`/`StartRecord` | encodeur MFT + sinks |
+| Fond vert | plugin OBS | **non** (hors périmètre) |
+| Aperçu | iframe `:4321` + projecteur OBS | texture partagée / aperçu natif |
+| Just Chatting | dérivation de scène + OBS | layout compositeur |
+| Diagnostic | CPU/RAM/GPU par PID | + pilote, encodeur, étages |
+
+---
+
+## 22. Lots et gates
 
 > Convention : chaque lot = **liste blanche fermée**. Chaque fichier = un diff
 > = une pause. Un lot n'est « fait » que si `cargo clippy` (exit 0),
@@ -318,9 +753,11 @@ gel : elle doit dire **quel étage** a lâché, pas seulement que l'app a gelé.
 | **P2** — Tuyau natif | capture WGC/DXGI, composition, horloge/gouverneur, MFT, `FileSink`, aperçu, enregistrement, **diagnostic (lots 2.9/2.10)** | 1080p60 3 sources 0 drop 30 min ; 4K documenté ; **diagnostic « Moteur » opérationnel et exact** |
 | **P3** — Rendu | texte, vecteurs, médias, masques, tuyau cadres + 2 styles, titres, widgets, modules | harnais vert, SSIM ≥ 0,995 |
 | **P4** — Overlays | alertes, commandes, welcome, bandeau, BRB, pad, fight, présentation, JC — un lot par overlay | test de conformité par overlay |
-| **P5** — Différenciation | robustesse, cas dégradés | — |
+| **P5** — Différenciation | RTMP/SRT/Tee, audio par app, ROI, multi-format, reprise crash, backends SDK | matrice matérielle complète |
 
-## Fichiers — cible (⚠️ aucun n'existe à ce jour)
+---
+
+## 23. Fichiers — cible (⚠️ aucun n'existe à ce jour)
 
 | Fichier | Rôle |
 |---|---|
@@ -336,7 +773,33 @@ gel : elle doit dire **quel étage** a lâché, pas seulement que l'app a gelé.
 | `docs/features/moteur-natif/mesures-p0.md` | protocole + baseline + verdict go/no-go |
 | `%APPDATA%\com.streamos.v0\moteur.json` | mode + encodeur choisi + LUID |
 
-## Points ouverts (à trancher avant la phase concernée)
+### 23.1 Points d'intégration dans l'app
+
+**Commandes Tauri à ajouter** (aucune existante modifiée) :
+`moteur_etat`, `moteur_basculer`, `moteur_diag`, `moteur_sortie_demarrer`,
+`moteur_sortie_arreter`.
+**Event :** `moteur:etat` (`{ mode, etat, capacites }`).
+**Frontend :** `stores/moteur.ts`, bouton OBS / Rust dans la barre latérale,
+onglet « Moteur » de `ConsoModal.svelte`.
+**Cycle de vie :** les points d'appel de `scene_sync_captures` (boot,
+`openScene`, duplication, preset, import ZIP, reconnexion OBS, JC ON/OFF,
+hook post-commit) deviennent des **notifications au registre de moteurs** ;
+le mode OBS garde exactement le comportement actuel.
+**Inchangé :** `server.rs` (`:4321`, WS, médias, `/api`), `chat_tx`,
+pop-outs, barre de raccourcis, télémétrie, API Stream Deck.
+
+---
+
+## 24. Hors périmètre v1
+
+Fond vert virtuel, HDR, game capture par hooking, Linux/macOS, NDI,
+multi-pistes audio, replay buffer, filtres (LUT, chroma key, denoise),
+caméra virtuelle, plugins, SRT (phase P5), ROI (phase P5), multi-format
+(phase P5).
+
+---
+
+## 25. Points ouverts (à trancher avant la phase concernée)
 
 1. **Cadres — moteur de rendu** : `lyon` (procédural, 4K natif) ou `resvg`
    (fidélité immédiate, coût par frame) ? Proposition : `lyon`, le tuyau
@@ -350,3 +813,14 @@ gel : elle doit dire **quel étage** a lâché, pas seulement que l'app a gelé.
    confirmation explicite + refus si stream natif actif.
 5. **MSRV** : rester 1.77 ou monter si un SDK l'exige ? Proposition : rester
    1.77 tant que MFT + sidecar suffisent.
+
+---
+
+## 26. Références
+
+- `PLAN-MOTEUR-NATIF.md` — phases, lots, mesures, matrice matérielle.
+- `docs/features/moteur-natif/mesures-p0.md` — protocole P0 et verdict.
+- `AGENTS.md` — protocole, contrats figés, pièges obs-websocket.
+- `docs/features/camera-details.md`, `fond-capture-obs.md`,
+  `selecteur-capture.md`, `obs-sorties.md`, `just-chatting.md`,
+  `equaliseur.md`, `diagnostic.md`, `telemetrie.md`.
