@@ -1,0 +1,21 @@
+[package]
+name = "sos-moteur-natif"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+description = "StreamOS — moteur natif de capture, composition et encodage (sans OBS)"
+
+# Aucune dépendance Tauri, aucun accès au domaine : ce crate doit rester
+# compilable et testable seul (`cargo test -p sos-moteur-natif`).
+# Contrat : docs/features/moteur-natif.md §3.
+
+[dependencies]
+log = "0.4"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+] }

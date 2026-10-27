@@ -96,3 +96,9 @@ windows = { version = "0.58", features = [
 
 [features]
 custom-protocol = ["tauri/custom-protocol"]
+
+# Workspace : le moteur natif se compile et se teste SANS Tauri.
+# Contrat : docs/features/moteur-natif.md §3 (règles de dépendance).
+[workspace]
+members = ["crates/sos-moteur-natif"]
+resolver = "2"
