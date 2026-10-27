@@ -21,8 +21,8 @@ fn main() {
             println!("{} adaptateur(s) détecté(s) :", adaptateurs.len());
             println!();
             println!(
-                "{:<3} {:<10} {:<38} {:>8} {:<18} {}",
-                "#", "Vendeur", "Carte", "VRAM", "LUID", "Type"
+                "{:<3} {:<10} {:<38} {:>8} {:<18} Type",
+                "#", "Vendeur", "Carte", "VRAM", "LUID"
             );
             println!("{}", "-".repeat(92));
             for a in &adaptateurs {

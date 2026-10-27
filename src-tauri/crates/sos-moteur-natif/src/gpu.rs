@@ -120,6 +120,22 @@ pub fn enumerer_adaptateurs() -> Result<Vec<Adaptateur>, ErreurGpu> {
     Err(ErreurGpu::NonSupporte)
 }
 
+/// Ouvre un adaptateur DXGI par index.
+///
+/// Sert à créer le device D3D11 **sur l'adaptateur qui possède l'écran
+/// capturé** : sur un portable à double GPU, un device créé sur l'autre
+/// adaptateur impose une copie inter-GPU (cf. plan §6.3).
+#[cfg(windows)]
+pub fn ouvrir_adaptateur(
+    index: u32,
+) -> Result<windows::Win32::Graphics::Dxgi::IDXGIAdapter1, ErreurGpu> {
+    use windows::Win32::Graphics::Dxgi::{CreateDXGIFactory1, IDXGIFactory1};
+
+    let factory: IDXGIFactory1 =
+        unsafe { CreateDXGIFactory1() }.map_err(|e| ErreurGpu::Dxgi(e.message()))?;
+    unsafe { factory.EnumAdapters1(index) }.map_err(|e| ErreurGpu::Dxgi(e.message()))
+}
+
 /// Convertit une chaîne UTF-16 terminée par zéro (description DXGI).
 #[cfg(windows)]
 fn utf16z(desc: &[u16; 128]) -> String {
