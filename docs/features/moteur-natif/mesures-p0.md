@@ -99,26 +99,6 @@ powershell -ExecutionPolicy Bypass -File ..\tools\mesure-p0.ps1 `
 > ⚠️ En debug, la conversion NV12 prend ~77 ms/frame : la mesure ne veut rien
 > dire. Toujours `--release`.
 
-## Verdict global (lot 0.3)
-
-### P0-a — verdict **provisoire** (chaîne capture→encode)
-
-À remplir après les relevés P0-a :
-
-| Cible | PC principal | PC ancien | Tenue ? |
-|---|---|---|---|
-| CPU ≤ 0,7 × | | | |
-| RAM ≤ 0,5 × | | | |
-| Drops = 0 | | | |
-
-### P0-b — verdict **décisionnel** (fonctionnalités équivalentes)
-
-À remplir **après P2** (compositeur), même tableau, même méthode.
-
-**Go** si 2 cibles sur 3 tenues **sur les machines de la matrice**, en P0-b.
-Un P0-a favorable mais un P0-b défavorable = **STOP** : c'est le P0-b qui
-décide, parce que c'est lui qui compare des fonctionnalités équivalentes.
-
 ## Feuille de relevé — à remplir par machine
 
 Une ligne par machine (matrice §6.4 du plan : « PC principal », « PC ancien »,
