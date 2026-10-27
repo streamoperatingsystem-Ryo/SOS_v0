@@ -12,6 +12,10 @@
 #
 # Parametres :
 #   -IdProc                 PID du processus a mesurer (obligatoire)
+#   -Arbre               mesure le processus ET tous ses descendants
+#                        (spike : encode_nvenc + ffmpeg ; OBS : obs64 +
+#                        obs-browser-page). Sans ce commutateur, seul le PID
+#                        racine est mesure.
 #   -DureeSecondes       duree totale (defaut 1800 = 30 min)
 #   -IntervalleMs        periode d'echantillonnage (defaut 1000)
 #   -IgnorerDebutSecondes  echantillons ignores dans le resume (defaut 60)
@@ -19,6 +23,7 @@
 
 param(
     [Parameter(Mandatory = $true)][int]$IdProc,
+    [switch]$Arbre,
     [int]$DureeSecondes = 1800,
     [int]$IntervalleMs = 1000,
     [int]$IgnorerDebutSecondes = 60,
@@ -83,6 +88,17 @@ namespace MesureP0 {
 
         // Somme des moteurs GPU du PID. -1 = non mesurable.
         public static double GpuPourPid(int pid) {
+            return GpuPourPids(new int[] { pid });
+        }
+
+        // Somme des moteurs GPU de plusieurs PID (arbre de processus).
+        // -1 = non mesurable.
+        public static double GpuPourPids(int[] pids) {
+            if (pids == null || pids.Length == 0) return -1;
+
+            string[] motifs = new string[pids.Length];
+            for (int j = 0; j < pids.Length; j++) motifs[j] = "pid_" + pids[j] + "_";
+
             IntPtr query;
             if (PdhOpenQueryW(null, IntPtr.Zero, out query) != 0) return -1;
 
@@ -111,14 +127,18 @@ namespace MesureP0 {
 
                 double total = 0;
                 int tailleItem = Marshal.SizeOf(typeof(PDH_FMT_COUNTERVALUE_ITEM_W));
-                string motif = "pid_" + pid + "_";
 
                 for (int i = 0; i < nombre; i++) {
                     IntPtr p = new IntPtr(tampon.ToInt64() + i * tailleItem);
                     var item = (PDH_FMT_COUNTERVALUE_ITEM_W)Marshal.PtrToStructure(p, typeof(PDH_FMT_COUNTERVALUE_ITEM_W));
                     string nom = Marshal.PtrToStringUni(item.szName);
-                    if (nom != null && nom.IndexOf(motif, StringComparison.OrdinalIgnoreCase) >= 0) {
-                        total += item.FmtValue.doubleValue;
+                    if (nom == null) continue;
+
+                    for (int j = 0; j < motifs.Length; j++) {
+                        if (nom.IndexOf(motifs[j], StringComparison.OrdinalIgnoreCase) >= 0) {
+                            total += item.FmtValue.doubleValue;
+                            break;
+                        }
                     }
                 }
 
@@ -176,6 +196,36 @@ function Moyenne {
     return ($Valeurs | Measure-Object -Average).Average
 }
 
+# Arbre de processus : racine + tous les descendants, a partir d'une table
+# Win32_Process deja collectee (une seule requete par echantillon).
+function ArbrePids {
+    param([int]$Racine, $Table)
+    $enfants = @{}
+    foreach ($t in $Table) {
+        $parent = [int]$t.ParentProcessId
+        if (-not $enfants.ContainsKey($parent)) {
+            $enfants[$parent] = New-Object System.Collections.Generic.List[int]
+        }
+        $enfants[$parent].Add([int]$t.ProcessId)
+    }
+
+    $tous = New-Object System.Collections.Generic.List[int]
+    $file = New-Object System.Collections.Generic.Queue[int]
+    $tous.Add($Racine)
+    $file.Enqueue($Racine)
+    while ($file.Count -gt 0) {
+        $courant = $file.Dequeue()
+        if (-not $enfants.ContainsKey($courant)) { continue }
+        foreach ($e in $enfants[$courant]) {
+            if (-not $tous.Contains($e)) {
+                $tous.Add($e)
+                $file.Enqueue($e)
+            }
+        }
+    }
+    return $tous.ToArray()
+}
+
 # --- Boucle ---------------------------------------------------------------
 $processus = Get-Process -Id $IdProc -ErrorAction Stop
 $coeurs = [Environment]::ProcessorCount
@@ -186,11 +236,19 @@ Write-Host ("Sortie CSV : {0}" -f $Sortie)
 Write-Host "Ctrl+C pour arreter proprement (le CSV deja ecrit reste valide)."
 
 $lignes = New-Object System.Collections.Generic.List[object]
-$cpuPrecedent = $processus.TotalProcessorTime.TotalMilliseconds
+$cpuPrecedent = @{}   # PID -> ms CPU au tour precedent
 $instantPrecedent = [DateTime]::UtcNow
 
+# Cadence sur l'horloge murale : les requetes PDH/CIM (200-300 ms) ne doivent
+# pas allonger la duree totale. La mesure s'arrete a DureeSecondes reelles.
+$debutMesure = [DateTime]::UtcNow
+$finMesure = $debutMesure.AddSeconds($DureeSecondes)
+
 for ($i = 0; $i -lt $nombre; $i++) {
-    Start-Sleep -Milliseconds $IntervalleMs
+    $echeance = $debutMesure.AddMilliseconds(($i + 1) * $IntervalleMs)
+    $attente = ($echeance - [DateTime]::UtcNow).TotalMilliseconds
+    if ($attente -gt 0) { Start-Sleep -Milliseconds ([math]::Round($attente)) }
+    if ([DateTime]::UtcNow -ge $finMesure) { break }
 
     $p = Get-Process -Id $IdProc -ErrorAction SilentlyContinue
     if ($null -eq $p) {
@@ -198,32 +256,53 @@ for ($i = 0; $i -lt $nombre; $i++) {
         break
     }
 
+    if ($Arbre) {
+        $table = Get-CimInstance Win32_Process -Property ProcessId, ParentProcessId
+        $pids = @(ArbrePids $IdProc $table)
+    } else {
+        $pids = @($IdProc)
+    }
+
     $instant = [DateTime]::UtcNow
     $deltaMs = ($instant - $instantPrecedent).TotalMilliseconds
-    $cpuMs = $p.TotalProcessorTime.TotalMilliseconds
+
+    # CPU et RSS cumules sur l'arbre. Un PID nouveau n'apporte que son delta
+    # (sa consommation anterieure est ignoree, pas comptee d'un coup).
+    $cpuMs = 0.0
+    $ramMo = 0.0
+    $cpuCourant = @{}
+    foreach ($idp in $pids) {
+        $proc = Get-Process -Id $idp -ErrorAction SilentlyContinue
+        if ($null -eq $proc) { continue }
+        $cpu = $proc.TotalProcessorTime.TotalMilliseconds
+        if ($cpuPrecedent.ContainsKey($idp)) { $cpuMs += $cpu - $cpuPrecedent[$idp] }
+        $cpuCourant[$idp] = $cpu
+        $ramMo += $proc.WorkingSet64 / 1MB
+    }
+    $cpuPrecedent = $cpuCourant
 
     $cpuPct = 0.0
     if ($deltaMs -gt 0) {
-        $cpuPct = (($cpuMs - $cpuPrecedent) / $deltaMs) * 100.0 / $coeurs
+        $cpuPct = ($cpuMs / $deltaMs) * 100.0 / $coeurs
     }
 
-    $gpu = [MesureP0.Pdh]::GpuPourPid($IdProc)
+    $gpu = if ($Arbre) { [MesureP0.Pdh]::GpuPourPids($pids) } else { [MesureP0.Pdh]::GpuPourPid($IdProc) }
     $ramSysteme = [MesureP0.Memoire]::RamSystemeOccupeeMo()
 
     $ligne = [pscustomobject]@{
         ts         = $instant.ToString("o")
         cpu_pct    = [math]::Round($cpuPct, 2)
-        ram_mo     = [math]::Round($p.WorkingSet64 / 1MB, 1)
+        ram_mo     = [math]::Round($ramMo, 1)
         gpu_pct    = if ($gpu -lt 0) { "N/A" } else { [math]::Round($gpu, 2) }
         ram_sys_mo = if ($ramSysteme -lt 0) { "N/A" } else { [math]::Round($ramSysteme, 1) }
     }
     $lignes.Add($ligne) | Out-Null
 
-    $cpuPrecedent = $cpuMs
     $instantPrecedent = $instant
 
     if (($i + 1) % 10 -eq 0) {
-        Write-Host ("  {0}/{1} - CPU {2}% - RAM {3} Mo - GPU {4}%" -f ($i + 1), $nombre, $ligne.cpu_pct, $ligne.ram_mo, $ligne.gpu_pct)
+        $suffixe = if ($Arbre) { " - arbre $($pids.Count) proc." } else { "" }
+        Write-Host ("  {0}/{1} - CPU {2}% - RAM {3} Mo - GPU {4}%{5}" -f ($i + 1), $nombre, $ligne.cpu_pct, $ligne.ram_mo, $ligne.gpu_pct, $suffixe)
     }
 }
 
@@ -246,6 +325,7 @@ $ramSys = @($retenues | Where-Object { $_.ram_sys_mo -ne "N/A" } | ForEach-Objec
 $resume = @()
 $resume += "=== RESUME P0 ==="
 $resume += ("processus       : {0} (PID {1})" -f $processus.ProcessName, $IdProc)
+$resume += ("mode            : {0}" -f $(if ($Arbre) { "arbre de processus" } else { "PID seul" }))
 $resume += ("echantillons    : {0} collectes, {1} ignores, {2} retenus" -f $lignes.Count, $ignorer, $retenues.Count)
 $resume += ("CPU  moyenne    : {0:N2} %" -f (Moyenne $cpu))
 $resume += ("CPU  p95        : {0:N2} %" -f (Centile95 $cpu))
