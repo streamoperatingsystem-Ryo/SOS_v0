@@ -116,6 +116,16 @@ impl ConvertisseurNv12 {
         &self,
         bgra: &ID3D11Texture2D,
     ) -> Result<ID3D11Texture2D, ErreurEncodage> {
+        let nv12 = self.creer_cible()?;
+        self.convertir_vers(bgra, &nv12)?;
+        Ok(nv12)
+    }
+
+    /// Crée une texture NV12 réutilisable comme cible du video processor.
+    ///
+    /// C'est la texture que le chemin zéro-copie enregistre **une fois**
+    /// auprès de NVENC (lot 0.2g-γ) : elle est réécrite à chaque frame.
+    pub fn creer_cible(&self) -> Result<ID3D11Texture2D, ErreurEncodage> {
         let desc_nv12 = D3D11_TEXTURE2D_DESC {
             Width: self.largeur,
             Height: self.hauteur,
@@ -136,8 +146,20 @@ impl ConvertisseurNv12 {
         unsafe { self.device.CreateTexture2D(&desc_nv12, None, Some(&mut nv12)) }.map_err(
             |e| ErreurEncodage::Gpu(format!("CreateTexture2D NV12 : {}", e.message())),
         )?;
-        let nv12 = nv12.ok_or_else(|| ErreurEncodage::Gpu("texture NV12 nulle".into()))?;
+        nv12.ok_or_else(|| ErreurEncodage::Gpu("texture NV12 nulle".into()))
+    }
 
+    /// Convertit une texture BGRA **dans une texture NV12 existante**.
+    ///
+    /// Variante du chemin zéro-copie : la cible est enregistrée une fois
+    /// auprès de l'encodeur puis réécrite à chaque frame. Sûr en mode
+    /// synchrone (`enableEncodeAsync = 0`) : la frame est consommée par
+    /// `nvEncLockBitstream` avant le `Blt` suivant.
+    pub fn convertir_vers(
+        &self,
+        bgra: &ID3D11Texture2D,
+        cible: &ID3D11Texture2D,
+    ) -> Result<(), ErreurEncodage> {
         let desc_sortie = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
             ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
             Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
@@ -148,7 +170,7 @@ impl ConvertisseurNv12 {
         let mut vue_sortie: Option<ID3D11VideoProcessorOutputView> = None;
         unsafe {
             self.video_device.CreateVideoProcessorOutputView(
-                &nv12,
+                cible,
                 &self.enumerateur,
                 &desc_sortie,
                 Some(&mut vue_sortie),
@@ -221,7 +243,7 @@ impl ConvertisseurNv12 {
         resultat
             .map_err(|e| ErreurEncodage::Gpu(format!("VideoProcessorBlt : {}", e.message())))?;
 
-        Ok(nv12)
+        Ok(())
     }
 
     /// Variante pour les encodeurs qui refusent une surface « render target » :

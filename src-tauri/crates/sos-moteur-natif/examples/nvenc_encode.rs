@@ -10,9 +10,10 @@
 //!     [moniteur] [sortie.h264] [frames] [fps] [kbps]
 //! ```
 //!
-//! ⚠️ Ce lot prouve le chemin ; il n'alimente **pas** encore des images
-//! différentes à chaque frame (la texture est enregistrée une fois). La
-//! mesure P0-a avec frames vivantes est le lot 0.2g-γ.
+//! ⚠️ La texture NV12 est **persistante** (créée une fois, enregistrée une
+//! fois) et réécrite à chaque frame par le video processor : les images
+//! encodées sont vivantes. La mesure P0-a sur ce chemin rejoue le protocole
+//! de `docs/features/moteur-natif/mesures-p0.md` (lot 0.2g-γ).
 
 #[path = "nvenc/ffi.rs"]
 mod ffi;
@@ -163,14 +164,6 @@ fn main() {
     }
     println!("Encodeur initialise");
 
-    let texture_bgra = match capture.prochaine_texture(Duration::from_secs(5)) {
-        Ok(t) => t,
-        Err(e) => {
-            eprintln!("Aucune texture : {e}");
-            sdk.detruire(encoder);
-            return;
-        }
-    };
     let convertisseur = match ConvertisseurNv12::nouveau(&contexte, largeur, hauteur, fps) {
         Ok(c) => c,
         Err(e) => {
@@ -179,15 +172,15 @@ fn main() {
             return;
         }
     };
-    let texture_nv12 = match convertisseur.convertir(&texture_bgra) {
+    let texture_nv12 = match convertisseur.creer_cible() {
         Ok(t) => t,
         Err(e) => {
-            eprintln!("Conversion GPU impossible : {e}");
+            eprintln!("Texture NV12 impossible : {e}");
             sdk.detruire(encoder);
             return;
         }
     };
-    println!("Texture NV12 produite sur GPU");
+    println!("Texture NV12 persistante creee (reecrite a chaque frame)");
 
     let ressource = match sdk.enregistrer_texture(encoder, texture_nv12.as_raw(), largeur, hauteur) {
         Ok(r) => r,
@@ -229,11 +222,38 @@ fn main() {
     };
 
     let debut = Instant::now();
+    let intervalle = Duration::from_secs_f64(1.0 / fps as f64);
     let mut octets = 0usize;
     let mut paquets = 0usize;
+    let mut capturees = 0u32;
+    let mut sans_maj = 0u32;
+    let mut en_retard = 0u32;
     let mut erreur = None;
 
     for i in 0..frames {
+        // Cadence : la boucle tourne à `fps`, indépendamment de WGC.
+        let echeance = debut + intervalle * i;
+        let maintenant = Instant::now();
+        if maintenant < echeance {
+            std::thread::sleep(echeance - maintenant);
+        } else if i > 0 {
+            en_retard += 1;
+        }
+
+        // WGC ne délivre des frames que sur changement d'écran : tentative
+        // non bloquante. Sans frame, on ré-encode le contenu précédent —
+        // compteur honnête, jamais un drop silencieux.
+        match capture.prochaine_texture(Duration::ZERO) {
+            Ok(texture) => match convertisseur.convertir_vers(&texture, &texture_nv12) {
+                Ok(()) => capturees += 1,
+                Err(e) => {
+                    erreur = Some(format!("frame {i} : conversion : {e}"));
+                    break;
+                }
+            },
+            Err(_) => sans_maj += 1,
+        }
+
         let pts = (i as i64 * 1_000_000) / fps as i64;
         match sdk.encoder_image(
             encoder,
@@ -283,6 +303,9 @@ fn main() {
             println!(
                 "{paquets} paquets, {octets} octets → {sortie} ({:.0} kbps)",
                 (octets as f64 * 8.0) / (frames as f64 / fps as f64).max(0.001) / 1000.0
+            );
+            println!(
+                "Capture : {capturees}/{frames} frames — {sans_maj} sans mise a jour, {en_retard} en retard"
             );
             println!("Verifier : ffmpeg -i {sortie} -f null -");
         }
