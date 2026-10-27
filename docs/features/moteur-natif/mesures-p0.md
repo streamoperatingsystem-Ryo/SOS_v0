@@ -24,28 +24,39 @@ réévaluation.
 La latence capture→encode est **relevée mais non bloquante** : elle informe le
 gouverneur, elle ne décide pas du go.
 
+## Deux mesures distinctes — ne pas les confondre
+
+| Mesure | Comparaison | Statut |
+|---|---|---|
+| **P0-a — pipeline seul** | OBS : **une** capture d'écran, **sans** browser source ↔ spike : capture + NVENC | réalisable **maintenant** |
+| **P0-b — fonctionnalités équivalentes** | OBS avec chat/alertes (browser sources) ↔ moteur natif avec compositeur | **impossible avant P2** (compositeur) |
+
+> ⚠️ Le spike actuel ne compose rien : il capture un moniteur et encode.
+> Comparer ce spike à OBS **avec** browser sources serait biaisé en notre
+> faveur. **P0-a valide la chaîne ; P0-b décide du go/no-go.**
+> Tant que P0-b n'est pas mesurable, le verdict reste **provisoire**.
+
 ## Scène de référence
 
-Une seule scène, figée, identique des deux côtés de la comparaison :
+### P0-a — pipeline seul
 
-- 1 capture de jeu
-- 1 caméra
-- 1 chat
-- 1 alerte
+Une seule source, identique des deux côtés :
 
-**1080p60, 30 minutes d'enregistrement local** (pas de stream : le réseau
-introduirait une variable).
+- 1 capture d'écran (moniteur), résolution native ;
+- **aucune** browser source, aucune caméra, aucun overlay ;
+- enregistrement local H.264, 30 min.
 
-> ⚠️ **OBS doit tourner AVEC ses browser sources.** C'est tout l'enjeu : ce
-> qu'on cherche à supprimer, c'est le navigateur dans le chemin de sortie. Une
-> baseline « OBS nu, 3 sources natives » ne prouve rien — le plan §1.2 le dit
-> explicitement, OBS nu est déjà proche de l'optimum GPU.
+### P0-b — fonctionnalités équivalentes (après P2)
+
+- 1 capture de jeu, 1 caméra, 1 chat, 1 alerte ;
+- OBS **avec** ses browser sources ;
+- 1080p60, 30 min d'enregistrement local.
 
 ## Outillage
 
 | Grandeur | Outil | Remarque |
 |---|---|---|
-| CPU, RSS | PDH `\Process(*)` ou `Get-Process` | **même outil des deux côtés**, sinon les chiffres ne sont pas comparables |
+| CPU, RSS | `tools/mesure-p0.ps1` | **même script des deux côtés** (PDH anglais, CSV invariant) |
 | GPU | PDH `\GPU Engine(*)\Utilization Percentage`, agrégé par PID | vendor-agnostic (déjà utilisé par `conso.rs`) |
 | Drops | OBS : fenêtre **Stats** (`frames missed due to rendering lag`, `skipped frames due to encoding lag`) ; spike : ses propres compteurs | métrique commune = frames perdues / total |
 | Latence | PresentMon | **proxy** : mesure la présentation du jeu, pas la chaîne capture→encode. À documenter comme tel |
@@ -68,6 +79,45 @@ chiffres côté Rust. Les deux côtés sont mesurés **avec les mêmes outils**.
 
 Les 30 minutes ne sont pas décoratives : c'est la durée nécessaire pour que la
 dérive thermique et la fragmentation des files se manifestent.
+
+## Commandes (P0-a)
+
+```powershell
+# Spike — OBLIGATOIREMENT en release (le debug tombe à ~12 fps)
+cd src-tauri
+cargo build --release -p sos-moteur-natif --example encode_nvenc
+
+$spike = Start-Process -FilePath "target\release\examples\encode_nvenc.exe" `
+  -ArgumentList '0','C:\temp\spike.h264','0','60','6000','h264_nvenc','1800' `
+  -PassThru
+
+# Mesure — même harnais que OBS
+powershell -ExecutionPolicy Bypass -File ..\tools\mesure-p0.ps1 `
+  -IdProc $spike.Id -DureeSecondes 1800 -Sortie ..\mesures\spike-run1.csv
+```
+
+> ⚠️ En debug, la conversion NV12 prend ~77 ms/frame : la mesure ne veut rien
+> dire. Toujours `--release`.
+
+## Verdict global (lot 0.3)
+
+### P0-a — verdict **provisoire** (chaîne capture→encode)
+
+À remplir après les relevés P0-a :
+
+| Cible | PC principal | PC ancien | Tenue ? |
+|---|---|---|---|
+| CPU ≤ 0,7 × | | | |
+| RAM ≤ 0,5 × | | | |
+| Drops = 0 | | | |
+
+### P0-b — verdict **décisionnel** (fonctionnalités équivalentes)
+
+À remplir **après P2** (compositeur), même tableau, même méthode.
+
+**Go** si 2 cibles sur 3 tenues **sur les machines de la matrice**, en P0-b.
+Un P0-a favorable mais un P0-b défavorable = **STOP** : c'est le P0-b qui
+décide, parce que c'est lui qui compare des fonctionnalités équivalentes.
 
 ## Feuille de relevé — à remplir par machine
 
@@ -97,7 +147,9 @@ Le **verdict** se calcule ligne par ligne, jamais de mémoire :
 
 ## Verdict global (lot 0.3)
 
-À remplir **après** tous les relevés :
+### P0-a — verdict **provisoire** (chaîne capture→encode)
+
+À remplir après les relevés P0-a :
 
 | Cible | PC principal | PC ancien | Tenue ? |
 |---|---|---|---|
@@ -105,9 +157,13 @@ Le **verdict** se calcule ligne par ligne, jamais de mémoire :
 | RAM ≤ 0,5 × | | | |
 | Drops = 0 | | | |
 
-**Go** si 2 cibles sur 3 tenues **sur les machines de la matrice**. Sinon :
-**STOP** — pas de plan de six mois sur une intuition, réévaluation avant toute
-ligne de moteur.
+### P0-b — verdict **décisionnel** (fonctionnalités équivalentes)
+
+À remplir **après P2** (compositeur), même tableau, même méthode.
+
+**Go** si 2 cibles sur 3 tenues **sur les machines de la matrice**, en P0-b.
+Un P0-a favorable mais un P0-b défavorable = **STOP** : c'est le P0-b qui
+décide, parce que c'est lui qui compare des fonctionnalités équivalentes.
 
 ## Pièges — à ne pas refaire
 
