@@ -115,12 +115,26 @@ fn main() {
 
     let debut = Instant::now();
     let mut rafraichies = 0u32;
+    let mut en_retard = 0u32;
+    let mut retard_max_us = 0u64;
+    let intervalle_us = 1_000_000 / fps as u64;
 
     for i in 0..frames {
         let cible = debut + Duration::from_micros(i as u64 * 1_000_000 / fps as u64);
         let maintenant = Instant::now();
         if cible > maintenant {
             std::thread::sleep(cible - maintenant);
+        }
+
+        // Retard = temps réel après la cible. Un retard > 1 intervalle est
+        // une échéance manquée (le pipeline ne tient pas le fps).
+        let apres = Instant::now();
+        let retard = apres.saturating_duration_since(cible);
+        if retard > Duration::from_micros(intervalle_us) {
+            en_retard += 1;
+        }
+        if retard.as_micros() as u64 > retard_max_us {
+            retard_max_us = retard.as_micros() as u64;
         }
 
         // Re-capture non bloquante : rafraîchit si l'écran change.
@@ -159,6 +173,15 @@ fn main() {
             println!(
                 "{} octets NV12 poussés, débit cible {} kbps → {}",
                 resume.octets_entree, kbps, sortie
+            );
+            let attendu = (duree.as_micros() as u64 * fps as u64 / 1_000_000) as u32;
+            let drops = attendu.saturating_sub(frames);
+            println!(
+                "Frames poussées : {} | en retard : {} | retard max : {} ms | drops estimés : {}",
+                resume.frames_poussees,
+                en_retard,
+                retard_max_us / 1000,
+                drops
             );
         }
         Err(e) => {

@@ -19,6 +19,8 @@ use super::ErreurEncodage;
 pub struct ResumeFfmpeg {
     /// Octets NV12 poussés dans le pipe.
     pub octets_entree: usize,
+    /// Nombre de frames effectivement poussées.
+    pub frames_poussees: u64,
     /// Sortie d'erreur (vide si succès).
     pub stderr: String,
     /// Code de sortie du processus.
@@ -39,6 +41,7 @@ pub struct EncodeurFfmpeg {
     hauteur: u32,
     taille_frame: usize,
     octets_entree: usize,
+    frames_poussees: u64,
 }
 
 impl EncodeurFfmpeg {
@@ -121,6 +124,7 @@ impl EncodeurFfmpeg {
             hauteur,
             taille_frame: (largeur as usize * hauteur as usize * 3) / 2,
             octets_entree: 0,
+            frames_poussees: 0,
         })
     }
 
@@ -155,6 +159,7 @@ impl EncodeurFfmpeg {
             ErreurEncodage::Sortie(format!("écriture dans FFmpeg : {e}"))
         })?;
         self.octets_entree += nv12.len();
+        self.frames_poussees += 1;
         Ok(())
     }
 
@@ -169,6 +174,7 @@ impl EncodeurFfmpeg {
 
         Ok(ResumeFfmpeg {
             octets_entree: self.octets_entree,
+            frames_poussees: self.frames_poussees,
             stderr: String::from_utf8_lossy(&sortie.stderr).trim().to_string(),
             code: sortie.status.code(),
         })
