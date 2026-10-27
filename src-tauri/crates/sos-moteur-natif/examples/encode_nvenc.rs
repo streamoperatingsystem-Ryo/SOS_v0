@@ -29,6 +29,10 @@ fn main() {
     let encodeur = args
         .next()
         .unwrap_or_else(|| "h264_nvenc".to_string());
+    // 7e argument optionnel : duree en secondes. Si fourni, la boucle tourne
+    // en TEMPS REEL (cadencee au fps) pendant cette duree — condition d'une
+    // mesure P0 representative (30 min).
+    let duree_s: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(0);
 
     let ffmpeg = match chemin_sidecar() {
         Ok(p) => p,
@@ -99,8 +103,45 @@ fn main() {
     };
     println!("Encodeur : {encodeur}");
 
+    let frames = if duree_s > 0 {
+        duree_s.saturating_mul(fps)
+    } else {
+        frames
+    };
+    println!(
+        "Boucle : {} frames à {} fps{}",
+        frames,
+        fps,
+        if duree_s > 0 {
+            format!(" pendant {} s (temps réel)", duree_s)
+        } else {
+            " (sans cadencement)".to_string()
+        }
+    );
+
     let debut = Instant::now();
+    let mut nv12 = nv12;
+    let mut rafraichies = 0u32;
+
     for i in 0..frames {
+        // Cadence : cible = début + i / fps.
+        let cible = debut + std::time::Duration::from_micros(i as u64 * 1_000_000 / fps as u64);
+        let maintenant = Instant::now();
+        if cible > maintenant {
+            std::thread::sleep(cible - maintenant);
+        }
+
+        // Re-capture non bloquante : sur un écran qui change, la frame est
+        // rafraîchie ; sinon on réutilise la précédente.
+        if let Ok(f) = capture.prochaine_frame(std::time::Duration::from_millis(0)) {
+            if f.largeur & !1 == largeur && f.hauteur & !1 == hauteur {
+                if let Ok(v) = bgra_vers_nv12(&f.pixels, largeur, hauteur) {
+                    nv12 = v;
+                    rafraichies += 1;
+                }
+            }
+        }
+
         if let Err(e) = enc.pousser(&nv12) {
             eprintln!("Frame {i} refusée : {e}");
             std::process::exit(7);
@@ -118,10 +159,11 @@ fn main() {
                 std::process::exit(8);
             }
             println!(
-                "\n{} frames en {} ms ({:.1} fps d'alimentation)",
+                "\n{} frames en {} ms ({:.1} fps d'alimentation, {} re-capturées)",
                 frames,
                 duree.as_millis(),
-                frames as f64 / duree.as_secs_f64().max(0.001)
+                frames as f64 / duree.as_secs_f64().max(0.001),
+                rafraichies
             );
             println!(
                 "{} octets NV12 poussés, débit cible {} kbps → {}",
