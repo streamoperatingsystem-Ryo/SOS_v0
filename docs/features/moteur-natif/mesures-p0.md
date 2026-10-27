@@ -131,6 +131,7 @@ secondes ignorées ; `p95` calculé sur l'ensemble des échantillons retenus) :
 |---|---|---|---|---|---|---|---|---|---|
 | PC principal | OBS | 0,75 % | 1,25 % | 849,5 Mo | 871,7 Mo | 49,2 % | 0 (Stats 0/0) | `N/A` | référence |
 | PC principal | spike | 2,07 % | 2,62 % | 183,5 Mo | 187,9 Mo | 32,3 % | 0 structurel, 188 frames en retard | `N/A` | voir verdict |
+| PC principal | spike zéro-copie (2026-10-28) | 0,05 % | 0,20 % | 59,6 Mo | 59,8 Mo | 28,8 % | non mesurable, 14 en retard (0,013 %) | `N/A` | voir verdict révisé |
 | PC ancien | OBS | `N/A` | | | | | | | non mesuré |
 | PC ancien | spike | `N/A` | | | | | | | non mesuré |
 
@@ -142,6 +143,34 @@ Stabilité intra-run (contrôle de dérive, 6 tranches de 5 min) :
 
 Aucune tendance : ni throttling thermique, ni fragmentation de file, ni
 croissance mémoire sur 30 min. C'est ce qui autorise la lecture par blocs.
+
+### Relevé du 2026-10-28 — spike zéro-copie (lot 0.2g-γ)
+
+Même protocole, même machine, même scène : seule la chaîne côté spike change.
+`nvenc_encode` (SDK NVENC) consomme directement une texture NV12 D3D11
+**persistante**, réécrite à chaque frame par le video processor ; plus de
+readback BGRA, plus de conversion CPU, plus de pipe ffmpeg (aucun processus
+enfant).
+
+- 108 000 frames en 1 799 987 ms = **60,0 fps exact**, 872 Mo (3 875 kbps) ;
+- **89 989/108 000 frames capturées (83,3 %)** — l'ancien spike était à
+  83,2 % : conditions comparables ; 18 011 frames sans mise à jour
+  (ré-encodage du contenu précédent), **14 en retard** (0,013 %) ;
+- décodage intégral du flux : `ffmpeg -v error … -f null -` → exit 0.
+
+| Bloc (5 min) | CPU moy | RAM moy | GPU moy |
+|---|---|---|---|
+| 1 | 0,05 % | 59,2 Mo | 31,31 % |
+| 2 | 0,05 % | 59,7 Mo | 30,18 % |
+| 3 | 0,03 % | 59,8 Mo | 29,60 % |
+| 4 | 0,05 % | 59,8 Mo | 29,03 % |
+| 5 | 0,05 % | 59,8 Mo | 27,90 % |
+| 6 (231 éch., tronqué) | 0,05 % | 59,5 Mo | 23,65 % |
+| **Médiane** | **0,05 %** | **59,8 Mo** | **29,3 %** |
+
+Réserve de mesure : 0,05 % de 16 cœurs ≈ 8 ms/s, alors que
+`TotalProcessorTime` avance par ticks de ~15,6 ms (≈ 0,1 % de 16 cœurs) — la
+valeur défendable est le **p95 = 0,20 %** (0,16 × OBS, seuil 0,7 ×).
 
 Le **verdict** se calcule ligne par ligne, jamais de mémoire :
 
@@ -235,10 +264,32 @@ rejouer **exactement** ce protocole. Tant que le CPU du spike reste à
 ≈3,5 ms/frame au-dessus d'OBS, le mode natif est disqualifié sur les PC
 anciens — c'est-à-dire précisément là où il devait gagner.
 
+**Condition remplie le 2026-10-28** — par le SDK NVENC (pas par le MFT,
+écarté en `d10cacc`) : voir le relevé zéro-copie ci-dessus et le verdict
+révisé qui suit.
+
 **Ce que ce verdict ne tranche pas** : P0-b (fonctionnalités équivalentes),
 qui exige le compositeur (phase P2) et reste la mesure **décisionnelle** du
 plan. Un P0-a défavorable n'autorise pas à conclure sur P0-b, et
 inversement.
+
+#### Verdict P0-a révisé — chemin zéro-copie (2026-10-28)
+
+| Cible | PC principal (zéro-copie) | PC ancien | Tenue ? |
+|---|---|---|---|
+| CPU ≤ 0,7 × | **0,07 ×** (0,05 % / 0,75 % ; p95 0,20 % → 0,16 ×) | `N/A` | **OUI** |
+| RAM ≤ 0,5 × | **0,07 ×** (59,6 Mo / 849,5 Mo) | `N/A` | **OUI** |
+| Drops = 0 | OBS 0 ; spike **non mesurable** (14 en retard, 0,013 %) | `N/A` | **N/A** |
+
+**Verdict P0-a révisé (2026-10-28) : 2 cibles sur 3 tenues — le no-go du
+2026-10-27 ne s'applique plus.** Il qualifiait l'ancien spike (readback
+BGRA → conversion CPU NV12 → pipe ffmpeg), pas la chaîne zéro-copie. La
+cible CPU est tenue d'un facteur ≈10 en moyenne (≈4 sur le p95, 0,20 %).
+
+Ce que ce verdict ne dit pas : la mesure ne couvre que la chaîne
+capture→encode (P0-a), sur une seule machine (NVIDIA). P0-b
+(fonctionnalités équivalentes, compositeur P2) reste la mesure
+**décisionnelle**.
 
 ### P0-b — verdict **décisionnel** (fonctionnalités équivalentes)
 
