@@ -13,8 +13,9 @@ use windows::Win32::Foundation::BOOL;
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor,
     ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
-    D3D11_BIND_RENDER_TARGET, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+    D3D11_BIND_RENDER_TARGET, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+    D3D11_USAGE_STAGING, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
     D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
@@ -255,5 +256,77 @@ impl ConvertisseurNv12 {
 
         unsafe { self.context.CopyResource(&cible, &rendu) };
         Ok(cible)
+    }
+
+    /// Lit une texture NV12 GPU vers un buffer NV12 linéaire (Y puis UV).
+    ///
+    /// C'est la seule copie mémoire du chemin FFmpeg : elle remplace la
+    /// conversion par pixel (~20 ms/frame) par une copie (~1-2 ms).
+    pub fn lire_texture_nv12(
+        &self,
+        texture: &ID3D11Texture2D,
+    ) -> Result<Vec<u8>, ErreurEncodage> {
+        let mut desc = D3D11_TEXTURE2D_DESC::default();
+        unsafe { texture.GetDesc(&mut desc) };
+
+        let desc_staging = D3D11_TEXTURE2D_DESC {
+            Width: desc.Width,
+            Height: desc.Height,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: desc.Format,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_STAGING,
+            BindFlags: 0,
+            CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+            MiscFlags: 0,
+        };
+
+        let mut staging: Option<ID3D11Texture2D> = None;
+        unsafe { self.device.CreateTexture2D(&desc_staging, None, Some(&mut staging)) }.map_err(
+            |e| ErreurEncodage::Gpu(format!("CreateTexture2D staging NV12 : {}", e.message())),
+        )?;
+        let staging =
+            staging.ok_or_else(|| ErreurEncodage::Gpu("texture staging NV12 nulle".into()))?;
+
+        unsafe { self.context.CopyResource(&staging, texture) };
+
+        let largeur = desc.Width as usize;
+        let hauteur = desc.Height as usize;
+        let taille_y = largeur * hauteur;
+        let mut nv12 = vec![0u8; taille_y + taille_y / 2];
+
+        // Plan Y (sous-ressource 0).
+        let mut mappee = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe { self.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mappee)) }.map_err(
+            |e| ErreurEncodage::Gpu(format!("Map NV12 Y : {}", e.message())),
+        )?;
+        unsafe {
+            for y in 0..hauteur {
+                let src = (mappee.pData as *const u8).add(y * mappee.RowPitch as usize);
+                let dst = nv12.as_mut_ptr().add(y * largeur);
+                std::ptr::copy_nonoverlapping(src, dst, largeur);
+            }
+            self.context.Unmap(&staging, 0);
+        }
+
+        // Plan UV (sous-ressource 1) : largeur octets par ligne, h/2 lignes.
+        let mut mappee = D3D11_MAPPED_SUBRESOURCE::default();
+        unsafe { self.context.Map(&staging, 1, D3D11_MAP_READ, 0, Some(&mut mappee)) }.map_err(
+            |e| ErreurEncodage::Gpu(format!("Map NV12 UV : {}", e.message())),
+        )?;
+        unsafe {
+            for y in 0..hauteur / 2 {
+                let src = (mappee.pData as *const u8).add(y * mappee.RowPitch as usize);
+                let dst = nv12.as_mut_ptr().add(taille_y + y * largeur);
+                std::ptr::copy_nonoverlapping(src, dst, largeur);
+            }
+            self.context.Unmap(&staging, 1);
+        }
+
+        Ok(nv12)
     }
 }

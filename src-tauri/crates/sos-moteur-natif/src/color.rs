@@ -43,45 +43,43 @@ pub fn bgra_vers_nv12(
     let taille_uv = w * h / 2;
     let mut nv12 = vec![0u8; taille_y + taille_uv];
 
-    // Plan Y
+    // Plan Y — BT.709 plage limitée, arithmétique entière (pas de f32).
+    // Y = ((47R + 157G + 16B + 128) >> 8) + 16
     for y in 0..h {
         for x in 0..w {
             let i = (y * w + x) * 4;
-            let b = pixels[i] as f32 / 255.0;
-            let g = pixels[i + 1] as f32 / 255.0;
-            let r = pixels[i + 2] as f32 / 255.0;
-
-            let y_prime = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-            nv12[y * w + x] = (16.0 + 219.0 * y_prime).round().clamp(16.0, 235.0) as u8;
+            let b = pixels[i] as i32;
+            let g = pixels[i + 1] as i32;
+            let r = pixels[i + 2] as i32;
+            let yv = ((47 * r + 157 * g + 16 * b + 128) >> 8) + 16;
+            nv12[y * w + x] = yv.clamp(16, 235) as u8;
         }
     }
 
-    // Plan UV (sous-échantillonnage 2×2)
+    // Plan UV (sous-échantillonnage 2×2, moyennes entières).
     let base_uv = taille_y;
     for y in (0..h).step_by(2) {
         for x in (0..w).step_by(2) {
-            let mut somme_u = 0.0f32;
-            let mut somme_v = 0.0f32;
-
+            let mut sr = 0i32;
+            let mut sg = 0i32;
+            let mut sb = 0i32;
             for dy in 0..2 {
                 for dx in 0..2 {
                     let i = ((y + dy) * w + (x + dx)) * 4;
-                    let b = pixels[i] as f32 / 255.0;
-                    let g = pixels[i + 1] as f32 / 255.0;
-                    let r = pixels[i + 2] as f32 / 255.0;
-
-                    let y_prime = 0.2126 * r + 0.7152 * g + 0.0722 * b;
-                    somme_u += (b - y_prime) / 1.8556;
-                    somme_v += (r - y_prime) / 1.5748;
+                    sb += pixels[i] as i32;
+                    sg += pixels[i + 1] as i32;
+                    sr += pixels[i + 2] as i32;
                 }
             }
-
-            let u = (128.0 + 224.0 * (somme_u / 4.0)).round().clamp(16.0, 240.0) as u8;
-            let v = (128.0 + 224.0 * (somme_v / 4.0)).round().clamp(16.0, 240.0) as u8;
-
+            // Moyenne des 4 pixels (division par 4), puis conversion.
+            let r = sr >> 2;
+            let g = sg >> 2;
+            let b = sb >> 2;
+            let u = (((-26 * r - 87 * g + 112 * b + 128) >> 8) + 128).clamp(16, 240);
+            let v = (((112 * r - 102 * g - 10 * b + 128) >> 8) + 128).clamp(16, 240);
             let index = base_uv + (y / 2) * w + x;
-            nv12[index] = u;
-            nv12[index + 1] = v;
+            nv12[index] = u as u8;
+            nv12[index + 1] = v as u8;
         }
     }
 

@@ -1,16 +1,15 @@
-//! Encodage **matériel via FFmpeg** (NVENC/AMF/QSV) — déblocage du P0.
+//! Encodage **matériel via FFmpeg** (NVENC/AMF/QSV) — chemin P0.
 //!
-//! Capture WGC → NV12 (CPU, assumé) → sidecar FFmpeg → H.264.
-//! Ce chemin remplace temporairement le MFT matériel (bloqué sur la machine
-//! de test) pour permettre une mesure P0 honnête, avec encodage matériel.
+//! Capture WGC → NV12 (CPU, conversion entière optimisée) → sidecar FFmpeg.
+//! La conversion GPU existe (`color_gpu.rs`) mais la lecture du plan UV NV12
+//! échoue sur le pilote de test ; le MFT zéro-copie reste le lot 0.2f.
 //!
 //! ```text
-//! cargo run -p sos-moteur-natif --example encode_nvenc -- \
-//!     [moniteur] [sortie.h264] [frames] [fps] [kbps] [encodeur]
-//! ffmpeg -v error -i sortie.h264 -f null -
+//! cargo run --release -p sos-moteur-natif --example encode_nvenc -- \
+//!     [moniteur] [sortie.h264] [frames] [fps] [kbps] [encodeur] [duree_s]
 //! ```
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use sos_moteur_natif::capture::enumeration::enumerer_moniteurs;
 use sos_moteur_natif::capture::wgc::CaptureMoniteur;
@@ -26,12 +25,7 @@ fn main() {
     let frames: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(120);
     let fps: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(30);
     let kbps: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(6000);
-    let encodeur = args
-        .next()
-        .unwrap_or_else(|| "h264_nvenc".to_string());
-    // 7e argument optionnel : duree en secondes. Si fourni, la boucle tourne
-    // en TEMPS REEL (cadencee au fps) pendant cette duree — condition d'une
-    // mesure P0 representative (30 min).
+    let encodeur = args.next().unwrap_or_else(|| "h264_nvenc".to_string());
     let duree_s: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(0);
 
     let ffmpeg = match chemin_sidecar() {
@@ -41,7 +35,6 @@ fn main() {
             std::process::exit(2);
         }
     };
-    println!("FFmpeg : {}", ffmpeg.display());
 
     let moniteurs = match enumerer_moniteurs() {
         Ok(m) => m,
@@ -66,7 +59,12 @@ fn main() {
         }
     };
 
-    let frame = match capture.prochaine_frame(std::time::Duration::from_secs(5)) {
+    let (largeur, hauteur) = capture.taille();
+    let largeur = largeur & !1;
+    let hauteur = hauteur & !1;
+    println!("Capture : {largeur}×{hauteur}");
+
+    let frame = match capture.prochaine_frame(Duration::from_secs(5)) {
         Ok(f) => f,
         Err(e) => {
             eprintln!("Aucune frame : {e}");
@@ -74,12 +72,8 @@ fn main() {
         }
     };
 
-    let largeur = frame.largeur & !1;
-    let hauteur = frame.hauteur & !1;
-    println!("Frame : {}×{}", largeur, hauteur);
-
     let debut_conv = Instant::now();
-    let nv12 = match bgra_vers_nv12(&frame.pixels, largeur, hauteur) {
+    let mut nv12 = match bgra_vers_nv12(&frame.pixels, largeur, hauteur) {
         Ok(v) => v,
         Err(e) => {
             eprintln!("Conversion impossible : {e}");
@@ -87,7 +81,7 @@ fn main() {
         }
     };
     println!(
-        "NV12 : {} octets en {} ms (copie CPU assumée pour le P0)",
+        "NV12 : {} octets en {} ms (conversion entière optimisée)",
         nv12.len(),
         debut_conv.elapsed().as_millis()
     );
@@ -120,20 +114,17 @@ fn main() {
     );
 
     let debut = Instant::now();
-    let mut nv12 = nv12;
     let mut rafraichies = 0u32;
 
     for i in 0..frames {
-        // Cadence : cible = début + i / fps.
-        let cible = debut + std::time::Duration::from_micros(i as u64 * 1_000_000 / fps as u64);
+        let cible = debut + Duration::from_micros(i as u64 * 1_000_000 / fps as u64);
         let maintenant = Instant::now();
         if cible > maintenant {
             std::thread::sleep(cible - maintenant);
         }
 
-        // Re-capture non bloquante : sur un écran qui change, la frame est
-        // rafraîchie ; sinon on réutilise la précédente.
-        if let Ok(f) = capture.prochaine_frame(std::time::Duration::from_millis(0)) {
+        // Re-capture non bloquante : rafraîchit si l'écran change.
+        if let Ok(f) = capture.prochaine_frame(Duration::from_millis(0)) {
             if f.largeur & !1 == largeur && f.hauteur & !1 == hauteur {
                 if let Ok(v) = bgra_vers_nv12(&f.pixels, largeur, hauteur) {
                     nv12 = v;
