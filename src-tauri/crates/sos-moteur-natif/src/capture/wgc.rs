@@ -1,4 +1,5 @@
-//! Session de capture d'un moniteur via Windows Graphics Capture.
+//! Session de capture d'un moniteur **ou d'une fenêtre** via Windows Graphics
+//! Capture.
 //!
 //! Le device D3D11 est **partagé** avec l'encodeur (`gpu::ContexteGpu`) :
 //! c'est la condition du zéro-copie. `prochaine_texture` rend la texture GPU
@@ -24,6 +25,7 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
+use windows::Win32::Foundation::HWND;
 use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
@@ -49,17 +51,20 @@ impl FrameBgra {
     }
 }
 
-/// Session de capture d'un moniteur.
+/// Session de capture WGC — moniteur ou fenêtre.
 ///
 /// La session partage le `ContexteGpu` fourni ; tout est libéré au `Drop`.
-pub struct CaptureMoniteur {
+pub struct CaptureWgc {
     contexte: Arc<ContexteGpu>,
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     taille: (u32, u32),
 }
 
-impl CaptureMoniteur {
+/// Alias historique : le cas d'usage principal reste le moniteur.
+pub type CaptureMoniteur = CaptureWgc;
+
+impl CaptureWgc {
     /// Démarre la capture en créant son propre contexte GPU sur l'adaptateur
     /// du moniteur.
     pub fn demarrer(moniteur: &Moniteur) -> Result<Self, ErreurCapture> {
@@ -80,6 +85,52 @@ impl CaptureMoniteur {
         // toléré : WGC free-threaded n'exige pas la MTA.
         let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
 
+        let interop: IGraphicsCaptureItemInterop =
+            windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
+                .map_err(|e| ErreurCapture::Wgc(e.message()))?;
+
+        let item: GraphicsCaptureItem =
+            unsafe { interop.CreateForMonitor(HMONITOR(moniteur.hmon as *mut _)) }
+                .map_err(|e| ErreurCapture::Wgc(e.message()))?;
+
+        Self::demarrer_item(item, contexte)
+    }
+
+    /// Démarre la capture d'une **fenêtre** (HWND natif) sur son propre
+    /// contexte GPU (adaptateur par défaut).
+    ///
+    /// Une fenêtre réduite ne produit pas d'image : WGC exige une fenêtre
+    /// visible à l'écran.
+    pub fn demarrer_fenetre(hwnd: isize) -> Result<Self, ErreurCapture> {
+        let contexte = Arc::new(
+            ContexteGpu::creer(None).map_err(|e| ErreurCapture::Gpu(e.to_string()))?,
+        );
+        Self::demarrer_fenetre_avec(hwnd, contexte)
+    }
+
+    /// Démarre la capture d'une fenêtre sur un contexte GPU existant.
+    pub fn demarrer_fenetre_avec(
+        hwnd: isize,
+        contexte: Arc<ContexteGpu>,
+    ) -> Result<Self, ErreurCapture> {
+        let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
+
+        let interop: IGraphicsCaptureItemInterop =
+            windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
+                .map_err(|e| ErreurCapture::Wgc(e.message()))?;
+
+        let item: GraphicsCaptureItem =
+            unsafe { interop.CreateForWindow(HWND(hwnd as *mut _)) }
+                .map_err(|e| ErreurCapture::Wgc(e.message()))?;
+
+        Self::demarrer_item(item, contexte)
+    }
+
+    /// Tronc commun moniteur/fenêtre : device WinRT, pool, session.
+    fn demarrer_item(
+        item: GraphicsCaptureItem,
+        contexte: Arc<ContexteGpu>,
+    ) -> Result<Self, ErreurCapture> {
         let dxgi_device: IDXGIDevice = contexte
             .device()
             .cast()
@@ -89,14 +140,6 @@ impl CaptureMoniteur {
         let winrt_device: IDirect3DDevice = inspectable
             .cast()
             .map_err(|e| ErreurCapture::Gpu(e.message()))?;
-
-        let interop: IGraphicsCaptureItemInterop =
-            windows::core::factory::<GraphicsCaptureItem, IGraphicsCaptureItemInterop>()
-                .map_err(|e| ErreurCapture::Wgc(e.message()))?;
-
-        let item: GraphicsCaptureItem =
-            unsafe { interop.CreateForMonitor(HMONITOR(moniteur.hmon as *mut _)) }
-                .map_err(|e| ErreurCapture::Wgc(e.message()))?;
 
         let taille = item.Size().map_err(|e| ErreurCapture::Wgc(e.message()))?;
 
@@ -259,7 +302,7 @@ impl CaptureMoniteur {
     }
 }
 
-impl Drop for CaptureMoniteur {
+impl Drop for CaptureWgc {
     fn drop(&mut self) {
         // Ordre : session puis pool. Les erreurs de fermeture sont ignorées.
         let _ = &self.session;

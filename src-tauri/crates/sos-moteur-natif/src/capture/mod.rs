@@ -1,8 +1,8 @@
 //! Capture de sources.
 //!
-//! LOT 0.2b : **moniteurs uniquement** (WGC + DXGI). Les fenêtres, la caméra
-//! et les médias arrivent aux lots suivants — ne pas élargir ce module sans
-//! mettre à jour le plan.
+//! LOT 2.2 : **moniteurs et fenêtres** (WGC). La caméra et les médias
+//! arrivent aux lots suivants — ne pas élargir ce module sans mettre à jour
+//! le plan.
 //!
 //! Invariant du moteur : une source = **une** session refcountée, partagée
 //! par tous ses consommateurs (widgets, fond, aperçu, enregistrement).
