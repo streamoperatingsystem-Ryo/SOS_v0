@@ -10,6 +10,8 @@
 //! État au LOT 0.2a : socle + énumération des adaptateurs. Rien d'autre.
 
 pub mod capture;
+pub mod color;
+pub mod encode;
 pub mod gpu;
 
 /// Version du crate (affichée par le diagnostic, utile au support).
