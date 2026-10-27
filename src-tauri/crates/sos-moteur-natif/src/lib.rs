@@ -11,6 +11,7 @@
 
 pub mod capture;
 pub mod color;
+pub mod color_gpu;
 pub mod encode;
 pub mod gpu;
 

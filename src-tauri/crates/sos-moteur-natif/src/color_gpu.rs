@@ -1,0 +1,223 @@
+//! Conversion BGRA → NV12 **sur GPU** (D3D11 Video Processor).
+//!
+//! Remplace la conversion CPU du spike : aucune frame ne repasse par la
+//! mémoire système entre la capture et l'encodeur (plan §11, invariant 1).
+//!
+//! Le video processor gère la conversion colorimétrique (BT.709) et le
+//! sous-échantillonnage 4:2:0 côté pilote.
+
+use std::mem::ManuallyDrop;
+use std::ptr::null_mut;
+
+use windows::Win32::Foundation::BOOL;
+use windows::Win32::Graphics::Direct3D11::{
+    ID3D11Device, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice, ID3D11VideoProcessor,
+    ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView, ID3D11VideoProcessorOutputView,
+    D3D11_BIND_RENDER_TARGET, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
+    D3D11_USAGE_DEFAULT, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0,
+    D3D11_VIDEO_PROCESSOR_STREAM, D3D11_VIDEO_USAGE_PLAYBACK_NORMAL, D3D11_VPIV_DIMENSION_TEXTURE2D,
+    D3D11_VPOV_DIMENSION_TEXTURE2D,
+};
+use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_NV12, DXGI_RATIONAL, DXGI_SAMPLE_DESC};
+use windows::core::Interface;
+
+use crate::encode::ErreurEncodage;
+use crate::gpu::ContexteGpu;
+
+/// Convertisseur BGRA → NV12 attaché à un contexte GPU.
+pub struct ConvertisseurNv12 {
+    device: ID3D11Device,
+    video_device: ID3D11VideoDevice,
+    video_context: ID3D11VideoContext,
+    enumerateur: ID3D11VideoProcessorEnumerator,
+    processeur: ID3D11VideoProcessor,
+    largeur: u32,
+    hauteur: u32,
+}
+
+impl ConvertisseurNv12 {
+    /// Prépare le video processor pour une taille et un fps donnés.
+    pub fn nouveau(
+        contexte: &ContexteGpu,
+        largeur: u32,
+        hauteur: u32,
+        fps: u32,
+    ) -> Result<Self, ErreurEncodage> {
+        let largeur = largeur & !1;
+        let hauteur = hauteur & !1;
+        if largeur == 0 || hauteur == 0 || fps == 0 {
+            return Err(ErreurEncodage::Conversion(
+                "dimensions ou fps invalides".into(),
+            ));
+        }
+
+        let video_device: ID3D11VideoDevice = contexte
+            .device()
+            .cast()
+            .map_err(|e| ErreurEncodage::Gpu(format!("ID3D11VideoDevice : {}", e.message())))?;
+        let video_context: ID3D11VideoContext = contexte
+            .context()
+            .cast()
+            .map_err(|e| ErreurEncodage::Gpu(format!("ID3D11VideoContext : {}", e.message())))?;
+
+        let desc = D3D11_VIDEO_PROCESSOR_CONTENT_DESC {
+            InputFrameFormat: D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
+            InputFrameRate: DXGI_RATIONAL {
+                Numerator: fps,
+                Denominator: 1,
+            },
+            InputWidth: largeur,
+            InputHeight: hauteur,
+            OutputFrameRate: DXGI_RATIONAL {
+                Numerator: fps,
+                Denominator: 1,
+            },
+            OutputWidth: largeur,
+            OutputHeight: hauteur,
+            Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
+        };
+
+        let enumerateur = unsafe { video_device.CreateVideoProcessorEnumerator(&desc) }.map_err(
+            |e| ErreurEncodage::Gpu(format!("CreateVideoProcessorEnumerator : {}", e.message())),
+        )?;
+
+        let processeur = unsafe { video_device.CreateVideoProcessor(&enumerateur, 0) }
+            .map_err(|e| ErreurEncodage::Gpu(format!("CreateVideoProcessor : {}", e.message())))?;
+
+        Ok(Self {
+            device: contexte.device().clone(),
+            video_device,
+            video_context,
+            enumerateur,
+            processeur,
+            largeur,
+            hauteur,
+        })
+    }
+
+    pub fn largeur(&self) -> u32 {
+        self.largeur
+    }
+
+    pub fn hauteur(&self) -> u32 {
+        self.hauteur
+    }
+
+    /// Convertit une texture BGRA en texture NV12 (GPU uniquement).
+    ///
+    /// La texture NV12 est neuve à chaque appel ; le pool viendra avec le
+    /// compositeur (lot 2.1).
+    pub fn convertir(
+        &self,
+        bgra: &ID3D11Texture2D,
+    ) -> Result<ID3D11Texture2D, ErreurEncodage> {
+        let desc_nv12 = D3D11_TEXTURE2D_DESC {
+            Width: self.largeur,
+            Height: self.hauteur,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+
+        let mut nv12: Option<ID3D11Texture2D> = None;
+        unsafe { self.device.CreateTexture2D(&desc_nv12, None, Some(&mut nv12)) }.map_err(
+            |e| ErreurEncodage::Gpu(format!("CreateTexture2D NV12 : {}", e.message())),
+        )?;
+        let nv12 = nv12.ok_or_else(|| ErreurEncodage::Gpu("texture NV12 nulle".into()))?;
+
+        let desc_sortie = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
+            ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
+                Texture2D: D3D11_TEX2D_VPOV { MipSlice: 0 },
+            },
+        };
+
+        let mut vue_sortie: Option<ID3D11VideoProcessorOutputView> = None;
+        unsafe {
+            self.video_device.CreateVideoProcessorOutputView(
+                &nv12,
+                &self.enumerateur,
+                &desc_sortie,
+                Some(&mut vue_sortie),
+            )
+        }
+        .map_err(|e| {
+            ErreurEncodage::Gpu(format!(
+                "CreateVideoProcessorOutputView : {}",
+                e.message()
+            ))
+        })?;
+        let vue_sortie =
+            vue_sortie.ok_or_else(|| ErreurEncodage::Gpu("vue de sortie nulle".into()))?;
+
+        let desc_entree = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
+            FourCC: 0,
+            ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
+            Anonymous: D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0 {
+                Texture2D: D3D11_TEX2D_VPIV {
+                    MipSlice: 0,
+                    ArraySlice: 0,
+                },
+            },
+        };
+
+        let mut vue_entree: Option<ID3D11VideoProcessorInputView> = None;
+        unsafe {
+            self.video_device.CreateVideoProcessorInputView(
+                bgra,
+                &self.enumerateur,
+                &desc_entree,
+                Some(&mut vue_entree),
+            )
+        }
+        .map_err(|e| {
+            ErreurEncodage::Gpu(format!(
+                "CreateVideoProcessorInputView : {}",
+                e.message()
+            ))
+        })?;
+        let vue_entree =
+            vue_entree.ok_or_else(|| ErreurEncodage::Gpu("vue d'entrée nulle".into()))?;
+
+        let mut flux = D3D11_VIDEO_PROCESSOR_STREAM {
+            Enable: BOOL(1),
+            OutputIndex: 0,
+            InputFrameOrField: 0,
+            PastFrames: 0,
+            FutureFrames: 0,
+            ppPastSurfaces: null_mut(),
+            pInputSurface: ManuallyDrop::new(Some(vue_entree)),
+            ppFutureSurfaces: null_mut(),
+            ppPastSurfacesRight: null_mut(),
+            pInputSurfaceRight: ManuallyDrop::new(None),
+            ppFutureSurfacesRight: null_mut(),
+        };
+
+        let resultat = unsafe {
+            self.video_context.VideoProcessorBlt(
+                &self.processeur,
+                &vue_sortie,
+                0,
+                std::slice::from_ref(&flux),
+            )
+        };
+
+        // Le flux n'est pas propriétaire : on libère explicitement la vue.
+        unsafe { ManuallyDrop::drop(&mut flux.pInputSurface) };
+
+        resultat
+            .map_err(|e| ErreurEncodage::Gpu(format!("VideoProcessorBlt : {}", e.message())))?;
+
+        Ok(nv12)
+    }
+}

@@ -1,13 +1,14 @@
 //! Session de capture d'un moniteur via Windows Graphics Capture.
 //!
-//! LOT 0.2b : **une frame à la demande**, en GPU, avec une seule copie CPU
-//! explicite pour la vérification (`prochaine_frame`). La boucle temps réel
-//! du moteur consommera la texture GPU directement — la copie CPU de ce lot
-//! ne doit **pas** être réutilisée dans le chemin de production.
+//! Le device D3D11 est **partagé** avec l'encodeur (`gpu::ContexteGpu`) :
+//! c'est la condition du zéro-copie. `prochaine_texture` rend la texture GPU
+//! telle quelle ; `prochaine_frame` ne sert qu'à la vérification (une copie
+//! CPU explicite, jamais dans le chemin de production).
 //!
 //! Réglages (plan §7.3) : frame pool **free-threaded** de 4 buffers, curseur
 //! capturé, aucune exigence MTA.
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows::core::Interface;
@@ -17,16 +18,12 @@ use windows::Graphics::Capture::{
 };
 use windows::Graphics::DirectX::Direct3D11::IDirect3DDevice;
 use windows::Graphics::DirectX::DirectXPixelFormat;
-use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0,
-};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Texture2D,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ,
-    D3D11_MAPPED_SUBRESOURCE, D3D11_SDK_VERSION, D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
+    ID3D11Texture2D, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ, D3D11_MAPPED_SUBRESOURCE,
+    D3D11_TEXTURE2D_DESC, D3D11_USAGE_STAGING,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
-use windows::Win32::Graphics::Dxgi::{IDXGIAdapter, IDXGIAdapter1, IDXGIDevice};
+use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Graphics::Gdi::HMONITOR;
 use windows::Win32::System::WinRT::Direct3D11::{
     CreateDirect3D11DeviceFromDXGIDevice, IDirect3DDxgiInterfaceAccess,
@@ -35,8 +32,9 @@ use windows::Win32::System::WinRT::Graphics::Capture::IGraphicsCaptureItemIntero
 use windows::Win32::System::WinRT::{RoInitialize, RO_INIT_MULTITHREADED};
 
 use super::{ErreurCapture, Moniteur};
+use crate::gpu::ContexteGpu;
 
-/// Une frame capturée, en BGRA8, lignes de haut en bas.
+/// Une frame capturée, en BGRA8, lignes de haut en bas (vérification seule).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FrameBgra {
     pub largeur: u32,
@@ -53,33 +51,37 @@ impl FrameBgra {
 
 /// Session de capture d'un moniteur.
 ///
-/// La session est propriétaire du device, du pool et de la session WGC :
-/// tout est libéré au `Drop` (le moteur gardera la session vivante tant que
-/// le refcount est > 0).
+/// La session partage le `ContexteGpu` fourni ; tout est libéré au `Drop`.
 pub struct CaptureMoniteur {
-    device: ID3D11Device,
-    context: ID3D11DeviceContext,
+    contexte: Arc<ContexteGpu>,
     pool: Direct3D11CaptureFramePool,
     session: GraphicsCaptureSession,
     taille: (u32, u32),
 }
 
 impl CaptureMoniteur {
-    /// Démarre la capture d'un moniteur.
-    ///
-    /// Le device D3D11 est créé **sur l'adaptateur du moniteur** : sur une
-    /// machine hybride, cela évite une copie inter-GPU (plan §6.3).
+    /// Démarre la capture en créant son propre contexte GPU sur l'adaptateur
+    /// du moniteur.
     pub fn demarrer(moniteur: &Moniteur) -> Result<Self, ErreurCapture> {
+        let contexte = Arc::new(
+            ContexteGpu::creer(Some(moniteur.adaptateur_index))
+                .map_err(|e| ErreurCapture::Gpu(e.to_string()))?,
+        );
+        Self::demarrer_avec(moniteur, contexte)
+    }
+
+    /// Démarre la capture sur un contexte GPU existant (partagé avec
+    /// l'encodeur → zéro-copie).
+    pub fn demarrer_avec(
+        moniteur: &Moniteur,
+        contexte: Arc<ContexteGpu>,
+    ) -> Result<Self, ErreurCapture> {
         // WinRT en MTA. RPC_E_CHANGED_MODE (déjà initialisé en STA) est
         // toléré : WGC free-threaded n'exige pas la MTA.
         let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
 
-        let adaptateur: IDXGIAdapter1 = crate::gpu::ouvrir_adaptateur(moniteur.adaptateur_index)
-            .map_err(|e| ErreurCapture::Gpu(e.to_string()))?;
-
-        let (device, context) = creer_device(Some(&adaptateur))?;
-
-        let dxgi_device: IDXGIDevice = device
+        let dxgi_device: IDXGIDevice = contexte
+            .device()
             .cast()
             .map_err(|e| ErreurCapture::Gpu(e.message()))?;
         let inspectable = unsafe { CreateDirect3D11DeviceFromDXGIDevice(&dxgi_device) }
@@ -118,8 +120,7 @@ impl CaptureMoniteur {
             .map_err(|e| ErreurCapture::Wgc(e.message()))?;
 
         Ok(Self {
-            device,
-            context,
+            contexte,
             pool,
             session,
             taille: (taille.Width.max(0) as u32, taille.Height.max(0) as u32),
@@ -131,15 +132,45 @@ impl CaptureMoniteur {
         self.taille
     }
 
+    /// Contexte GPU partagé (device/context à réutiliser pour l'encodage).
+    pub fn contexte(&self) -> &Arc<ContexteGpu> {
+        &self.contexte
+    }
+
+    /// Attend la prochaine frame et rend sa **texture GPU** (zéro-copie).
+    ///
+    /// La texture appartient au frame pool : elle doit être consommée
+    /// immédiatement (conversion/encodage), pas conservée.
+    pub fn prochaine_texture(
+        &self,
+        timeout: Duration,
+    ) -> Result<ID3D11Texture2D, ErreurCapture> {
+        let frame = self.attendre_frame(timeout)?;
+        let surface = frame
+            .Surface()
+            .map_err(|e| ErreurCapture::Wgc(e.message()))?;
+        let access: IDirect3DDxgiInterfaceAccess = surface
+            .cast()
+            .map_err(|e| ErreurCapture::Wgc(e.message()))?;
+        unsafe { access.GetInterface() }.map_err(|e| ErreurCapture::Gpu(e.message()))
+    }
+
     /// Attend la prochaine frame et la rapatrie en mémoire CPU (BGRA8).
     ///
-    /// ⚠️ Usage **vérification uniquement** (exemple / tests). Le chemin de
-    /// production consommera la texture GPU sans copie CPU.
+    /// ⚠️ Usage **vérification uniquement** (exemple / tests).
     pub fn prochaine_frame(&self, timeout: Duration) -> Result<FrameBgra, ErreurCapture> {
+        let frame = self.attendre_frame(timeout)?;
+        self.lire_frame(&frame)
+    }
+
+    fn attendre_frame(
+        &self,
+        timeout: Duration,
+    ) -> Result<Direct3D11CaptureFrame, ErreurCapture> {
         let debut = Instant::now();
         loop {
             match self.pool.TryGetNextFrame() {
-                Ok(frame) => return self.lire_frame(&frame),
+                Ok(frame) => return Ok(frame),
                 Err(e) => {
                     if debut.elapsed() >= timeout {
                         return Err(ErreurCapture::Wgc(format!(
@@ -184,15 +215,24 @@ impl CaptureMoniteur {
         };
 
         let mut staging: Option<ID3D11Texture2D> = None;
-        unsafe { self.device.CreateTexture2D(&staging_desc, None, Some(&mut staging)) }
-            .map_err(|e| ErreurCapture::Gpu(e.message()))?;
+        unsafe {
+            self.contexte
+                .device()
+                .CreateTexture2D(&staging_desc, None, Some(&mut staging))
+        }
+        .map_err(|e| ErreurCapture::Gpu(e.message()))?;
         let staging = staging.ok_or_else(|| ErreurCapture::Gpu("texture staging nulle".into()))?;
 
-        unsafe { self.context.CopyResource(&staging, &texture) };
+        unsafe {
+            self.contexte
+                .context()
+                .CopyResource(&staging, &texture)
+        };
 
         let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe {
-            self.context
+            self.contexte
+                .context()
                 .Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mapped))
         }
         .map_err(|e| ErreurCapture::Gpu(e.message()))?;
@@ -208,7 +248,7 @@ impl CaptureMoniteur {
                 let dst = pixels.as_mut_ptr().add(y * ligne_octets);
                 std::ptr::copy_nonoverlapping(src, dst, ligne_octets);
             }
-            self.context.Unmap(&staging, 0);
+            self.contexte.context().Unmap(&staging, 0);
         }
 
         Ok(FrameBgra {
@@ -221,53 +261,8 @@ impl CaptureMoniteur {
 
 impl Drop for CaptureMoniteur {
     fn drop(&mut self) {
-        // Ordre : session puis pool. Les erreurs de fermeture sont ignorées
-        // (l'objet est de toute façon détruit).
+        // Ordre : session puis pool. Les erreurs de fermeture sont ignorées.
         let _ = &self.session;
         let _ = &self.pool;
-        let _ = &self.context;
-        let _ = &self.device;
     }
-}
-
-/// Crée un device D3D11 BGRA (obligatoire pour WGC), sur l'adaptateur donné
-/// ou sur l'adaptateur par défaut.
-fn creer_device(
-    adaptateur: Option<&IDXGIAdapter1>,
-) -> Result<(ID3D11Device, ID3D11DeviceContext), ErreurCapture> {
-    let adaptateur_dxgi: Option<IDXGIAdapter> = match adaptateur {
-        Some(a) => Some(a.cast().map_err(|e| ErreurCapture::Gpu(e.message()))?),
-        None => None,
-    };
-
-    // Règle D3D11 : avec un adaptateur explicite, le driver type DOIT être
-    // UNKNOWN (sinon E_INVALIDARG). Sans adaptateur, on demande HARDWARE.
-    let driver_type = if adaptateur_dxgi.is_some() {
-        D3D_DRIVER_TYPE_UNKNOWN
-    } else {
-        D3D_DRIVER_TYPE_HARDWARE
-    };
-
-    let mut device: Option<ID3D11Device> = None;
-    let mut context: Option<ID3D11DeviceContext> = None;
-    let mut niveau = D3D_FEATURE_LEVEL_11_0;
-
-    unsafe {
-        D3D11CreateDevice(
-            adaptateur_dxgi.as_ref(),
-            driver_type,
-            None::<&windows::Win32::Foundation::HMODULE>,
-            D3D11_CREATE_DEVICE_BGRA_SUPPORT,
-            Some(&[D3D_FEATURE_LEVEL_11_0]),
-            D3D11_SDK_VERSION,
-            Some(&mut device),
-            Some(&mut niveau),
-            Some(&mut context),
-        )
-    }
-    .map_err(|e| ErreurCapture::Gpu(e.message()))?;
-
-    let device = device.ok_or_else(|| ErreurCapture::Gpu("device D3D11 nul".into()))?;
-    let context = context.ok_or_else(|| ErreurCapture::Gpu("contexte D3D11 nul".into()))?;
-    Ok((device, context))
 }

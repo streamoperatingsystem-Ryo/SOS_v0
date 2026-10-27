@@ -10,6 +10,9 @@
 
 use std::fmt;
 
+#[cfg(windows)]
+use windows::core::Interface;
+
 /// Un adaptateur DXGI tel que le voit le moteur.
 ///
 /// `luid` est l'identité stable de la carte (elle ne change pas quand les
@@ -134,6 +137,87 @@ pub fn ouvrir_adaptateur(
     let factory: IDXGIFactory1 =
         unsafe { CreateDXGIFactory1() }.map_err(|e| ErreurGpu::Dxgi(e.message()))?;
     unsafe { factory.EnumAdapters1(index) }.map_err(|e| ErreurGpu::Dxgi(e.message()))
+}
+
+/// Contexte GPU partagé : **un seul** device pour la capture, la composition
+/// et l'encodage. C'est la condition du zéro-copie (plan §11).
+///
+/// Le device est créé sur l'adaptateur demandé (ou l'adaptateur par défaut)
+/// avec le support BGRA exigé par WGC.
+#[cfg(windows)]
+pub struct ContexteGpu {
+    device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    adaptateur_index: Option<u32>,
+}
+
+#[cfg(windows)]
+impl ContexteGpu {
+    /// Crée le device D3D11 (FL 11_0, BGRA).
+    pub fn creer(adaptateur_index: Option<u32>) -> Result<Self, ErreurGpu> {
+        use windows::Win32::Graphics::Direct3D::{
+            D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN, D3D_FEATURE_LEVEL_11_0,
+        };
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext,
+            D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_CREATE_DEVICE_FLAG,
+            D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
+        };
+        use windows::Win32::Graphics::Dxgi::IDXGIAdapter;
+
+        let adaptateur: Option<IDXGIAdapter> = match adaptateur_index {
+            Some(i) => {
+                let a1 = ouvrir_adaptateur(i)?;
+                Some(a1.cast().map_err(|e| ErreurGpu::Dxgi(e.message()))?)
+            }
+            None => None,
+        };
+
+        // Règle D3D11 : adaptateur explicite ⇒ D3D_DRIVER_TYPE_UNKNOWN.
+        let driver_type = if adaptateur.is_some() {
+            D3D_DRIVER_TYPE_UNKNOWN
+        } else {
+            D3D_DRIVER_TYPE_HARDWARE
+        };
+
+        let mut device: Option<ID3D11Device> = None;
+        let mut context: Option<ID3D11DeviceContext> = None;
+
+        unsafe {
+            D3D11CreateDevice(
+                adaptateur.as_ref(),
+                driver_type,
+                None::<&windows::Win32::Foundation::HMODULE>,
+                D3D11_CREATE_DEVICE_FLAG(
+                    D3D11_CREATE_DEVICE_BGRA_SUPPORT.0 | D3D11_CREATE_DEVICE_VIDEO_SUPPORT.0,
+                ),
+                Some(&[D3D_FEATURE_LEVEL_11_0]),
+                D3D11_SDK_VERSION,
+                Some(&mut device),
+                None,
+                Some(&mut context),
+            )
+        }
+        .map_err(|e| ErreurGpu::Dxgi(e.message()))?;
+
+        Ok(Self {
+            device: device.ok_or_else(|| ErreurGpu::Dxgi("device D3D11 nul".into()))?,
+            context: context.ok_or_else(|| ErreurGpu::Dxgi("contexte D3D11 nul".into()))?,
+            adaptateur_index,
+        })
+    }
+
+    pub fn device(&self) -> &windows::Win32::Graphics::Direct3D11::ID3D11Device {
+        &self.device
+    }
+
+    pub fn context(&self) -> &windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext {
+        &self.context
+    }
+
+    pub fn adaptateur_index(&self) -> Option<u32> {
+        self.adaptateur_index
+    }
 }
 
 /// Convertit une chaîne UTF-16 terminée par zéro (description DXGI).
