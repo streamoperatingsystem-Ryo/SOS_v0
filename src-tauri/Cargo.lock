@@ -4614,6 +4614,7 @@ dependencies = [
  "serde_json",
  "sha2",
  "sos-moteur-api",
+ "sos-moteur-natif",
  "sos-scene",
  "tauri",
  "tauri-build",

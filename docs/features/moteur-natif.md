@@ -1204,8 +1204,8 @@ l'alignement, pas une régression.
 - **Dérive A/V longue non mesurée** : l'alignement est fait au démarrage ;
   une dérive sur 30 min n'est pas instrumentée (l'horloge audio et l'horloge
   vidéo sont indépendantes).
-- `Capacites` n'expose pas encore « audio » : l'UI ne peut pas l'afficher
-  avant un ajout de champ (contrat partagé, à faire avec l'intégration app).
+- `Capacites.audio` existe depuis le lot 1.4 (voir §32) : l'UI affiche
+  « Audio (loopback + micro) » quand le moteur actif le déclare.
 
 ### 31.6 Pièges vérifiés
 
@@ -1218,3 +1218,85 @@ l'alignement, pas une régression.
    le premier paquet.
 4. Les harnais n'installent pas de logger : les traces `log::info!` du moteur
    sont invisibles (`examples/audio_scene.rs` embarque un journal minimal).
+
+---
+
+## 32. Intégration app — lot 1.4 (2026-10-28)
+
+Le moteur natif est **branché dans l'application** : le crate est une
+dépendance de `src-tauri`, le registre porte les deux moteurs, et une sortie
+native se pilote depuis la barre latérale. Le mode OBS est inchangé
+(`obs.rs`, `obs_trou.rs`, `diffusion.html` non modifiés).
+
+### 32.1 Décisions tranchées
+
+| Question | Décision | Conséquence |
+|---|---|---|
+| Destination du fichier | **Dialogue « Enregistrer sous »** | Défaut proposé : `<app_data>/enregistrements/StreamOS-<horodatage>.mp4` (tout local) ; l'utilisateur choisit. `normaliser_chemin` ajoute `.mp4` et crée le dossier parent. |
+| Bouton | **Le bouton « Enregistrer » existant route selon le mode** | En mode `natif`, il ouvre le dialogue puis démarre/arrête la sortie native ; en mode `obs`, il ouvre la confirmation OBS comme avant. |
+| Paramètres | **Figés, affichés en lecture seule** | 60 fps, H.264, 6000 kb/s, preset `equilibre`, `AudioCfg::default()` (loopback + micro, gains 1000 ‰). |
+| `Capacites.audio` | **Ajouté** | Contrat `sos-moteur-api`, miroir `moteur.ts`, id `audio` dans `capacites_actives`, clé `moteur.cap.audio` dans les 8 locales. |
+
+### 32.2 Livré
+
+- `src-tauri/Cargo.toml` : dépendance `sos-moteur-natif`.
+- `moteur/mod.rs` : `RegistreMoteur { mode, natif_disponible: true, obs,
+  natif: MoteurNatif, session }` ; `moteur_etat` renvoie les capacités du
+  moteur **actif** ; `moteur_diag` renvoie encodeur/résolution/fps réels
+  (`None` avant démarrage) ; trois commandes de sortie.
+- `moteur/mode.rs` : `verifier_bascule(actuel, cible, live_actif,
+  natif_actif)` — refus symétrique (`LiveEnCours` / `SortieNatifEnCours`).
+- `lib.rs` : commandes enregistrées + teardown `RunEvent::Exit` →
+  `arreter_natif()`.
+- Frontend : `tauri.ts` (3 wrappers), `stores/moteur.ts`
+  (`sortieNatif`, `sortieNatifBusy`, `sortieNatifFichier`,
+  `demarrerEnregistrementNatif`, `arreterEnregistrementNatif`,
+  `rafraichirSortieNatif`), `Toolbar.svelte` (routage + état réel).
+
+### 32.3 Sémantique
+
+- **Démarrer** (`moteur_sortie_demarrer(chemin)`) : exige le mode `natif` et
+  aucune sortie en cours ; lit `ScenesState.scene`, `configurer_scene(&scene,
+  &HashMap::new(), data_dir)` (les cibles viennent de `Widget.captureCible`
+  persisté), puis `SortieCfg::fichier(chemin, Mp4)` avec `canvas =
+  (scene.canvasW, scene.canvasH)`. Retourne le chemin.
+- **État** (`moteur_sortie_etat`) : `{ actif, chemin, kbps, frames_perdues,
+  encodeur, degradation }` — `chemin`/`encodeur` valent `null` hors
+  enregistrement, `kbps` vaut 0 à l'arrêt (aucune valeur inventée).
+- **Arrêt** (`moteur_sortie_arreter`) : `arreter()` (joint le fil, finalise
+  le conteneur, muxe l'audio), retourne le chemin finalisé ou `null`.
+- **Bascule** : refusée si `en_cours()` (symétrique de `LiveEnCours`).
+- **Jamais de démarrage implicite** : aucun enregistrement au boot ni à la
+  connexion OBS.
+- L'UI suit l'état à 1 s **pendant** l'enregistrement seulement (aucun timer
+  au repos).
+
+### 32.4 Pièges vérifiés
+
+1. **Commandes `async` + `spawn_blocking`** : `demarrer_sortie` initialise
+   GPU + encodeur (~100–500 ms) et `arreter` attend le muxage audio (~1 s) —
+   en synchrone, la fenêtre gèle. Les commandes ne prennent que `AppHandle` :
+   les états (`RegistreMoteur`, `ScenesState`) sont relus **dans** le thread
+   bloquant, ce qui évite tout `State` non `'static` capturé.
+2. **Teardown obligatoire** : sans `RunEvent::Exit` → `arreter_natif()`, le
+   fil moteur et NVENC survivent à la fermeture et le MP4 reste non finalisé.
+3. **Scène sans média ni titre** : `demarrer_sortie` refuse
+   (`aucune source, média ni texte configuré`). L'erreur remonte telle quelle
+   dans le bloc moteur — pas de faux « enregistrement lancé ».
+4. **`moteur_basculer` relit l'état après bascule** (`chargerEtatMoteur`) :
+   sans cela l'UI garderait les capacités d'OBS en mode natif.
+5. **Le natif ne rend pas la scène complète** : ni chat, ni cadres SVG, ni
+   overlays, ni caméra, ni capture de jeu, ni RTMP/SRT. Une sortie native =
+   captures (trous avec cible) + médias + titres + audio. L'UI doit le dire.
+
+### 32.5 Vérification
+
+```
+cd src-tauri && cargo clippy --workspace --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif      # 66
+cargo test -p sos-scene             # 8
+cargo test -p sos-moteur-api        # 12
+cargo test -p streamos-v0           # 200 passed, 1 ignoré
+cd .. && npm run check              # 0 erreur
+npm run build                       # build production
+```

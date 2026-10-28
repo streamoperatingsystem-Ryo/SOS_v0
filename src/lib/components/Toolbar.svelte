@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, createMusiqueWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview, rafraichirOutputs } from "../stores/obs";
-  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs } from "../stores/moteur";
+  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs, sortieNatif, sortieNatifBusy, sortieNatifFichier, rafraichirSortieNatif, demarrerEnregistrementNatif, arreterEnregistrementNatif } from "../stores/moteur";
   import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, planningModalOpen, statistiquesModalOpen, obsWebSocketModalOpen, confirmObsOutputOpen } from "../stores/ui";
   import { jcActif, toggleJustChatting } from "../stores/justChatting";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
@@ -18,6 +18,8 @@
   import { get } from "svelte/store";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
+  import { appDataDir } from "@tauri-apps/api/path";
+  import { save } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import icoWidgets from "../../assets/ico/Widget.png";
   import icoModules from "../../assets/ico/Modules.png";
@@ -36,6 +38,10 @@
   let error = $derived($obsError);
   let streaming = $derived($obsStreaming);
   let recording = $derived($obsRecording);
+  // Mode natif : le bouton « Enregistrer » route vers la sortie native.
+  // La pastille et le libellé suivent le moteur réellement actif.
+  let natifMode = $derived($moteurEtat.mode === "natif");
+  let enregistre = $derived(natifMode ? $sortieNatif.actif : recording);
   let open = $derived($openSection);
   let cx = $derived($connexions);
   let twitchErr = $derived($twitchErreur);
@@ -91,8 +97,48 @@
   function onToggleStream() {
     confirmObsOutputOpen.set("stream");
   }
-  function onToggleRecord() {
+  /// Enregistrement : OBS ou natif selon le mode actif. En natif, l'utilisateur
+  /// choisit le fichier (dialogue) puis le backend démarre hors du thread UI.
+  async function onToggleRecord() {
+    if (natifMode) {
+      if ($sortieNatif.actif) {
+        await arreterEnregistrementNatif();
+        return;
+      }
+      const chemin = await choisirFichierSortie();
+      if (chemin) await demarrerEnregistrementNatif(chemin);
+      return;
+    }
     confirmObsOutputOpen.set("record");
+  }
+
+  /// Horodatage local `AAAA-MM-JJ_HH-MM-SS` pour le nom par défaut.
+  function horodatage(): string {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, "0");
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+  }
+
+  /// Dialogue « Enregistrer sous ». Défaut dans `enregistrements/` du dossier
+  /// de données de l'app (tout local) ; `null` si l'utilisateur annule.
+  async function choisirFichierSortie(): Promise<string | null> {
+    const nom = `StreamOS-${horodatage()}.mp4`;
+    let defaut = nom;
+    try {
+      defaut = `${await appDataDir()}/enregistrements/${nom}`;
+    } catch {
+      // Repli : le dialogue s'ouvre sur son dernier dossier connu.
+    }
+    try {
+      return await save({
+        title: get(t)("moteur.enregistrerTitre"),
+        defaultPath: defaut,
+        filters: [{ name: "MP4", extensions: ["mp4"] }],
+      });
+    } catch (e) {
+      moteurErreur.set(String(e));
+      return null;
+    }
   }
 
   // Resync des libellés stream/record à l'ouverture de la section OBS :
@@ -284,6 +330,9 @@
     if (!tiktokUsername) tiktokUsername = (await lireUsernameSauve()) ?? "";
     await chargerEtatMoteur();
     await envoyerConnexionObs();
+    // Reprise d'affichage : si une sortie native tourne déjà (jamais au boot,
+    // mais l'UI ne doit pas mentir), le suivi 1 s démarre.
+    await rafraichirSortieNatif();
   });
 
   /// Bascule OBS ↔ natif. `liveActif` empêche le backend de couper un live
@@ -476,12 +525,12 @@
         </button>
         <button
           class="action output-btn"
-          class:actif={recording}
+          class:actif={enregistre}
           onclick={onToggleRecord}
-          disabled={status !== "connected" || $obsRecordBusy}
+          disabled={(!natifMode && status !== "connected") || $obsRecordBusy || $sortieNatifBusy}
         >
-          <span class="dot" class:on={recording}></span>
-          {recording ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
+          <span class="dot" class:on={enregistre}></span>
+          {enregistre ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
         </button>
         <span
           class="obs-status"
@@ -495,8 +544,8 @@
           {/if}
         </span>
         <!-- Moteur de diffusion (lot 1.5) : OBS ou natif. Le backend refuse
-             la bascule si un live tourne (jamais de coupure implicite) ; le
-             natif reste désactivé tant que le moteur Rust n'est pas branché. -->
+             la bascule si un live OBS ou une sortie native tourne (jamais de
+             coupure implicite). -->
         <div class="moteur-bloc">
           <span class="moteur-titre">{$t("moteur.titre")}</span>
           <div class="moteur-seg">
@@ -525,6 +574,26 @@
                 <li>{$t("moteur.cap." + cap)}</li>
               {/each}
             </ul>
+          {/if}
+          {#if natifMode}
+            <!-- Paramètres figés de la tranche : affichés, non réglables. -->
+            <p class="hint">{$t("moteur.sortieParametres")}</p>
+            {#if $sortieNatif.actif}
+              <p class="hint">
+                {$t("moteur.sortieEtat", { kbps: $sortieNatif.kbps, drops: $sortieNatif.frames_perdues })}
+              </p>
+              {#if $sortieNatif.encodeur}
+                <p class="hint">{$t("moteur.sortieEncodeur", { encodeur: $sortieNatif.encodeur })}</p>
+              {/if}
+              {#if $sortieNatif.chemin}
+                <p class="hint moteur-chemin">{$t("moteur.sortieFichier", { chemin: $sortieNatif.chemin })}</p>
+              {/if}
+            {:else if $sortieNatifFichier}
+              <p class="hint moteur-chemin">{$t("moteur.sortieFichier", { chemin: $sortieNatifFichier })}</p>
+            {/if}
+            {#if $sortieNatif.degradation}
+              <p class="hint moteur-erreur">{$sortieNatif.degradation}</p>
+            {/if}
           {/if}
           {#if $moteurErreur}
             <p class="hint moteur-erreur">{$moteurErreur}</p>
@@ -1033,6 +1102,10 @@
   }
   .moteur-erreur {
     color: var(--t-rouge);
+  }
+  .moteur-chemin {
+    word-break: break-all;
+    opacity: 0.7;
   }
   .sec-preview      { --accent-carte: var(--carte-jaune);    --accent-crochet: var(--crochet-jaune); }
   .sec-perso        { --accent-carte: var(--carte-violette); --accent-crochet: var(--crochet-violet); }

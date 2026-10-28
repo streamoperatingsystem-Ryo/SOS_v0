@@ -22,6 +22,8 @@ serde_json = "1"
 sos-scene = { path = "crates/sos-scene" }
 # Contrats des moteurs (anneau 2) — trait Moteur, Capacites, SortieCfg.
 sos-moteur-api = { path = "crates/sos-moteur-api" }
+# Moteur natif (anneau 2) — capture WGC, composition, encodage, audio.
+sos-moteur-natif = { path = "crates/sos-moteur-natif" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["fs", "cors"] }

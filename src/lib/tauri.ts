@@ -1542,6 +1542,31 @@ export const tauri = {
     await invoke("moteur_obs_connexion", { host, port, password });
   },
 
+  /// État de la sortie native. Aucune valeur inventée : `chemin` vaut `null`
+  /// hors enregistrement, `encodeur` reste `null` tant que rien n'a démarré.
+  async moteurSortieEtat(): Promise<{
+    actif: boolean;
+    chemin: string | null;
+    kbps: number;
+    frames_perdues: number;
+    encodeur: string | null;
+    degradation: string | null;
+  }> {
+    return await invoke("moteur_sortie_etat");
+  },
+
+  /// Démarre l'enregistrement natif (mode Rust). Le backend initialise GPU et
+  /// encodeur hors du thread UI ; il retourne le chemin du fichier créé.
+  async moteurSortieDemarrer(chemin: string): Promise<string> {
+    return await invoke<string>("moteur_sortie_demarrer", { chemin });
+  },
+
+  /// Arrête l'enregistrement natif : finalise le conteneur et muxe l'audio
+  /// (~1 s). Retourne le chemin finalisé, ou `null` si rien ne tournait.
+  async moteurSortieArreter(): Promise<string | null> {
+    return await invoke<string | null>("moteur_sortie_arreter");
+  },
+
   /// Liste les moniteurs vus par OBS (GetMonitorList) — sélecteur de la
   /// section Prévisualisation. Index OBS, PAS les index Win32.
   async obsProjecteurMoniteurs(

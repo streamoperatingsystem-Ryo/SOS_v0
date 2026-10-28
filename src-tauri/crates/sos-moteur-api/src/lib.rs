@@ -122,6 +122,8 @@ pub struct Capacites {
     pub fond_vert: bool,
     pub masque_shader: bool,
     pub cadres_animes: bool,
+    /// Sortie audio muxée dans le fichier (loopback + micro).
+    pub audio: bool,
     pub audio_par_app: bool,
     pub roi_encode: bool,
     pub multi_format: bool,
@@ -131,7 +133,7 @@ pub struct Capacites {
 }
 
 impl Capacites {
-    /// Aucune capacité : les 13 drapeaux à `false`.
+    /// Aucune capacité : les 14 drapeaux à `false`.
     pub fn aucune() -> Self {
         Self::default()
     }
@@ -146,6 +148,7 @@ impl Capacites {
             self.fond_vert,
             self.masque_shader,
             self.cadres_animes,
+            self.audio,
             self.audio_par_app,
             self.roi_encode,
             self.multi_format,
@@ -477,6 +480,7 @@ mod tests {
         assert!(!c.capture_ecran);
         assert!(!c.camera);
         assert!(!c.fond_vert);
+        assert!(!c.audio);
     }
 
     #[test]

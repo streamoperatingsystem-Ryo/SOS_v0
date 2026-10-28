@@ -4165,8 +4165,9 @@ pub fn run() {
             };
             app.manage(state.clone());
 
-            // Registre moteur — mode actif persisté (obs | natif). Le moteur
-            // natif n'est pas encore branché : la bascule est refusée proprement.
+            // Registre moteur — mode actif persisté (obs | natif). Les deux
+            // moteurs sont branchés : OBS (adaptateur obs-websocket) et le
+            // moteur natif (capture/composition/encodage sans OBS).
             let mode_moteur = config::lire_mode_moteur(app.handle())
                 .ok()
                 .flatten()
@@ -4520,6 +4521,9 @@ pub fn run() {
             moteur::moteur_diag,
             moteur::moteur_basculer,
             moteur::moteur_obs_connexion,
+            moteur::moteur_sortie_demarrer,
+            moteur::moteur_sortie_arreter,
+            moteur::moteur_sortie_etat,
             get_scene,
             update_scene,
             import_media,
@@ -4768,6 +4772,16 @@ pub fn run() {
             conso_etat,
             boite_noire_etat
         ])
-        .run(tauri::generate_context!())
-        .expect("erreur lors du lancement de StreamOS v0");
+        .build(tauri::generate_context!())
+        .expect("erreur lors du lancement de StreamOS v0")
+        .run(|app, event| {
+            // Teardown du moteur natif : joint le thread moteur et libère
+            // NVENC. Sans cela, fermer l'app en cours d'enregistrement
+            // laisserait le thread et l'encodeur vivants, MP4 non finalisé.
+            if let tauri::RunEvent::Exit = event {
+                if let Some(registre) = app.try_state::<moteur::RegistreMoteur>() {
+                    registre.arreter_natif();
+                }
+            }
+        });
 }

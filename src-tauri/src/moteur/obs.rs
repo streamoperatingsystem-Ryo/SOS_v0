@@ -126,6 +126,8 @@ impl Moteur for MoteurObs {
             masque_shader: false,
             // Browser source + SMIL : les cadres animés existent en OBS.
             cadres_animes: true,
+            // Desktop audio + micro sont muxés par OBS.
+            audio: true,
             audio_par_app: true,
             roi_encode: false,
             multi_format: true,

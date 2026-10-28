@@ -233,6 +233,8 @@ impl Moteur for MoteurNatif {
             fond_vert: false,
             masque_shader: false,
             cadres_animes: false,
+            // Loopback + micro muxés en AAC dans le fichier (P3 audio).
+            audio: true,
             audio_par_app: false,
             roi_encode: false,
             multi_format: false,
