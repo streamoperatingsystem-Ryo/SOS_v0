@@ -1130,3 +1130,91 @@ Budget 16,7 ms @60 fps : la passe ajoutée reste marginale (≤ 3 % en 4K).
 6. `Clear` sur une cible **premultipliée** avec `(0,0,0,0)` = transparent ;
    ne jamais effacer le canvas (il porte les calques composés).
 
+
+---
+
+## 31. Audio dans la sortie (2026-10-28)
+
+### 31.1 Décisions
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Muxage | **deux temps** : PCM capturé pendant l'enregistrement, FFmpeg muxe à l'arrêt | une 2ᵉ entrée FFmpeg en direct exige un pipe nommé Windows ; le live (RTMP) est déjà refusé et demandera un muxeur portant les PTS |
+| Sources | **loopback + micro** | un streamer a besoin des deux |
+| Gains | **millièmes entiers** (1000 = 1.0) dans `AudioCfg` | `SortieCfg` dérive `Eq` — un `f32` casserait le contrat partagé |
+| Resampling / mixage | **faits par FFmpeg** (`volume` + `amix`) | zéro code de rééchantillonnage côté Rust, une seule source de vérité |
+
+### 31.2 Livré
+
+- `sos-moteur-api` : `AudioCfg { loopback, micro, gain_loopback, gain_micro }`,
+  `SortieCfg.audio: Option<AudioCfg>`. `SortieCfg::fichier()` a du son par
+  défaut ; les harnais vidéo passent `None`. Gains bornés à 4000 ‰ dans
+  `valider()`.
+- `audio::piste` : **un thread par source** (WASAPI → PCM `s16le` dans
+  `%TEMP%`). `CapturePiste::attendre_demarrage` / `arreter() -> Piste`
+  (chemin, taux, canaux, gain, durée).
+- `output::ffmpeg::muxer_audio(chemin, pistes)` : `-c:v copy -c:a aac 192k`,
+  filtre `volume` par source → `amix` → `apad`, `-shortest`. Bascule
+  atomique (temporaire → sauvegarde → remplacement → suppression), avec
+  restauration si la bascule échoue.
+- `moteur.rs` : démarrage des captures avant la boucle, arrêt + muxage après
+  fermeture des sinks, suppression des PCM temporaires dans tous les cas.
+- Harnais `examples/audio_scene.rs` (journal `log` minimal intégré).
+
+### 31.3 Alignement A/V — piège corrigé
+
+Première mesure : **2,83 s d'audio pour 3 s de vidéo**. Deux causes :
+
+1. le buffer WASAPI partagé fait **200 ms** — le premier paquet n'arrive
+   qu'une fois rempli, donc le son démarrait 170 ms après la première frame ;
+2. `-shortest` sans `apad` **tronquait le fichier** à la longueur de l'audio.
+
+Correctifs : la boucle vidéo **ne démarre qu'après le premier paquet audio**
+(`attendre_demarrage`, 400 ms max), et `apad` complète une piste courte en
+silence avant `-shortest`. Mesure après correctif (3 s demandées) :
+
+| Flux | Durée |
+|---|---|
+| Vidéo | 2,81 s |
+| Loopback | 2,80 s |
+| Micro | 2,77 s |
+
+L'écart résiduel (< 40 ms) est la granularité d'un paquet. Le démarrage est
+retardé d'environ 200 ms (le temps de remplir le buffer) : c'est le prix de
+l'alignement, pas une régression.
+
+### 31.4 Validation (GTX 1070 Ti, 1360×768@60, 3 s)
+
+| Contrôle | Résultat |
+|---|---|
+| Flux du MP4 | **2** : H.264 1360×768 + **AAC 48 kHz stéréo** |
+| Décodage ffmpeg complet | exit 0 |
+| Gain 1000 ‰ (micro, bruit de pièce) | mean **−59,6 dB**, max −46,5 dB |
+| Gain 0 ‰ | mean **−91,0 dB** (silence numérique) → le filtre `volume` est bien appliqué |
+| PCM temporaires | supprimés après muxage |
+
+### 31.5 Limites (assumées)
+
+- **Fichier uniquement** : pas de muxage en direct (voir 31.1). RTMP/SRT
+  refusés comme avant.
+- **Loopback de l'appareil par défaut** seulement — pas de loopback par
+  processus (`Capacites.audio_par_app` reste `false`, phase P5).
+- Pas de mute/solo par source dans l'UI (gains fixes par `SortieCfg`).
+- Mode partagé WASAPI uniquement (pas d'exclusif), format du mixage système.
+- **Dérive A/V longue non mesurée** : l'alignement est fait au démarrage ;
+  une dérive sur 30 min n'est pas instrumentée (l'horloge audio et l'horloge
+  vidéo sont indépendantes).
+- `Capacites` n'expose pas encore « audio » : l'UI ne peut pas l'afficher
+  avant un ajout de champ (contrat partagé, à faire avec l'intégration app).
+
+### 31.6 Pièges vérifiés
+
+1. **`Capteur` n'est pas `Send`** (`IUnknown` → `NonNull<c_void>` dans
+   `windows-core` 0.58) : l'ouverture WASAPI doit rester **dans** le thread
+   audio. Ne pas ajouter d'`unsafe impl Send` sur un objet d'appartement —
+   l'alignement se fait par `attendre_demarrage`, pas en déplaçant le capteur.
+2. **`-shortest` sans `apad` coupe la vidéo** à la durée de l'audio.
+3. Le buffer WASAPI partagé (200 ms) décale le son si la vidéo démarre avant
+   le premier paquet.
+4. Les harnais n'installent pas de logger : les traces `log::info!` du moteur
+   sont invisibles (`examples/audio_scene.rs` embarque un journal minimal).

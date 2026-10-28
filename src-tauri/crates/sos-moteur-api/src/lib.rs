@@ -212,6 +212,45 @@ impl fmt::Debug for SinkCfg {
     }
 }
 
+/// Sources audio d'un enregistrement — loopback (son du PC) + micro.
+///
+/// Gains en **millièmes** (1000 = unité, 0 = muet) : `SortieCfg` dérive `Eq`,
+/// un `f32` casserait le contrat partagé.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AudioCfg {
+    /// Loopback du périphérique de sortie par défaut (= « desktop audio »).
+    pub loopback: bool,
+    /// Micro du périphérique d'entrée par défaut.
+    pub micro: bool,
+    /// Gain du loopback, en millièmes (1000 = 1.0).
+    pub gain_loopback: u32,
+    /// Gain du micro, en millièmes (1000 = 1.0).
+    pub gain_micro: u32,
+}
+
+impl AudioCfg {
+    /// `true` si au moins une source est demandée.
+    pub fn actif(&self) -> bool {
+        self.loopback || self.micro
+    }
+
+    /// Gain en facteur flottant (1000 → 1.0).
+    pub fn facteur(gain_milliemes: u32) -> f32 {
+        gain_milliemes as f32 / 1000.0
+    }
+}
+
+impl Default for AudioCfg {
+    fn default() -> Self {
+        Self {
+            loopback: true,
+            micro: true,
+            gain_loopback: 1000,
+            gain_micro: 1000,
+        }
+    }
+}
+
 /// Configuration complète d'un démarrage de sortie.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SortieCfg {
@@ -223,6 +262,9 @@ pub struct SortieCfg {
     pub preset: String,
     /// Clé de flux : **jamais journalisée** (masquée dans `Debug`).
     pub cle: Option<String>,
+    /// Pistes audio à enregistrer. `None` = sortie muette (comportement
+    /// historique des harnais vidéo).
+    pub audio: Option<AudioCfg>,
 }
 
 impl SortieCfg {
@@ -240,6 +282,9 @@ impl SortieCfg {
             debit_kbps: 6000,
             preset: "equilibre".to_string(),
             cle: None,
+            // Un enregistrement « produit » a du son par défaut ; les
+            // harnais vidéo passent explicitement `None`.
+            audio: Some(AudioCfg::default()),
         }
     }
 
@@ -264,6 +309,18 @@ impl SortieCfg {
                 "débit nul".to_string(),
             ));
         }
+        if let Some(audio) = self.audio {
+            for (nom, gain) in [
+                ("loopback", audio.gain_loopback),
+                ("micro", audio.gain_micro),
+            ] {
+                if gain > 4000 {
+                    return Err(ErreurMoteur::Configuration(format!(
+                        "gain {nom} hors bornes : {gain} millièmes (max 4000)"
+                    )));
+                }
+            }
+        }
         Ok(())
     }
 }
@@ -278,6 +335,7 @@ impl fmt::Debug for SortieCfg {
             .field("debit_kbps", &self.debit_kbps)
             .field("preset", &self.preset)
             .field("cle", &self.cle.as_ref().map(|_| "<masquée>"))
+            .field("audio", &self.audio)
             .finish()
     }
 }
@@ -455,6 +513,30 @@ mod tests {
         let mut cfg = SortieCfg::fichier("C:/tmp/x.mp4", Conteneur::Mp4);
         cfg.sinks.clear();
         assert!(matches!(cfg.valider(), Err(ErreurMoteur::Configuration(_))));
+
+        let mut cfg = SortieCfg::fichier("C:/tmp/x.mp4", Conteneur::Mp4);
+        cfg.audio = Some(AudioCfg {
+            gain_micro: 4001,
+            ..AudioCfg::default()
+        });
+        assert!(matches!(cfg.valider(), Err(ErreurMoteur::Configuration(_))));
+    }
+
+    #[test]
+    fn audio_cfg_defauts_et_gains() {
+        let cfg = AudioCfg::default();
+        assert!(cfg.loopback && cfg.micro && cfg.actif());
+        assert_eq!(AudioCfg::facteur(cfg.gain_loopback), 1.0);
+        assert_eq!(AudioCfg::facteur(500), 0.5);
+        assert!(!AudioCfg {
+            loopback: false,
+            micro: false,
+            gain_loopback: 1000,
+            gain_micro: 1000,
+        }
+        .actif());
+        // Un enregistrement « produit » a du son ; un harnais vidéo non.
+        assert!(SortieCfg::fichier("C:/tmp/x.mp4", Conteneur::Mp4).audio.is_some());
     }
 
     #[test]
@@ -474,6 +556,7 @@ mod tests {
             debit_kbps: 6000,
             preset: "equilibre".to_string(),
             cle: Some("secret-de-flux".to_string()),
+            audio: None,
         };
         let texte = format!("{cfg:?}");
         assert!(!texte.contains("secret-de-flux"));

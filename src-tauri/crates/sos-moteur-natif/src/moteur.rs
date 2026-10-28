@@ -557,12 +557,16 @@ fn boucle(
     };
 
     let mut sinks: Vec<Box<dyn Sink>> = Vec::new();
+    // Chemins des sorties fichier : le muxage audio se fait **après** la
+    // fermeture du conteneur, sur le fichier finalisé.
+    let mut chemins_sortie: Vec<std::path::PathBuf> = Vec::new();
     for sink in &cfg.sinks {
         match sink {
             SinkCfg::Fichier { chemin, conteneur } => {
                 let s = FfmpegSink::nouveau(None, chemin, *conteneur, fps)
                     .map_err(|e| format!("sortie {} : {e}", chemin.display()))?;
                 sinks.push(Box::new(s));
+                chemins_sortie.push(chemin.clone());
             }
             SinkCfg::Apercu => {}
             SinkCfg::Rtmp { .. } | SinkCfg::Srt { .. } => {
@@ -590,6 +594,42 @@ fn boucle(
     }
 
     compteurs.maj_resolution(cw, ch);
+
+    // Audio : un thread par source, démarré **juste avant** la boucle pour
+    // que l'offset A/V reste borné. Une source indisponible dégrade
+    // l'enregistrement (muet sur cette source), elle ne l'annule jamais.
+    let mut captures_audio: Vec<crate::audio::piste::CapturePiste> = Vec::new();
+    if let Some(audio) = cfg.audio.filter(|a| a.actif()) {
+        if audio.loopback {
+            match crate::audio::piste::demarrer(
+                crate::audio::Sens::Sortie,
+                audio.gain_loopback,
+                "loop",
+            ) {
+                Ok(mut capture) => {
+                    // Aligne le son sur la première frame : on attend le
+                    // premier paquet réel (buffer WASAPI de 200 ms).
+                    let _ = capture.attendre_demarrage(Duration::from_millis(400));
+                    captures_audio.push(capture);
+                }
+                Err(e) => compteurs.degrader(format!("audio loopback indisponible : {e}")),
+            }
+        }
+        if audio.micro {
+            match crate::audio::piste::demarrer(
+                crate::audio::Sens::Entree,
+                audio.gain_micro,
+                "mic",
+            ) {
+                Ok(mut capture) => {
+                    let _ = capture.attendre_demarrage(Duration::from_millis(400));
+                    captures_audio.push(capture);
+                }
+                Err(e) => compteurs.degrader(format!("audio micro indisponible : {e}")),
+            }
+        }
+    }
+
     let debut = Instant::now();
     let mut dernier_echantillon = Instant::now();
     let mut octets_fenetre: u64 = 0;
@@ -771,6 +811,37 @@ fn boucle(
     for sink in sinks.iter_mut() {
         let _ = sink.fermer();
     }
+
+    // Audio : arrêt des captures, puis muxage dans chaque fichier finalisé.
+    // Le PCM temporaire est supprimé dans tous les cas.
+    let mut pistes: Vec<crate::audio::piste::Piste> = Vec::new();
+    for capture in captures_audio {
+        match capture.arreter() {
+            Ok(piste) => pistes.push(piste),
+            Err(e) => compteurs.degrader(format!("audio : {e}")),
+        }
+    }
+    if erreur_sortie.is_none() {
+        for piste in &pistes {
+            log::info!(
+                "audio {} : {:.2} s, {} Hz, {} canaux, gain {}‰",
+                piste.chemin.display(),
+                piste.duree_s,
+                piste.taux,
+                piste.canaux,
+                piste.gain_milliemes
+            );
+        }
+        for chemin in &chemins_sortie {
+            if let Err(e) = crate::output::ffmpeg::muxer_audio(chemin, &pistes) {
+                compteurs.degrader(format!("muxage audio ({}) : {e}", chemin.display()));
+            }
+        }
+    }
+    for piste in &pistes {
+        let _ = std::fs::remove_file(&piste.chemin);
+    }
+
     if let Some(e) = erreur_sortie {
         return Err(e);
     }

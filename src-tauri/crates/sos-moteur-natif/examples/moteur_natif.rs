@@ -56,6 +56,8 @@ fn main() {
         debit_kbps: kbps,
         preset: "equilibre".to_string(),
         cle: None,
+        // Harnais vidéo : sortie muette (pas de périphérique requis).
+        audio: None,
     };
 
     let moteur = MoteurNatif::nouveau();

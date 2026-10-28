@@ -55,6 +55,8 @@ fn main() {
         debit_kbps: 6000,
         preset: "equilibre".to_string(),
         cle: None,
+        // Harnais vidéo : sortie muette (pas de périphérique requis).
+        audio: None,
     };
     if let Err(e) = moteur.demarrer_sortie(cfg) {
         eprintln!("Démarrage refusé : {e}");

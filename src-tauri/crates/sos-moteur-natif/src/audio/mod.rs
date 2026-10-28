@@ -6,6 +6,7 @@
 
 pub mod capture;
 pub mod mixage;
+pub mod piste;
 
 use std::fmt;
 
