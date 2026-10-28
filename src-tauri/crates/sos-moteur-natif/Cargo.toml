@@ -12,6 +12,9 @@ description = "StreamOS — moteur natif de capture, composition et encodage (sa
 
 [dependencies]
 log = "0.4"
+# Contrats partagés (Sink, PaquetEncode, Conteneur, ErreurMoteur) : le moteur
+# les implémente, il ne les redéfinit pas. Contrat §3.2.
+sos-moteur-api = { path = "../sos-moteur-api" }
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

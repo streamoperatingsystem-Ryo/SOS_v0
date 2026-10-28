@@ -1,0 +1,12 @@
+[package]
+name = "sos-moteur-api"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+description = "StreamOS — contrats des moteurs de diffusion (sans Tauri, sans Windows)"
+
+# Contrat de l'anneau 2 : uniquement des types et des traits, aucune
+# dépendance. Il ne dépend ni de Tauri, ni du domaine, ni de `windows`.
+# Contrat : docs/features/moteur-natif.md §3.1 à §3.3.
+[dependencies]

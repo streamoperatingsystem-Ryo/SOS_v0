@@ -3,8 +3,9 @@
 //! Un sink en erreur fait échouer le paquet (jamais de perte silencieuse) ;
 //! `fermer` ferme tous les sinks et rend la première erreur rencontrée.
 
-use super::{ErreurSortie, Sink};
+use super::Sink;
 use crate::encode::PaquetEncode;
+use sos_moteur_api::ErreurMoteur;
 
 /// Diffuse chaque paquet vers tous ses sinks.
 pub struct TeeSink {
@@ -26,15 +27,15 @@ impl TeeSink {
 }
 
 impl Sink for TeeSink {
-    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurSortie> {
+    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurMoteur> {
         for sink in &mut self.sinks {
             sink.pousser(paquet)?;
         }
         Ok(())
     }
 
-    fn fermer(&mut self) -> Result<(), ErreurSortie> {
-        let mut premiere: Option<ErreurSortie> = None;
+    fn fermer(&mut self) -> Result<(), ErreurMoteur> {
+        let mut premiere: Option<ErreurMoteur> = None;
         for sink in &mut self.sinks {
             if let Err(e) = sink.fermer() {
                 if premiere.is_none() {

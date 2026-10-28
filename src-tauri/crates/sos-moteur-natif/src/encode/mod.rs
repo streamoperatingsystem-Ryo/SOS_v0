@@ -11,33 +11,8 @@ pub mod mft;
 
 use std::fmt;
 
-/// Codec de sortie.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Codec {
-    H264,
-    Hevc,
-    Av1,
-}
-
-impl Codec {
-    pub fn nom(self) -> &'static str {
-        match self {
-            Codec::H264 => "H.264",
-            Codec::Hevc => "HEVC",
-            Codec::Av1 => "AV1",
-        }
-    }
-}
-
-/// Un paquet encodé (bitstream), horodaté.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PaquetEncode {
-    pub data: Vec<u8>,
-    /// Presentation timestamp, en microsecondes.
-    pub pts_us: i64,
-    /// `true` si le paquet contient une image-clé (IDR).
-    pub cle: bool,
-}
+// Contrats partagés : définis une seule fois dans `sos-moteur-api` (§3.2).
+pub use sos_moteur_api::{Codec, PaquetEncode};
 
 /// Erreurs d'encodage. Aucune variante ne doit faire paniquer l'appelant.
 #[derive(Debug, Clone, PartialEq, Eq)]

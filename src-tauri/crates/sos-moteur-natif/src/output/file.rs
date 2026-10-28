@@ -9,6 +9,7 @@ use std::path::Path;
 
 use super::{ErreurSortie, Sink};
 use crate::encode::PaquetEncode;
+use sos_moteur_api::ErreurMoteur;
 
 /// Écrit les paquets tels quels dans un fichier.
 pub struct FileSink {
@@ -33,7 +34,7 @@ impl FileSink {
 }
 
 impl Sink for FileSink {
-    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurSortie> {
+    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurMoteur> {
         self.fichier
             .write_all(&paquet.data)
             .map_err(|e| ErreurSortie::Fichier(format!("ecriture : {e}")))?;
@@ -41,9 +42,9 @@ impl Sink for FileSink {
         Ok(())
     }
 
-    fn fermer(&mut self) -> Result<(), ErreurSortie> {
+    fn fermer(&mut self) -> Result<(), ErreurMoteur> {
         self.fichier
             .flush()
-            .map_err(|e| ErreurSortie::Fichier(format!("flush : {e}")))
+            .map_err(|e| ErreurMoteur::from(ErreurSortie::Fichier(format!("flush : {e}"))))
     }
 }

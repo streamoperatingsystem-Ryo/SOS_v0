@@ -12,6 +12,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use super::{Conteneur, ErreurSortie, Sink};
 use crate::encode::ffmpeg::chemin_sidecar;
 use crate::encode::PaquetEncode;
+use sos_moteur_api::ErreurMoteur;
 
 /// Muxeur piloté par un processus FFmpeg (stdin = bitstream H.264).
 pub struct FfmpegSink {
@@ -106,7 +107,7 @@ impl FfmpegSink {
 }
 
 impl Sink for FfmpegSink {
-    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurSortie> {
+    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurMoteur> {
         let entree = self
             .entree
             .as_mut()
@@ -119,7 +120,7 @@ impl Sink for FfmpegSink {
         Ok(())
     }
 
-    fn fermer(&mut self) -> Result<(), ErreurSortie> {
+    fn fermer(&mut self) -> Result<(), ErreurMoteur> {
         self.ferme = true;
         drop(self.entree.take());
         let statut = self
@@ -127,10 +128,10 @@ impl Sink for FfmpegSink {
             .wait()
             .map_err(|e| ErreurSortie::Processus(format!("attente : {e}")))?;
         if !statut.success() {
-            return Err(ErreurSortie::Processus(format!(
+            return Err(ErreurMoteur::from(ErreurSortie::Processus(format!(
                 "ffmpeg : statut {:?}",
                 statut.code()
-            )));
+            ))));
         }
         Ok(())
     }

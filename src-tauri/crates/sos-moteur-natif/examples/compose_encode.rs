@@ -22,15 +22,14 @@ use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextW};
 use windows::core::Interface;
 
+use sos_moteur_api::ErreurMoteur;
 use sos_moteur_natif::capture::enumeration::enumerer_moniteurs;
 use sos_moteur_natif::capture::wgc::CaptureWgc;
 use sos_moteur_natif::clock::Horloge;
 use sos_moteur_natif::compositor::{Calque, Compositeur};
 use sos_moteur_natif::encode::PaquetEncode;
 use sos_moteur_natif::gpu::{ContexteGpu, DescTexture, Format};
-use sos_moteur_natif::output::{
-    ffmpeg::FfmpegSink, file::FileSink, Conteneur, ErreurSortie, Sink,
-};
+use sos_moteur_natif::output::{ffmpeg::FfmpegSink, file::FileSink, Conteneur, Sink};
 use sos_moteur_natif::preview::Apercu;
 
 use ffi::{struct_version, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P4};
@@ -52,14 +51,14 @@ enum Sortie {
 }
 
 impl Sortie {
-    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurSortie> {
+    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurMoteur> {
         match self {
             Sortie::Brut(s) => s.pousser(paquet),
             Sortie::Conteneur(s) => s.pousser(paquet),
         }
     }
 
-    fn fermer(&mut self) -> Result<(), ErreurSortie> {
+    fn fermer(&mut self) -> Result<(), ErreurMoteur> {
         match self {
             Sortie::Brut(s) => s.fermer(),
             Sortie::Conteneur(s) => s.fermer(),
@@ -67,10 +66,10 @@ impl Sortie {
     }
 
     /// Coupure simulée : tue le sidecar (le fichier brut est refermé).
-    fn couper(&mut self) -> Result<(), ErreurSortie> {
+    fn couper(&mut self) -> Result<(), ErreurMoteur> {
         match self {
             Sortie::Brut(s) => s.fermer(),
-            Sortie::Conteneur(s) => s.couper(),
+            Sortie::Conteneur(s) => s.couper().map_err(ErreurMoteur::from),
         }
     }
 }

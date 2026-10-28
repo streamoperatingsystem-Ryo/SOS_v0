@@ -4522,10 +4522,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "sos-moteur-api"
+version = "0.1.0"
+
+[[package]]
 name = "sos-moteur-natif"
 version = "0.1.0"
 dependencies = [
  "log",
+ "sos-moteur-api",
  "windows 0.58.0",
 ]
 
