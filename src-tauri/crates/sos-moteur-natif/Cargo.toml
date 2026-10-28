@@ -28,6 +28,8 @@ windows = { version = "0.58", features = [
     # Énumération de fenêtres (exemple de vérification 2.2) : EnumWindows,
     # GetWindowTextW, GetForegroundWindow.
     "Win32_UI_WindowsAndMessaging",
+    # Audio WASAPI (loopback + micro) — liaisons directes, aucune crate tierce.
+    "Win32_Media_Audio",
     # Encodage / décodage Media Foundation (MFT) + libération CoTaskMem.
     "Win32_Media_MediaFoundation",
     "Win32_System_Com",

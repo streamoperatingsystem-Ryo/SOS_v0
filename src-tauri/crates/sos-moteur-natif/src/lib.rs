@@ -9,6 +9,7 @@
 //!
 //! État au LOT 0.2a : socle + énumération des adaptateurs. Rien d'autre.
 
+pub mod audio;
 pub mod capture;
 pub mod clock;
 pub mod color;
