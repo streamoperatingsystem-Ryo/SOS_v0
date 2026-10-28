@@ -261,6 +261,20 @@ impl MoteurNatif {
         let textes = crate::scene_sources::textes_depuis_scene(scene);
         let cadres = crate::scene_sources::cadres_depuis_scene(scene);
         let chats = crate::scene_sources::chat_depuis_scene(scene);
+        // Un style non porté ne produit aucun cadre : le dire, plutôt que de
+        // laisser croire que la scène est rendue à l'identique.
+        if let Some(cadre) = scene
+            .cadreWidget
+            .as_ref()
+            .filter(|c| c.actif && c.strokeWidth > 0.0)
+        {
+            if crate::cadres::StyleCadre::depuis_nom(&cadre.style).is_none() {
+                self.compteurs.degrader(format!(
+                    "cadre « {} » non porté : aucun tracé",
+                    cadre.style
+                ));
+            }
+        }
         for source in &sources {
             source.valider()?;
         }
@@ -1508,6 +1522,27 @@ mod tests {
         assert_eq!(moteur.cadres()[0].z, i32::MAX);
         assert_eq!(moteur.chats().len(), 1);
         assert!(moteur.chats()[0].bulles);
+    }
+
+    #[test]
+    fn style_de_cadre_non_porte_est_signale() {
+        let scene: sos_scene::Scene = serde_json::from_str(
+            r##"{"cadreWidget":{"style":"cyberpunk","strokeWidth":20,"actif":true},
+                 "widgets":[{"id":"a","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":0}]}"##,
+        )
+        .expect("scène");
+        let moteur = MoteurNatif::nouveau();
+        moteur
+            .configurer_scene(&scene, &std::collections::HashMap::new(), std::path::Path::new("."))
+            .expect("scène acceptée");
+        assert!(moteur.cadres().is_empty());
+        assert!(
+            moteur
+                .instantane()
+                .raison_degradation
+                .is_some_and(|r| r.contains("cyberpunk")),
+            "un style non porté doit être signalé, jamais silencieux"
+        );
     }
 
     #[test]
