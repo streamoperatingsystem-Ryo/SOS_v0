@@ -18,6 +18,8 @@ tauri-plugin-dialog = "2"
 tauri-plugin-fs = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Contrats de scène (anneau 0) — types purs partagés avec le moteur natif.
+sos-scene = { path = "crates/sos-scene" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["fs", "cors"] }
@@ -100,5 +102,5 @@ custom-protocol = ["tauri/custom-protocol"]
 # Workspace : le moteur natif se compile et se teste SANS Tauri.
 # Contrat : docs/features/moteur-natif.md §3 (règles de dépendance).
 [workspace]
-members = ["crates/sos-moteur-api", "crates/sos-moteur-natif"]
+members = ["crates/sos-moteur-api", "crates/sos-moteur-natif", "crates/sos-scene"]
 resolver = "2"

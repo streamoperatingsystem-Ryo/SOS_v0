@@ -1,0 +1,16 @@
+[package]
+name = "sos-scene"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.77"
+publish = false
+description = "StreamOS — contrats de scène (types purs serde, zéro logique d'app)"
+
+# Anneau 0 : types purs, aucune dépendance Tauri, domaine ou Windows.
+# Le JSON produit ici est le contrat de `scene.ts` et des scènes sur disque.
+# Contrat : docs/features/moteur-natif.md §3.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+serde_json = "1"

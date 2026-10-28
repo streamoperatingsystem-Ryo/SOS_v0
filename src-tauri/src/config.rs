@@ -184,12 +184,9 @@ pub fn effacer_tiktok_username(app: &AppHandle) -> Result<(), String> {
 
 // ===== Persistance config Speedrun Splitter =====
 
-#[derive(Serialize, Deserialize, Clone, Debug)]
-pub struct SpeedrunSettings {
-    pub start: bool,
-    pub split: bool,
-    pub reset: bool,
-}
+// Type pur défini dans `sos-scene` (anneau 0) : ré-export pour que
+// `crate::config::SpeedrunSettings` reste valable partout.
+pub use sos_scene::SpeedrunSettings;
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct SpeedrunConfig {
@@ -210,12 +207,6 @@ pub struct SpeedrunConfig {
     /// ASL) ; jamais décrémenté (undo/goto/reset ne comptent pas).
     #[serde(default)]
     pub nb_tentatives: u32,
-}
-
-impl Default for SpeedrunSettings {
-    fn default() -> Self {
-        Self { start: true, split: true, reset: true }
-    }
 }
 
 /// Lit la config speedrun sauvegardée. Defaults si absent.
