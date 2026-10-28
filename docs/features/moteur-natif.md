@@ -1290,17 +1290,13 @@ native se pilote depuis la barre latérale. Le mode OBS est inchangé
 5. **Le natif ne rend pas la scène complète** : ni chat, ni cadres SVG, ni
    overlays, ni caméra, ni capture de jeu, ni RTMP/SRT. Une sortie native =
    captures (trous avec cible) + médias + titres + audio. L'UI doit le dire.
-6. **Plafond matériel de calques — mesuré 2026-10-28, non contourné.** Le
-   compositeur compose en **un seul** `VideoProcessorBlt`, borné par
+6. **Plafond matériel de calques — levé au §33 (2026-10-28).** Le
+   compositeur compose en un seul `VideoProcessorBlt`, borné par
    `D3D11_VIDEO_PROCESSOR_CAPS.MaxInputStreams` (5 sur la GTX 1070 Ti).
-   Une scène de 11 calques (fond + 10 médias) échoue avec
-   `composition : trop de calques : 11 (maximum 5)` ; le sidecar FFmpeg
-   reçoit alors zéro paquet et meurt sur `Output file does not contain any
-   stream` (visible en console, pas dans l'UI). **Ce n'est pas un réglage** :
-   débloquer les scènes riches exige une composition **multi-passes**
-   (rendu par lots vers une texture intermédiaire), lot ultérieur. En
-   attendant, une scène ≤ 5 calques s'enregistre normalement (vérifié :
-   4 calques → h264 1360×768@60 + AAC 48 kHz stéréo, décodage exit 0).
+   Avant le §33, une scène de 11 calques (fond + 10 médias) échouait avec
+   `composition : trop de calques : 11 (maximum 5)` et le sidecar FFmpeg
+   mourait sur `Output file does not contain any stream`. La composition
+   multi-passes supprime la limite.
 7. **Une erreur terminale doit être visible** : `moteur_sortie_etat.erreur`
    porte `MoteurEtat::Erreur`. Sans ce champ (première version du lot), un
    échec de composition laissait l'UI muette et seule la sortie stderr
@@ -1317,3 +1313,89 @@ cargo test -p streamos-v0           # 200 passed, 1 ignoré
 cd .. && npm run check              # 0 erreur
 npm run build                       # build production
 ```
+
+---
+
+## 33. Composition multi-passes — plafond `MaxInputStreams` levé (2026-10-28)
+
+Le compositeur ne refuse plus les scènes riches. **Aucun réglage** n'a été
+ajouté : c'est le chemin de composition qui change.
+
+### 33.1 Décision
+
+`D3D11_VIDEO_PROCESSOR_CAPS.MaxInputStreams` est un **plafond matériel**
+(5 sur la GTX 1070 Ti) : un `VideoProcessorBlt` ne peut pas recevoir plus de
+flux. Trois voies ont été écartées :
+
+- **texture intermédiaire + fusion** : exigerait un mélange alpha que le
+  processeur vidéo ne fait pas entre deux surfaces (il écrit, il ne compose
+  pas) ;
+- **lots avec fenêtre = union des destinations** : les trous de l'union
+  seraient repeints en noir et effaceraient les passes précédentes ;
+- **plafonner la scène** : refuse le produit, pas la technique.
+
+Voie retenue : **un blt par calque au-delà du premier lot**, la fenêtre de
+sortie étant restreinte à la destination du calque
+(`VideoProcessorSetOutputTargetRect`). Le fond noir n'est peint que dans
+cette fenêtre, que le calque recouvre entièrement (la destination est
+exactement sa boîte) → les passes précédentes restent intactes.
+
+### 33.2 Sémantique exacte
+
+1. `calques.len() <= MaxInputStreams` → **un seul blt** (chemin historique,
+   aucune régression : même nombre d'appels, même coût).
+2. Au-delà : premier lot de `MaxInputStreams` calques en un blt (il écrit
+   **toute** la surface — fond noir compris — donc aucun pixel résiduel de
+   la frame précédente), puis un blt par calque restant, dans l'ordre z.
+3. La fenêtre de sortie est un **état** du processeur : elle est relâchée
+   (`enable=false`) à la fin de chaque frame multi-passes, sinon la frame
+   suivante serait rognée.
+4. Un calque dont la destination tombe entièrement hors canvas est ignoré
+   (`fenetre_destination` → `None`), sans erreur.
+5. `ErreurComposition::TropDeCalques` est **supprimée** : la variante ne
+   pouvait plus se produire (une erreur inatteignable ment sur le contrat).
+
+### 33.3 Mesures (GTX 1070 Ti, 1360×768@60, NVENC zéro-copie)
+
+| Scène | Calques | blts/frame | fps effectif | drops | latence |
+|---|---|---|---|---|---|
+| scène de test | 4 | 1 | ~53 | 0 | — |
+| scène réelle `af09059c` | 11 | 1 + 6 = 7 | ~56,6 | 0 | 39 ms |
+
+Le coût des passes supplémentaires n'est pas mesurable ici : le facteur
+limitant reste l'encodeur (~56 fps sur cette machine, y compris à 4 calques).
+
+### 33.4 Validation
+
+1. **Scène réelle à 11 calques** (fond + 10 médias) : enregistrement complet,
+   `ffmpeg -f null -` → `exit 0`, 2 flux (h264 1360×768@60 + AAC 48 kHz
+   stéréo), 4,73 s, 1,4 Mo.
+2. **Preuve que les passes n'effacent rien** — scène synthétique de 7 calques
+   de couleurs pures, positions disjointes, décodage d'une frame et mesure
+   `signalstats` par région :
+
+   | calque | passe | YAVG mesuré |
+   |---|---|---|
+   | rouge | lot 1 | 54 |
+   | vert | lot 1 | 91 |
+   | bleu | lot 1 | 18 |
+   | jaune | passe 6 | 235 |
+   | magenta | passe 7 | 72 |
+   | cyan | passe 8 | 201 |
+   | blanc | passe 9 | 255 |
+
+   Les sept régions gardent leur luminance propre : si la fenêtre de sortie
+   était ignorée, chaque passe aurait repeint tout le canvas en noir et seuls
+   les derniers calques survivraient.
+3. Tests unitaires ajoutés (`fenetre_destination`) : bornage au canvas,
+   fenêtre intérieure intacte, calque hors canvas ou de surface nulle ignoré.
+
+### 33.5 Limites (assumées)
+
+- Une passe par calque au-delà du plafond : coût proportionnel au nombre de
+  calques, pas de regroupement intelligent (une scène à 40 calques fera
+  36 blts/frame). À optimiser si un usage réel le demande.
+- Les calques restent **opaques** (alpha 1.0) : la composition ne fait pas de
+  mélange alpha entre calques, comme avant.
+- Le gain réel n'est mesurable que sur une machine dont l'encodeur n'est pas
+  le facteur limitant.

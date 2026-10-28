@@ -1,4 +1,4 @@
-//! Compositeur GPU — N calques → canvas NV12, en un seul `VideoProcessorBlt`.
+//! Compositeur GPU — N calques → canvas NV12, en un `VideoProcessorBlt`.
 //!
 //! Composition et conversion colorimétrique (BT.709, 4:2:0) sont fusionnées :
 //! l'encodeur consomme directement la texture de sortie (zéro-copie).
@@ -7,6 +7,13 @@
 //! Le processeur vidéo D3D11 accepte plusieurs flux par appel ; chaque flux
 //! porte sa fenêtre source (crop), sa destination (position + échelle) et un
 //! alpha constant. Les zones non couvertes prennent le fond (noir).
+//!
+//! **Au-delà de `MaxInputStreams`** (plafond matériel : 5 sur GTX 1070 Ti),
+//! la composition passe en **multi-passes** : premier lot plein canvas, puis
+//! un appel par calque restant, la fenêtre de sortie étant restreinte à sa
+//! destination (`VideoProcessorSetOutputTargetRect`). Le fond noir n'est
+//! alors peint que dans cette fenêtre, entièrement recouverte par le calque :
+//! les passes précédentes ne sont jamais effacées.
 
 use std::fmt;
 use std::mem::ManuallyDrop;
@@ -43,8 +50,6 @@ pub enum ErreurComposition {
     Gpu(String),
     /// Aucun calque à composer.
     AucunCalque,
-    /// Plus de calques que de flux supportés par le processeur.
-    TropDeCalques { demandes: usize, maximum: u32 },
 }
 
 impl fmt::Display for ErreurComposition {
@@ -52,9 +57,6 @@ impl fmt::Display for ErreurComposition {
         match self {
             ErreurComposition::Gpu(m) => write!(f, "GPU : {m}"),
             ErreurComposition::AucunCalque => write!(f, "aucun calque"),
-            ErreurComposition::TropDeCalques { demandes, maximum } => {
-                write!(f, "trop de calques : {demandes} (maximum {maximum})")
-            }
         }
     }
 }
@@ -200,17 +202,34 @@ impl Compositeur {
     }
 
     /// Compose les calques (z = ordre du tableau) dans la texture de sortie.
+    ///
+    /// Chemin rapide — un seul `VideoProcessorBlt` — tant que le nombre de
+    /// calques tient dans `MaxInputStreams`. Au-delà, multi-passes : premier
+    /// lot en un appel (il peint tout le canvas, fond compris), puis un appel
+    /// par calque restant borné à sa destination. Aucune limite de scène.
     pub fn composer(&mut self, calques: &[Calque<'_>]) -> Result<(), ErreurComposition> {
         if calques.is_empty() {
             return Err(ErreurComposition::AucunCalque);
         }
-        if calques.len() > self.max_flux as usize {
-            return Err(ErreurComposition::TropDeCalques {
-                demandes: calques.len(),
-                maximum: self.max_flux,
-            });
+        let lot = (self.max_flux as usize).max(1);
+        if calques.len() <= lot {
+            return self.composer_en_un_appel(calques);
         }
+        self.composer_en_un_appel(&calques[..lot])?;
+        for calque in &calques[lot..] {
+            self.composer_un_calque(calque)?;
+        }
+        // La fenêtre de sortie est un état du processeur : la relâcher, sinon
+        // la frame suivante serait rognée.
+        unsafe {
+            self.video_context
+                .VideoProcessorSetOutputTargetRect(&self.processeur, false, None);
+        }
+        Ok(())
+    }
 
+    /// Un appel, N flux : chemin historique (toute la surface est écrite).
+    fn composer_en_un_appel(&mut self, calques: &[Calque<'_>]) -> Result<(), ErreurComposition> {
         let mut vues: Vec<ID3D11VideoProcessorInputView> = Vec::with_capacity(calques.len());
         for (i, calque) in calques.iter().enumerate() {
             let vue = self.creer_vue(calque.texture)?;
@@ -263,6 +282,60 @@ impl Compositeur {
         Ok(())
     }
 
+    /// Une passe, un calque, bornée à sa destination : le fond noir n'est
+    /// peint que dans cette fenêtre, que le calque recouvre entièrement.
+    fn composer_un_calque(&mut self, calque: &Calque<'_>) -> Result<(), ErreurComposition> {
+        let Some(fenetre) = fenetre_destination(calque.destination, self.largeur, self.hauteur)
+        else {
+            // Entièrement hors canvas : rien à écrire.
+            return Ok(());
+        };
+        let vue = self.creer_vue(calque.texture)?;
+        unsafe {
+            self.video_context.VideoProcessorSetStreamSourceRect(
+                &self.processeur,
+                0,
+                true,
+                Some(&calque.source as *const RECT),
+            );
+            self.video_context.VideoProcessorSetStreamDestRect(
+                &self.processeur,
+                0,
+                true,
+                Some(&calque.destination as *const RECT),
+            );
+            self.video_context.VideoProcessorSetStreamAlpha(&self.processeur, 0, true, 1.0);
+            self.video_context.VideoProcessorSetOutputTargetRect(
+                &self.processeur,
+                true,
+                Some(&fenetre as *const RECT),
+            );
+        }
+
+        let mut flux = [D3D11_VIDEO_PROCESSOR_STREAM {
+            Enable: BOOL(1),
+            OutputIndex: 0,
+            InputFrameOrField: 0,
+            PastFrames: 0,
+            FutureFrames: 0,
+            ppPastSurfaces: null_mut(),
+            pInputSurface: ManuallyDrop::new(Some(vue)),
+            ppFutureSurfaces: null_mut(),
+            ppPastSurfacesRight: null_mut(),
+            pInputSurfaceRight: ManuallyDrop::new(None),
+            ppFutureSurfacesRight: null_mut(),
+        }];
+
+        let resultat = unsafe {
+            self.video_context
+                .VideoProcessorBlt(&self.processeur, &self.vue_sortie, 0, &flux)
+        };
+        for f in flux.iter_mut() {
+            unsafe { ManuallyDrop::drop(&mut f.pInputSurface) };
+        }
+        resultat.map_err(|e| ErreurComposition::Gpu(format!("VideoProcessorBlt : {}", e.message())))
+    }
+
     /// Texture de sortie (NV12, encodable telle quelle).
     pub fn sortie(&self) -> &ID3D11Texture2D {
         &self.sortie
@@ -303,5 +376,50 @@ impl Compositeur {
             ))
         })?;
         vue.ok_or_else(|| ErreurComposition::Gpu("vue d'entrée nulle".into()))
+    }
+}
+
+/// Fenêtre de sortie d'une passe multi-calques : la destination du calque,
+/// bornée au canvas. `None` si elle est vide (calque hors canvas).
+fn fenetre_destination(destination: RECT, largeur: u32, hauteur: u32) -> Option<RECT> {
+    let fenetre = RECT {
+        left: destination.left.max(0),
+        top: destination.top.max(0),
+        right: destination.right.min(largeur as i32),
+        bottom: destination.bottom.min(hauteur as i32),
+    };
+    (fenetre.right > fenetre.left && fenetre.bottom > fenetre.top).then_some(fenetre)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    #[test]
+    fn fenetre_bornee_au_canvas() {
+        let f = fenetre_destination(rect(-10, -10, 2000, 2000), 1920, 1080).expect("fenêtre");
+        assert_eq!((f.left, f.top, f.right, f.bottom), (0, 0, 1920, 1080));
+    }
+
+    #[test]
+    fn fenetre_interieure_intacte() {
+        let f = fenetre_destination(rect(100, 50, 300, 150), 1920, 1080).expect("fenêtre");
+        assert_eq!((f.left, f.top, f.right, f.bottom), (100, 50, 300, 150));
+    }
+
+    #[test]
+    fn fenetre_hors_canvas_ou_vide_est_ignoree() {
+        assert!(fenetre_destination(rect(2000, 0, 2200, 100), 1920, 1080).is_none());
+        assert!(fenetre_destination(rect(-50, 0, 0, 100), 1920, 1080).is_none());
+        assert!(fenetre_destination(rect(10, 10, 10, 50), 1920, 1080).is_none());
     }
 }
