@@ -64,6 +64,38 @@ pub fn sauver_obs_canvas(app: &AppHandle, w: u32, h: u32) -> Result<(), String> 
         .map_err(|e| format!("Écrire obs_canvas.json: {}", e))
 }
 
+// ===== Persistance mode moteur (obs | natif) =====
+
+#[derive(Serialize, Deserialize)]
+struct MoteurConfig {
+    mode: String,
+}
+
+/// Lit le mode moteur persisté (moteur.json). `None` si absent.
+pub fn lire_mode_moteur(app: &AppHandle) -> Result<Option<String>, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("moteur.json");
+    if !path.exists() {
+        return Ok(None);
+    }
+    let content = fs::read_to_string(&path).map_err(|e| format!("Lire moteur.json: {}", e))?;
+    let cfg: MoteurConfig =
+        serde_json::from_str(&content).map_err(|e| format!("Parse moteur.json: {}", e))?;
+    Ok(Some(cfg.mode))
+}
+
+/// Sauve le mode moteur (écrase si existe).
+pub fn sauver_mode_moteur(app: &AppHandle, mode: &str) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("moteur.json");
+    let cfg = MoteurConfig {
+        mode: mode.to_string(),
+    };
+    let json =
+        serde_json::to_string(&cfg).map_err(|e| format!("Serialize moteur.json: {}", e))?;
+    fs::write(&path, json).map_err(|e| format!("Écrire moteur.json: {}", e))
+}
+
 // ===== Persistance slug Kick =====
 
 #[derive(Serialize, Deserialize)]

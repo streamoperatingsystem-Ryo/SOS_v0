@@ -13,6 +13,7 @@ mod equaliseur;
 mod kick;
 mod mask_png;
 mod musique;
+mod moteur;
 mod obs;
 mod obs_trou;
 mod pc_enum;
@@ -4163,6 +4164,15 @@ pub fn run() {
             };
             app.manage(state.clone());
 
+            // Registre moteur — mode actif persisté (obs | natif). Le moteur
+            // natif n'est pas encore branché : la bascule est refusée proprement.
+            let mode_moteur = config::lire_mode_moteur(app.handle())
+                .ok()
+                .flatten()
+                .and_then(|m| moteur::mode::Mode::depuis_nom(&m))
+                .unwrap_or(moteur::mode::Mode::Obs);
+            app.manage(moteur::RegistreMoteur::nouveau(mode_moteur));
+
             // État Équaliseur — sync initiale au boot : si la scène chargée a
             // le module déjà actif (persisté), la capture démarre dès
             // maintenant (push_snapshot ne rejoue que sur mutation de scène).
@@ -4505,6 +4515,8 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            moteur::moteur_etat,
+            moteur::moteur_basculer,
             get_scene,
             update_scene,
             import_media,
