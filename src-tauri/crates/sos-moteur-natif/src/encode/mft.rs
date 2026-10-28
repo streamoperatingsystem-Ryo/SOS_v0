@@ -42,7 +42,7 @@ use windows::Win32::Media::MediaFoundation::{
     MF_MT_MPEG2_PROFILE, MF_MT_SAMPLE_SIZE, MF_SA_D3D11_BINDFLAGS, MF_SA_D3D11_USAGE,
     MF_MT_SUBTYPE, MF_SA_D3D11_AWARE, MF_TRANSFORM_ASYNC,
     MF_TRANSFORM_ASYNC_UNLOCK, CODECAPI_AVEncCommonQuality, CODECAPI_AVEncCommonRateControlMode,
-    CODECAPI_AVEncMPVGOPSize,
+    CODECAPI_AVEncMPVGOPSize, CODECAPI_AVEncMPVDefaultBPictureCount,
 };
 
 use super::detect;
@@ -226,6 +226,9 @@ impl EncodeurMft {
             )
         };
         let _ = unsafe { attrs.SetUINT32(&CODECAPI_AVEncMPVGOPSize, fps.saturating_mul(2)) };
+        // Pas de B-frames : faible latence et DTS monotone sur un flux
+        // élémentaire remuxé par le sidecar (constaté 2026-10-28).
+        let _ = unsafe { attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0) };
         let _ = unsafe { attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, 70) };
         let _ = unsafe { attrs.SetUINT32(&MF_LOW_LATENCY, 1) };
 

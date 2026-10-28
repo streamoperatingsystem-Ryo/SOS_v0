@@ -321,32 +321,28 @@ impl ConvertisseurNv12 {
         let taille_y = largeur * hauteur;
         let mut nv12 = vec![0u8; taille_y + taille_y / 2];
 
-        // Plan Y (sous-ressource 0).
+        // Plan Y + plan UV dans le MÊME mapping : NV12 est une seule
+        // sous-ressource D3D11. Mapper la sous-ressource 1 renvoie
+        // E_INVALIDARG sur les pilotes réels (constaté 2026-10-28).
         let mut mappee = D3D11_MAPPED_SUBRESOURCE::default();
         unsafe { self.context.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut mappee)) }.map_err(
-            |e| ErreurEncodage::Gpu(format!("Map NV12 Y : {}", e.message())),
+            |e| ErreurEncodage::Gpu(format!("Map NV12 : {}", e.message())),
         )?;
         unsafe {
+            let base = mappee.pData as *const u8;
+            let pas = mappee.RowPitch as usize;
             for y in 0..hauteur {
-                let src = (mappee.pData as *const u8).add(y * mappee.RowPitch as usize);
+                let src = base.add(y * pas);
                 let dst = nv12.as_mut_ptr().add(y * largeur);
                 std::ptr::copy_nonoverlapping(src, dst, largeur);
             }
-            self.context.Unmap(&staging, 0);
-        }
-
-        // Plan UV (sous-ressource 1) : largeur octets par ligne, h/2 lignes.
-        let mut mappee = D3D11_MAPPED_SUBRESOURCE::default();
-        unsafe { self.context.Map(&staging, 1, D3D11_MAP_READ, 0, Some(&mut mappee)) }.map_err(
-            |e| ErreurEncodage::Gpu(format!("Map NV12 UV : {}", e.message())),
-        )?;
-        unsafe {
+            let uv = base.add(pas * hauteur);
             for y in 0..hauteur / 2 {
-                let src = (mappee.pData as *const u8).add(y * mappee.RowPitch as usize);
+                let src = uv.add(y * pas);
                 let dst = nv12.as_mut_ptr().add(taille_y + y * largeur);
                 std::ptr::copy_nonoverlapping(src, dst, largeur);
             }
-            self.context.Unmap(&staging, 1);
+            self.context.Unmap(&staging, 0);
         }
 
         Ok(nv12)
