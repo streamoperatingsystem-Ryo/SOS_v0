@@ -35,6 +35,7 @@ use crate::compositor::{Calque, Compositeur};
 use crate::compteurs::{CompteursMoteur, Instantane};
 use crate::encode::detect;
 use crate::encode::mft::EncodeurMft;
+use crate::encode::nvenc::EncodeurNvenc;
 use crate::encode::{detect::EncodeurDispo, ErreurEncodage};
 use crate::gouverneur::{Action, Gouverneur, Mesures};
 use crate::gpu::{ContexteGpu, DescTexture, Format};
@@ -343,9 +344,9 @@ fn boucle(
     let mut compositeur = Compositeur::nouveau(&contexte, cw, ch, fps)
         .map_err(|e| format!("compositeur : {e}"))?;
 
-    // Tous les encodeurs, matériels puis logiciels : le repli doit pouvoir
-    // descendre jusqu'au logiciel même quand un matériel est listé mais
-    // refuse de s'initialiser ou d'encoder (exigence plan §11.3).
+    // Tous les encodeurs MFT, matériels puis logiciels : le repli doit
+    // pouvoir descendre jusqu'au logiciel même quand un matériel est listé
+    // mais refuse de s'initialiser ou d'encoder (exigence plan §11.3).
     let mut disponibles =
         detect::lister_tous(cfg.codec).map_err(|e| format!("encodeurs : {e}"))?;
     let forcer_logiciel = std::env::var_os("SOS_MOTEUR_ENCODEUR_LOGICIEL").is_some();
@@ -353,22 +354,41 @@ fn boucle(
         disponibles.retain(|d| !d.materiel);
     }
     let mut index = 0usize;
-    let mut encodeur: Option<EncodeurMft> = None;
-    let mut materiel = false;
+
+    // 1) NVENC direct (zéro-copie prouvée) si présent. `SOS_MOTEUR_SANS_NVENC`
+    //    force le chemin MFT (diagnostic / comparaison).
+    let sans_nvenc =
+        forcer_logiciel || std::env::var_os("SOS_MOTEUR_SANS_NVENC").is_some();
+    let mut encodeur: Option<EncodeurActif> = None;
     let mut derniere_erreur = String::new();
-    while index < disponibles.len() {
-        match ouvrir_encodeur(&disponibles[index], &cfg, cw, ch, fps, &contexte) {
-            Ok(enc) => {
-                materiel = disponibles[index].materiel;
-                encodeur = Some(enc);
-                break;
+    if !sans_nvenc {
+        match EncodeurNvenc::nouveau(&contexte, cfg.codec, cw, ch, fps, cfg.debit_kbps) {
+            Ok(mut nvenc) => match nvenc.enregistrer(compositeur.sortie()) {
+                Ok(()) => encodeur = Some(EncodeurActif::Nvenc(Box::new(nvenc))),
+                Err(e) => derniere_erreur = e.to_string(),
+            },
+            Err(e) => derniere_erreur = e.to_string(),
+        }
+    }
+
+    // 2) Repli MFT (ou chemin principal si NVENC absent).
+    let mut zero_copie = false;
+    if encodeur.is_none() {
+        match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte) {
+            Some((enc, materiel)) => {
+                zero_copie = materiel
+                    && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
+                encodeur = Some(EncodeurActif::Mft(enc));
             }
-            Err(e) => {
-                derniere_erreur = e.to_string();
-                index += 1;
+            None => {
+                return Err(format!(
+                    "aucun encodeur {} utilisable : {derniere_erreur}",
+                    cfg.codec.nom()
+                ));
             }
         }
     }
+
     let Some(mut encodeur) = encodeur else {
         return Err(format!(
             "aucun encodeur {} utilisable : {derniere_erreur}",
@@ -399,17 +419,14 @@ fn boucle(
     let mut horloge = Horloge::nouvelle(fps).map_err(|e| format!("horloge : {e}"))?;
     let mut gouverneur = Gouverneur::nouveau();
 
-    // Chemin zéro-copie par défaut **pour un encodeur matériel**. Un MFT
+    // Chemin zéro-copie par défaut **pour un encodeur MFT matériel**. Un MFT
     // logiciel n'est pas D3D11-aware : il consomme de la mémoire, pas une
     // surface. Certains MFT matériels refusent aussi la surface
     // (« ProcessOutput E_FAIL ») : repli explicite, signalé au diagnostic.
     // `SOS_MOTEUR_MFT_MEMOIRE=1` force la copie.
     let convertisseur = ConvertisseurNv12::nouveau(&contexte, cw, ch, fps).ok();
-    let mut zero_copie = materiel && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
-    if !materiel {
-        compteurs.degrader("encodeur logiciel : copie NV12");
-    } else if !zero_copie {
-        compteurs.degrader("copie NV12 (chemin mémoire forcé)");
+    if matches!(encodeur, EncodeurActif::Mft(_)) && !zero_copie {
+        compteurs.degrader("encodeur MFT logiciel : copie NV12");
     }
 
     compteurs.maj_resolution(cw, ch);
@@ -453,44 +470,34 @@ fn boucle(
         }
         compteurs.composite();
 
-        let mut paquets = encoder_frame(
+        let mut resultat = encoder_actif(
             &mut encodeur,
             &mut zero_copie,
             convertisseur.as_ref(),
             compositeur.sortie(),
             pts_us,
         );
-        if let Err(e) = &paquets {
-            // Repli : l'encodeur courant refuse la frame (surface GPU ou état
-            // interne). On descend dans l'ordre de détection, puis on rejoue
-            // la frame — une seule fois par encodeur, jamais de boucle.
-            let mut remplace = false;
-            while index + 1 < disponibles.len() {
-                index += 1;
-                if let Ok(enc) = ouvrir_encodeur(&disponibles[index], &cfg, cw, ch, fps, &contexte) {
-                    encodeur = enc;
-                    materiel = disponibles[index].materiel;
-                    zero_copie = materiel && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
-                    compteurs.degrader(format!(
-                        "repli encodeur {} ({e})",
-                        disponibles[index].nom
-                    ));
-                    remplace = true;
-                    break;
+        if let Err(e) = &resultat {
+            // Repli : NVENC ou MFT refuse la frame. On descend dans l'ordre
+            // de détection MFT puis on rejoue la frame — une seule fois.
+            match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte) {
+                Some((enc, materiel)) => {
+                    zero_copie =
+                        materiel && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
+                    compteurs.degrader(format!("repli encodeur ({e})"));
+                    encodeur = EncodeurActif::Mft(enc);
+                    resultat = encoder_actif(
+                        &mut encodeur,
+                        &mut zero_copie,
+                        convertisseur.as_ref(),
+                        compositeur.sortie(),
+                        pts_us,
+                    );
                 }
+                None => return Err(format!("encodage : {e}")),
             }
-            if !remplace {
-                return Err(format!("encodage : {e}"));
-            }
-            paquets = encoder_frame(
-                &mut encodeur,
-                &mut zero_copie,
-                convertisseur.as_ref(),
-                compositeur.sortie(),
-                pts_us,
-            );
         }
-        let paquets = paquets.map_err(|e| format!("encodage : {e}"))?;
+        let paquets = resultat.map_err(|e| format!("encodage : {e}"))?;
         compteurs.maj_file_encode(paquets.len() as u32);
         for paquet in &paquets {
             octets_fenetre += paquet.data.len() as u64;
@@ -548,7 +555,11 @@ fn boucle(
         }
     }
 
-    if let Ok(paquets) = encodeur.terminer() {
+    let derniers = match &mut encodeur {
+        EncodeurActif::Nvenc(nvenc) => nvenc.terminer(),
+        EncodeurActif::Mft(mft) => mft.terminer(),
+    };
+    if let Ok(paquets) = derniers {
         for paquet in &paquets {
             for sink in sinks.iter_mut() {
                 let _ = sink.pousser(paquet);
@@ -562,6 +573,48 @@ fn boucle(
         return Err(e);
     }
     Ok(())
+}
+
+/// Encodeur actif : NVENC direct (zéro-copie) ou MFT (universel).
+enum EncodeurActif {
+    Nvenc(Box<EncodeurNvenc>),
+    Mft(EncodeurMft),
+}
+
+/// Ouvre le prochain MFT disponible, en avançant `index` (repli monotone).
+fn ouvrir_mft(
+    disponibles: &[EncodeurDispo],
+    index: &mut usize,
+    cfg: &SortieCfg,
+    cw: u32,
+    ch: u32,
+    fps: u32,
+    contexte: &ContexteGpu,
+) -> Option<(EncodeurMft, bool)> {
+    while *index < disponibles.len() {
+        let dispo = &disponibles[*index];
+        *index += 1;
+        if let Ok(encodeur) = ouvrir_encodeur(dispo, cfg, cw, ch, fps, contexte) {
+            return Some((encodeur, dispo.materiel));
+        }
+    }
+    None
+}
+
+/// Encode une frame avec l'encodeur actif.
+fn encoder_actif(
+    encodeur: &mut EncodeurActif,
+    zero_copie: &mut bool,
+    convertisseur: Option<&ConvertisseurNv12>,
+    sortie: &ID3D11Texture2D,
+    pts_us: i64,
+) -> Result<Vec<PaquetEncode>, ErreurEncodage> {
+    match encodeur {
+        EncodeurActif::Nvenc(nvenc) => nvenc.encoder_texture(sortie, pts_us),
+        EncodeurActif::Mft(mft) => {
+            encoder_frame(mft, zero_copie, convertisseur, sortie, pts_us)
+        }
+    }
 }
 
 /// Ouvre un encodeur MFT pour une sortie donnée.

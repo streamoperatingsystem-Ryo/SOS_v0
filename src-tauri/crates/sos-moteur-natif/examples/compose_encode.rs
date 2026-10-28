@@ -10,9 +10,6 @@
 //!     [sortie.h264] [frames] [fps] [kbps]
 //! ```
 
-#[path = "nvenc/ffi.rs"]
-mod ffi;
-
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -32,7 +29,7 @@ use sos_moteur_natif::gpu::{ContexteGpu, DescTexture, Format};
 use sos_moteur_natif::output::{ffmpeg::FfmpegSink, file::FileSink, Conteneur, Sink};
 use sos_moteur_natif::preview::Apercu;
 
-use ffi::{struct_version, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P4};
+use sos_moteur_natif::encode::nvenc::ffi::{self, struct_version, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P4};
 
 struct Source {
     nom: String,

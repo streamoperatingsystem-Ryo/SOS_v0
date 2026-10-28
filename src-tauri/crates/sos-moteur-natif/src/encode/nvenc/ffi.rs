@@ -1,7 +1,5 @@
-//! FFI minimale du SDK NVENC (`nvEncodeAPI64.dll`), pour les exemples du
-//! crate. **Ce fichier n'est pas compilé seul** : il est inclus par
-//! `nvenc_encode.rs` via `#[path]`, et vit dans un sous-dossier pour que
-//! Cargo ne le prenne pas pour un exemple.
+//! FFI minimale du SDK NVENC (`nvEncodeAPI64.dll`), module du crate depuis le
+//! lot 1.6 (auparavant inclus par les exemples via `#[path]`).
 //!
 //! Source des structures : en-tête officiel `nvEncodeAPI.h` de
 //! `FFmpeg/nv-codec-headers` (API 13.1). Chaque structure ne déclare que les
@@ -9,6 +7,10 @@
 //! le SDK écrit au plus `sizeof` de SA structure, donc une queue plus grande
 //! est sans effet, alors qu'une queue plus petite provoquerait un
 //! débordement.
+//!
+//! ⚠️ Couche brute : les fonctions prennent des handles opaques et ne sont
+//! pas `unsafe` (elles le sont de fait). L'API sûre est `EncodeurNvenc`.
+#![allow(clippy::not_unsafe_ptr_arg_deref)]
 //!
 //! ⚠️ Les offsets des champs que le SDK lit **doivent** correspondre au
 //! layout C. Ils sont vérifiés par [`verifier_layout`], appelée au démarrage :
@@ -622,6 +624,18 @@ impl Sdk {
         encoder: *mut c_void,
         image: Image,
     ) -> Result<Vec<u8>, String> {
+        self.encoder_image_avec(encoder, image, PIC_TYPE_IDR)
+    }
+
+    /// Variante avec type d'image explicite : IDR seulement à la première
+    /// frame et à chaque GOP, P sinon. Forcer IDR à chaque frame gaspille le
+    /// débit (défaut du spike corrigé au lot 1.6).
+    pub fn encoder_image_avec(
+        &self,
+        encoder: *mut c_void,
+        image: Image,
+        picture_type: u32,
+    ) -> Result<Vec<u8>, String> {
         let Image { entree, sortie, largeur, hauteur, index, pts_us } = image;
         let encoder_f: FnEncodePicture = unsafe {
             std::mem::transmute(self.ptr(self.liste.encode_picture, "EncodePicture")?)
@@ -645,7 +659,7 @@ impl Sdk {
         p.output_bitstream = sortie;
         p.buffer_fmt = BUFFER_FORMAT_NV12;
         p.picture_struct = PIC_STRUCT_FRAME;
-        p.picture_type = PIC_TYPE_IDR;
+        p.picture_type = picture_type;
         let st = unsafe { encoder_f(encoder, &mut p) };
         if st != 0 {
             return Err(format!(

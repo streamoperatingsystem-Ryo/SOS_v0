@@ -8,6 +8,7 @@
 pub mod detect;
 pub mod ffmpeg;
 pub mod mft;
+pub mod nvenc;
 
 use std::fmt;
 
@@ -29,6 +30,8 @@ pub enum ErreurEncodage {
     Gpu(String),
     /// Sortie (sidecar FFmpeg, fichier, processus).
     Sortie(String),
+    /// Backend NVENC direct (SDK constructeur, zéro-copie).
+    Nvenc(String),
     /// Plateforme non supportée.
     NonSupporte,
 }
@@ -42,6 +45,7 @@ impl fmt::Display for ErreurEncodage {
             ErreurEncodage::Conversion(m) => write!(f, "conversion : {m}"),
             ErreurEncodage::Gpu(m) => write!(f, "GPU : {m}"),
             ErreurEncodage::Sortie(m) => write!(f, "sortie : {m}"),
+            ErreurEncodage::Nvenc(m) => write!(f, "NVENC : {m}"),
             ErreurEncodage::NonSupporte => write!(f, "plateforme non supportée"),
         }
     }

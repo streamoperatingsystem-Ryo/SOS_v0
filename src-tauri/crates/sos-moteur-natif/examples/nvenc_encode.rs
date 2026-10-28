@@ -15,9 +15,6 @@
 //! encodées sont vivantes. La mesure P0-a sur ce chemin rejoue le protocole
 //! de `docs/features/moteur-natif/mesures-p0.md` (lot 0.2g-γ).
 
-#[path = "nvenc/ffi.rs"]
-mod ffi;
-
 use std::io::Write;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -29,7 +26,7 @@ use sos_moteur_natif::capture::wgc::CaptureMoniteur;
 use sos_moteur_natif::color_gpu::ConvertisseurNv12;
 use sos_moteur_natif::gpu::ContexteGpu;
 
-use ffi::{struct_version, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P4};
+use sos_moteur_natif::encode::nvenc::ffi::{self, struct_version, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P4};
 
 fn main() {
     let mut args = std::env::args().skip(1);
