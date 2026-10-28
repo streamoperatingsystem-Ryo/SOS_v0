@@ -1037,6 +1037,10 @@ Validation : clip `testsrc2` 2 s / 30 fps, 3 s d'enregistrement NVENC ;
 frames 10 et 70 extraites → **md5 différents** (la vidéo avance), décodage
 ffmpeg exit 0.
 
+⚠️ Cette validation ne vérifiait que « ça avance », pas **à quelle
+cadence** : la vidéo était jouée à la fréquence du moteur. Corrigé le
+2026-10-28, voir §34.
+
 ### 29.6 Suite P3
 
 1. Vidéos (Source Reader) + fit réel (`ajuster`/`remplir`).
@@ -1399,3 +1403,61 @@ limitant reste l'encodeur (~56 fps sur cette machine, y compris à 4 calques).
   mélange alpha entre calques, comme avant.
 - Le gain réel n'est mesurable que sur une machine dont l'encodeur n'est pas
   le facteur limitant.
+
+---
+
+## 34. Cadence des vidéos médias — piège corrigé (2026-10-28)
+
+**Symptôme rapporté** : une vidéo média jouée dans un enregistrement natif
+paraît **×2 ou ×3** trop rapide.
+
+### 34.1 Cause
+
+`MediaChargee::avancer(temps_us)` téléversait la texture **avant** de tester
+l'horodatage :
+
+```rust
+loop {
+    ReadSample(...);                 // une frame
+    UpdateSubresource(...);          // affichée immédiatement
+    if pts_us >= temps_us { return } // puis sortie
+}
+```
+
+Chaque appel du moteur consommait donc exactement **une** frame, et le test
+final ne pouvait jamais retarder quoi que ce soit (la première frame lue est
+toujours celle qui vient d'être affichée). Le média était joué à la cadence
+du moteur (60 Hz) au lieu de la sienne : ×2 pour une source 30 fps, ×2,5
+pour du 24 fps.
+
+### 34.2 Correctif — une frame d'avance
+
+`VideoLecteur` porte `en_attente: Option<(IMFSample, i64)>` (le Source Reader
+MF **ne sait pas remettre** un échantillon : on le garde). `avancer` :
+
+1. si une frame est en attente et que `pts <= temps_us` → téléverser, boucler ;
+2. si `pts > temps_us` → la remettre en attente et sortir (rien à afficher) ;
+3. sinon lire l'échantillon suivant dans `en_attente`.
+
+Fin de flux inchangée (dernière image figée, pas de bouclage). Coût : au plus
+une période de la source de latence d'affichage (41,7 ms pour du 24 fps).
+
+### 34.3 Mesures (vidéo compteur 24 fps, moteur 60 Hz, 4 s)
+
+| instant du fichier | avant | après | attendu |
+|---|---|---|---|
+| t = 1 s | frame **61** (×2,54) | frame **20** | 24 |
+| t = 3 s | ~180 | frame **68** | 72 |
+
+Débit mesuré après correctif : (68 − 20) / 2 s = **24 fps**. L'écart constant
+de 4 frames (0,17 s) est la latence de pipeline (file encodeur + arrondi du
+seek), pas une dérive : l'écart ne grandit pas entre t = 1 et t = 3.
+
+### 34.4 Pièges vérifiés
+
+1. **`IMFSample` ne se rembobine pas** : tout correctif de cadence doit
+   conserver l'échantillon lu trop tôt, pas le relire.
+2. **Un test « ça avance » ne prouve pas la cadence** (§29.5) : il faut un
+   compteur d'image lisible dans la source et une mesure à deux instants.
+3. Les images (`video: None`) ne sont pas concernées : `avancer` sort
+   immédiatement.

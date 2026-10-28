@@ -22,7 +22,7 @@ use windows::Win32::Graphics::Imaging::{
     WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnLoad,
 };
 use windows::Win32::Media::MediaFoundation::{
-    IMFSourceReader, MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL,
+    IMFSourceReader, IMFSample, MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL,
     MFMediaType_Video, MFVideoFormat_RGB32, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
     MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM,
@@ -96,7 +96,9 @@ pub struct MediaChargee {
 struct VideoLecteur {
     reader: IMFSourceReader,
     context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
-    dernier_pts_us: i64,
+    /// Frame lue mais **pas encore due** (PTS postérieur au temps écoulé).
+    /// Le Source Reader ne sait pas remettre un échantillon : on le garde.
+    en_attente: Option<(IMFSample, i64)>,
 }
 
 impl MediaChargee {
@@ -104,34 +106,53 @@ impl MediaChargee {
         self.video.is_some()
     }
 
-    /// Avance la vidéo jusqu'à la frame correspondant à `temps_us`.
-    /// Sans effet pour une image. Fin de flux = dernière image figée
-    /// (pas encore de bouclage).
+    /// Avance la vidéo jusqu'à la frame **due** à `temps_us`.
+    ///
+    /// Une frame lue dont le PTS est postérieur au temps écoulé est conservée
+    /// jusqu'à son échéance (`en_attente`) : sans cette attente, chaque appel
+    /// du moteur afficherait une frame et toute vidéo serait jouée à la
+    /// cadence du moteur — ×2 pour une source 30 fps, ×2,5 pour du 24 fps
+    /// (mesuré 2026-10-28 : frame 61 à t = 1 s d'un compteur 24 fps).
+    /// Sans effet pour une image. Fin de flux = dernière image figée.
     pub fn avancer(&mut self, temps_us: i64) -> Result<(), ErreurMedia> {
         let Some(video) = self.video.as_mut() else {
             return Ok(());
         };
         loop {
-            let mut flags = 0u32;
-            let mut sample: Option<windows::Win32::Media::MediaFoundation::IMFSample> = None;
-            unsafe {
-                video.reader.ReadSample(
-                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
-                    0,
-                    None,
-                    Some(&mut flags),
-                    None,
-                    Some(&mut sample),
-                )
-            }
-            .map_err(|e| ErreurMedia::Decodage(format!("ReadSample : {}", e.message())))?;
-            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
-                return Ok(());
-            }
-            let Some(sample) = sample else {
-                return Ok(());
+            let en_attente = video.en_attente.take();
+            let (sample, pts_us) = match en_attente {
+                Some(en_attente) => en_attente,
+                None => {
+                    let mut flags = 0u32;
+                    let mut sample: Option<IMFSample> = None;
+                    unsafe {
+                        video.reader.ReadSample(
+                            MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                            0,
+                            None,
+                            Some(&mut flags),
+                            None,
+                            Some(&mut sample),
+                        )
+                    }
+                    .map_err(|e| {
+                        ErreurMedia::Decodage(format!("ReadSample : {}", e.message()))
+                    })?;
+                    if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                        return Ok(());
+                    }
+                    let Some(sample) = sample else {
+                        return Ok(());
+                    };
+                    let pts_us = unsafe { sample.GetSampleTime() }.unwrap_or(0) / 10;
+                    (sample, pts_us)
+                }
             };
-            let pts_us = unsafe { sample.GetSampleTime() }.unwrap_or(0) / 10;
+            // Frame future : on la garde pour un prochain appel.
+            if pts_us > temps_us {
+                video.en_attente = Some((sample, pts_us));
+                return Ok(());
+            }
             let buffer = unsafe { sample.ConvertToContiguousBuffer() }
                 .map_err(|e| ErreurMedia::Decodage(format!("buffer : {}", e.message())))?;
             let mut ptr: *mut u8 = std::ptr::null_mut();
@@ -154,12 +175,6 @@ impl MediaChargee {
             };
             unsafe { buffer.Unlock() }
                 .map_err(|e| ErreurMedia::Decodage(format!("Unlock : {}", e.message())))?;
-
-            let ancien = video.dernier_pts_us;
-            video.dernier_pts_us = pts_us;
-            if pts_us >= temps_us || pts_us <= ancien {
-                return Ok(());
-            }
         }
     }
 }
@@ -334,7 +349,7 @@ fn charger_video(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee,
             video: Some(VideoLecteur {
                 reader,
                 context: contexte.context().clone(),
-                dernier_pts_us: -1,
+                en_attente: None,
             }),
         };
         media.avancer(0)?;
