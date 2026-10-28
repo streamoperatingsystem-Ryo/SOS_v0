@@ -24,10 +24,12 @@ fn main() {
         .next()
         .unwrap_or_else(|| "media-scene.mp4".to_string());
     let secondes: u64 = args.next().and_then(|v| v.parse().ok()).unwrap_or(3);
+    let fit = args.next().unwrap_or_else(|| "remplir".to_string());
 
     let scene_json = format!(
-        r#"{{"canvasW":1360,"canvasH":768,"bgMedia":"{}","widgets":[]}}"#,
-        rel.replace('\\', "\\\\")
+        r#"{{"canvasW":1360,"canvasH":768,"bgMedia":"{}","bgFit":"{}","widgets":[]}}"#,
+        rel.replace('\\', "\\\\"),
+        fit
     );
     let scene: sos_scene::Scene = match serde_json::from_str(&scene_json) {
         Ok(s) => s,

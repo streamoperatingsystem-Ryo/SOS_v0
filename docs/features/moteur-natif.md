@@ -895,7 +895,7 @@ ffmpeg) était à 2,07 % / 183,5 Mo. Détails : `mesures-p0.md`.
 ```bash
 cd src-tauri
 cargo clippy -p sos-moteur-natif --all-targets -- -D warnings   # exit 0
-cargo test -p sos-moteur-natif                                  # 46 tests
+cargo test -p sos-moteur-natif                                  # 50 tests
 cargo clippy -p streamos-v0                                     # exit 0
 cargo test -p streamos-v0 moteur::mode                          # 4 tests
 ```
@@ -1004,15 +1004,26 @@ enregistrement « de scène » soit complet.
 
 ### 29.3 Limites de la tranche (assumées)
 
-- **Fit** : le média est étiré au rect (`mediaFit` ignoré) ; rotation, zoom,
-  miroir et effets ne sont pas appliqués.
+- **Fit** : `etirer` / `ajuster` (letterbox centré) / `remplir` (crop centré)
+  sont appliqués (`mediaFit`, `bgFit`). Rotation, zoom, miroir et effets ne
+  sont pas encore appliqués.
 - **Vidéos** : non supportées (Media Foundation Source Reader à venir) ;
   `mediaSlides` : seule la première slide est chargée.
 - **Texte** : aucun rendu (DirectWrite à venir) — donc pas de titres, chat,
   alertes ni cadres.
 - Le média est chargé **une fois** au démarrage : pas de rechargement à chaud.
 
-### 29.4 Suite P3
+### 29.4 Fit réel (ajout 2026-10-28)
+
+`media::Fit` + `geometrie(taille, rect, canvas, fit)` : `etirer` garde tout
+et le rect ; `ajuster` réduit la destination au ratio du média (centrée,
+arrondi pour éviter 1 px d'asymétrie) ; `remplir` garde le rect et croppe la
+source au centre. `mediaFit` des widgets et `bgFit` du fond sont transmis.
+
+Validation : carré 400×400 dans un canvas 1360×768 avec `ajuster` → bande
+gauche `YAVG = 16` (noir), centre `YAVG = 125` (image). Décodage exit 0.
+
+### 29.5 Suite P3
 
 1. Vidéos (Source Reader) + fit réel (`ajuster`/`remplir`).
 2. Texte DirectWrite → texture (titres, chat).

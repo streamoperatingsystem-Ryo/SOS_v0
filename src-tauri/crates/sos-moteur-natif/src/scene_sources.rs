@@ -14,7 +14,7 @@ use std::path::Path;
 
 use sos_scene::{CaptureCible, Scene};
 
-use crate::media::MediaCfg;
+use crate::media::{Fit, MediaCfg};
 use crate::moteur::{CibleCapture, SourceCfg};
 
 /// Traduit la cible persistée dans la scène en cible du moteur.
@@ -86,6 +86,7 @@ pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
                 chemin: base.join(rel),
                 rect: (0.0, 0.0, scene.canvasW as f64, scene.canvasH as f64),
                 z: i32::MIN,
+                fit: Fit::depuis_nom(&scene.bgFit),
             });
         }
     }
@@ -98,6 +99,7 @@ pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
                 chemin: base.join(rel),
                 rect: (w.x, w.y, w.largeur, w.hauteur),
                 z: w.z,
+                fit: Fit::depuis_nom(&w.mediaFit),
             });
         }
     }

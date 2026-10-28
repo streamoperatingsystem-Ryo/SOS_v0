@@ -551,16 +551,16 @@ fn boucle(
         for (_, genre, index) in &plan {
             if *genre == 0 {
                 let media = &medias[*index];
-                let (mw, mh) = media.taille;
+                let (source, destination) = crate::media::geometrie(
+                    media.taille,
+                    media.rect,
+                    (cw, ch),
+                    media.fit,
+                );
                 calques.push(Calque {
                     texture: &media.texture,
-                    source: RECT {
-                        left: 0,
-                        top: 0,
-                        right: mw as i32,
-                        bottom: mh as i32,
-                    },
-                    destination: destination(media.rect, cw, ch),
+                    source,
+                    destination,
                 });
             } else {
                 let capture = &captures[*index];

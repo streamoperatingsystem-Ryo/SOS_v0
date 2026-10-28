@@ -9,7 +9,7 @@ use std::fmt;
 use std::path::{Path, PathBuf};
 
 use windows::core::HSTRING;
-use windows::Win32::Foundation::GENERIC_READ;
+use windows::Win32::Foundation::{RECT, GENERIC_READ};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_DEFAULT,
@@ -47,12 +47,34 @@ impl fmt::Display for ErreurMedia {
 
 impl std::error::Error for ErreurMedia {}
 
+/// Comment le média remplit son rect (contrat `mediaFit`/`bgFit`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Fit {
+    /// Étirement au rect (historique, aucune déformation évitée).
+    Etirer,
+    /// Contenu entier, centré (letterbox).
+    Ajuster,
+    /// Rect entièrement couvert, crop centré (cover).
+    Remplir,
+}
+
+impl Fit {
+    pub fn depuis_nom(nom: &str) -> Self {
+        match nom {
+            "ajuster" => Fit::Ajuster,
+            "remplir" => Fit::Remplir,
+            _ => Fit::Etirer,
+        }
+    }
+}
+
 /// Un média statique à composer : chemin résolu + destination + ordre z.
 #[derive(Debug, Clone, PartialEq)]
 pub struct MediaCfg {
     pub chemin: PathBuf,
     pub rect: (f64, f64, f64, f64),
     pub z: i32,
+    pub fit: Fit,
 }
 
 /// Média décodé, prêt pour le compositeur.
@@ -61,6 +83,78 @@ pub struct MediaChargee {
     pub taille: (u32, u32),
     pub rect: (f64, f64, f64, f64),
     pub z: i32,
+    pub fit: Fit,
+}
+
+/// Calcule la fenêtre source et la destination selon le fit.
+///
+/// `rect` est borné au canvas ; `taille` = dimensions natives du média.
+/// `Etirer` garde toute l'image et le rect ; `Ajuster` réduit la destination
+/// au ratio du média (centrée) ; `Remplir` garde le rect et croppe la source.
+pub fn geometrie(
+    taille: (u32, u32),
+    rect: (f64, f64, f64, f64),
+    canvas: (u32, u32),
+    fit: Fit,
+) -> (RECT, RECT) {
+    let (mw, mh) = (taille.0.max(1) as f64, taille.1.max(1) as f64);
+    let (cw, ch) = (canvas.0 as f64, canvas.1 as f64);
+    let x = rect.0.clamp(0.0, cw);
+    let y = rect.1.clamp(0.0, ch);
+    let w = rect.2.max(1.0).min((cw - x).max(1.0));
+    let h = rect.3.max(1.0).min((ch - y).max(1.0));
+
+    let source_pleine = RECT {
+        left: 0,
+        top: 0,
+        right: taille.0 as i32,
+        bottom: taille.1 as i32,
+    };
+    let destination = RECT {
+        left: x as i32,
+        top: y as i32,
+        right: (x + w) as i32,
+        bottom: (y + h) as i32,
+    };
+
+    match fit {
+        Fit::Etirer => (source_pleine, destination),
+        Fit::Ajuster => {
+            let echelle = (w / mw).min(h / mh);
+            let (dw, dh) = (mw * echelle, mh * echelle);
+            // Arrondi : évite une asymétrie de 1 px du letterbox.
+            let dx = (x + (w - dw) / 2.0).round();
+            let dy = (y + (h - dh) / 2.0).round();
+            (
+                source_pleine,
+                RECT {
+                    left: dx as i32,
+                    top: dy as i32,
+                    right: (dx + dw).round() as i32,
+                    bottom: (dy + dh).round() as i32,
+                },
+            )
+        }
+        Fit::Remplir => {
+            let ratio_destination = w / h;
+            let ratio_media = mw / mh;
+            let (sw, sh) = if ratio_media > ratio_destination {
+                (mh * ratio_destination, mh)
+            } else {
+                (mw, mw / ratio_destination)
+            };
+            let (sx, sy) = ((mw - sw) / 2.0, (mh - sh) / 2.0);
+            (
+                RECT {
+                    left: sx as i32,
+                    top: sy as i32,
+                    right: (sx + sw) as i32,
+                    bottom: (sy + sh) as i32,
+                },
+                destination,
+            )
+        }
+    }
 }
 
 /// Décode une image en texture BGRA (usage `DEFAULT`, bind render target,
@@ -82,6 +176,7 @@ pub fn charger(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee, E
         taille: (largeur, hauteur),
         rect: cfg.rect,
         z: cfg.z,
+        fit: cfg.fit,
     })
 }
 
@@ -180,6 +275,7 @@ mod tests {
             chemin: PathBuf::from("C:/inexistant/sos-test.png"),
             rect: (0.0, 0.0, 10.0, 10.0),
             z: 0,
+            fit: Fit::Etirer,
         };
         // Pas de contexte GPU nécessaire : l'erreur vient du fichier.
         let contexte = match ContexteGpu::creer(None) {
@@ -193,5 +289,34 @@ mod tests {
     fn erreur_affichee() {
         let e = ErreurMedia::Decodage("test".to_string());
         assert!(e.to_string().contains("test"));
+    }
+
+    #[test]
+    fn fit_etirer_garde_tout() {
+        let (source, dest) = geometrie((1920, 1080), (0.0, 0.0, 100.0, 100.0), (100, 100), Fit::Etirer);
+        assert_eq!((source.left, source.top, source.right, source.bottom), (0, 0, 1920, 1080));
+        assert_eq!((dest.left, dest.top, dest.right, dest.bottom), (0, 0, 100, 100));
+    }
+
+    #[test]
+    fn fit_ajuster_letterbox_centre() {
+        // 16:9 dans un carré : 100×56 centré (22 px en haut et en bas).
+        let (source, dest) = geometrie((1920, 1080), (0.0, 0.0, 100.0, 100.0), (100, 100), Fit::Ajuster);
+        assert_eq!((source.left, source.top, source.right, source.bottom), (0, 0, 1920, 1080));
+        assert_eq!((dest.left, dest.top, dest.right, dest.bottom), (0, 22, 100, 78));
+    }
+
+    #[test]
+    fn fit_remplir_crop_centre() {
+        // 16:9 dans un carré : crop 1080×1080 centré horizontalement.
+        let (source, dest) = geometrie((1920, 1080), (0.0, 0.0, 100.0, 100.0), (100, 100), Fit::Remplir);
+        assert_eq!((source.left, source.top, source.right, source.bottom), (420, 0, 1500, 1080));
+        assert_eq!((dest.left, dest.top, dest.right, dest.bottom), (0, 0, 100, 100));
+    }
+
+    #[test]
+    fn fit_est_borne_au_canvas() {
+        let (_, dest) = geometrie((100, 100), (50.0, 50.0, 500.0, 500.0), (100, 100), Fit::Etirer);
+        assert_eq!((dest.left, dest.top, dest.right, dest.bottom), (50, 50, 100, 100));
     }
 }
