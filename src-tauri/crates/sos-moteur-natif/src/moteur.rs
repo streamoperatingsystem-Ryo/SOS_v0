@@ -77,6 +77,14 @@ impl SourceCfg {
     }
 }
 
+/// Identité de l'encodeur réellement retenu (diagnostic, lot 2.9).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EncodeurInfo {
+    pub nom: String,
+    pub materiel: bool,
+    pub zero_copie: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum EtatInterne {
     Inactif,
@@ -93,6 +101,7 @@ pub struct MoteurNatif {
     arret: Mutex<Option<Arc<AtomicBool>>>,
     fil: Mutex<Option<JoinHandle<()>>>,
     apercu: Arc<Mutex<Option<ApercuFrame>>>,
+    encodeur: Arc<Mutex<Option<EncodeurInfo>>>,
 }
 
 impl Default for MoteurNatif {
@@ -110,6 +119,7 @@ impl MoteurNatif {
             arret: Mutex::new(None),
             fil: Mutex::new(None),
             apercu: Arc::new(Mutex::new(None)),
+            encodeur: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -136,6 +146,14 @@ impl MoteurNatif {
     /// Photographie des compteurs (diagnostic, lot 2.9).
     pub fn instantane(&self) -> Instantane {
         self.compteurs.instantane()
+    }
+
+    /// Identité de l'encodeur retenu (`None` tant que rien n'a démarré).
+    pub fn encodeur(&self) -> Option<EncodeurInfo> {
+        self.encodeur
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
     }
 
     /// Un enregistrement tourne-t-il (fil vivant) ?
@@ -221,10 +239,18 @@ impl Moteur for MoteurNatif {
         let etat = Arc::clone(&self.etat);
         let compteurs = Arc::clone(&self.compteurs);
         let apercu = Arc::clone(&self.apercu);
+        let encodeur_partage = Arc::clone(&self.encodeur);
         let fil = std::thread::Builder::new()
             .name("sos-moteur-natif".to_string())
             .spawn(move || {
-                let resultat = boucle(cfg, sources, Arc::clone(&compteurs), apercu, arret);
+                let resultat = boucle(
+                    cfg,
+                    sources,
+                    Arc::clone(&compteurs),
+                    apercu,
+                    arret,
+                    encodeur_partage,
+                );
                 let mut e = etat.lock().unwrap_or_else(|p| p.into_inner());
                 *e = match resultat {
                     Ok(()) => EtatInterne::Inactif,
@@ -291,6 +317,7 @@ fn boucle(
     compteurs: Arc<CompteursMoteur>,
     apercu_partage: Arc<Mutex<Option<ApercuFrame>>>,
     arret: Arc<AtomicBool>,
+    encodeur_partage: Arc<Mutex<Option<EncodeurInfo>>>,
 ) -> Result<(), String> {
     let (cw, ch) = cfg.canvas;
     let fps = cfg.fps;
@@ -364,7 +391,16 @@ fn boucle(
     if !sans_nvenc {
         match EncodeurNvenc::nouveau(&contexte, cfg.codec, cw, ch, fps, cfg.debit_kbps) {
             Ok(mut nvenc) => match nvenc.enregistrer(compositeur.sortie()) {
-                Ok(()) => encodeur = Some(EncodeurActif::Nvenc(Box::new(nvenc))),
+                Ok(()) => {
+                    *encodeur_partage
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(EncodeurInfo {
+                        nom: "NVENC H.264".to_string(),
+                        materiel: true,
+                        zero_copie: true,
+                    });
+                    encodeur = Some(EncodeurActif::Nvenc(Box::new(nvenc)));
+                }
                 Err(e) => derniere_erreur = e.to_string(),
             },
             Err(e) => derniere_erreur = e.to_string(),
@@ -375,9 +411,13 @@ fn boucle(
     let mut zero_copie = false;
     if encodeur.is_none() {
         match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte) {
-            Some((enc, materiel)) => {
-                zero_copie = materiel
-                    && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
+            Some((enc, mut info)) => {
+                zero_copie =
+                    info.materiel && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
+                info.zero_copie = zero_copie;
+                *encodeur_partage
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(info);
                 encodeur = Some(EncodeurActif::Mft(enc));
             }
             None => {
@@ -481,9 +521,13 @@ fn boucle(
             // Repli : NVENC ou MFT refuse la frame. On descend dans l'ordre
             // de détection MFT puis on rejoue la frame — une seule fois.
             match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte) {
-                Some((enc, materiel)) => {
+                Some((enc, mut info)) => {
                     zero_copie =
-                        materiel && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
+                        info.materiel && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
+                    info.zero_copie = zero_copie;
+                    *encodeur_partage
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner()) = Some(info);
                     compteurs.degrader(format!("repli encodeur ({e})"));
                     encodeur = EncodeurActif::Mft(enc);
                     resultat = encoder_actif(
@@ -551,6 +595,12 @@ fn boucle(
             if decision.action != Action::Rien {
                 compteurs.degrader(decision.to_string());
             }
+            if matches!(encodeur, EncodeurActif::Mft(_)) {
+                let mut diag = encodeur_partage.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(info) = diag.as_mut() {
+                    info.zero_copie = zero_copie;
+                }
+            }
             dernier_echantillon = Instant::now();
         }
     }
@@ -590,12 +640,19 @@ fn ouvrir_mft(
     ch: u32,
     fps: u32,
     contexte: &ContexteGpu,
-) -> Option<(EncodeurMft, bool)> {
+) -> Option<(EncodeurMft, EncodeurInfo)> {
     while *index < disponibles.len() {
         let dispo = &disponibles[*index];
         *index += 1;
         if let Ok(encodeur) = ouvrir_encodeur(dispo, cfg, cw, ch, fps, contexte) {
-            return Some((encodeur, dispo.materiel));
+            return Some((
+                encodeur,
+                EncodeurInfo {
+                    nom: dispo.nom.clone(),
+                    materiel: dispo.materiel,
+                    zero_copie: false,
+                },
+            ));
         }
     }
     None
@@ -737,6 +794,11 @@ mod tests {
         let mut s = source();
         s.nom = "  ".to_string();
         assert!(matches!(s.valider(), Err(ErreurMoteur::Configuration(_))));
+    }
+
+    #[test]
+    fn encodeur_inconnu_avant_demarrage() {
+        assert!(MoteurNatif::nouveau().encodeur().is_none());
     }
 
     #[test]

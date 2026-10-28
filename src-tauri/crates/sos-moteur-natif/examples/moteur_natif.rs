@@ -79,9 +79,10 @@ fn main() {
         std::thread::sleep(Duration::from_secs(1));
         let i = moteur.instantane();
         println!(
-            "t={:>2}s etat={:?} capturees={} composites={} perdues={} kbps={} latence={}ms",
+            "t={:>2}s etat={:?} encodeur={:?} capturees={} composites={} perdues={} kbps={} latence={}ms",
             debut.elapsed().as_secs(),
             moteur.etat(),
+            moteur.encodeur(),
             i.frames_capturees,
             i.frames_composites,
             i.frames_perdues,

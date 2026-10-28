@@ -895,7 +895,7 @@ ffmpeg) était à 2,07 % / 183,5 Mo. Détails : `mesures-p0.md`.
 ```bash
 cd src-tauri
 cargo clippy -p sos-moteur-natif --all-targets -- -D warnings   # exit 0
-cargo test -p sos-moteur-natif                                  # 27 tests
+cargo test -p sos-moteur-natif                                  # 38 tests
 cargo clippy -p streamos-v0                                     # exit 0
 cargo test -p streamos-v0 moteur::mode                          # 4 tests
 ```
@@ -906,7 +906,60 @@ Spikes : `nvenc_encode`, `capture_multi`, `compose_encode`
 ### 27.6 Lots faits / restants
 
 **Faits** : 0.2g-β, 0.2g-γ, P0-a zéro-copie, 2.1, 2.2, 2.3, 2.4, 2.6, 2.7,
-audio WASAPI, mixage, compteurs, app 1.4 (registre de mode).
-**Restants** : 1.1 (`sos-scene`), 1.2 (`sos-moteur-api`), 1.3 (adaptateur
-`MoteurObs`), 1.5 (UI OBS/Rust), 2.8 (bouton d'enregistrement natif),
-2.9/2.10 (diagnostic « Moteur »), P0-b, caméra, hot-plug, RTMP/SRT, audio muxé.
+audio WASAPI, mixage, compteurs, app 1.4 (registre de mode), **1.1**
+(`sos-scene`), **1.2** (`sos-moteur-api`), **1.3** (`MoteurObs`), **1.5** (UI
+OBS/Rust), **1.6** (orchestrateur `MoteurNatif`), **1.6b** (backend NVENC).
+**Restants** : 2.8 (bouton d'enregistrement natif), 2.9/2.10 (diagnostic
+« Moteur »), P0-b, caméra, hot-plug, RTMP/SRT, audio muxé, **P3 renderer**
+(texte/chat/cadres/médias) — prérequis produit de 2.8.
+
+---
+
+## 28. État mesuré du 2026-10-28 — orchestrateur et encodeurs
+
+### 28.1 Ce qui tourne
+
+- `MoteurNatif` (`crates/sos-moteur-natif/src/moteur.rs`) implémente
+  `sos_moteur_api::Moteur` : N sources WGC (moniteur ou fenêtre, rect dans le
+  canvas) → compositeur NV12 → encodeur → sinks fichier, horloge, gouverneur,
+  compteurs, aperçu. Thread dédié, arrêt idempotent, `arreter()` ne coupe
+  jamais un live.
+- **NVENC direct** prioritaire (`encode::nvenc`, promu du spike P0-a) :
+  texture NV12 du compositeur enregistrée **une fois**, zéro-copie.
+- Repli **MFT** (matériels puis logiciels) si NVENC absent ou en échec.
+  Variables de diagnostic : `SOS_MOTEUR_SANS_NVENC`,
+  `SOS_MOTEUR_ENCODEUR_LOGICIEL`, `SOS_MOTEUR_MFT_MEMOIRE`.
+- `MoteurNatif::encodeur()` expose `{ nom, materiel, zero_copie }` — le
+  diagnostic ne doit jamais afficher « matériel » pour du logiciel.
+
+### 28.2 Mesures (GTX 1070 Ti, 1360×768@60, 10 s, harnais `moteur_natif`)
+
+| Voie | Débit | Latence | Décodage ffmpeg |
+|---|---|---|---|
+| NVENC direct | 5975 kb/s (cible 6000) | **1–2 ms** | exit 0, aucun avertissement |
+| MFT logiciel | 300–4500 kb/s | 230 ms | exit 0, DTS non monotone |
+
+### 28.3 Défauts vérifiés — ne pas les redécouvrir
+
+1. **MFT NVIDIA** : `ProcessOutput` rend `E_FAIL` (0x8000FFFF) sur cette
+   machine, quel que soit le chemin (surface GPU, mémoire, sans gestionnaire
+   D3D11). Constat reproductible par `cargo run --example mft_diag`. Le MFT
+   Intel refuse `SetD3DManager` avec le device NVIDIA.
+2. **Readback NV12** : `Map` de la sous-ressource 1 renvoie `E_INVALIDARG` ;
+   NV12 est **une** sous-ressource, la UV se lit à
+   `pData + RowPitch × hauteur` dans le même mapping.
+3. **B-frames** : elles produisent un DTS non monotone au remux d'un flux
+   élémentaire. `CODECAPI_AVEncMPVDefaultBPictureCount = 0` exigé.
+4. **Spike NVENC** : forçait `PIC_TYPE_IDR` à chaque frame. Corrigé : IDR à
+   la première frame et chaque GOP, P sinon.
+5. **WGC** ne délivre que sur changement d'écran : `composites` dépasse
+   `capturees` sans que ce soit une perte. Ne jamais compter cela comme drop.
+
+### 28.4 Blocage produit assumé
+
+Le rendu natif (texte, chat, alertes, cadres, titres, médias) n'existe pas
+encore (phases P3/P4). L'orchestrateur enregistre **des captures**, pas la
+scène StreamOS. Les lots 2.8/2.9 sont techniquement débloqués (moteur réel,
+diagnostic réel) mais un bouton « enregistrer le stream » mentirait tant que
+P3 n'est pas livré. Le mapping widget/trou → cible de capture vit côté
+frontend et doit être poussé au moteur avant tout enregistrement de scène.
