@@ -474,6 +474,7 @@ propres, l'anneau éventuel (`cameraBord`) dérive du cadre de scène.
 | Menus contextuels — recette `.ctx-*` / `CtxMenu.svelte` | `docs/features/ctx-menus.md` |
 | Pastille « Vos scènes » masquée + confirmation | `docs/features/pastille-masquee.md` |
 | Tableau « Vos scènes » enrichi (mini-map) | `docs/features/tableau-scenes.md` |
+| Résolution canvas — miroir OBS + rescale des scènes | `docs/features/canvas-resolution.md` |
 | API Stream Deck — HTTP :4321 | `docs/features/api-deck.md` |
 | État partagé (tauri::State) | `docs/features/etat-partage.md` |
 | Stores frontend | `docs/features/stores.md` |

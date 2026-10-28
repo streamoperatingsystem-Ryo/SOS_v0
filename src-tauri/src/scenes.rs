@@ -257,27 +257,167 @@ fn load_current_id_config(app: &AppHandle) -> Result<Option<String>, String> {
 
 // ===== Canvas OBS global =====
 
+/// Bruit toléré sur la résolution OBS, avant de considérer qu'il y a
+/// changement. OBS renvoie parfois la même résolution arrondie différemment
+/// (1360×768 puis 1361×768) : en dessous de ce seuil, **rien** n'est touché
+/// (ni les dimensions, ni la géométrie) — sinon la scène serait re-sauvée
+/// pour un pixel.
+///
+/// ⚠️ Ne pas confondre avec un seuil de protection contre la dérive : c'est
+/// `canvasDesignW/H` qui garantit l'absence de dérive (chaque adaptation
+/// repart de l'espace de conception, donc un aller-retour est exact).
+pub(crate) const EPSILON_CANVAS: f64 = 0.001;
+
 /// Applique la dernière résolution canvas OBS connue (obs_canvas.json) à une
 /// scène. canvasW/canvasH sont un miroir de la résolution OBS — PAS une
 /// propriété par scène. Sans ça, une scène créée/importée avec le défaut
 /// 1920×1080 alors qu'OBS est en (ex.) 1842×1036 rend une page :4321 plus
 /// large que la source navigateur → bords droit/bas coupés dans OBS.
-/// Les widgets ne sont jamais rescalés.
+///
+/// Depuis le 2026-10-28, la géométrie **suit** un vrai changement de
+/// résolution (voir [`adapter_canvas`]) : sans ça, les widgets restaient aux
+/// coordonnées de l'ancien canvas et débordaient.
 pub(crate) fn appliquer_canvas_obs(app: &AppHandle, scene: &mut Scene) {
     match crate::config::lire_obs_canvas(app) {
         Ok(Some((w, h))) => {
-            if scene.canvasW != w || scene.canvasH != h {
+            let (avant_w, avant_h) = (scene.canvasW, scene.canvasH);
+            if adapter_canvas(scene, w, h) {
                 log::info!(
                     "Canvas scène {}×{} → {}×{} (résolution OBS connue)",
-                    scene.canvasW, scene.canvasH, w, h
+                    avant_w,
+                    avant_h,
+                    w,
+                    h
                 );
-                scene.canvasW = w;
-                scene.canvasH = h;
             }
         }
         Ok(None) => {} // jamais connecté à OBS → dims de la scène inchangées
         Err(e) => log::warn!("lire_obs_canvas: {} (dims scène inchangées)", e),
     }
+}
+
+/// Met la scène aux dimensions `w × h` en repartant de son **espace de
+/// conception** (`canvasDesignW/H`).
+///
+/// Pourquoi repartir de la conception : un rescale direct `ancien → nouveau`
+/// arrondit à chaque passage, donc 1920 → 1360 → 1920 ne retrouve pas le
+/// layout d'origine. Ici la géométrie est d'abord ramenée dans l'espace de
+/// conception (inverse de la transformation courante), puis projetée sur le
+/// nouveau canvas : l'aller-retour est exact (aux arrondis des champs
+/// entiers près, ±1 px au pire).
+///
+/// Facteur **uniforme** (`min` des deux ratios) + centrage (letterbox) : un
+/// passage 16:9 → 4:3 ne déforme jamais les widgets, il laisse des bandes.
+/// Retourne `true` si les dimensions du canvas ont changé.
+pub(crate) fn adapter_canvas(scene: &mut Scene, w: u32, h: u32) -> bool {
+    if w == 0 || h == 0 || (scene.canvasW == w && scene.canvasH == h) {
+        return false;
+    }
+    let (courant_w, courant_h) = (scene.canvasW as f64, scene.canvasH as f64);
+    let sx = w as f64 / courant_w;
+    let sy = h as f64 / courant_h;
+    if (sx - 1.0).abs() <= EPSILON_CANVAS && (sy - 1.0).abs() <= EPSILON_CANVAS {
+        return false;
+    }
+
+    // Espace de conception — migration d'une vieille scène : les coordonnées
+    // actuelles sont, par définition, exprimées dans le canvas courant.
+    let (design_w, design_h) = match (scene.canvasDesignW, scene.canvasDesignH) {
+        (Some(dw), Some(dh)) if dw > 0 && dh > 0 => (dw as f64, dh as f64),
+        _ => {
+            scene.canvasDesignW = Some(scene.canvasW);
+            scene.canvasDesignH = Some(scene.canvasH);
+            (courant_w, courant_h)
+        }
+    };
+
+    // 1) Retour dans l'espace de conception (inverse de `echelle_scene`).
+    let (facteur, dx, dy) = transformation(design_w, design_h, courant_w, courant_h);
+    echelle_scene(scene, 1.0 / facteur, -dx / facteur, -dy / facteur);
+
+    // 2) Projection sur le nouveau canvas.
+    let (facteur, dx, dy) = transformation(design_w, design_h, w as f64, h as f64);
+    echelle_scene(scene, facteur, dx, dy);
+
+    scene.canvasW = w;
+    scene.canvasH = h;
+    true
+}
+
+/// Transformation conception → canvas : facteur uniforme + centrage.
+///
+/// `x_canvas = x_conception × f + dx`, `y_canvas = y_conception × f + dy`.
+fn transformation(design_w: f64, design_h: f64, cw: f64, ch: f64) -> (f64, f64, f64) {
+    let facteur = (cw / design_w).min(ch / design_h);
+    (
+        facteur,
+        (cw - design_w * facteur) / 2.0,
+        (ch - design_h * facteur) / 2.0,
+    )
+}
+
+/// Applique `facteur` + décalage de centrage à toute la géométrie en px canvas.
+///
+/// Ne touche qu'aux grandeurs **en pixels canvas** : positions, tailles,
+/// décalages, tailles de police, épaisseurs de contour, flou. Les valeurs
+/// sans dimension (zoom, rotations en degrés, durées, compteurs) sont
+/// laissées intactes.
+fn echelle_scene(scene: &mut Scene, facteur: f64, dx: f64, dy: f64) {
+    for w in &mut scene.widgets {
+        w.x = w.x * facteur + dx;
+        w.y = w.y * facteur + dy;
+        w.largeur *= facteur;
+        w.hauteur *= facteur;
+        w.mediaOffsetX *= facteur;
+        w.mediaOffsetY *= facteur;
+        w.mediaFlou *= facteur;
+        w.taillePolice = echelle_px(w.taillePolice, facteur);
+        w.titreTaille = echelle_px(w.titreTaille, facteur);
+        w.titreContourEpaisseur = echelle_px(w.titreContourEpaisseur, facteur);
+        w.titreEspacement = w.titreEspacement.map(|v| v * facteur);
+        w.srTaillePolice = echelle_px(w.srTaillePolice, facteur);
+        w.srSegBordureEpaisseur = echelle_px(w.srSegBordureEpaisseur, facteur);
+        w.srSegBordureRayon = echelle_px(w.srSegBordureRayon, facteur);
+        w.srHauteurLigne = echelle_px(w.srHauteurLigne, facteur);
+    }
+
+    if let Some(modules) = scene.modules.as_mut() {
+        for module in [
+            modules.horloge.as_mut(),
+            modules.musique.as_mut(),
+            modules.objectifs.as_mut(),
+            modules.equaliseur.as_mut(),
+            modules.spots.as_mut(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            module.x = module.x * facteur + dx;
+            module.y = module.y * facteur + dy;
+            module.largeur *= facteur;
+            module.hauteur *= facteur;
+            module.taille = echelle_px(module.taille, facteur);
+        }
+    }
+
+    scene.bgOffsetX *= facteur;
+    scene.bgOffsetY *= facteur;
+    scene.bgFlou *= facteur;
+    scene.bgTitreTaille = echelle_px(scene.bgTitreTaille, facteur);
+    scene.bgTitreContourEpaisseur = echelle_px(scene.bgTitreContourEpaisseur, facteur);
+    scene.bgTitreEspacement = scene.bgTitreEspacement.map(|v| v * facteur);
+}
+
+/// Échelle d'une valeur entière en px. `0` reste `0` (contour désactivé,
+/// taille absente) : jamais de « 0 devient 1 ».
+fn echelle_px(valeur: Option<u32>, facteur: f64) -> Option<u32> {
+    valeur.map(|v| {
+        if v == 0 {
+            0
+        } else {
+            ((v as f64 * facteur).round() as u32).max(1)
+        }
+    })
 }
 
 // ===== Boot + migration =====
@@ -543,6 +683,142 @@ mod tests {
 
     /// La garde « scène vierge » doit détecter TOUT contenu utilisateur —
     /// c'est elle qui empêche l'onboarding d'écraser une scène existante.
+    /// Widget à (x, y) = centre, comme `clampWidget` côté frontend.
+    fn scene_avec_widget(x: f64, y: f64, largeur: f64, hauteur: f64) -> Scene {
+        let json = format!(
+            r#"{{"widgets":[{{"id":"w","type":"media","x":{x},"y":{y},
+                "largeur":{largeur},"hauteur":{hauteur},"z":0,
+                "titreTaille":48,"titreContourEpaisseur":0,"mediaOffsetX":20}}]}}"#
+        );
+        serde_json::from_str(&json).expect("scène JSON")
+    }
+
+    #[test]
+    fn adapter_canvas_rescale_1920_vers_1360() {
+        let mut s = scene_avec_widget(960.0, 540.0, 400.0, 200.0);
+        assert!(adapter_canvas(&mut s, 1360, 768));
+        assert_eq!((s.canvasW, s.canvasH), (1360, 768));
+        // Facteur uniforme = min(1360/1920, 768/1080) = 0.70833 ; le contenu
+        // (1920×1080 × f = 1360×765) est centré → dy = 1.5 px.
+        let f = 1360.0 / 1920.0;
+        let dy = (768.0 - 1080.0 * f) / 2.0;
+        let w = &s.widgets[0];
+        assert!((w.x - 960.0 * f).abs() < 0.01, "x = {}", w.x);
+        assert!((w.y - (540.0 * f + dy)).abs() < 0.01, "y = {}", w.y);
+        assert!((w.largeur - 400.0 * f).abs() < 0.01);
+        assert!((w.hauteur - 200.0 * f).abs() < 0.01);
+        assert!((w.mediaOffsetX - 20.0 * f).abs() < 0.01);
+        assert_eq!(w.titreTaille, Some(34), "48 × 0.708 = 34");
+        assert_eq!(w.titreContourEpaisseur, Some(0), "0 = contour désactivé");
+        // L'espace de conception est mémorisé : la scène a été dessinée en
+        // 1920×1080, même si elle s'affiche maintenant en 1360×768.
+        assert_eq!((s.canvasDesignW, s.canvasDesignH), (Some(1920), Some(1080)));
+    }
+
+    #[test]
+    fn adapter_canvas_ignore_le_bruit_obs() {
+        // 1919×1080 = 0,05 % d'écart : bruit d'arrondi, rien n'est touché —
+        // ni les dimensions (sinon la scène serait re-sauvée pour 1 px), ni
+        // la géométrie.
+        let mut s = scene_avec_widget(960.0, 540.0, 400.0, 200.0);
+        assert!(!adapter_canvas(&mut s, 1919, 1080));
+        assert_eq!((s.canvasW, s.canvasH), (1920, 1080));
+        assert_eq!(s.widgets[0].x, 960.0);
+        assert_eq!(s.canvasDesignW, None, "aucune migration pour du bruit");
+    }
+
+    #[test]
+    fn adapter_canvas_aller_retour_exact() {
+        let mut s = scene_avec_widget(960.0, 540.0, 400.0, 200.0);
+        let (x0, y0, l0, h0) = (
+            s.widgets[0].x,
+            s.widgets[0].y,
+            s.widgets[0].largeur,
+            s.widgets[0].hauteur,
+        );
+        assert!(adapter_canvas(&mut s, 1360, 768));
+        assert!(adapter_canvas(&mut s, 1920, 1080));
+        let w = &s.widgets[0];
+        assert_eq!((s.canvasW, s.canvasH), (1920, 1080));
+        assert!((w.x - x0).abs() < 1e-9, "x {} ≠ {}", w.x, x0);
+        assert!((w.y - y0).abs() < 1e-9, "y {} ≠ {}", w.y, y0);
+        assert!((w.largeur - l0).abs() < 1e-9);
+        assert!((w.hauteur - h0).abs() < 1e-9);
+        assert_eq!(w.titreTaille, Some(48), "champ entier restauré");
+    }
+
+    #[test]
+    fn adapter_canvas_aller_retour_exact_4_3() {
+        let mut s = scene_avec_widget(960.0, 540.0, 400.0, 200.0);
+        assert!(adapter_canvas(&mut s, 1440, 1080));
+        assert!(adapter_canvas(&mut s, 1920, 1080));
+        let w = &s.widgets[0];
+        assert!((w.x - 960.0).abs() < 1e-9);
+        assert!((w.largeur - 400.0).abs() < 1e-9);
+        assert!((w.hauteur - 200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn adapter_canvas_garde_l_espace_de_conception() {
+        let mut s = scene_avec_widget(960.0, 540.0, 400.0, 200.0);
+        assert!(adapter_canvas(&mut s, 1360, 768));
+        assert!(adapter_canvas(&mut s, 2560, 1440));
+        assert_eq!((s.canvasW, s.canvasH), (2560, 1440));
+        assert_eq!(
+            (s.canvasDesignW, s.canvasDesignH),
+            (Some(1920), Some(1080)),
+            "la conception ne bouge jamais"
+        );
+        let w = &s.widgets[0];
+        let f = 2560.0 / 1920.0;
+        assert!((w.x - 960.0 * f).abs() < 0.01, "projeté depuis 1920×1080");
+    }
+
+    #[test]
+    fn adapter_canvas_est_idempotent() {
+        let mut s = scene_avec_widget(960.0, 540.0, 400.0, 200.0);
+        assert!(adapter_canvas(&mut s, 1360, 768));
+        let (x, largeur) = (s.widgets[0].x, s.widgets[0].largeur);
+        assert!(!adapter_canvas(&mut s, 1360, 768), "même dims = no-op");
+        assert_eq!(s.widgets[0].x, x);
+        assert_eq!(s.widgets[0].largeur, largeur);
+    }
+
+    #[test]
+    fn adapter_canvas_letterbox_si_le_ratio_change() {
+        // 1920×1080 → 1440×1080 (4:3, même hauteur) : facteur uniforme 0.75,
+        // contenu 1440×810 centré verticalement → bandes de 135 px en haut et
+        // en bas, aucune déformation.
+        let mut s = scene_avec_widget(960.0, 540.0, 400.0, 200.0);
+        assert!(adapter_canvas(&mut s, 1440, 1080));
+        let w = &s.widgets[0];
+        assert!((w.largeur - 300.0).abs() < 0.01, "largeur × 0.75");
+        assert!((w.hauteur - 150.0).abs() < 0.01, "hauteur × 0.75");
+        assert!((w.x - 720.0).abs() < 0.01, "pas de bande horizontale");
+        assert!((w.y - 540.0).abs() < 0.01, "540 × 0.75 + 135 = 540");
+    }
+
+    #[test]
+    fn adapter_canvas_refuse_des_dims_nulles() {
+        let mut s = scene_avec_widget(960.0, 540.0, 400.0, 200.0);
+        assert!(!adapter_canvas(&mut s, 0, 768));
+        assert_eq!((s.canvasW, s.canvasH), (1920, 1080));
+    }
+
+    #[test]
+    fn adapter_canvas_rescale_les_modules() {
+        let mut s: Scene = serde_json::from_str(
+            r#"{"widgets":[],"modules":{"horloge":{"x":1520,"y":40,"largeur":360,"hauteur":60,"taille":30}}}"#,
+        )
+        .expect("scène JSON");
+        assert!(adapter_canvas(&mut s, 1360, 768));
+        let h = s.modules.as_ref().and_then(|m| m.horloge.as_ref()).unwrap();
+        let f = 1360.0 / 1920.0;
+        assert!((h.x - 1520.0 * f).abs() < 0.01);
+        assert!((h.largeur - 360.0 * f).abs() < 0.01);
+        assert_eq!(h.taille, Some(21));
+    }
+
     #[test]
     fn scene_vierge_detecte_contenu() {
         let s = Scene::new();

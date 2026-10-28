@@ -772,20 +772,21 @@ async fn obs_connect(
     }
 
     // Muter canvasW/canvasH si changement → save + snapshot (chaîne unique).
+    // La géométrie suit un vrai changement de résolution (facteur uniforme +
+    // letterbox, seuil SEUIL_CANVAS) — sinon les widgets restent aux
+    // coordonnées de l'ancien canvas et débordent (cf. scenes::adapter_canvas).
     let changed = {
         let mut current = state.scene.lock().unwrap();
-        if current.canvasW == w && current.canvasH == h {
-            false
-        } else {
-            current.canvasW = w;
-            current.canvasH = h;
-            true
+        let (avant_w, avant_h) = (current.canvasW, current.canvasH);
+        let change = scenes::adapter_canvas(&mut current, w, h);
+        if change {
+            log::info!("Canvas mis à jour : {}×{} → {}×{}", avant_w, avant_h, w, h);
         }
+        change
     };
 
     if changed {
         scenes::save_current(&app, &state)?;
-        log::info!("Canvas mis à jour : {}×{}", w, h);
     }
 
     Ok(())

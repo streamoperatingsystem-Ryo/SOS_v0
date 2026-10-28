@@ -20,8 +20,9 @@
   fonctionnels sans import média (chat / camera / input-viewer / speedrun /
   goal / media troué sans fichier) + `cadreWidget` actif (règle figée
   cadres : s'applique à tous). Conçus 1920×1080 ; `appliquer_canvas_obs`
-  ajuste le canvas sans rescaler les widgets (comportement des scènes
-  importées).
+  applique la résolution OBS et **rescale** la géométrie si l'écart dépasse
+  10 % (facteur uniforme + letterbox, cf. `canvas-resolution.md`) — un preset
+  tient donc dans un canvas 1360×768 sans être coupé.
 
 ### Flux
 

@@ -613,6 +613,12 @@ export interface Scene {
   widgets: Widget[];
   canvasW?: number;
   canvasH?: number;
+  /// Espace de conception de la scène (résolution dans laquelle les
+  /// coordonnées ont été dessinées). Rempli par Rust à la première adaptation
+  /// du canvas ; sert à rendre l'aller-retour de résolution exact. Le frontend
+  /// ne fait que le transporter (jamais recalculé côté TS).
+  canvasDesignW?: number;
+  canvasDesignH?: number;
   bgMedia?: string;
   /// Carrousel d'images du fond : liste non vide = ACTIF et prioritaire
   /// sur bgMedia (qui reste stocké). bgObsSource reste prioritaire sur

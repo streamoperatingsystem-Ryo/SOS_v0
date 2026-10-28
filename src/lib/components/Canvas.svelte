@@ -31,7 +31,8 @@
   import { t } from "../stores/langue";
 
   // Dims canvas = résolution OBS lue au connect (fallback 1920×1080).
-  // Widgets existants jamais rescalés quand ces dims changent.
+  // Un vrai changement de résolution (> 10 %) rescale la scène côté Rust
+  // (scenes::adapter_canvas) ; en dessous du seuil, la géométrie ne bouge pas.
   let canvasW = $derived($sceneStore.canvasW ?? 1920);
   let canvasH = $derived($sceneStore.canvasH ?? 1080);
 

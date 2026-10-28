@@ -791,6 +791,17 @@ pub struct Scene {
     pub canvasW: u32,
     #[serde(default = "default_canvas_h")]
     pub canvasH: u32,
+    /// Résolution de **conception** : l'espace dans lequel les coordonnées de
+    /// la scène ont été dessinées. `canvasW/H` peut changer (résolution OBS)
+    /// sans perdre le layout d'origine : `scenes::adapter_canvas` revient
+    /// toujours dans cet espace avant d'appliquer le nouveau canvas, ce qui
+    /// rend l'aller-retour 1920 → 1360 → 1920 exact.
+    /// `None` (vieilles scènes) = migré à la première adaptation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvasDesignW: Option<u32>,
+    /// Hauteur de l'espace de conception (voir `canvasDesignW`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvasDesignH: Option<u32>,
     #[serde(default)]
     pub bgMedia: String,
     /// Carrousel d'images du fond : liste non vide = ACTIF et prioritaire
@@ -962,6 +973,8 @@ impl Default for Scene {
             widgets: Vec::new(),
             canvasW: DEFAULT_CANVAS_W,
             canvasH: DEFAULT_CANVAS_H,
+            canvasDesignW: None,
+            canvasDesignH: None,
             bgMedia: String::new(),
             bgSlides: None,
             bgSlidesSec: None,
