@@ -12,6 +12,10 @@ description = "StreamOS — moteur natif de capture, composition et encodage (sa
 
 [dependencies]
 log = "0.4"
+# Décodage des polices de titre : les .woff2 du dépôt (servis au frontend)
+# sont convertis en TTF **en mémoire** puis chargés par DirectWrite. Aucun
+# téléchargement, aucun fichier écrit (CONTRAT FIGÉ vie privée).
+wuff = "0.2"
 # Contrats partagés (Sink, PaquetEncode, Conteneur, ErreurMoteur) : le moteur
 # les implémente, il ne les redéfinit pas. Contrat §3.2.
 sos-moteur-api = { path = "../sos-moteur-api" }
@@ -43,6 +47,12 @@ windows = { version = "0.58", features = [
     # Décodage d'images (PNG/JPG/BMP) via WIC — médias et fonds de scène.
     "Win32_Graphics_Imaging",
     "Win32_System_Com",
+    # Texte natif : DirectWrite (mise en page, polices) + Direct2D (dessin
+    # antialiasé avec alpha). `Foundation` porte `Numerics::Matrix3x2`.
+    "Foundation_Numerics",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
     "Graphics",
     "Graphics_Capture",
     "Graphics_DirectX",

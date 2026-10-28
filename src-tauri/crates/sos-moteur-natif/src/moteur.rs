@@ -42,6 +42,7 @@ use crate::gpu::{ContexteGpu, DescTexture, Format};
 use crate::media::MediaCfg;
 use crate::output::ffmpeg::FfmpegSink;
 use crate::preview::Apercu;
+use crate::texte::{DessinateurTexte, TexteCfg};
 
 /// Ce que le moteur capture.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -100,6 +101,7 @@ enum EtatInterne {
 pub struct MoteurNatif {
     sources: Mutex<Vec<SourceCfg>>,
     medias: Mutex<Vec<MediaCfg>>,
+    textes: Mutex<Vec<TexteCfg>>,
     etat: Arc<Mutex<EtatInterne>>,
     compteurs: Arc<CompteursMoteur>,
     arret: Mutex<Option<Arc<AtomicBool>>>,
@@ -119,6 +121,7 @@ impl MoteurNatif {
         Self {
             sources: Mutex::new(Vec::new()),
             medias: Mutex::new(Vec::new()),
+            textes: Mutex::new(Vec::new()),
             etat: Arc::new(Mutex::new(EtatInterne::Inactif)),
             compteurs: Arc::new(CompteursMoteur::nouveau()),
             arret: Mutex::new(None),
@@ -157,6 +160,23 @@ impl MoteurNatif {
         Ok(())
     }
 
+    /// Remplace les textes (titres de fond et de widgets).
+    pub fn configurer_textes(&self, textes: Vec<TexteCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.textes.lock().unwrap_or_else(|e| e.into_inner()) = textes;
+        Ok(())
+    }
+
+    /// Textes configurés (diagnostic / tests).
+    pub fn textes(&self) -> Vec<TexteCfg> {
+        self.textes
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     /// Remplace sources et médias depuis une scène + la table widget → cible.
     /// `base` = dossier des données (`medias/` y est relatif).
     pub fn configurer_scene(
@@ -170,11 +190,13 @@ impl MoteurNatif {
         }
         let sources = crate::scene_sources::sources_depuis_scene(scene, cibles);
         let medias = crate::scene_sources::medias_depuis_scene(scene, base);
+        let textes = crate::scene_sources::textes_depuis_scene(scene);
         for source in &sources {
             source.valider()?;
         }
         *self.sources.lock().unwrap_or_else(|e| e.into_inner()) = sources;
         *self.medias.lock().unwrap_or_else(|e| e.into_inner()) = medias;
+        *self.textes.lock().unwrap_or_else(|e| e.into_inner()) = textes;
         Ok(())
     }
 
@@ -263,9 +285,10 @@ impl Moteur for MoteurNatif {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone();
-        if sources.is_empty() && medias.is_empty() {
+        let textes = self.textes();
+        if sources.is_empty() && medias.is_empty() && textes.is_empty() {
             return Err(ErreurMoteur::Configuration(
-                "aucune source ni média configuré".to_string(),
+                "aucune source, média ni texte configuré".to_string(),
             ));
         }
         for source in &sources {
@@ -285,8 +308,11 @@ impl Moteur for MoteurNatif {
             .spawn(move || {
                 let resultat = boucle(
                     cfg,
-                    sources,
-                    medias,
+                    SceneChargee {
+                        sources,
+                        medias,
+                        textes,
+                    },
                     Arc::clone(&compteurs),
                     apercu,
                     arret,
@@ -338,6 +364,13 @@ impl Moteur for MoteurNatif {
     }
 }
 
+/// Contenu figé d'une session d'enregistrement (captures, médias, textes).
+struct SceneChargee {
+    sources: Vec<SourceCfg>,
+    medias: Vec<MediaCfg>,
+    textes: Vec<TexteCfg>,
+}
+
 /// Une capture active + sa copie GPU persistante.
 ///
 /// La texture WGC appartient au frame pool : elle est copiée immédiatement,
@@ -355,13 +388,17 @@ struct CaptureActive {
 /// panique ne doit traverser le fil.
 fn boucle(
     cfg: SortieCfg,
-    sources: Vec<SourceCfg>,
-    medias_cfg: Vec<MediaCfg>,
+    scene: SceneChargee,
     compteurs: Arc<CompteursMoteur>,
     apercu_partage: Arc<Mutex<Option<ApercuFrame>>>,
     arret: Arc<AtomicBool>,
     encodeur_partage: Arc<Mutex<Option<EncodeurInfo>>>,
 ) -> Result<(), String> {
+    let SceneChargee {
+        sources,
+        medias: medias_cfg,
+        textes: textes_cfg,
+    } = scene;
     let (cw, ch) = cfg.canvas;
     let fps = cfg.fps;
 
@@ -429,8 +466,30 @@ fn boucle(
     }
     plan.sort_by_key(|(z, _, _)| *z);
 
-    let mut compositeur = Compositeur::nouveau(&contexte, cw, ch, fps)
-        .map_err(|e| format!("compositeur : {e}"))?;
+    // Voie A du texte (2026-10-28) : quand des titres existent, la
+    // composition se fait dans un canvas **BGRA** (Direct2D y dessine le
+    // texte avec un alpha réel), puis une passe `VideoProcessorBlt` convertit
+    // ce canvas en NV12 pour l'encodeur. Sans texte, le chemin direct
+    // NV12 → encodeur reste inchangé (aucune passe ajoutée).
+    let mut voie_texte = if textes_cfg.is_empty() {
+        None
+    } else {
+        Some(VoieTexte::nouveau(&contexte, cw, ch, fps, textes_cfg).map_err(|e| format!("texte : {e}"))?)
+    };
+
+    let mut compositeur = match voie_texte.as_ref() {
+        Some(v) => Compositeur::nouveau_sur(&contexte, &v.canvas, fps)
+            .map_err(|e| format!("compositeur (texte) : {e}"))?,
+        None => Compositeur::nouveau(&contexte, cw, ch, fps)
+            .map_err(|e| format!("compositeur : {e}"))?,
+    };
+
+    // Texture que l'encodeur consomme : NV12 du compositeur (chemin direct)
+    // ou NV12 converti depuis le canvas BGRA (voie texte).
+    let cible_encode = match voie_texte.as_ref() {
+        Some(v) => v.nv12.clone(),
+        None => compositeur.sortie().clone(),
+    };
 
     // Tous les encodeurs MFT, matériels puis logiciels : le repli doit
     // pouvoir descendre jusqu'au logiciel même quand un matériel est listé
@@ -451,7 +510,7 @@ fn boucle(
     let mut derniere_erreur = String::new();
     if !sans_nvenc {
         match EncodeurNvenc::nouveau(&contexte, cfg.codec, cw, ch, fps, cfg.debit_kbps) {
-            Ok(mut nvenc) => match nvenc.enregistrer(compositeur.sortie()) {
+            Ok(mut nvenc) => match nvenc.enregistrer(&cible_encode) {
                 Ok(()) => {
                     *encodeur_partage
                         .lock()
@@ -584,21 +643,30 @@ fn boucle(
                 }
             }
         }
-        if calques.is_empty() {
+        // Sans calque, le canvas texte (créé à zéro par le pilote) reste noir :
+        // une scène « titre seul » doit quand même s'enregistrer.
+        if calques.is_empty() && voie_texte.is_none() {
             compteurs.perdue();
             continue;
         }
 
-        if let Err(e) = compositeur.composer(&calques) {
-            return Err(format!("composition : {e}"));
+        if !calques.is_empty() {
+            if let Err(e) = compositeur.composer(&calques) {
+                return Err(format!("composition : {e}"));
+            }
+            compteurs.composite();
         }
-        compteurs.composite();
+
+        // Texte par-dessus les calques, puis conversion BGRA → NV12.
+        if let Some(v) = voie_texte.as_mut() {
+            v.dessiner().map_err(|e| format!("texte : {e}"))?;
+        }
 
         let mut resultat = encoder_actif(
             &mut encodeur,
             &mut zero_copie,
             convertisseur.as_ref(),
-            compositeur.sortie(),
+            &cible_encode,
             pts_us,
         );
         if let Err(e) = &resultat {
@@ -618,7 +686,7 @@ fn boucle(
                         &mut encodeur,
                         &mut zero_copie,
                         convertisseur.as_ref(),
-                        compositeur.sortie(),
+                        &cible_encode,
                         pts_us,
                     );
                 }
@@ -649,7 +717,7 @@ fn boucle(
         if let Some(a) = apercu.as_mut() {
             let pas = (fps / 10).max(1) as u64;
             if horloge.ticks() % pas == 0 {
-                if let Ok(tampon) = a.lire(compositeur.sortie()) {
+                if let Ok(tampon) = a.lire(&cible_encode) {
                     let frame = ApercuFrame {
                         data: tampon.to_vec(),
                         largeur: pw,
@@ -713,6 +781,56 @@ fn boucle(
 enum EncodeurActif {
     Nvenc(Box<EncodeurNvenc>),
     Mft(EncodeurMft),
+}
+
+/// Voie A du texte : canvas BGRA, textes Direct2D, conversion NV12.
+///
+/// Le canvas BGRA est la cible du compositeur ; la texture `nv12` est celle
+/// que l'encodeur a enregistrée **une fois** — la conversion réécrit la même
+/// surface à chaque frame (même contrat que le chemin zéro-copie).
+struct VoieTexte {
+    canvas: ID3D11Texture2D,
+    nv12: ID3D11Texture2D,
+    convertisseur: ConvertisseurNv12,
+    dessinateur: DessinateurTexte,
+    textes: Vec<TexteCfg>,
+}
+
+impl VoieTexte {
+    fn nouveau(
+        contexte: &ContexteGpu,
+        largeur: u32,
+        hauteur: u32,
+        fps: u32,
+        textes: Vec<TexteCfg>,
+    ) -> Result<Self, String> {
+        let desc = DescTexture::new(Format::Bgra8, largeur, hauteur)
+            .map_err(|e| format!("canvas texte : {e}"))?;
+        let canvas = contexte
+            .creer_texture(&desc)
+            .map_err(|e| format!("canvas texte : {e}"))?;
+        let convertisseur = ConvertisseurNv12::nouveau(contexte, largeur, hauteur, fps)
+            .map_err(|e| e.to_string())?;
+        let nv12 = convertisseur.creer_cible().map_err(|e| e.to_string())?;
+        let dessinateur = DessinateurTexte::nouveau(contexte, &canvas).map_err(|e| e.to_string())?;
+        Ok(Self {
+            canvas,
+            nv12,
+            convertisseur,
+            dessinateur,
+            textes,
+        })
+    }
+
+    /// Dessine les titres puis convertit le canvas en NV12.
+    fn dessiner(&mut self) -> Result<(), String> {
+        self.dessinateur
+            .dessiner(&self.textes)
+            .map_err(|e| e.to_string())?;
+        self.convertisseur
+            .convertir_vers(&self.canvas, &self.nv12)
+            .map_err(|e| e.to_string())
+    }
 }
 
 /// Ouvre le prochain MFT disponible, en avançant `index` (repli monotone).

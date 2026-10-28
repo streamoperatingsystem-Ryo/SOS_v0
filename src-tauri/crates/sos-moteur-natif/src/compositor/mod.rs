@@ -82,11 +82,34 @@ impl Compositeur {
         hauteur: u32,
         fps: u32,
     ) -> Result<Self, ErreurComposition> {
+        let desc = DescTexture::new(Format::Nv12, largeur, hauteur)
+            .map_err(|e| ErreurComposition::Gpu(e.to_string()))?;
+        let sortie = contexte
+            .creer_texture(&desc)
+            .map_err(|e| ErreurComposition::Gpu(e.to_string()))?;
+        Self::nouveau_sur(contexte, &sortie, fps)
+    }
+
+    /// Compose vers une texture **existante** — voie A du texte (2026-10-28).
+    ///
+    /// Le canvas de composition est alors en BGRA : Direct2D dessine les
+    /// textes dessus (alpha réel), puis `color_gpu::ConvertisseurNv12`
+    /// convertit vers la texture NV12 enregistrée auprès de l'encodeur.
+    /// La texture NV12 du chemin direct reste produite par [`Compositeur::nouveau`].
+    pub fn nouveau_sur(
+        contexte: &ContexteGpu,
+        sortie: &ID3D11Texture2D,
+        fps: u32,
+    ) -> Result<Self, ErreurComposition> {
         if fps == 0 {
             return Err(ErreurComposition::Gpu("fps nul".into()));
         }
-        let desc = DescTexture::new(Format::Nv12, largeur, hauteur)
-            .map_err(|e| ErreurComposition::Gpu(e.to_string()))?;
+        let mut desc = windows::Win32::Graphics::Direct3D11::D3D11_TEXTURE2D_DESC::default();
+        unsafe { sortie.GetDesc(&mut desc) };
+        let (largeur, hauteur) = (desc.Width, desc.Height);
+        if largeur == 0 || hauteur == 0 {
+            return Err(ErreurComposition::Gpu("texture de sortie nulle".into()));
+        }
 
         let video_device: ID3D11VideoDevice = contexte.device().cast().map_err(|e| {
             ErreurComposition::Gpu(format!("ID3D11VideoDevice : {}", e.message()))
@@ -101,14 +124,14 @@ impl Compositeur {
                 Numerator: fps,
                 Denominator: 1,
             },
-            InputWidth: desc.largeur,
-            InputHeight: desc.hauteur,
+            InputWidth: largeur,
+            InputHeight: hauteur,
             OutputFrameRate: DXGI_RATIONAL {
                 Numerator: fps,
                 Denominator: 1,
             },
-            OutputWidth: desc.largeur,
-            OutputHeight: desc.hauteur,
+            OutputWidth: largeur,
+            OutputHeight: hauteur,
             Usage: D3D11_VIDEO_USAGE_PLAYBACK_NORMAL,
         };
 
@@ -126,10 +149,6 @@ impl Compositeur {
         unsafe { enumerateur.GetVideoProcessorCaps(&mut caps) }
             .map_err(|e| ErreurComposition::Gpu(format!("GetVideoProcessorCaps : {}", e.message())))?;
 
-        let sortie = contexte
-            .creer_texture(&desc)
-            .map_err(|e| ErreurComposition::Gpu(e.to_string()))?;
-
         let desc_sortie = D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC {
             ViewDimension: D3D11_VPOV_DIMENSION_TEXTURE2D,
             Anonymous: D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC_0 {
@@ -139,7 +158,7 @@ impl Compositeur {
         let mut vue_sortie: Option<ID3D11VideoProcessorOutputView> = None;
         unsafe {
             video_device.CreateVideoProcessorOutputView(
-                &sortie,
+                sortie,
                 &enumerateur,
                 &desc_sortie,
                 Some(&mut vue_sortie),
@@ -172,10 +191,10 @@ impl Compositeur {
             video_context,
             enumerateur,
             processeur,
-            sortie,
+            sortie: sortie.clone(),
             vue_sortie,
-            largeur: desc.largeur,
-            hauteur: desc.hauteur,
+            largeur,
+            hauteur,
             max_flux: caps.MaxInputStreams,
         })
     }

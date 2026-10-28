@@ -1043,3 +1043,90 @@ ffmpeg exit 0.
 2. Texte DirectWrite → texture (titres, chat).
 3. Cadres SVG (tuyau de rendu vectoriel, 2 styles représentatifs).
 4. Overlays (alertes, commandes, welcome, BRB, pad, fight, présentation).
+
+---
+
+## 30. P3 — tranche 2 : texte (2026-10-28)
+
+### 30.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Blending | **Voie A** : canvas **BGRA** + Direct2D, puis conversion NV12 | `VideoProcessorBlt` n'a pas d'alpha par pixel (alpha constant par flux) → un texte passé en calque ressort opaque sur un rectangle noir |
+| Polices | **WOFF2 décodés en mémoire** (`wuff`) → `IDWriteInMemoryFontFileLoader` | les 20 `.woff2` sont déjà versionnés (`src-tauri/resources/fonts/`), aucun téléchargement, aucun fichier écrit, fidélité exacte au dashboard |
+| Contour | **passes décalées** (16 directions) | approximation assumée de `-webkit-text-stroke` ; le trait exact (`GetGlyphRunOutline`) est la suite |
+| Périmètre | titres de **fond** + titres de **widget** | 4 positions chacun |
+
+### 30.2 Livré
+
+- `texte.rs` : `TexteCfg` / `StyleTexte` / `PositionTitre` / `CibleTitre`,
+  `placement()` (géométrie de `applyTitreFond` / `applyTitreWidget`),
+  `DessinateurTexte` (Direct2D + DirectWrite).
+- `compositor::Compositeur::nouveau_sur(contexte, texture, fps)` : compose
+  vers une texture **existante** (canvas BGRA). `nouveau()` inchangé.
+- `scene_sources::textes_depuis_scene(scene)` : 4 titres de fond
+  (`bgTitreHaut/Bas/Gauche/Droite`, `z = i32::MIN + 1`) + titres de chaque
+  widget (`titreHaut/Bas/Gauche/Droite`, `z = w.z`, **hors** du rect).
+- `moteur.rs` : `configurer_textes`, `configurer_scene` remplit aussi les
+  textes ; `VoieTexte` (canvas BGRA + `ConvertisseurNv12` + dessinateur).
+  Sans texte, le chemin NV12 direct reste **inchangé** (aucune passe ajoutée).
+- Harnais `examples/texte_scene.rs` et `examples/passe_nv12.rs` (mesure).
+
+### 30.3 Mesures (GTX 1070 Ti)
+
+| Passe | 1360×768 | 3840×2160 |
+|---|---|---|
+| Composition 2 calques → NV12 (référence) | 0,178 ms | 0,316 ms |
+| Conversion BGRA → NV12 (passe ajoutée) | **0,145 ms** | **0,468 ms** |
+| Voie A complète | 0,269 ms | 1,065 ms |
+
+Budget 16,7 ms @60 fps : la passe ajoutée reste marginale (≤ 3 % en 4K).
+
+### 30.4 Validation (3 s, 1360×768@60, NVENC zéro-copie)
+
+| Contrôle | Résultat |
+|---|---|
+| Décodage ffmpeg du MP4 | exit 0 |
+| Bande du titre haut, frame 40 | YAVG **16,5** / YMAX **249** |
+| Bande vide (témoin) | YAVG 0 / YMAX 0 |
+| Bande du titre bas | YAVG 20,2 / YMAX 251 |
+| Rendu | 4 positions (dont latérales tournées 90°), dégradé 135°, contour, titre de widget |
+
+### 30.5 Limites de la tranche (assumées)
+
+- **Contour approximé** par dilation (16 passes) : plus épais qu'un trait
+  centré, les fûts fins se referment à petite taille. Suite : géométrie de
+  glyphes (`IDWriteFontFace::GetGlyphRunOutline`).
+- **Tous les titres sont peints après la composition** : un titre de widget
+  passe donc au-dessus de calques de `z` supérieur. Le rendu CSS les imbrique
+  dans le widget ; le correctif (découpe de la composition en deux passes
+  autour du texte) n'est pas fait.
+- **`line-height`** : DWrite utilise son interligne natif, le CSS force
+  `1.1` → écart vertical de quelques pixels.
+- Pas de `crop`/`rotation` du texte, pas d'emoji couleur, pas de retour à la
+  ligne (les titres sont mono-ligne, comme `white-space: nowrap`).
+- Le cache est indexé par (contenu, style) : un texte dynamique (chat) devra
+  fournir sa propre invalidation.
+
+### 30.6 Pièges vérifiés — ne pas les redécouvrir
+
+1. **`RegisterFontFileLoader` obligatoire** : sans enregistrement du loader
+   mémoire auprès de la factory, `CreateInMemoryFontFileReference` rend
+   `E_INVALIDARG` (0x80070057), **sans message utile**. Vérifié 2026-10-28.
+2. **`CreateBitmapFromDxgiSurface` + `D2D1_BITMAP_OPTIONS_TARGET`** exige une
+   texture `D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE` ; avec
+   `RENDER_TARGET` seul il faut `TARGET | CANNOT_DRAW`, sinon `E_INVALIDARG`.
+   Le canvas (jamais échantillonné par D2D) utilise `TARGET|CANNOT_DRAW` ;
+   les textures de texte (dessinées ensuite) ajoutent `SHADER_RESOURCE`.
+3. **`Matrix3x2::rotation` attend des DEGRÉS** (`D2D1MakeRotateMatrix`) : avec
+   `FRAC_PI_2` le titre latéral reste quasi horizontal (1,57°).
+4. **`D3D11_QUERY_TIMESTAMP` ne voit pas les `VideoProcessorBlt`** (moteur
+   vidéo distinct du pipeline 3D) : deux timestamps encadrant N blts rendent
+   la **même valeur** (delta 0). Mesurer à l'horloge murale avec
+   synchronisation (`examples/passe_nv12.rs`).
+5. **D2D et `ID2D1RenderTarget`** : `ID2D1DeviceContext` ne `Deref` pas vers
+   `ID2D1RenderTarget` dans `windows` 0.58 → cast explicite pour
+   `BeginDraw`/`DrawBitmap`/`SetTransform`/`CreateSolidColorBrush`.
+6. `Clear` sur une cible **premultipliée** avec `(0,0,0,0)` = transparent ;
+   ne jamais effacer le canvas (il porte les calques composés).
+
