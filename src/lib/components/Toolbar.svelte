@@ -1,6 +1,7 @@
 <script lang="ts">
   import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, createMusiqueWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview, rafraichirOutputs } from "../stores/obs";
+  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs } from "../stores/moteur";
   import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, planningModalOpen, statistiquesModalOpen, obsWebSocketModalOpen, confirmObsOutputOpen } from "../stores/ui";
   import { jcActif, toggleJustChatting } from "../stores/justChatting";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
@@ -281,7 +282,15 @@
     await listen("popout-closed", () => {});
     if (!kickSlug) kickSlug = (await lireSlugSauve()) ?? "";
     if (!tiktokUsername) tiktokUsername = (await lireUsernameSauve()) ?? "";
+    await chargerEtatMoteur();
+    await envoyerConnexionObs();
   });
+
+  /// Bascule OBS ↔ natif. `liveActif` empêche le backend de couper un live
+  /// implicitement (refus explicite affiché dans le bloc moteur).
+  async function onBasculerMoteur(cible: "obs" | "natif") {
+    await basculerMoteur(cible, streaming || recording);
+  }
 
   // ===== Fermeture auto de la carte d'édition au scroll de la sidebar =====
   // La carte ouverte (CarteEdition, au-dessus) compresse l'accordéon : si
@@ -485,6 +494,42 @@
             {error}
           {/if}
         </span>
+        <!-- Moteur de diffusion (lot 1.5) : OBS ou natif. Le backend refuse
+             la bascule si un live tourne (jamais de coupure implicite) ; le
+             natif reste désactivé tant que le moteur Rust n'est pas branché. -->
+        <div class="moteur-bloc">
+          <span class="moteur-titre">{$t("moteur.titre")}</span>
+          <div class="moteur-seg">
+            <button
+              class="action moteur-btn"
+              class:actif={$moteurEtat.mode === "obs"}
+              disabled={$moteurEtat.mode === "obs"}
+              onclick={() => onBasculerMoteur("obs")}
+            >
+              {$t("moteur.obs")}
+            </button>
+            <button
+              class="action moteur-btn"
+              class:actif={$moteurEtat.mode === "natif"}
+              disabled={$moteurEtat.mode === "natif" || !$moteurEtat.natif_disponible}
+              title={!$moteurEtat.natif_disponible ? $t("moteur.natifIndisponible") : ""}
+              onclick={() => onBasculerMoteur("natif")}
+            >
+              {$t("moteur.natif")}
+            </button>
+          </div>
+          {#if $moteurEtat.capacites.length > 0}
+            <p class="hint">{$t("moteur.capacites", { n: $moteurEtat.capacites.length })}</p>
+            <ul class="moteur-caps">
+              {#each $moteurEtat.capacites as cap}
+                <li>{$t("moteur.cap." + cap)}</li>
+              {/each}
+            </ul>
+          {/if}
+          {#if $moteurErreur}
+            <p class="hint moteur-erreur">{$moteurErreur}</p>
+          {/if}
+        </div>
         <!-- Fenêtre « Connexion OBS » (WebSocket) : inventaire de ce qui
              transite par le canal + options — pour les curieux, l'utilisateur
              non technique n'y va jamais. -->
@@ -945,6 +990,50 @@
   .sec-planning     { --accent-crochet: var(--crochet-indigo); }
   .sec-statistiques { --accent-crochet: var(--crochet-teal); }
   .sec-obs          { --accent-carte: var(--carte-dore);     --accent-crochet: var(--crochet-dore); }
+  /* Bloc « Moteur » (lot 1.5) : compact, à l'intérieur de la carte OBS. */
+  .moteur-bloc {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--bordure-ui);
+  }
+  .moteur-titre {
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    opacity: 0.6;
+  }
+  .moteur-seg {
+    display: flex;
+    gap: 0.35rem;
+  }
+  .moteur-btn {
+    flex: 1;
+  }
+  .moteur-btn.actif {
+    border-color: var(--bordure-ui-active);
+    color: var(--texte);
+  }
+  .moteur-caps {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .moteur-caps li {
+    padding: 0.05rem 0.35rem;
+    border: 1px solid var(--bordure-ui);
+    border-radius: 999px;
+    font-size: 0.64rem;
+    opacity: 0.8;
+  }
+  .moteur-erreur {
+    color: var(--t-rouge);
+  }
   .sec-preview      { --accent-carte: var(--carte-jaune);    --accent-crochet: var(--crochet-jaune); }
   .sec-perso        { --accent-carte: var(--carte-violette); --accent-crochet: var(--crochet-violet); }
   .sec-ergo         { --accent-carte: var(--carte-ardoise);  --accent-crochet: var(--crochet-ardoise); }

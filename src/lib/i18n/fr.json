@@ -1653,5 +1653,27 @@
         "p1": "Le reste se découvre section par section dans la **barre latérale** : connexions, widgets, réglages… **Bon stream !**"
       }
     }
+  },
+  "moteur": {
+    "titre": "Moteur de diffusion",
+    "obs": "OBS",
+    "natif": "Rust",
+    "natifIndisponible": "Moteur natif pas encore disponible",
+    "capacites": "{n} capacités actives",
+    "cap": {
+      "capture_ecran": "Capture d'écran",
+      "capture_fenetre": "Capture de fenêtre",
+      "capture_jeu": "Capture de jeu",
+      "camera": "Caméra",
+      "fond_vert": "Fond vert",
+      "masque_shader": "Masques",
+      "cadres_animes": "Cadres animés",
+      "audio_par_app": "Audio par application",
+      "roi_encode": "Encodage ROI",
+      "multi_format": "Multi-format",
+      "hdr": "HDR",
+      "srt": "SRT",
+      "ndi": "NDI"
+    }
   }
 }

@@ -1504,6 +1504,29 @@ export const tauri = {
     return await invoke("obs_outputs_status", { host, port, password });
   },
 
+  /// État du registre moteur : mode actif (obs|natif), disponibilités,
+  /// capacités du moteur actif (ids stables, libellés par l'i18n).
+  async moteurEtat(): Promise<{
+    mode: string;
+    natif_disponible: boolean;
+    obs_disponible: boolean;
+    capacites: string[];
+  }> {
+    return await invoke("moteur_etat");
+  },
+
+  /// Bascule OBS ↔ natif. Refusée si une sortie OBS est active (jamais de
+  /// coupure implicite) ou si le natif n'est pas branché.
+  async moteurBasculer(cible: string, liveActif: boolean): Promise<string> {
+    return await invoke<string>("moteur_basculer", { cible, liveActif });
+  },
+
+  /// Transmet la connexion obs-websocket à l'adaptateur moteur. Le mot de
+  /// passe reste en mémoire du backend (jamais persisté, jamais loggé).
+  async moteurObsConnexion(host: string, port: number, password: string): Promise<void> {
+    await invoke("moteur_obs_connexion", { host, port, password });
+  },
+
   /// Liste les moniteurs vus par OBS (GetMonitorList) — sélecteur de la
   /// section Prévisualisation. Index OBS, PAS les index Win32.
   async obsProjecteurMoniteurs(

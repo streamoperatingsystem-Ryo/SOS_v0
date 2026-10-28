@@ -1650,5 +1650,27 @@
         "p1": "The rest is discovered section by section in the **sidebar**: connections, widgets, settings… **Happy streaming!**"
       }
     }
+  },
+  "moteur": {
+    "titre": "Broadcast engine",
+    "obs": "OBS",
+    "natif": "Rust",
+    "natifIndisponible": "Native engine not available yet",
+    "capacites": "{n} active capabilities",
+    "cap": {
+      "capture_ecran": "Screen capture",
+      "capture_fenetre": "Window capture",
+      "capture_jeu": "Game capture",
+      "camera": "Camera",
+      "fond_vert": "Green screen",
+      "masque_shader": "Masks",
+      "cadres_animes": "Animated frames",
+      "audio_par_app": "Per-app audio",
+      "roi_encode": "ROI encoding",
+      "multi_format": "Multi-format",
+      "hdr": "HDR",
+      "srt": "SRT",
+      "ndi": "NDI"
+    }
   }
 }

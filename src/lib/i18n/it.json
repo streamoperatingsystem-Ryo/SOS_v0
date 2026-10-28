@@ -1650,5 +1650,27 @@
         "p1": "Il resto si scopre sezione per sezione nella **barra laterale**: connessioni, widget, impostazioni… **Buon stream!**"
       }
     }
+  },
+  "moteur": {
+    "titre": "Motore di trasmissione",
+    "obs": "OBS",
+    "natif": "Rust",
+    "natifIndisponible": "Il motore nativo non è ancora disponibile",
+    "capacites": "{n} capacità attive",
+    "cap": {
+      "capture_ecran": "Cattura schermo",
+      "capture_fenetre": "Cattura finestra",
+      "capture_jeu": "Cattura gioco",
+      "camera": "Fotocamera",
+      "fond_vert": "Green screen",
+      "masque_shader": "Maschere",
+      "cadres_animes": "Cornici animate",
+      "audio_par_app": "Audio per applicazione",
+      "roi_encode": "Codifica ROI",
+      "multi_format": "Multiformato",
+      "hdr": "HDR",
+      "srt": "SRT",
+      "ndi": "NDI"
+    }
   }
 }

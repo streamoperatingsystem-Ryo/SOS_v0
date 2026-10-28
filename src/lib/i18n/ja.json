@@ -1650,5 +1650,27 @@
         "p1": "残りの機能は**サイドバー**をセクションごとに探ってみてください。接続・ウィジェット・設定… **よい配信を!**"
       }
     }
+  },
+  "moteur": {
+    "titre": "配信エンジン",
+    "obs": "OBS",
+    "natif": "Rust",
+    "natifIndisponible": "ネイティブエンジンはまだ利用できません",
+    "capacites": "有効な機能: {n}",
+    "cap": {
+      "capture_ecran": "画面キャプチャ",
+      "capture_fenetre": "ウィンドウキャプチャ",
+      "capture_jeu": "ゲームキャプチャ",
+      "camera": "カメラ",
+      "fond_vert": "グリーンバック",
+      "masque_shader": "マスク",
+      "cadres_animes": "アニメーションフレーム",
+      "audio_par_app": "アプリ別音声",
+      "roi_encode": "ROI エンコード",
+      "multi_format": "マルチフォーマット",
+      "hdr": "HDR",
+      "srt": "SRT",
+      "ndi": "NDI"
+    }
   }
 }

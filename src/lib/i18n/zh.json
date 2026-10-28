@@ -1650,5 +1650,27 @@
         "p1": "其余功能可在**侧边栏**逐区探索：连接、小组件、设置……**祝直播愉快！**"
       }
     }
+  },
+  "moteur": {
+    "titre": "推流引擎",
+    "obs": "OBS",
+    "natif": "Rust",
+    "natifIndisponible": "原生引擎尚不可用",
+    "capacites": "{n} 项可用能力",
+    "cap": {
+      "capture_ecran": "屏幕捕获",
+      "capture_fenetre": "窗口捕获",
+      "capture_jeu": "游戏捕获",
+      "camera": "摄像头",
+      "fond_vert": "绿幕",
+      "masque_shader": "遮罩",
+      "cadres_animes": "动画边框",
+      "audio_par_app": "按应用音频",
+      "roi_encode": "ROI 编码",
+      "multi_format": "多格式",
+      "hdr": "HDR",
+      "srt": "SRT",
+      "ndi": "NDI"
+    }
   }
 }

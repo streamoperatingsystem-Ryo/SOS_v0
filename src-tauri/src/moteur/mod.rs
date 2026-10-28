@@ -9,6 +9,7 @@ pub mod obs;
 use std::sync::Mutex;
 
 use serde::Serialize;
+use sos_moteur_api::{Capacites, Moteur};
 use tauri::{AppHandle, State};
 
 use mode::{verifier_bascule, Mode};
@@ -47,6 +48,32 @@ pub struct EtatMoteur {
     pub mode: String,
     pub natif_disponible: bool,
     pub obs_disponible: bool,
+    /// Capacités du moteur actif — ids stables, libellés par l'i18n.
+    pub capacites: Vec<&'static str>,
+}
+
+/// Traduit les drapeaux en identifiants stables (contrat avec `moteur.cap.*`).
+fn capacites_actives(c: &Capacites) -> Vec<&'static str> {
+    let drapeaux = [
+        (c.capture_ecran, "capture_ecran"),
+        (c.capture_fenetre, "capture_fenetre"),
+        (c.capture_jeu, "capture_jeu"),
+        (c.camera, "camera"),
+        (c.fond_vert, "fond_vert"),
+        (c.masque_shader, "masque_shader"),
+        (c.cadres_animes, "cadres_animes"),
+        (c.audio_par_app, "audio_par_app"),
+        (c.roi_encode, "roi_encode"),
+        (c.multi_format, "multi_format"),
+        (c.hdr, "hdr"),
+        (c.srt, "srt"),
+        (c.ndi, "ndi"),
+    ];
+    drapeaux
+        .iter()
+        .filter(|(actif, _)| *actif)
+        .map(|(_, id)| *id)
+        .collect()
 }
 
 #[tauri::command]
@@ -55,6 +82,7 @@ pub fn moteur_etat(registre: State<'_, RegistreMoteur>) -> EtatMoteur {
         mode: registre.mode().nom().to_string(),
         natif_disponible: registre.natif_disponible,
         obs_disponible: true,
+        capacites: capacites_actives(&registre.obs().capacites()),
     }
 }
 
@@ -114,4 +142,24 @@ pub fn moteur_obs_connexion(
     password: String,
 ) {
     registre.obs().configurer_connexion(host, port, password);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capacites_aucune_ne_produit_aucun_id() {
+        assert!(capacites_actives(&Capacites::aucune()).is_empty());
+    }
+
+    #[test]
+    fn capacites_ids_stables_pour_l_i18n() {
+        let c = Capacites {
+            camera: true,
+            srt: true,
+            ..Capacites::aucune()
+        };
+        assert_eq!(capacites_actives(&c), vec!["camera", "srt"]);
+    }
 }

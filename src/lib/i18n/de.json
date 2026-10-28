@@ -1650,5 +1650,27 @@
         "p1": "Der Rest entdeckt sich Abschnitt für Abschnitt in der **Seitenleiste**: Verbindungen, Widgets, Einstellungen… **Happy Streaming!**"
       }
     }
+  },
+  "moteur": {
+    "titre": "Streaming-Engine",
+    "obs": "OBS",
+    "natif": "Rust",
+    "natifIndisponible": "Native Engine noch nicht verfügbar",
+    "capacites": "{n} aktive Funktionen",
+    "cap": {
+      "capture_ecran": "Bildschirmaufnahme",
+      "capture_fenetre": "Fensteraufnahme",
+      "capture_jeu": "Spielaufnahme",
+      "camera": "Kamera",
+      "fond_vert": "Greenscreen",
+      "masque_shader": "Masken",
+      "cadres_animes": "Animierte Rahmen",
+      "audio_par_app": "Audio pro App",
+      "roi_encode": "ROI-Encoding",
+      "multi_format": "Mehrformat",
+      "hdr": "HDR",
+      "srt": "SRT",
+      "ndi": "NDI"
+    }
   }
 }
