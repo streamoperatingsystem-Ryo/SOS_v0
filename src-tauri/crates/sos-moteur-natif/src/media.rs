@@ -8,7 +8,7 @@ use std::ffi::c_void;
 use std::fmt;
 use std::path::{Path, PathBuf};
 
-use windows::core::HSTRING;
+use windows::core::{HSTRING, Interface};
 use windows::Win32::Foundation::{RECT, GENERIC_READ};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
@@ -20,6 +20,12 @@ use windows::Win32::Graphics::Dxgi::Common::{
 use windows::Win32::Graphics::Imaging::{
     IWICImagingFactory, CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA,
     WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnLoad,
+};
+use windows::Win32::Media::MediaFoundation::{
+    IMFSourceReader, MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL,
+    MFMediaType_Video, MFVideoFormat_RGB32, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
+    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
+    MF_SOURCE_READER_FIRST_VIDEO_STREAM,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
@@ -84,6 +90,78 @@ pub struct MediaChargee {
     pub rect: (f64, f64, f64, f64),
     pub z: i32,
     pub fit: Fit,
+    video: Option<VideoLecteur>,
+}
+
+struct VideoLecteur {
+    reader: IMFSourceReader,
+    context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
+    dernier_pts_us: i64,
+}
+
+impl MediaChargee {
+    pub fn est_video(&self) -> bool {
+        self.video.is_some()
+    }
+
+    /// Avance la vidéo jusqu'à la frame correspondant à `temps_us`.
+    /// Sans effet pour une image. Fin de flux = dernière image figée
+    /// (pas encore de bouclage).
+    pub fn avancer(&mut self, temps_us: i64) -> Result<(), ErreurMedia> {
+        let Some(video) = self.video.as_mut() else {
+            return Ok(());
+        };
+        loop {
+            let mut flags = 0u32;
+            let mut sample: Option<windows::Win32::Media::MediaFoundation::IMFSample> = None;
+            unsafe {
+                video.reader.ReadSample(
+                    MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32,
+                    0,
+                    None,
+                    Some(&mut flags),
+                    None,
+                    Some(&mut sample),
+                )
+            }
+            .map_err(|e| ErreurMedia::Decodage(format!("ReadSample : {}", e.message())))?;
+            if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                return Ok(());
+            }
+            let Some(sample) = sample else {
+                return Ok(());
+            };
+            let pts_us = unsafe { sample.GetSampleTime() }.unwrap_or(0) / 10;
+            let buffer = unsafe { sample.ConvertToContiguousBuffer() }
+                .map_err(|e| ErreurMedia::Decodage(format!("buffer : {}", e.message())))?;
+            let mut ptr: *mut u8 = std::ptr::null_mut();
+            let mut longueur = 0u32;
+            unsafe { buffer.Lock(&mut ptr, None, Some(&mut longueur)) }
+                .map_err(|e| ErreurMedia::Decodage(format!("Lock : {}", e.message())))?;
+            let ressource: windows::Win32::Graphics::Direct3D11::ID3D11Resource = self
+                .texture
+                .cast()
+                .map_err(|e| ErreurMedia::Gpu(format!("texture → ressource : {}", e.message())))?;
+            unsafe {
+                video.context.UpdateSubresource(
+                    Some(&ressource),
+                    0,
+                    None,
+                    ptr as *const c_void,
+                    self.taille.0 * 4,
+                    0,
+                )
+            };
+            unsafe { buffer.Unlock() }
+                .map_err(|e| ErreurMedia::Decodage(format!("Unlock : {}", e.message())))?;
+
+            let ancien = video.dernier_pts_us;
+            video.dernier_pts_us = pts_us;
+            if pts_us >= temps_us || pts_us <= ancien {
+                return Ok(());
+            }
+        }
+    }
 }
 
 /// Calcule la fenêtre source et la destination selon le fit.
@@ -157,8 +235,7 @@ pub fn geometrie(
     }
 }
 
-/// Décode une image en texture BGRA (usage `DEFAULT`, bind render target,
-/// compatible vue d'entrée du video processor).
+/// Charge une image ou une vidéo selon l'extension.
 pub fn charger(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee, ErreurMedia> {
     if !cfg.chemin.is_file() {
         return Err(ErreurMedia::Fichier(format!(
@@ -166,6 +243,27 @@ pub fn charger(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee, E
             cfg.chemin.display()
         )));
     }
+    if est_video(&cfg.chemin) {
+        charger_video(contexte, cfg)
+    } else {
+        charger_image(contexte, cfg)
+    }
+}
+
+/// Extensions vidéo prises en charge par le Source Reader.
+pub fn est_video(chemin: &Path) -> bool {
+    matches!(
+        chemin
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or_default()
+            .to_ascii_lowercase()
+            .as_str(),
+        "mp4" | "m4v" | "mov" | "avi" | "mkv" | "webm"
+    )
+}
+
+fn charger_image(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee, ErreurMedia> {
     let (largeur, hauteur, pixels) = decoder_bgra(&cfg.chemin)?;
     if largeur == 0 || hauteur == 0 {
         return Err(ErreurMedia::Decodage("image vide".to_string()));
@@ -177,7 +275,97 @@ pub fn charger(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee, E
         rect: cfg.rect,
         z: cfg.z,
         fit: cfg.fit,
+        video: None,
     })
+}
+
+/// Ouvre une vidéo via Media Foundation Source Reader (sortie RGB32).
+fn charger_video(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee, ErreurMedia> {
+    crate::encode::detect::initialiser();
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    unsafe {
+        let mut attrs: Option<windows::Win32::Media::MediaFoundation::IMFAttributes> = None;
+        MFCreateAttributes(&mut attrs, 2)
+            .map_err(|e| ErreurMedia::Decodage(format!("attributs : {}", e.message())))?;
+        let attrs = attrs.ok_or_else(|| ErreurMedia::Decodage("attributs nuls".to_string()))?;
+        attrs
+            .SetUINT32(&MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, 1)
+            .map_err(|e| ErreurMedia::Decodage(format!("attributs : {}", e.message())))?;
+
+        let reader = MFCreateSourceReaderFromURL(
+            &HSTRING::from(cfg.chemin.as_os_str()),
+            &attrs,
+        )
+        .map_err(|e| {
+            ErreurMedia::Decodage(format!("ouverture {} : {}", cfg.chemin.display(), e.message()))
+        })?;
+
+        let type_sortie = MFCreateMediaType()
+            .map_err(|e| ErreurMedia::Decodage(format!("type : {}", e.message())))?;
+        type_sortie
+            .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Video)
+            .map_err(|e| ErreurMedia::Decodage(format!("major : {}", e.message())))?;
+        type_sortie
+            .SetGUID(&MF_MT_SUBTYPE, &MFVideoFormat_RGB32)
+            .map_err(|e| ErreurMedia::Decodage(format!("subtype : {}", e.message())))?;
+        reader
+            .SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, None, &type_sortie)
+            .map_err(|e| ErreurMedia::Decodage(format!("type RGB32 : {}", e.message())))?;
+
+        let courant = reader
+            .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
+            .map_err(|e| ErreurMedia::Decodage(format!("type courant : {}", e.message())))?;
+        let pack = courant
+            .GetUINT64(&MF_MT_FRAME_SIZE)
+            .map_err(|e| ErreurMedia::Decodage(format!("taille vidéo : {}", e.message())))?;
+        let largeur = (pack >> 32) as u32;
+        let hauteur = pack as u32;
+        if largeur == 0 || hauteur == 0 {
+            return Err(ErreurMedia::Decodage("vidéo de taille nulle".to_string()));
+        }
+
+        let texture = creer_texture_video(contexte, largeur, hauteur)?;
+        let mut media = MediaChargee {
+            texture,
+            taille: (largeur, hauteur),
+            rect: cfg.rect,
+            z: cfg.z,
+            fit: cfg.fit,
+            video: Some(VideoLecteur {
+                reader,
+                context: contexte.context().clone(),
+                dernier_pts_us: -1,
+            }),
+        };
+        media.avancer(0)?;
+        Ok(media)
+    }
+}
+
+fn creer_texture_video(
+    contexte: &ContexteGpu,
+    largeur: u32,
+    hauteur: u32,
+) -> Result<ID3D11Texture2D, ErreurMedia> {
+    let desc = D3D11_TEXTURE2D_DESC {
+        Width: largeur,
+        Height: hauteur,
+        MipLevels: 1,
+        ArraySize: 1,
+        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+        SampleDesc: DXGI_SAMPLE_DESC {
+            Count: 1,
+            Quality: 0,
+        },
+        Usage: D3D11_USAGE_DEFAULT,
+        BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+        CPUAccessFlags: 0,
+        MiscFlags: 0,
+    };
+    let mut texture: Option<ID3D11Texture2D> = None;
+    unsafe { contexte.device().CreateTexture2D(&desc, None, Some(&mut texture)) }
+        .map_err(|e| ErreurMedia::Gpu(format!("CreateTexture2D vidéo : {}", e.message())))?;
+    texture.ok_or_else(|| ErreurMedia::Gpu("texture vidéo nulle".into()))
 }
 
 /// Décode un fichier image en BGRA8 linéaire (ligne par ligne, sans padding).
@@ -289,6 +477,15 @@ mod tests {
     fn erreur_affichee() {
         let e = ErreurMedia::Decodage("test".to_string());
         assert!(e.to_string().contains("test"));
+    }
+
+    #[test]
+    fn extensions_video_reconnues() {
+        assert!(est_video(Path::new("a.MP4")));
+        assert!(est_video(Path::new("b.webm")));
+        assert!(est_video(Path::new("c.mkv")));
+        assert!(!est_video(Path::new("d.png")));
+        assert!(!est_video(Path::new("e")));
     }
 
     #[test]

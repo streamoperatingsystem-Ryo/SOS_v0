@@ -541,6 +541,11 @@ fn boucle(
         let pts_us = debut.elapsed().as_micros() as i64;
 
         let mut calques: Vec<Calque<'_>> = Vec::with_capacity(plan.len());
+        for media in medias.iter_mut() {
+            media
+                .avancer(pts_us)
+                .map_err(|e| format!("média vidéo : {e}"))?;
+        }
         for capture in captures.iter_mut() {
             if let Ok(texture) = capture.session.prochaine_texture(Duration::ZERO) {
                 unsafe { contexte.context().CopyResource(&capture.cible, &texture) };

@@ -895,7 +895,7 @@ ffmpeg) était à 2,07 % / 183,5 Mo. Détails : `mesures-p0.md`.
 ```bash
 cd src-tauri
 cargo clippy -p sos-moteur-natif --all-targets -- -D warnings   # exit 0
-cargo test -p sos-moteur-natif                                  # 50 tests
+cargo test -p sos-moteur-natif                                  # 51 tests
 cargo clippy -p streamos-v0                                     # exit 0
 cargo test -p streamos-v0 moteur::mode                          # 4 tests
 ```
@@ -1007,8 +1007,10 @@ enregistrement « de scène » soit complet.
 - **Fit** : `etirer` / `ajuster` (letterbox centré) / `remplir` (crop centré)
   sont appliqués (`mediaFit`, `bgFit`). Rotation, zoom, miroir et effets ne
   sont pas encore appliqués.
-- **Vidéos** : non supportées (Media Foundation Source Reader à venir) ;
-  `mediaSlides` : seule la première slide est chargée.
+- **Vidéos** : MP4/MOV/AVI/MKV/WEBM via Media Foundation Source Reader
+  (RGB32, téléversement CPU par frame, cadencé par l'horloge). Pas de
+  bouclage (dernière image figée), audio non lu. `mediaSlides` : seule la
+  première slide est chargée.
 - **Texte** : aucun rendu (DirectWrite à venir) — donc pas de titres, chat,
   alertes ni cadres.
 - Le média est chargé **une fois** au démarrage : pas de rechargement à chaud.
@@ -1023,7 +1025,19 @@ source au centre. `mediaFit` des widgets et `bgFit` du fond sont transmis.
 Validation : carré 400×400 dans un canvas 1360×768 avec `ajuster` → bande
 gauche `YAVG = 16` (noir), centre `YAVG = 125` (image). Décodage exit 0.
 
-### 29.5 Suite P3
+### 29.5 Vidéos (ajout 2026-10-28)
+
+`media::est_video` (extensions) + `charger_video` : Source Reader MF, sortie
+RGB32, texture BGRA réutilisée et mise à jour par `UpdateSubresource`.
+`MediaChargee::avancer(temps_us)` lit les échantillons jusqu'à l'horodatage
+courant ; `boucle` l'appelle avant chaque composition. Fin de flux = dernière
+image figée (pas de bouclage). Audio vidéo non lu.
+
+Validation : clip `testsrc2` 2 s / 30 fps, 3 s d'enregistrement NVENC ;
+frames 10 et 70 extraites → **md5 différents** (la vidéo avance), décodage
+ffmpeg exit 0.
+
+### 29.6 Suite P3
 
 1. Vidéos (Source Reader) + fit réel (`ajuster`/`remplir`).
 2. Texte DirectWrite → texture (titres, chat).
