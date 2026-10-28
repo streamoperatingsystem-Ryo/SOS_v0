@@ -65,6 +65,7 @@ fn main() {
             index: principal.index,
         },
         rect: (0.0, 0.0, largeur as f64, hauteur as f64),
+        z: 0,
     }]) {
         eprintln!("Sources refusées : {e}");
         return;

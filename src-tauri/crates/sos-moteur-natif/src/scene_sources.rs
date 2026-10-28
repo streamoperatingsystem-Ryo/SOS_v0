@@ -10,9 +10,11 @@
 //! n'existe pas) est ignoré — jamais d'invention.
 
 use std::collections::HashMap;
+use std::path::Path;
 
 use sos_scene::{CaptureCible, Scene};
 
+use crate::media::MediaCfg;
 use crate::moteur::{CibleCapture, SourceCfg};
 
 /// Traduit la cible persistée dans la scène en cible du moteur.
@@ -53,9 +55,53 @@ pub fn sources_depuis_scene(
                 nom: w.id.clone(),
                 cible,
                 rect: (w.x, w.y, w.largeur, w.hauteur),
+                z: w.z,
             })
         })
         .collect()
+}
+
+/// Construit les médias statiques de la scène (fond + widgets média).
+///
+/// `base` = dossier des données de l'app (`%APPDATA%\com.streamos.v0\`) ;
+/// les chemins de la scène sont relatifs (`medias/<uuid>.<ext>`).
+/// Le fond (`bgSlides` prioritaire sur `bgMedia`) est composé sous tout le
+/// reste (`z = i32::MIN`). Une page transparente (`bgObsSource`) n'a pas de
+/// média. Les trous et la caméra sont exclus (captures, pas des médias).
+pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
+    let mut medias = Vec::new();
+    if scene.bgObsSource.is_none() {
+        let fond_slides = scene
+            .bgSlides
+            .as_ref()
+            .and_then(|slides| slides.first())
+            .map(|slide| slide.rel.as_str());
+        let fond = fond_slides.or(if scene.bgMedia.is_empty() {
+            None
+        } else {
+            Some(scene.bgMedia.as_str())
+        });
+        if let Some(rel) = fond {
+            medias.push(MediaCfg {
+                chemin: base.join(rel),
+                rect: (0.0, 0.0, scene.canvasW as f64, scene.canvasH as f64),
+                z: i32::MIN,
+            });
+        }
+    }
+    for w in &scene.widgets {
+        if w.trou || w.widget_type == "camera" {
+            continue;
+        }
+        if let Some(rel) = &w.media {
+            medias.push(MediaCfg {
+                chemin: base.join(rel),
+                rect: (w.x, w.y, w.largeur, w.hauteur),
+                z: w.z,
+            });
+        }
+    }
+    medias
 }
 
 #[cfg(test)]
@@ -103,6 +149,37 @@ mod tests {
         let mut cibles = HashMap::new();
         cibles.insert("nul".to_string(), CibleCapture::Moniteur { index: 0 });
         assert!(sources_depuis_scene(&scene, &cibles).is_empty());
+    }
+
+    #[test]
+    fn medias_fond_et_widgets_avec_z() {
+        let scene = scene(
+            r#"{
+                "canvasW": 1920, "canvasH": 1080,
+                "bgMedia": "medias/fond.png",
+                "widgets": [
+                    {"id":"a","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":2,"media":"medias/a.png"},
+                    {"id":"t","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":3,"trou":true,"media":"medias/t.png"},
+                    {"id":"c","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":1,"media":"medias/c.png"}
+                ]
+            }"#,
+        );
+        let medias = medias_depuis_scene(&scene, Path::new("C:/data"));
+        assert_eq!(medias.len(), 2);
+        assert_eq!(medias[0].z, i32::MIN);
+        assert_eq!(medias[0].chemin, Path::new("C:/data/medias/fond.png"));
+        assert_eq!(medias[0].rect, (0.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(medias[1].z, 2);
+        assert_eq!(medias[1].chemin, Path::new("C:/data/medias/a.png"));
+        assert_eq!(medias[1].rect, (10.0, 20.0, 300.0, 200.0));
+    }
+
+    #[test]
+    fn fond_obs_source_ne_charge_aucun_media() {
+        let scene = scene(
+            r#"{"bgMedia":"medias/fond.png","bgObsSource":"SOS-Fond-abc","widgets":[]}"#,
+        );
+        assert!(medias_depuis_scene(&scene, Path::new("C:/data")).is_empty());
     }
 
     #[test]

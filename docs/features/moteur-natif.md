@@ -895,7 +895,7 @@ ffmpeg) était à 2,07 % / 183,5 Mo. Détails : `mesures-p0.md`.
 ```bash
 cd src-tauri
 cargo clippy -p sos-moteur-natif --all-targets -- -D warnings   # exit 0
-cargo test -p sos-moteur-natif                                  # 42 tests
+cargo test -p sos-moteur-natif                                  # 46 tests
 cargo clippy -p streamos-v0                                     # exit 0
 cargo test -p streamos-v0 moteur::mode                          # 4 tests
 ```
@@ -974,3 +974,47 @@ scènes existantes est **inchangé** (champ absent) et le mode OBS l'ignore.
 Le sélecteur de capture remplit ce champ ; `setWidgetTrou(false)` le purge.
 Reste à faire : P3 renderer (texte/chat/alertes/cadres/médias) avant qu'un
 enregistrement « de scène » soit complet.
+
+
+---
+
+## 29. P3 — tranche 1 : médias statiques (2026-10-28)
+
+### 29.1 Livré
+
+- `media.rs` : décodage **WIC** (PNG/JPG/BMP) → texture BGRA, téléversée une
+  fois (`D3D11_USAGE_DEFAULT`, bind render target, compatible video
+  processor). COM MTA initialisé sur le fil moteur.
+- `scene_sources::medias_depuis_scene(scene, base)` : fond
+  (`bgSlides` prioritaire, sinon `bgMedia`, ignoré si `bgObsSource`) +
+  widgets média (hors trou/caméra), avec leur `z`. `base` = dossier de
+  données, les chemins sont relatifs (`medias/<uuid>.<ext>`).
+- `MoteurNatif::configurer_medias` / `configurer_scene(scene, cibles, base)`.
+- Composition : médias et captures triés par `z` dans un plan unique ;
+  `SourceCfg.z` ajouté. Une scène **sans capture** (fond seul) démarre.
+- Harnais `examples/media_scene.rs`.
+
+### 29.2 Validation (GTX 1070 Ti, 1360×768@60, 3 s)
+
+| Contrôle | Résultat |
+|---|---|
+| Décodage ffmpeg du MP4 | exit 0 |
+| Frame 60, `signalstats` | YAVG **126,2** / YMIN 22 / YMAX 211 — image visible |
+| Encodeur | NVENC H.264, zéro-copie |
+
+### 29.3 Limites de la tranche (assumées)
+
+- **Fit** : le média est étiré au rect (`mediaFit` ignoré) ; rotation, zoom,
+  miroir et effets ne sont pas appliqués.
+- **Vidéos** : non supportées (Media Foundation Source Reader à venir) ;
+  `mediaSlides` : seule la première slide est chargée.
+- **Texte** : aucun rendu (DirectWrite à venir) — donc pas de titres, chat,
+  alertes ni cadres.
+- Le média est chargé **une fois** au démarrage : pas de rechargement à chaud.
+
+### 29.4 Suite P3
+
+1. Vidéos (Source Reader) + fit réel (`ajuster`/`remplir`).
+2. Texte DirectWrite → texture (titres, chat).
+3. Cadres SVG (tuyau de rendu vectoriel, 2 styles représentatifs).
+4. Overlays (alertes, commandes, welcome, BRB, pad, fight, présentation).

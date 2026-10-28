@@ -19,6 +19,7 @@ pub mod compteurs;
 pub mod encode;
 pub mod gouverneur;
 pub mod gpu;
+pub mod media;
 pub mod moteur;
 pub mod output;
 pub mod preview;

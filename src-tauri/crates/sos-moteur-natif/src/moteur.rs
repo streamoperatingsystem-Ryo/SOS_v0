@@ -39,6 +39,7 @@ use crate::encode::nvenc::EncodeurNvenc;
 use crate::encode::{detect::EncodeurDispo, ErreurEncodage};
 use crate::gouverneur::{Action, Gouverneur, Mesures};
 use crate::gpu::{ContexteGpu, DescTexture, Format};
+use crate::media::MediaCfg;
 use crate::output::ffmpeg::FfmpegSink;
 use crate::preview::Apercu;
 
@@ -56,6 +57,8 @@ pub struct SourceCfg {
     pub cible: CibleCapture,
     /// Destination `(x, y, largeur, hauteur)` en pixels canvas.
     pub rect: (f64, f64, f64, f64),
+    /// Ordre de composition (croissant = dessous).
+    pub z: i32,
 }
 
 impl SourceCfg {
@@ -96,6 +99,7 @@ enum EtatInterne {
 /// hors enregistrement.
 pub struct MoteurNatif {
     sources: Mutex<Vec<SourceCfg>>,
+    medias: Mutex<Vec<MediaCfg>>,
     etat: Arc<Mutex<EtatInterne>>,
     compteurs: Arc<CompteursMoteur>,
     arret: Mutex<Option<Arc<AtomicBool>>>,
@@ -114,6 +118,7 @@ impl MoteurNatif {
     pub fn nouveau() -> Self {
         Self {
             sources: Mutex::new(Vec::new()),
+            medias: Mutex::new(Vec::new()),
             etat: Arc::new(Mutex::new(EtatInterne::Inactif)),
             compteurs: Arc::new(CompteursMoteur::nouveau()),
             arret: Mutex::new(None),
@@ -143,14 +148,34 @@ impl MoteurNatif {
             .clone()
     }
 
-    /// Remplace les sources depuis une scène + la table widget → cible.
-    /// Le mapping vit dans `scene_sources` (aucun champ ajouté à `Widget`).
+    /// Remplace les médias statiques (fond + widgets média).
+    pub fn configurer_medias(&self, medias: Vec<MediaCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.medias.lock().unwrap_or_else(|e| e.into_inner()) = medias;
+        Ok(())
+    }
+
+    /// Remplace sources et médias depuis une scène + la table widget → cible.
+    /// `base` = dossier des données (`medias/` y est relatif).
     pub fn configurer_scene(
         &self,
         scene: &sos_scene::Scene,
         cibles: &std::collections::HashMap<String, CibleCapture>,
+        base: &std::path::Path,
     ) -> Result<(), ErreurMoteur> {
-        self.configurer_sources(crate::scene_sources::sources_depuis_scene(scene, cibles))
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        let sources = crate::scene_sources::sources_depuis_scene(scene, cibles);
+        let medias = crate::scene_sources::medias_depuis_scene(scene, base);
+        for source in &sources {
+            source.valider()?;
+        }
+        *self.sources.lock().unwrap_or_else(|e| e.into_inner()) = sources;
+        *self.medias.lock().unwrap_or_else(|e| e.into_inner()) = medias;
+        Ok(())
     }
 
     /// Photographie des compteurs (diagnostic, lot 2.9).
@@ -233,9 +258,14 @@ impl Moteur for MoteurNatif {
         }
 
         let sources = self.sources();
-        if sources.is_empty() {
+        let medias = self
+            .medias
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        if sources.is_empty() && medias.is_empty() {
             return Err(ErreurMoteur::Configuration(
-                "aucune source configurée".to_string(),
+                "aucune source ni média configuré".to_string(),
             ));
         }
         for source in &sources {
@@ -256,6 +286,7 @@ impl Moteur for MoteurNatif {
                 let resultat = boucle(
                     cfg,
                     sources,
+                    medias,
                     Arc::clone(&compteurs),
                     apercu,
                     arret,
@@ -316,6 +347,7 @@ struct CaptureActive {
     cible: ID3D11Texture2D,
     taille: (u32, u32),
     rect: (f64, f64, f64, f64),
+    z: i32,
     prete: bool,
 }
 
@@ -324,6 +356,7 @@ struct CaptureActive {
 fn boucle(
     cfg: SortieCfg,
     sources: Vec<SourceCfg>,
+    medias_cfg: Vec<MediaCfg>,
     compteurs: Arc<CompteursMoteur>,
     apercu_partage: Arc<Mutex<Option<ApercuFrame>>>,
     arret: Arc<AtomicBool>,
@@ -374,9 +407,27 @@ fn boucle(
             cible,
             taille,
             rect: source.rect,
+            z: source.z,
             prete: false,
         });
     }
+
+    let mut medias: Vec<crate::media::MediaChargee> = Vec::with_capacity(medias_cfg.len());
+    for cfg_media in &medias_cfg {
+        let chargee = crate::media::charger(&contexte, cfg_media)
+            .map_err(|e| format!("média {} : {e}", cfg_media.chemin.display()))?;
+        medias.push(chargee);
+    }
+
+    // Plan de composition : médias et captures triés par z (stable).
+    let mut plan: Vec<(i32, u8, usize)> = Vec::new();
+    for (i, media) in medias.iter().enumerate() {
+        plan.push((media.z, 0, i));
+    }
+    for (i, capture) in captures.iter().enumerate() {
+        plan.push((capture.z, 1, i));
+    }
+    plan.sort_by_key(|(z, _, _)| *z);
 
     let mut compositeur = Compositeur::nouveau(&contexte, cw, ch, fps)
         .map_err(|e| format!("compositeur : {e}"))?;
@@ -489,25 +540,43 @@ fn boucle(
         horloge.attendre();
         let pts_us = debut.elapsed().as_micros() as i64;
 
-        let mut calques: Vec<Calque<'_>> = Vec::with_capacity(captures.len());
+        let mut calques: Vec<Calque<'_>> = Vec::with_capacity(plan.len());
         for capture in captures.iter_mut() {
             if let Ok(texture) = capture.session.prochaine_texture(Duration::ZERO) {
                 unsafe { contexte.context().CopyResource(&capture.cible, &texture) };
                 capture.prete = true;
                 compteurs.capture();
             }
-            if capture.prete {
-                let (lw, lh) = capture.taille;
+        }
+        for (_, genre, index) in &plan {
+            if *genre == 0 {
+                let media = &medias[*index];
+                let (mw, mh) = media.taille;
                 calques.push(Calque {
-                    texture: &capture.cible,
+                    texture: &media.texture,
                     source: RECT {
                         left: 0,
                         top: 0,
-                        right: lw as i32,
-                        bottom: lh as i32,
+                        right: mw as i32,
+                        bottom: mh as i32,
                     },
-                    destination: destination(capture.rect, cw, ch),
+                    destination: destination(media.rect, cw, ch),
                 });
+            } else {
+                let capture = &captures[*index];
+                if capture.prete {
+                    let (lw, lh) = capture.taille;
+                    calques.push(Calque {
+                        texture: &capture.cible,
+                        source: RECT {
+                            left: 0,
+                            top: 0,
+                            right: lw as i32,
+                            bottom: lh as i32,
+                        },
+                        destination: destination(capture.rect, cw, ch),
+                    });
+                }
             }
         }
         if calques.is_empty() {
@@ -770,6 +839,7 @@ mod tests {
             nom: "moniteur 0".to_string(),
             cible: CibleCapture::Moniteur { index: 0 },
             rect: (0.0, 0.0, 1920.0, 1080.0),
+            z: 0,
         }
     }
 
