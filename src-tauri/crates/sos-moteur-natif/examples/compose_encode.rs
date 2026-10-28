@@ -31,6 +31,7 @@ use sos_moteur_natif::gpu::{ContexteGpu, DescTexture, Format};
 use sos_moteur_natif::output::{
     ffmpeg::FfmpegSink, file::FileSink, Conteneur, ErreurSortie, Sink,
 };
+use sos_moteur_natif::preview::Apercu;
 
 use ffi::{struct_version, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P4};
 
@@ -153,6 +154,14 @@ fn main() {
         }
     };
     println!("Compositeur : {} flux max", compositeur.max_flux());
+
+    let mut apercu = match Apercu::nouveau(&contexte, (largeur, hauteur), (480, 270)) {
+        Ok(a) => Some(a),
+        Err(e) => {
+            eprintln!("Apercu impossible : {e}");
+            None
+        }
+    };
 
     let encoder = match sdk.ouvrir_session(contexte.device().as_raw()) {
         Ok(e) => e,
@@ -318,6 +327,7 @@ fn main() {
     let mut octets = 0usize;
     let mut paquets = 0usize;
     let mut sans_calque = 0u32;
+    let mut apercus = 0u32;
     let mut coupure: Option<u32> = None;
     let mut erreur: Option<String> = None;
 
@@ -361,6 +371,21 @@ fn main() {
         if let Err(e) = compositeur.composer(&calques) {
             erreur = Some(format!("frame {i} : composition : {e}"));
             break;
+        }
+
+        if let Some(a) = apercu.as_mut() {
+            if i % 6 == 0 {
+                let (al, ah) = a.taille();
+                match a.lire(compositeur.sortie()) {
+                    Ok(pixels) => {
+                        apercus += 1;
+                        if apercus == 1 {
+                            println!("  apercu : {al}x{ah} ({} octets)", pixels.len());
+                        }
+                    }
+                    Err(e) => eprintln!("  apercu : {e}"),
+                }
+            }
         }
 
         let pts = (i as i64 * 1_000_000) / fps as i64;
@@ -443,6 +468,7 @@ fn main() {
                 horloge.retards(),
                 horloge.retard_max().as_millis()
             );
+            println!("  {apercus} apercus lus (10 fps)");
             if let Some(i) = coupure {
                 println!("  coupure simulee apres la frame {i} (conteneur laisse tel quel)");
             }

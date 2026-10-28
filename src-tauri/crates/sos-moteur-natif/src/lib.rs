@@ -18,6 +18,7 @@ pub mod encode;
 pub mod gouverneur;
 pub mod gpu;
 pub mod output;
+pub mod preview;
 
 /// Version du crate (affichée par le diagnostic, utile au support).
 pub fn version() -> &'static str {
