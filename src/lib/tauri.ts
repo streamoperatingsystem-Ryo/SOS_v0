@@ -1543,7 +1543,8 @@ export const tauri = {
   },
 
   /// État de la sortie native. Aucune valeur inventée : `chemin` vaut `null`
-  /// hors enregistrement, `encodeur` reste `null` tant que rien n'a démarré.
+  /// hors enregistrement, `encodeur` reste `null` tant que rien n'a démarré,
+  /// `erreur` porte l'erreur terminale du moteur (thread arrêté).
   async moteurSortieEtat(): Promise<{
     actif: boolean;
     chemin: string | null;
@@ -1551,6 +1552,7 @@ export const tauri = {
     frames_perdues: number;
     encodeur: string | null;
     degradation: string | null;
+    erreur: string | null;
   }> {
     return await invoke("moteur_sortie_etat");
   },

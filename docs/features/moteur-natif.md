@@ -1261,8 +1261,10 @@ native se pilote depuis la barre latérale. Le mode OBS est inchangé
   persisté), puis `SortieCfg::fichier(chemin, Mp4)` avec `canvas =
   (scene.canvasW, scene.canvasH)`. Retourne le chemin.
 - **État** (`moteur_sortie_etat`) : `{ actif, chemin, kbps, frames_perdues,
-  encodeur, degradation }` — `chemin`/`encodeur` valent `null` hors
+  encodeur, degradation, erreur }` — `chemin`/`encodeur` valent `null` hors
   enregistrement, `kbps` vaut 0 à l'arrêt (aucune valeur inventée).
+  `erreur` = erreur **terminale** du moteur (`MoteurEtat::Erreur`), distincte
+  de `degradation` (gouverneur) : une dégradation n'arrête pas la sortie.
 - **Arrêt** (`moteur_sortie_arreter`) : `arreter()` (joint le fil, finalise
   le conteneur, muxe l'audio), retourne le chemin finalisé ou `null`.
 - **Bascule** : refusée si `en_cours()` (symétrique de `LiveEnCours`).
@@ -1288,6 +1290,21 @@ native se pilote depuis la barre latérale. Le mode OBS est inchangé
 5. **Le natif ne rend pas la scène complète** : ni chat, ni cadres SVG, ni
    overlays, ni caméra, ni capture de jeu, ni RTMP/SRT. Une sortie native =
    captures (trous avec cible) + médias + titres + audio. L'UI doit le dire.
+6. **Plafond matériel de calques — mesuré 2026-10-28, non contourné.** Le
+   compositeur compose en **un seul** `VideoProcessorBlt`, borné par
+   `D3D11_VIDEO_PROCESSOR_CAPS.MaxInputStreams` (5 sur la GTX 1070 Ti).
+   Une scène de 11 calques (fond + 10 médias) échoue avec
+   `composition : trop de calques : 11 (maximum 5)` ; le sidecar FFmpeg
+   reçoit alors zéro paquet et meurt sur `Output file does not contain any
+   stream` (visible en console, pas dans l'UI). **Ce n'est pas un réglage** :
+   débloquer les scènes riches exige une composition **multi-passes**
+   (rendu par lots vers une texture intermédiaire), lot ultérieur. En
+   attendant, une scène ≤ 5 calques s'enregistre normalement (vérifié :
+   4 calques → h264 1360×768@60 + AAC 48 kHz stéréo, décodage exit 0).
+7. **Une erreur terminale doit être visible** : `moteur_sortie_etat.erreur`
+   porte `MoteurEtat::Erreur`. Sans ce champ (première version du lot), un
+   échec de composition laissait l'UI muette et seule la sortie stderr
+   d'FFmpeg parlait — l'utilisateur croyait à un bouton inerte.
 
 ### 32.5 Vérification
 

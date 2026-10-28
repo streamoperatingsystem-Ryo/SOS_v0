@@ -19,7 +19,7 @@ export interface EtatMoteur {
 
 /// État de la sortie native — reflète le backend, rien n'est inventé :
 /// `chemin` vaut `null` hors enregistrement, `encodeur` reste `null` tant
-/// que rien n'a démarré.
+/// que rien n'a démarré, `erreur` porte l'erreur terminale du moteur.
 export interface SortieNatif {
   actif: boolean;
   chemin: string | null;
@@ -27,6 +27,7 @@ export interface SortieNatif {
   frames_perdues: number;
   encodeur: string | null;
   degradation: string | null;
+  erreur: string | null;
 }
 
 /// Défaut honnête : OBS, aucune capacité inventée.
@@ -46,6 +47,7 @@ export const sortieNatif = writable<SortieNatif>({
   frames_perdues: 0,
   encodeur: null,
   degradation: null,
+  erreur: null,
 });
 
 /// Opération de sortie en cours (démarrage GPU ou arrêt + muxage) : l'UI
@@ -127,6 +129,7 @@ export async function rafraichirSortieNatif(): Promise<void> {
       frames_perdues: e.frames_perdues ?? 0,
       encodeur: e.encodeur ?? null,
       degradation: e.degradation ?? null,
+      erreur: e.erreur ?? null,
     });
     if (e.chemin) sortieNatifFichier.set(e.chemin);
     if (e.actif) demarrerSuivi();

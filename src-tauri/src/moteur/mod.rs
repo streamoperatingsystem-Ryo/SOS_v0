@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use sos_moteur_api::{Capacites, Conteneur, Moteur, SortieCfg};
+use sos_moteur_api::{Capacites, Conteneur, Moteur, MoteurEtat, SortieCfg};
 use sos_moteur_natif::moteur::MoteurNatif;
 use tauri::{AppHandle, Manager, State};
 
@@ -186,21 +186,34 @@ pub struct EtatSortieNatif {
     pub frames_perdues: u64,
     pub encodeur: Option<String>,
     pub degradation: Option<String>,
+    /// Erreur **terminale** du moteur natif (thread arrêté sur erreur).
+    /// Distincte de `degradation` : une dégradation n'arrête pas la sortie.
+    pub erreur: Option<String>,
 }
 
 #[tauri::command]
 pub fn moteur_sortie_etat(registre: State<'_, RegistreMoteur>) -> EtatSortieNatif {
     let actif = registre.natif_actif();
+    let etat = registre.natif().etat();
+    let erreur = match &etat {
+        MoteurEtat::Erreur(m) => Some(m.clone()),
+        _ => None,
+    };
     let instantane = registre.natif().instantane();
     EtatSortieNatif {
         actif,
-        chemin: registre
-            .session()
-            .map(|s| s.chemin.display().to_string()),
+        // Le chemin n'est annoncé que tant que le fil tourne : après une
+        // erreur terminale, aucun fichier exploitable n'a été écrit.
+        chemin: if actif {
+            registre.session().map(|s| s.chemin.display().to_string())
+        } else {
+            None
+        },
         kbps: if actif { instantane.kbps } else { 0 },
         frames_perdues: instantane.frames_perdues,
         encodeur: registre.natif().encodeur().map(|e| e.nom),
         degradation: instantane.raison_degradation,
+        erreur,
     }
 }
 

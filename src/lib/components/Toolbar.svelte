@@ -588,11 +588,14 @@
               {#if $sortieNatif.chemin}
                 <p class="hint moteur-chemin">{$t("moteur.sortieFichier", { chemin: $sortieNatif.chemin })}</p>
               {/if}
-            {:else if $sortieNatifFichier}
+            {:else if $sortieNatifFichier && !$sortieNatif.erreur}
               <p class="hint moteur-chemin">{$t("moteur.sortieFichier", { chemin: $sortieNatifFichier })}</p>
             {/if}
             {#if $sortieNatif.degradation}
               <p class="hint moteur-erreur">{$sortieNatif.degradation}</p>
+            {/if}
+            {#if $sortieNatif.erreur}
+              <p class="hint moteur-erreur">{$sortieNatif.erreur}</p>
             {/if}
           {/if}
           {#if $moteurErreur}
