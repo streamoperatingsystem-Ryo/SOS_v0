@@ -10,10 +10,12 @@
 //! État au LOT 0.2a : socle + énumération des adaptateurs. Rien d'autre.
 
 pub mod capture;
+pub mod clock;
 pub mod color;
 pub mod color_gpu;
 pub mod compositor;
 pub mod encode;
+pub mod gouverneur;
 pub mod gpu;
 pub mod output;
 

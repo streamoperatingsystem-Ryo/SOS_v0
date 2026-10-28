@@ -24,6 +24,7 @@ use windows::core::Interface;
 
 use sos_moteur_natif::capture::enumeration::enumerer_moniteurs;
 use sos_moteur_natif::capture::wgc::CaptureWgc;
+use sos_moteur_natif::clock::Horloge;
 use sos_moteur_natif::compositor::{Calque, Compositeur};
 use sos_moteur_natif::encode::PaquetEncode;
 use sos_moteur_natif::gpu::{ContexteGpu, DescTexture, Format};
@@ -306,23 +307,22 @@ fn main() {
         },
     ];
 
-    let intervalle = Duration::from_secs_f64(1.0 / fps as f64);
+    let mut horloge = match Horloge::nouvelle(fps) {
+        Ok(h) => h,
+        Err(e) => {
+            eprintln!("Horloge impossible : {e}");
+            return;
+        }
+    };
     let debut = Instant::now();
     let mut octets = 0usize;
     let mut paquets = 0usize;
     let mut sans_calque = 0u32;
-    let mut en_retard = 0u32;
     let mut coupure: Option<u32> = None;
     let mut erreur: Option<String> = None;
 
     for i in 0..frames {
-        let echeance = debut + intervalle * i;
-        let maintenant = Instant::now();
-        if maintenant < echeance {
-            std::thread::sleep(echeance - maintenant);
-        } else if i > 0 {
-            en_retard += 1;
-        }
+        horloge.attendre();
 
         // Copie GPU de la dernière frame de chaque source (la texture WGC
         // n'est jamais conservée au-delà de cet appel).
@@ -438,7 +438,11 @@ fn main() {
             for s in &sources {
                 println!("  {} : {} frames capturees", s.nom, s.capturees);
             }
-            println!("  {sans_calque} frames sans calque, {en_retard} en retard");
+            println!(
+                "  {sans_calque} frames sans calque, {} en retard (max {} ms)",
+                horloge.retards(),
+                horloge.retard_max().as_millis()
+            );
             if let Some(i) = coupure {
                 println!("  coupure simulee apres la frame {i} (conteneur laisse tel quel)");
             }
