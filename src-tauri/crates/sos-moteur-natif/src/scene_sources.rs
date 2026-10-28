@@ -11,14 +11,30 @@
 
 use std::collections::HashMap;
 
-use sos_scene::Scene;
+use sos_scene::{CaptureCible, Scene};
 
 use crate::moteur::{CibleCapture, SourceCfg};
 
+/// Traduit la cible persistée dans la scène en cible du moteur.
+///
+/// `Moniteur.index` est utilisé tel quel (l'ordre DXGI est stable entre
+/// sessions sur une machine donnée) ; `name` est conservé pour une
+/// re-résolution ultérieure. `Fenetre.hwnd` est valable pour la session.
+fn cible_de(cible: &CaptureCible) -> CibleCapture {
+    match cible {
+        CaptureCible::Moniteur { index, .. } => CibleCapture::Moniteur { index: *index },
+        CaptureCible::Fenetre { hwnd, .. } => CibleCapture::Fenetre {
+            hwnd: *hwnd as isize,
+        },
+    }
+}
+
 /// Construit les sources du moteur depuis la scène et la table des cibles.
 ///
-/// `cibles` : identifiant de widget → cible native. Un widget absent de la
-/// table est ignoré (pas de capture par défaut).
+/// Priorité à `Widget.captureCible` (persisté dans la scène) ; `cibles` ne
+/// sert que de repli pour les scènes anciennes ou les widgets sans cible
+/// persistée. Un widget absent des deux est ignoré (pas de capture par
+/// défaut).
 pub fn sources_depuis_scene(
     scene: &Scene,
     cibles: &HashMap<String, CibleCapture>,
@@ -28,9 +44,14 @@ pub fn sources_depuis_scene(
         .iter()
         .filter(|w| w.trou && w.largeur > 0.0 && w.hauteur > 0.0)
         .filter_map(|w| {
-            cibles.get(&w.id).map(|cible| SourceCfg {
+            let cible = w
+                .captureCible
+                .as_ref()
+                .map(cible_de)
+                .or_else(|| cibles.get(&w.id).copied())?;
+            Some(SourceCfg {
                 nom: w.id.clone(),
-                cible: *cible,
+                cible,
                 rect: (w.x, w.y, w.largeur, w.hauteur),
             })
         })
@@ -82,5 +103,40 @@ mod tests {
         let mut cibles = HashMap::new();
         cibles.insert("nul".to_string(), CibleCapture::Moniteur { index: 0 });
         assert!(sources_depuis_scene(&scene, &cibles).is_empty());
+    }
+
+    #[test]
+    fn cible_persistee_prime_sur_la_table() {
+        let scene = scene(
+            r#"{
+                "widgets": [
+                    {"id":"a","type":"media","x":0,"y":0,"largeur":640,"hauteur":360,"z":0,
+                     "trou":true,
+                     "captureCible":{"kind":"moniteur","name":"\\\\.\\DISPLAY1","index":1}}
+                ]
+            }"#,
+        );
+        let mut cibles = HashMap::new();
+        cibles.insert("a".to_string(), CibleCapture::Fenetre { hwnd: 99 });
+        let sources = sources_depuis_scene(&scene, &cibles);
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].cible, CibleCapture::Moniteur { index: 1 });
+    }
+
+    #[test]
+    fn cible_fenetre_persistee() {
+        let scene = scene(
+            r#"{
+                "widgets": [
+                    {"id":"w","type":"media","x":5,"y":6,"largeur":320,"hauteur":180,"z":0,
+                     "trou":true,
+                     "captureCible":{"kind":"fenetre","hwnd":42,"title":"Jeu","exe":"jeu.exe"}}
+                ]
+            }"#,
+        );
+        let sources = sources_depuis_scene(&scene, &HashMap::new());
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].cible, CibleCapture::Fenetre { hwnd: 42 });
+        assert_eq!(sources[0].rect, (5.0, 6.0, 320.0, 180.0));
     }
 }

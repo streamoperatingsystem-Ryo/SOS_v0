@@ -223,6 +223,30 @@ impl Default for MorphPoint {
     }
 }
 
+/// Cible de capture native d'un widget « trou » (moteur Rust).
+///
+/// Optionnelle : absente des scènes existantes, ignorée par le mode OBS.
+/// `Moniteur.name` est l'identité stable (`\\.\DISPLAY1`) ; `index` sert de
+/// repli DXGI. `Fenetre.hwnd` n'est valable que pour la session courante —
+/// `title`/`exe` permettent une re-résolution ultérieure.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum CaptureCible {
+    Moniteur {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<String>,
+        #[serde(default)]
+        index: u32,
+    },
+    Fenetre {
+        hwnd: i64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        exe: Option<String>,
+    },
+}
+
 /// Une slide du carrousel d'images (widget média ou fond de scène).
 /// `rel` = chemin relatif "medias/<uuid>.<ext>" servi par :4321 ;
 /// `nom` = nom original du fichier (affichage liste, même rôle que mediaNom).
@@ -332,6 +356,10 @@ pub struct Widget {
     /// transform OBS (position + taille = widget x/y/largeur/hauteur).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub obsSource: Option<String>,
+    /// Cible de capture du moteur natif (choisie dans le sélecteur).
+    /// Absent = widget trou sans cible native (mode OBS inchangé).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub captureCible: Option<CaptureCible>,
     /// Filtre chat pour les widgets type "chat" : "unifie" (défaut) ou
     /// une plateforme ("twitch", "youtube", "kick", "tiktok").
     /// None pour les widgets non-chat.
@@ -1088,6 +1116,35 @@ mod tests {
         assert!(s.start);
         assert!(s.split);
         assert!(s.reset);
+    }
+
+    #[test]
+    fn capture_cible_absente_par_defaut_et_round_trip() {
+        let v = serde_json::to_value(Scene::default()).expect("scene -> json");
+        assert!(
+            v["widgets"].as_array().is_some(),
+            "widgets doit rester un tableau"
+        );
+
+        let json = r#"{"id":"w1","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":0,
+            "captureCible":{"kind":"moniteur","name":"\\\\.\\DISPLAY1","index":2}}"#;
+        let w: Widget = serde_json::from_str(json).expect("widget");
+        assert_eq!(
+            w.captureCible,
+            Some(CaptureCible::Moniteur {
+                name: Some("\\\\.\\DISPLAY1".to_string()),
+                index: 2,
+            })
+        );
+        let v = serde_json::to_value(&w).expect("widget -> json");
+        assert_eq!(v["captureCible"]["kind"], "moniteur");
+        assert_eq!(v["captureCible"]["index"], 2);
+
+        let sans = r#"{"id":"w2","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":0}"#;
+        let w: Widget = serde_json::from_str(sans).expect("widget");
+        assert!(w.captureCible.is_none());
+        let v = serde_json::to_value(&w).expect("widget -> json");
+        assert!(v.get("captureCible").is_none());
     }
 
     #[test]

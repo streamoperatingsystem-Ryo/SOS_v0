@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onDestroy } from "svelte";
   import { get } from "svelte/store";
-  import { tauri } from "../tauri";
+  import { tauri, type CaptureCible } from "../tauri";
   import { createObsTrouFromPc, lierFondCapture } from "../stores/scene";
   import Modal from "./Modal.svelte";
   import { t } from "../stores/langue";
@@ -37,6 +37,8 @@
     obs_value: string | null;
     hwnd?: number;
     hmon?: number;
+    /// Index DXGI du moniteur (cible du moteur natif).
+    index?: number;
   };
   let liste = $state<Item[]>([]);
   // Miniatures à la demande : clé = obs_value (ou nom) → data URL PNG.
@@ -84,6 +86,7 @@
           // par défaut plutôt qu'un nom localisé sans valeur pour OBS.
           obs_value: m.monitor_id || null,
           hmon: m.hmon,
+          index: m.index,
         }));
       } else {
         const wins =
@@ -142,6 +145,14 @@
     // target : caméra = nom device ; fenêtre/jeu = obs_value
     // ("title:class:exe") ; écran = monitor_id (null = écran par défaut OBS).
     const target = item.obs_value ?? (kind === "monitor" ? null : item.nom);
+    // Cible persistée pour le moteur natif (absente = mode OBS seul).
+    // Caméra exclue : Media Foundation n'existe pas encore côté moteur.
+    const cible: CaptureCible | undefined =
+      kind === "monitor"
+        ? { kind: "moniteur", name: item.obs_value ?? undefined, index: item.index ?? 0 }
+        : (kind === "window" || kind === "game") && item.hwnd != null
+          ? { kind: "fenetre", hwnd: item.hwnd, title: item.nom, exe: item.sub }
+          : undefined;
     etape = "working";
     working = true;
     error = null;
@@ -150,7 +161,7 @@
         await lierFondCapture(kind, target);
       } else {
         if (!widgetId) return;
-        await createObsTrouFromPc(widgetId, kind, target);
+        await createObsTrouFromPc(widgetId, kind, target, cible);
       }
       onClose();
     } catch (e) {

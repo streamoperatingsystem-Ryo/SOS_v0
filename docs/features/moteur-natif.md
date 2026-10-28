@@ -895,7 +895,7 @@ ffmpeg) était à 2,07 % / 183,5 Mo. Détails : `mesures-p0.md`.
 ```bash
 cd src-tauri
 cargo clippy -p sos-moteur-natif --all-targets -- -D warnings   # exit 0
-cargo test -p sos-moteur-natif                                  # 40 tests
+cargo test -p sos-moteur-natif                                  # 42 tests
 cargo clippy -p streamos-v0                                     # exit 0
 cargo test -p streamos-v0 moteur::mode                          # 4 tests
 ```
@@ -966,7 +966,11 @@ P3 n'est pas livré.
 Le pont scène → sources existe côté moteur :
 `scene_sources::sources_depuis_scene(&Scene, &HashMap<widget_id, CibleCapture>)`
 et `MoteurNatif::configurer_scene`. Seuls les widgets `trou` avec une cible
-connue et un rect non nul produisent une source — **aucun champ ajouté à
-`Widget`**, le JSON des scènes reste identique. Reste à faire côté app :
-persister la table widget → cible (aujourd'hui la cible ne vit que dans OBS,
-le dialogue de capture ne la stocke pas) et la pousser au moteur.
+connue et un rect non nul produisent une source. La cible est **persistée
+dans la scène** (`Widget.captureCible`, optionnel, `skip_serializing_if`) :
+`{ "kind": "moniteur", "name": "\\\\.\\DISPLAY1", "index": 0 }` ou
+`{ "kind": "fenetre", "hwnd": 42, "title": "…", "exe": "…" }`. Le JSON des
+scènes existantes est **inchangé** (champ absent) et le mode OBS l'ignore.
+Le sélecteur de capture remplit ce champ ; `setWidgetTrou(false)` le purge.
+Reste à faire : P3 renderer (texte/chat/alertes/cadres/médias) avant qu'un
+enregistrement « de scène » soit complet.

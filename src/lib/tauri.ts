@@ -10,8 +10,14 @@ export interface MediaSlide {
   nom: string;
 }
 
-export interface Widget {
-  id: string;
+/// Cible de capture native persistée dans la scène (widget « trou »).
+/// `moniteur.name` = identité stable (`\\.\DISPLAY1`), `index` = repli DXGI ;
+/// `fenetre.hwnd` n'est valable que pour la session courante.
+export type CaptureCible =
+  | { kind: "moniteur"; name?: string; index: number }
+  | { kind: "fenetre"; hwnd: number; title?: string; exe?: string };
+
+export interface Widget {  id: string;
   type: "media" | "chat" | "camera" | "input-viewer" | "speedrun" | "goal" | "musique";
   x: number;
   y: number;
@@ -62,6 +68,9 @@ export interface Widget {
   /// bibliothèque → transformerEnWidget). undefined/false = cadre appliqué.
   sansCadre?: boolean;
   obsSource?: string;
+  /// Cible de capture du moteur natif (widget « trou »). Absente des scènes
+  /// existantes ; ignorée par le mode OBS.
+  captureCible?: CaptureCible;
   chatFiltre?: string;
   taillePolice?: number;
   /// Mise en forme des messages (widget "chat") : "compact" (défaut —

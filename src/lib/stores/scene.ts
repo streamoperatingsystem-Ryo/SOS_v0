@@ -6,6 +6,7 @@ import {
   MODULE_IDS,
   type Scene,
   type Widget,
+  type CaptureCible,
   type CadreConfig,
   type MorphPoint,
   type ModuleId,
@@ -787,7 +788,9 @@ export async function setWidgetTrou(id: string, trou: boolean): Promise<void> {
     sceneStore.update((s) => ({
       ...s,
       widgets: s.widgets.map((x) =>
-        x.id === id ? { ...x, trou: false, obsSource: undefined } : x
+        x.id === id
+          ? { ...x, trou: false, obsSource: undefined, captureCible: undefined }
+          : x
       ),
     }));
   } else {
@@ -2056,7 +2059,8 @@ export async function linkExistingObsSource(
 export async function createObsTrouFromPc(
   id: string,
   kind: "camera" | "window" | "game" | "monitor",
-  target: string | null
+  target: string | null,
+  cible?: CaptureCible
 ): Promise<string> {
   const w = get(sceneStore).widgets.find((x) => x.id === id);
   if (!w) throw new Error(get(t)("scene.widgetIntrouvable"));
@@ -2068,7 +2072,7 @@ export async function createObsTrouFromPc(
   sceneStore.update((s) => ({
     ...s,
     widgets: s.widgets.map((x) =>
-      x.id === id ? { ...x, obsSource: name } : x
+      x.id === id ? { ...x, obsSource: name, captureCible: cible } : x
     ),
   }));
   await commitScene();
