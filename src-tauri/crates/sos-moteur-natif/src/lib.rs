@@ -15,6 +15,7 @@ pub mod color_gpu;
 pub mod compositor;
 pub mod encode;
 pub mod gpu;
+pub mod output;
 
 /// Version du crate (affichée par le diagnostic, utile au support).
 pub fn version() -> &'static str {

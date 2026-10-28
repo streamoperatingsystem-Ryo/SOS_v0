@@ -13,8 +13,7 @@
 #[path = "nvenc/ffi.rs"]
 mod ffi;
 
-use std::fs::File;
-use std::io::Write;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -26,7 +25,11 @@ use windows::core::Interface;
 use sos_moteur_natif::capture::enumeration::enumerer_moniteurs;
 use sos_moteur_natif::capture::wgc::CaptureWgc;
 use sos_moteur_natif::compositor::{Calque, Compositeur};
+use sos_moteur_natif::encode::PaquetEncode;
 use sos_moteur_natif::gpu::{ContexteGpu, DescTexture, Format};
+use sos_moteur_natif::output::{
+    ffmpeg::FfmpegSink, file::FileSink, Conteneur, ErreurSortie, Sink,
+};
 
 use ffi::{struct_version, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P4};
 
@@ -40,12 +43,46 @@ struct Source {
     prete: bool,
 }
 
+/// Sortie de l'exemple : fichier brut ou conteneur via le sidecar.
+enum Sortie {
+    Brut(FileSink),
+    Conteneur(FfmpegSink),
+}
+
+impl Sortie {
+    fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurSortie> {
+        match self {
+            Sortie::Brut(s) => s.pousser(paquet),
+            Sortie::Conteneur(s) => s.pousser(paquet),
+        }
+    }
+
+    fn fermer(&mut self) -> Result<(), ErreurSortie> {
+        match self {
+            Sortie::Brut(s) => s.fermer(),
+            Sortie::Conteneur(s) => s.fermer(),
+        }
+    }
+
+    /// Coupure simulée : tue le sidecar (le fichier brut est refermé).
+    fn couper(&mut self) -> Result<(), ErreurSortie> {
+        match self {
+            Sortie::Brut(s) => s.fermer(),
+            Sortie::Conteneur(s) => s.couper(),
+        }
+    }
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let sortie = args.next().unwrap_or_else(|| "compose-zc.h264".to_string());
     let frames: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(300);
     let fps: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(60);
     let kbps: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(6000);
+    let conteneur = args.next().unwrap_or_else(|| "h264".to_string());
+    let mode = args.next().unwrap_or_default();
+    let couper = mode == "couper";
+    let exit_brutal = mode == "exit";
 
     println!("=== Spike 2.3 — compositeur GPU + NVENC ===");
     ffi::verifier_layout();
@@ -221,12 +258,28 @@ fn main() {
         }
     };
 
-    let mut fichier = match File::create(&sortie) {
-        Ok(f) => f,
-        Err(e) => {
-            eprintln!("Creation {sortie} impossible : {e}");
-            return;
+    let mut sortie_fichier: Sortie = match conteneur.as_str() {
+        "mp4" | "mkv" => {
+            let c = if conteneur == "mp4" {
+                Conteneur::Mp4
+            } else {
+                Conteneur::Mkv
+            };
+            match FfmpegSink::nouveau(None, Path::new(&sortie), c, fps) {
+                Ok(s) => Sortie::Conteneur(s),
+                Err(e) => {
+                    eprintln!("Sortie {conteneur} impossible : {e}");
+                    return;
+                }
+            }
         }
+        _ => match FileSink::nouveau(Path::new(&sortie)) {
+            Ok(s) => Sortie::Brut(s),
+            Err(e) => {
+                eprintln!("Creation {sortie} impossible : {e}");
+                return;
+            }
+        },
     };
 
     // Calques : 0 = plein canvas, 1 = tiers bas-droit, 2 = tiers haut-droit.
@@ -259,6 +312,7 @@ fn main() {
     let mut paquets = 0usize;
     let mut sans_calque = 0u32;
     let mut en_retard = 0u32;
+    let mut coupure: Option<u32> = None;
     let mut erreur: Option<String> = None;
 
     for i in 0..frames {
@@ -327,9 +381,27 @@ fn main() {
                 }
                 octets += donnees.len();
                 paquets += 1;
-                if let Err(e) = fichier.write_all(&donnees) {
+                let paquet = PaquetEncode {
+                    data: donnees,
+                    pts_us: pts,
+                    cle: false,
+                };
+                if let Err(e) = sortie_fichier.pousser(&paquet) {
                     erreur = Some(format!("ecriture : {e}"));
                     break;
+                }
+                if couper && i + 1 >= frames * 2 / 3 {
+                    if let Err(e) = sortie_fichier.couper() {
+                        erreur = Some(format!("coupure : {e}"));
+                    }
+                    coupure = Some(i);
+                    break;
+                }
+                if exit_brutal && i + 1 >= frames * 2 / 3 {
+                    // Mort du processus StreamOS : le sidecar reçoit EOF et
+                    // doit finaliser le conteneur tout seul.
+                    println!("  arret brutal du processus (le sidecar doit finaliser seul)");
+                    std::process::exit(3);
                 }
             }
             Err(e) => {
@@ -340,7 +412,11 @@ fn main() {
     }
 
     let duree = debut.elapsed();
-    let _ = fichier.flush();
+    if erreur.is_none() && coupure.is_none() {
+        if let Err(e) = sortie_fichier.fermer() {
+            erreur = Some(format!("fermeture : {e}"));
+        }
+    }
 
     sdk.demapper(encoder, entree);
     sdk.desenregistrer(encoder, ressource);
@@ -351,18 +427,21 @@ fn main() {
         Some(e) => eprintln!("ECHEC — {e}"),
         None => {
             println!(
-                "\n{frames} frames en {} ms ({:.1} fps effectif)",
+                "\n{paquets} frames en {} ms ({:.1} fps effectif)",
                 duree.as_millis(),
-                frames as f64 / duree.as_secs_f64().max(0.001)
+                paquets as f64 / duree.as_secs_f64().max(0.001)
             );
             println!(
                 "{paquets} paquets, {octets} octets → {sortie} ({:.0} kbps)",
-                (octets as f64 * 8.0) / (frames as f64 / fps as f64).max(0.001) / 1000.0
+                (octets as f64 * 8.0) / (paquets as f64 / fps as f64).max(0.001) / 1000.0
             );
             for s in &sources {
                 println!("  {} : {} frames capturees", s.nom, s.capturees);
             }
             println!("  {sans_calque} frames sans calque, {en_retard} en retard");
+            if let Some(i) = coupure {
+                println!("  coupure simulee apres la frame {i} (conteneur laisse tel quel)");
+            }
             println!("Verifier : ffmpeg -i {sortie} -f null -");
         }
     }
