@@ -20,6 +20,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # Contrats de scène (anneau 0) — types purs partagés avec le moteur natif.
 sos-scene = { path = "crates/sos-scene" }
+# Contrats des moteurs (anneau 2) — trait Moteur, Capacites, SortieCfg.
+sos-moteur-api = { path = "crates/sos-moteur-api" }
 axum = { version = "0.8", features = ["ws"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.7", features = ["fs", "cors"] }

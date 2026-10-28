@@ -4,6 +4,7 @@
 //! refuse proprement une bascule vers un natif non branché (lot 1.4).
 
 pub mod mode;
+pub mod obs;
 
 use std::sync::Mutex;
 
@@ -11,12 +12,15 @@ use serde::Serialize;
 use tauri::{AppHandle, State};
 
 use mode::{verifier_bascule, Mode};
+use obs::MoteurObs;
 
 /// État partagé du registre moteur.
 pub struct RegistreMoteur {
     mode: Mutex<Mode>,
     /// Le moteur natif est-il branché ? (lot 1.4 : non)
     natif_disponible: bool,
+    /// Adaptateur OBS du contrat `Moteur` (lot 1.3).
+    obs: MoteurObs,
 }
 
 impl RegistreMoteur {
@@ -24,11 +28,16 @@ impl RegistreMoteur {
         Self {
             mode: Mutex::new(mode_initial),
             natif_disponible: false,
+            obs: MoteurObs::nouveau(),
         }
     }
 
     pub fn mode(&self) -> Mode {
         *self.mode.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    pub fn obs(&self) -> &MoteurObs {
+        &self.obs
     }
 }
 
@@ -92,4 +101,17 @@ pub fn moteur_basculer(
         crate::config::sauver_mode_moteur(&app, nouveau.nom())?;
     }
     Ok(nouveau.nom().to_string())
+}
+
+/// Connexion obs-websocket pour l'adaptateur `MoteurObs` (lot 1.3).
+/// Le mot de passe reste en mémoire du backend : jamais persisté ni loggé.
+/// Appelée par le frontend avant toute bascule ou action moteur (lot 1.5).
+#[tauri::command]
+pub fn moteur_obs_connexion(
+    registre: State<'_, RegistreMoteur>,
+    host: String,
+    port: u16,
+    password: String,
+) {
+    registre.obs().configurer_connexion(host, port, password);
 }

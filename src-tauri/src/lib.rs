@@ -4518,6 +4518,7 @@ pub fn run() {
             moteur::moteur_etat,
             moteur::moteur_diag,
             moteur::moteur_basculer,
+            moteur::moteur_obs_connexion,
             get_scene,
             update_scene,
             import_media,
