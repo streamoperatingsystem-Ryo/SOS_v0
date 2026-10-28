@@ -1,0 +1,12 @@
+﻿=== RESUME P0 ===
+processus       : encode_nvenc (PID 20300)
+mode            : arbre de processus
+echantillons    : 1796 collectes, 60 ignores, 1736 retenus
+CPU  moyenne    : 2.10 %
+CPU  p95        : 2.62 %
+RAM  moyenne    : 183.4 Mo
+RAM  p95        : 187.9 Mo
+GPU  moyenne    : 30.94 %
+GPU  p95        : 35.55 %
+RAM systeme moy : 15290 Mo
+CSV             : C:\Users\Ryo\Desktop\Rust-SOS\SOS_v0\mesures\spike-run1.csv

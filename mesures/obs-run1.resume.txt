@@ -1,0 +1,12 @@
+﻿=== RESUME P0 ===
+processus       : obs64 (PID 12484)
+mode            : arbre de processus
+echantillons    : 1778 collectes, 60 ignores, 1718 retenus
+CPU  moyenne    : 0.76 %
+CPU  p95        : 1.25 %
+RAM  moyenne    : 852.0 Mo
+RAM  p95        : 871.7 Mo
+GPU  moyenne    : 49.90 %
+GPU  p95        : 57.28 %
+RAM systeme moy : 15111 Mo
+CSV             : C:\Users\Ryo\Desktop\Rust-SOS\SOS_v0\mesures\obs-run1.csv
