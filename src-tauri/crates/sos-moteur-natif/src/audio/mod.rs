@@ -5,6 +5,7 @@
 //! périphérique (f32 48 kHz stéréo en pratique) ; PCM 16 bits accepté aussi.
 
 pub mod capture;
+pub mod mixage;
 
 use std::fmt;
 

@@ -15,6 +15,7 @@ pub mod clock;
 pub mod color;
 pub mod color_gpu;
 pub mod compositor;
+pub mod compteurs;
 pub mod encode;
 pub mod gouverneur;
 pub mod gpu;
