@@ -26,32 +26,39 @@
 
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::mem::ManuallyDrop;
 
-use windows::core::{Interface, PCWSTR};
+use windows::core::{Interface, IUnknown, PCWSTR};
 use windows::Foundation::Numerics::Matrix3x2;
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_GRADIENT_STOP,
     D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Bitmap1, ID2D1Brush, ID2D1Device, ID2D1Factory1,
-    ID2D1GradientStopCollection, ID2D1LinearGradientBrush, ID2D1RenderTarget,
-    D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
-    D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
+    D2D1CreateFactory, ID2D1Bitmap1, ID2D1Brush, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1,
+    ID2D1Geometry, ID2D1GradientStopCollection, ID2D1Layer, ID2D1LinearGradientBrush,
+    ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush, ID2D1StrokeStyle,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE,
+    D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
     D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_GAMMA_2_2, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+    D2D1_GAMMA_2_2, D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1,
+    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
     D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1_UNIT_MODE_PIXELS,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteFontCollection1,
-    IDWriteTextFormat, IDWriteTextLayout1, DWRITE_FACTORY_TYPE_SHARED, DWRITE_FONT_STRETCH_NORMAL,
-    DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_WEIGHT_BOLD,
-    DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE, DWRITE_WORD_WRAPPING_NO_WRAP,
+    IDWriteTextFormat, IDWriteTextLayout, IDWriteTextLayout1, DWRITE_FACTORY_TYPE_SHARED,
+    DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
+    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE,
+    DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
 use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
+use crate::cadres::{CadreCfg, ErreurCadre};
+use crate::chat::{ChatCfg, FileChat};
 use crate::gpu::{ContexteGpu, DescTexture, Format};
 
 /// Écart aux bords, en px canvas — valeur de `diffusion.html` (`.bg-titre`).
@@ -280,12 +287,21 @@ struct CacheTexte {
     hauteur: f32,
 }
 
-/// Dessinateur de textes sur un canvas BGRA donné.
+/// Dessinateur du canvas BGRA — nom historique : il porte désormais les
+/// **titres**, les **cadres** (`cadres::dessiner`), les **médias découpés au
+/// polygone** et le **chat** multi-lignes.
+///
+/// Un seul `ID2D1DeviceContext` et une seule cible : chaque appel de dessin
+/// est encadré par `debut`/`fin` **par le moteur**, qui peut ainsi insérer des
+/// `VideoProcessorBlt` bornés entre deux segments (ordre z exact).
 pub struct DessinateurTexte {
     dwrite: IDWriteFactory5,
     device: ID2D1Device,
     /// La fabrique doit vivre aussi longtemps que ses objets (device, ctx).
-    _d2d: ID2D1Factory1,
+    d2d: ID2D1Factory1,
+    /// Contexte de périphérique : `PushLayer` avec masque géométrique et
+    /// `CreateBitmapFromDxgiSurface` ne vivent que là.
+    ctx: ID2D1DeviceContext,
     /// Vue « render target » du canvas : c'est elle qui porte `BeginDraw`,
     /// `DrawBitmap`, `SetTransform` (l'héritage COM ne donne pas de `Deref`
     /// vers `ID2D1RenderTarget` dans `windows` 0.58 — cast explicite).
@@ -296,7 +312,46 @@ pub struct DessinateurTexte {
     /// vivre aussi longtemps que la collection.
     _donnees_polices: Vec<Vec<u8>>,
     device_d3d: windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    /// Trait des cadres (miter, limite 4) — créé une fois.
+    style_trait: ID2D1StrokeStyle,
     cache: HashMap<u64, CacheTexte>,
+    /// Bitmaps Direct2D des médias, clé = pointeur de la texture. L'entrée
+    /// conserve la texture : `ID2D1Bitmap1` ne la possède pas.
+    bitmaps: HashMap<
+        usize,
+        (
+            windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+            ID2D1Bitmap1,
+        ),
+    >,
+    /// Blocs de chat mis en page, clé = (version du buffer, filtre, métriques).
+    blocs: HashMap<u64, BlocChat>,
+}
+
+/// Un message mis en page : layout DirectWrite + hauteur rendue.
+struct MessageRendu {
+    layout: IDWriteTextLayout,
+    hauteur: f32,
+    /// `nth-child` impair (index pair) — zébrage de `diffusion.html`.
+    pair: bool,
+    /// Brosse de la couleur du pseudo : le layout la référence.
+    _brosse: Option<ID2D1SolidColorBrush>,
+}
+
+/// Bloc de chat complet (tous les messages d'un widget), mis en page une fois
+/// par version du buffer.
+///
+/// La clé de cache ne contient **pas** la version : le bloc est réutilisé
+/// tant que la configuration du widget ne change pas, et reconstruit quand
+/// `version` diffère. La table reste donc bornée par le nombre de widgets.
+struct BlocChat {
+    /// Version du buffer au moment de la mise en page.
+    version: u64,
+    /// Le layout DirectWrite ne possède pas le format : il doit vivre ici.
+    _format: IDWriteTextFormat,
+    messages: Vec<MessageRendu>,
+    /// Hauteur totale, interlignes de bulles comprises.
+    total: f32,
 }
 
 impl DessinateurTexte {
@@ -353,17 +408,23 @@ impl DessinateurTexte {
         let collection: IDWriteFontCollection = collection
             .cast()
             .map_err(|e| ErreurTexte::Systeme(format!("IDWriteFontCollection : {}", e.message())))?;
+        let style_trait = crate::cadres::style_trait(&d2d)
+            .map_err(|e| ErreurTexte::Systeme(e.to_string()))?;
 
         Ok(Self {
             dwrite,
             device,
-            _d2d: d2d,
+            d2d,
+            ctx: cible,
             cible_rt,
             _cible_bitmap: cible_bitmap,
             collection,
             _donnees_polices: donnees,
             device_d3d: contexte.device().clone(),
+            style_trait,
             cache: HashMap::new(),
+            bitmaps: HashMap::new(),
+            blocs: HashMap::new(),
         })
     }
 
@@ -372,12 +433,41 @@ impl DessinateurTexte {
         self.cache.len()
     }
 
+    /// Ouvre une passe de dessin (le moteur peut insérer des blts entre deux
+    /// passes : la cible Direct2D ne doit jamais rester ouverte pendant un
+    /// `VideoProcessorBlt`).
+    pub fn debut(&mut self) {
+        unsafe { self.cible_rt.BeginDraw() };
+    }
+
+    /// Ferme la passe de dessin (flush Direct2D).
+    pub fn fin(&mut self) -> Result<(), ErreurTexte> {
+        unsafe { self.cible_rt.EndDraw(None, None) }
+            .map_err(|e| ErreurTexte::Systeme(format!("EndDraw : {}", e.message())))
+    }
+
+    /// Efface le canvas avec une couleur **opaque** (dans une passe ouverte).
+    ///
+    /// Nécessaire au chemin segmenté : le premier lot du compositeur ne peint
+    /// plus toute la surface (il est borné au calque), donc plus personne ne
+    /// remet le fond à zéro entre deux frames.
+    pub fn effacer(&mut self, couleur: [u8; 4]) {
+        unsafe { self.cible_rt.Clear(Some(&couleur_d2d(couleur))) };
+    }
+
     /// Dessine les titres sur le canvas, dans l'ordre de `z`.
     ///
     /// Le canvas n'est **pas** effacé : il porte déjà les calques composés.
     /// Les textures de texte absentes du cache sont rendues à la volée, une
     /// seule fois, puis réutilisées à chaque frame.
     pub fn dessiner(&mut self, textes: &[TexteCfg]) -> Result<(), ErreurTexte> {
+        self.debut();
+        self.dessiner_textes(textes)?;
+        self.fin()
+    }
+
+    /// Titres seuls, **sans** `BeginDraw`/`EndDraw` (appelé dans une passe).
+    pub fn dessiner_textes(&mut self, textes: &[TexteCfg]) -> Result<(), ErreurTexte> {
         if textes.is_empty() {
             return Ok(());
         }
@@ -395,7 +485,6 @@ impl DessinateurTexte {
             plan.push((cle, placement(texte, entree.largeur, entree.hauteur)));
         }
 
-        unsafe { self.cible_rt.BeginDraw() };
         for (cle, place) in &plan {
             let Some(entree) = self.cache.get(cle) else {
                 continue;
@@ -420,9 +509,283 @@ impl DessinateurTexte {
                 }
             }
         }
-        unsafe { self.cible_rt.EndDraw(None, None) }
-            .map_err(|e| ErreurTexte::Systeme(format!("EndDraw : {}", e.message())))?;
         Ok(())
+    }
+
+    /// Géométrie (coordonnées canvas) du polygone d'un cadre.
+    pub fn geometrie_cadre(&self, cfg: &CadreCfg) -> Result<ID2D1PathGeometry, ErreurTexte> {
+        crate::cadres::geometrie(&self.d2d, cfg)
+            .map_err(|e| ErreurTexte::Systeme(e.to_string()))
+    }
+
+    /// Peint un cadre (clip au polygone, 2 styles) — dans une passe ouverte.
+    pub fn dessiner_cadre(
+        &mut self,
+        cfg: &CadreCfg,
+        geo: &ID2D1PathGeometry,
+    ) -> Result<(), ErreurTexte> {
+        crate::cadres::dessiner(&self.d2d, &self.ctx, &self.cible_rt, geo, cfg, &self.style_trait)
+            .map_err(|e: ErreurCadre| ErreurTexte::Systeme(e.to_string()))
+    }
+
+    /// Vue Direct2D d'une texture média (créée une fois, réutilisée).
+    ///
+    /// Clé = pointeur de la texture : les médias vivent toute la session.
+    /// La texture doit porter `D3D11_BIND_SHADER_RESOURCE` (voir
+    /// `ContexteGpu::creer_texture_echantillonnable`).
+    pub fn bitmap_media(
+        &mut self,
+        texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    ) -> Result<ID2D1Bitmap1, ErreurTexte> {
+        let cle = texture.as_raw() as usize;
+        if let Some((_, bitmap)) = self.bitmaps.get(&cle) {
+            return Ok(bitmap.clone());
+        }
+        let surface: IDXGISurface = texture
+            .cast()
+            .map_err(|e| ErreurTexte::Gpu(format!("IDXGISurface média : {}", e.message())))?;
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_NONE,
+            colorContext: ManuallyDrop::new(None),
+        };
+        let bitmap = unsafe { self.ctx.CreateBitmapFromDxgiSurface(&surface, Some(&props)) }
+            .map_err(|e| ErreurTexte::Gpu(format!("bitmap média : {}", e.message())))?;
+        self.bitmaps.insert(cle, (texture.clone(), bitmap.clone()));
+        Ok(bitmap)
+    }
+
+    /// Dessine un média **découpé au polygone** du cadre — dans une passe.
+    ///
+    /// `source`/`destination` sont ceux du video processor
+    /// (`media::geometrie`) : le rendu est identique, seule la découpe change.
+    pub fn dessiner_media(
+        &mut self,
+        bitmap: &ID2D1Bitmap1,
+        destination: RECT,
+        source: RECT,
+        clip: &ID2D1PathGeometry,
+    ) -> Result<(), ErreurTexte> {
+        let masque: ID2D1Geometry = clip
+            .cast()
+            .map_err(|e| ErreurTexte::Gpu(format!("ID2D1Geometry : {}", e.message())))?;
+        let dst = D2D_RECT_F {
+            left: destination.left as f32,
+            top: destination.top as f32,
+            right: destination.right as f32,
+            bottom: destination.bottom as f32,
+        };
+        let src = D2D_RECT_F {
+            left: source.left as f32,
+            top: source.top as f32,
+            right: source.right as f32,
+            bottom: source.bottom as f32,
+        };
+        let mut params = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: dst,
+            geometricMask: ManuallyDrop::new(Some(masque)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
+        let layer: ID2D1Layer = unsafe { self.cible_rt.CreateLayer(None) }
+            .map_err(|e| ErreurTexte::Gpu(format!("CreateLayer média : {}", e.message())))?;
+        unsafe { self.ctx.PushLayer(&params, &layer) };
+        unsafe {
+            self.cible_rt.DrawBitmap(
+                bitmap,
+                Some(&dst),
+                1.0,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                Some(&src),
+            )
+        };
+        unsafe { self.ctx.PopLayer() };
+        unsafe { ManuallyDrop::drop(&mut params.geometricMask) };
+        Ok(())
+    }
+
+    /// Dessine les widgets chat — dans une passe ouverte.
+    ///
+    /// Chaque widget a son bloc mis en page (cache par version du buffer) :
+    /// un nouveau message ne reconfigure **rien**, il invalide le bloc.
+    /// Le plus récent est en bas, on pousse vers le haut ; ce qui dépasse est
+    /// rogné au rect du widget (défilement automatique, pas de scroll manuel).
+    pub fn dessiner_chat(&mut self, cfgs: &[ChatCfg], file: &FileChat) -> Result<(), ErreurTexte> {
+        if cfgs.is_empty() || file.version() == 0 {
+            return Ok(());
+        }
+        let blanc = unsafe { self.cible_rt.CreateSolidColorBrush(&couleur_d2d([255, 255, 255, 255]), None) }
+            .map_err(|e| ErreurTexte::Systeme(format!("brosse chat : {}", e.message())))?;
+        let clair = D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.07,
+        };
+        let fond = unsafe { self.cible_rt.CreateSolidColorBrush(&clair, None) }
+            .map_err(|e| ErreurTexte::Systeme(format!("brosse fond chat : {}", e.message())))?;
+        let noir = unsafe { self.cible_rt.CreateSolidColorBrush(&couleur_d2d([0, 0, 0, 255]), None) }
+            .map_err(|e| ErreurTexte::Systeme(format!("brosse fond chat : {}", e.message())))?;
+
+        for cfg in cfgs {
+            let g = geometrie_chat(cfg);
+            let cle = cle_bloc(cfg, &g);
+            // `is_none_or` est 1.82 : MSRV du dépôt = 1.77.
+            let perime = match self.blocs.get(&cle) {
+                Some(bloc) => bloc.version != file.version(),
+                None => true,
+            };
+            if perime {
+                self.construire_bloc(cfg, file, &g, cle)?;
+            }
+            let Some(bloc) = self.blocs.get(&cle) else {
+                continue;
+            };
+            let (x, y, w, h) = cfg.rect;
+            let (x, y, w, h) = (x as f32, y as f32, w as f32, h as f32);
+            let clip = D2D_RECT_F {
+                left: x,
+                top: y,
+                right: x + w,
+                bottom: y + h,
+            };
+            unsafe {
+                self.cible_rt
+                    .PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+            };
+
+            let mut curseur = y + h - g.pad_bas - bloc.total;
+            for message in &bloc.messages {
+                let rect_fond = D2D_RECT_F {
+                    left: x + g.pad_x,
+                    top: curseur,
+                    right: x + w - g.pad_x,
+                    bottom: curseur + message.hauteur,
+                };
+                // Bulles : fond uniforme clair (zébrage off, cf. CSS) ;
+                // compact : une ligne sur deux en noir plein.
+                let brosse = if cfg.bulles || message.pair {
+                    &fond
+                } else {
+                    &noir
+                };
+                unsafe { self.cible_rt.FillRectangle(&rect_fond, brosse) };
+                let origine = D2D_POINT_2F {
+                    x: x + g.pad_x + g.marge_gauche,
+                    y: curseur + g.marge_haut,
+                };
+                unsafe {
+                    self.cible_rt.DrawTextLayout(
+                        origine,
+                        &message.layout,
+                        &blanc,
+                        D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    )
+                };
+                curseur += message.hauteur + g.gap;
+            }
+            unsafe { self.cible_rt.PopAxisAlignedClip() };
+        }
+        Ok(())
+    }
+
+    /// Met en page tous les messages d'un widget (une fois par version).
+    fn construire_bloc(
+        &mut self,
+        cfg: &ChatCfg,
+        file: &FileChat,
+        g: &ChatGeometrie,
+        cle: u64,
+    ) -> Result<(), ErreurTexte> {
+        let format = self.format_chat(g.police)?;
+        let mut messages = Vec::new();
+        let mut total = 0.0f32;
+        for (index, message) in file.pour_filtre(&cfg.filtre).enumerate() {
+            let contenu = if message.pseudo.is_empty() {
+                message.texte.clone()
+            } else {
+                format!("{}: {}", message.pseudo, message.texte)
+            };
+            let utf16: Vec<u16> = contenu.encode_utf16().collect();
+            let layout = unsafe {
+                self.dwrite
+                    .CreateTextLayout(&utf16, &format, g.largeur_texte, 100_000.0)
+            }
+            .map_err(|e| ErreurTexte::Systeme(format!("CreateTextLayout chat : {}", e.message())))?;
+            unsafe { layout.SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP) }
+                .map_err(|e| ErreurTexte::Systeme(format!("wrap chat : {}", e.message())))?;
+
+            let longueur = message.pseudo.encode_utf16().count() as u32;
+            let mut brosse = None;
+            if longueur > 0 {
+                let plage = DWRITE_TEXT_RANGE {
+                    startPosition: 0,
+                    length: longueur,
+                };
+                unsafe { layout.SetFontWeight(DWRITE_FONT_WEIGHT_BOLD, plage) }
+                    .map_err(|e| ErreurTexte::Systeme(format!("gras chat : {}", e.message())))?;
+                let couleur = unsafe {
+                    self.cible_rt
+                        .CreateSolidColorBrush(&couleur_d2d(message.couleur_pseudo()), None)
+                }
+                .map_err(|e| ErreurTexte::Systeme(format!("brosse pseudo : {}", e.message())))?;
+                let inconnu: IUnknown = couleur
+                    .cast()
+                    .map_err(|e| ErreurTexte::Systeme(format!("IUnknown pseudo : {}", e.message())))?;
+                unsafe { layout.SetDrawingEffect(&inconnu, plage) }
+                    .map_err(|e| ErreurTexte::Systeme(format!("couleur pseudo : {}", e.message())))?;
+                brosse = Some(couleur);
+            }
+
+            let mut metriques = DWRITE_TEXT_METRICS::default();
+            unsafe { layout.GetMetrics(&mut metriques) }
+                .map_err(|e| ErreurTexte::Systeme(format!("métriques chat : {}", e.message())))?;
+            let hauteur = metriques.height.ceil() + g.marge_haut + g.marge_bas;
+            total += hauteur;
+            messages.push(MessageRendu {
+                layout,
+                hauteur,
+                pair: index % 2 == 0,
+                _brosse: brosse,
+            });
+        }
+        total += g.gap * messages.len().saturating_sub(1) as f32;
+        self.blocs.insert(
+            cle,
+            BlocChat {
+                version: file.version(),
+                _format: format,
+                messages,
+                total,
+            },
+        );
+        Ok(())
+    }
+
+    /// `IDWriteTextFormat` du chat : police système, interligne natif.
+    fn format_chat(&self, police: f32) -> Result<IDWriteTextFormat, ErreurTexte> {
+        let nom: Vec<u16> = "Segoe UI".encode_utf16().chain(std::iter::once(0)).collect();
+        let locale: Vec<u16> = "fr-fr".encode_utf16().chain(std::iter::once(0)).collect();
+        unsafe {
+            self.dwrite.CreateTextFormat(
+                PCWSTR(nom.as_ptr()),
+                None,
+                DWRITE_FONT_WEIGHT_NORMAL,
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                police.max(1.0),
+                PCWSTR(locale.as_ptr()),
+            )
+        }
+        .map_err(|e| ErreurTexte::Systeme(format!("CreateTextFormat chat : {}", e.message())))
     }
 
     /// Rend un titre dans une texture BGRA transparente (une seule fois).
@@ -643,6 +1006,82 @@ impl DessinateurTexte {
     }
 }
 
+/// Métriques de mise en page d'un widget chat (px canvas).
+///
+/// Miroir des règles CSS de `diffusion.html` :
+/// - `compact` : `padding: 4px`, `padding-top: 5%` (pourcentage de la
+///   **largeur** en CSS), pas d'interligne, message `4px 6px 4px 10px` ;
+/// - `bulles` : `padding: 1.4em`, `gap: 0.6em`, message en `1.3em` avec
+///   `padding: 6px 10px 6px 12px`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ChatGeometrie {
+    pub police: f32,
+    pub pad_x: f32,
+    pub pad_haut: f32,
+    pub pad_bas: f32,
+    pub gap: f32,
+    pub largeur_texte: f32,
+    pub marge_gauche: f32,
+    pub marge_droite: f32,
+    pub marge_haut: f32,
+    pub marge_bas: f32,
+}
+
+/// Calcule les métriques d'un widget chat (pure, testable sans GPU).
+pub fn geometrie_chat(cfg: &ChatCfg) -> ChatGeometrie {
+    let (_, _, largeur, _) = cfg.rect;
+    let w = largeur as f32;
+    let (police, pad_x, pad_haut, pad_bas, gap, mg, md, mh, mb) = if cfg.bulles {
+        let pad = 1.4 * cfg.taille_police;
+        (
+            1.3 * cfg.taille_police,
+            pad,
+            pad,
+            pad,
+            0.6 * cfg.taille_police,
+            12.0,
+            10.0,
+            6.0,
+            6.0,
+        )
+    } else {
+        (
+            cfg.taille_police,
+            4.0,
+            0.05 * w,
+            4.0,
+            0.0,
+            10.0,
+            6.0,
+            4.0,
+            4.0,
+        )
+    };
+    ChatGeometrie {
+        police,
+        pad_x,
+        pad_haut,
+        pad_bas,
+        gap,
+        largeur_texte: (w - 2.0 * pad_x - mg - md).max(1.0),
+        marge_gauche: mg,
+        marge_droite: md,
+        marge_haut: mh,
+        marge_bas: mb,
+    }
+}
+
+/// Clé de cache d'un bloc de chat : tout ce qui change la **mise en page**
+/// (la version du buffer est comparée séparément, pour borner la table).
+fn cle_bloc(cfg: &ChatCfg, g: &ChatGeometrie) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    cfg.filtre.hash(&mut h);
+    cfg.bulles.hash(&mut h);
+    g.police.to_bits().hash(&mut h);
+    g.largeur_texte.to_bits().hash(&mut h);
+    h.finish()
+}
+
 /// Décode les 20 `.woff2` embarqués et construit la collection DirectWrite.
 fn charger_polices(
     dwrite: &IDWriteFactory5,
@@ -808,5 +1247,48 @@ mod tests {
             let d = (dx * dx + dy * dy).sqrt();
             assert!((d - 2.0).abs() < 0.01, "rayon {d}");
         }
+    }
+
+    fn chat(bulles: bool) -> ChatCfg {
+        let mut cfg = ChatCfg::depuis_widget((0.0, 0.0, 692.0, 88.0), 14);
+        cfg.taille_police = 11.0;
+        cfg.bulles = bulles;
+        cfg
+    }
+
+    #[test]
+    fn chat_compact_reprend_le_padding_css() {
+        let g = geometrie_chat(&chat(false));
+        assert_eq!(g.police, 11.0);
+        assert_eq!(g.pad_x, 4.0);
+        // `padding-top: 5%` en CSS = 5 % de la LARGEUR du bloc.
+        assert!((g.pad_haut - 34.6).abs() < 1e-3);
+        assert_eq!(g.gap, 0.0);
+        // 692 − 2×4 − 10 (gauche) − 6 (droite)
+        assert!((g.largeur_texte - 668.0).abs() < 1e-3);
+    }
+
+    #[test]
+    fn chat_bulles_grandit_police_padding_et_interligne() {
+        let g = geometrie_chat(&chat(true));
+        assert!((g.police - 14.3).abs() < 1e-4, "1.3em");
+        assert!((g.pad_x - 15.4).abs() < 1e-4, "1.4em");
+        assert!((g.pad_haut - 15.4).abs() < 1e-4);
+        assert!((g.gap - 6.6).abs() < 1e-4, "0.6em");
+        // 692 − 2×15,4 − 12 − 10
+        assert!((g.largeur_texte - 639.2).abs() < 1e-3);
+    }
+
+    #[test]
+    fn cle_de_bloc_ne_depend_que_de_la_mise_en_page() {
+        // La version du buffer est comparée à part : deux appels identiques
+        // doivent produire la même clé, sinon la table grossirait à chaque
+        // message.
+        let cfg = chat(false);
+        let g = geometrie_chat(&cfg);
+        assert_eq!(cle_bloc(&cfg, &g), cle_bloc(&cfg, &g));
+        let mut autre = chat(true);
+        autre.filtre = "kick".to_string();
+        assert_ne!(cle_bloc(&autre, &geometrie_chat(&autre)), cle_bloc(&cfg, &g));
     }
 }

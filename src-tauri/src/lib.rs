@@ -4174,6 +4174,9 @@ pub fn run() {
                 .and_then(|m| moteur::mode::Mode::depuis_nom(&m))
                 .unwrap_or(moteur::mode::Mode::Obs);
             app.manage(moteur::RegistreMoteur::nouveau(mode_moteur));
+            // Pont chat → moteur natif : le crate ne connaît pas tokio, l'app
+            // écoute `chat_tx` et pousse dans le buffer borné du moteur.
+            moteur::demarrer_ecoute_chat(app.handle().clone());
 
             // État Équaliseur — sync initiale au boot : si la scène chargée a
             // le module déjà actif (persisté), la capture démarre dès
@@ -4524,6 +4527,7 @@ pub fn run() {
             moteur::moteur_sortie_demarrer,
             moteur::moteur_sortie_arreter,
             moteur::moteur_sortie_etat,
+            moteur::moteur_chat_message,
             get_scene,
             update_scene,
             import_media,

@@ -20,6 +20,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::RECT;
+use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap1, ID2D1PathGeometry};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
 use sos_moteur_api::{
@@ -27,8 +28,10 @@ use sos_moteur_api::{
     SortieCfg, SortieKind,
 };
 
+use crate::cadres::CadreCfg;
 use crate::capture::enumeration::enumerer_moniteurs;
 use crate::capture::wgc::CaptureWgc;
+use crate::chat::{ChatCfg, FileChat, MessageChat};
 use crate::clock::Horloge;
 use crate::color_gpu::ConvertisseurNv12;
 use crate::compositor::{Calque, Compositeur};
@@ -60,6 +63,9 @@ pub struct SourceCfg {
     pub rect: (f64, f64, f64, f64),
     /// Ordre de composition (croissant = dessous).
     pub z: i32,
+    /// Cadre du widget porteur : `Some` = la capture est **découpée au
+    /// polygone** du cadre (même contrat que les médias).
+    pub cadre: Option<CadreCfg>,
 }
 
 impl SourceCfg {
@@ -102,6 +108,11 @@ pub struct MoteurNatif {
     sources: Mutex<Vec<SourceCfg>>,
     medias: Mutex<Vec<MediaCfg>>,
     textes: Mutex<Vec<TexteCfg>>,
+    cadres: Mutex<Vec<CadreCfg>>,
+    chats: Mutex<Vec<ChatCfg>>,
+    /// Buffer de chat **vivant** : l'app y pousse pendant l'enregistrement,
+    /// le rendu le relit à chaque frame sans reconfigurer la scène.
+    chat: Arc<Mutex<FileChat>>,
     etat: Arc<Mutex<EtatInterne>>,
     compteurs: Arc<CompteursMoteur>,
     arret: Mutex<Option<Arc<AtomicBool>>>,
@@ -122,6 +133,9 @@ impl MoteurNatif {
             sources: Mutex::new(Vec::new()),
             medias: Mutex::new(Vec::new()),
             textes: Mutex::new(Vec::new()),
+            cadres: Mutex::new(Vec::new()),
+            chats: Mutex::new(Vec::new()),
+            chat: Arc::new(Mutex::new(FileChat::nouveau())),
             etat: Arc::new(Mutex::new(EtatInterne::Inactif)),
             compteurs: Arc::new(CompteursMoteur::nouveau()),
             arret: Mutex::new(None),
@@ -177,6 +191,60 @@ impl MoteurNatif {
             .clone()
     }
 
+    /// Remplace les cadres (bord du canvas + widgets).
+    pub fn configurer_cadres(&self, cadres: Vec<CadreCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.cadres.lock().unwrap_or_else(|e| e.into_inner()) = cadres;
+        Ok(())
+    }
+
+    /// Cadres configurés (diagnostic / tests).
+    pub fn cadres(&self) -> Vec<CadreCfg> {
+        self.cadres
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Remplace les widgets chat (rect, filtre, taille, style).
+    pub fn configurer_chats(&self, chats: Vec<ChatCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.chats.lock().unwrap_or_else(|e| e.into_inner()) = chats;
+        Ok(())
+    }
+
+    /// Widgets chat configurés (diagnostic / tests).
+    pub fn chats(&self) -> Vec<ChatCfg> {
+        self.chats
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Pousse un message dans le buffer de chat.
+    ///
+    /// **Jamais refusé pendant un enregistrement** : c'est le canal par lequel
+    /// les messages arrivent après le démarrage (aucune reconfiguration de
+    /// scène, donc pas de `DejaActif`). File bornée, non bloquante.
+    pub fn pousser_chat(&self, message: MessageChat) {
+        self.chat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pousser(message);
+    }
+
+    /// Nombre de messages en buffer (diagnostic / tests).
+    pub fn chat_len(&self) -> usize {
+        self.chat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .len()
+    }
+
     /// Remplace sources et médias depuis une scène + la table widget → cible.
     /// `base` = dossier des données (`medias/` y est relatif).
     pub fn configurer_scene(
@@ -191,12 +259,16 @@ impl MoteurNatif {
         let sources = crate::scene_sources::sources_depuis_scene(scene, cibles);
         let medias = crate::scene_sources::medias_depuis_scene(scene, base);
         let textes = crate::scene_sources::textes_depuis_scene(scene);
+        let cadres = crate::scene_sources::cadres_depuis_scene(scene);
+        let chats = crate::scene_sources::chat_depuis_scene(scene);
         for source in &sources {
             source.valider()?;
         }
         *self.sources.lock().unwrap_or_else(|e| e.into_inner()) = sources;
         *self.medias.lock().unwrap_or_else(|e| e.into_inner()) = medias;
         *self.textes.lock().unwrap_or_else(|e| e.into_inner()) = textes;
+        *self.cadres.lock().unwrap_or_else(|e| e.into_inner()) = cadres;
+        *self.chats.lock().unwrap_or_else(|e| e.into_inner()) = chats;
         Ok(())
     }
 
@@ -288,9 +360,11 @@ impl Moteur for MoteurNatif {
             .unwrap_or_else(|e| e.into_inner())
             .clone();
         let textes = self.textes();
-        if sources.is_empty() && medias.is_empty() && textes.is_empty() {
+        let cadres = self.cadres();
+        let chats = self.chats();
+        if sources.is_empty() && medias.is_empty() && textes.is_empty() && chats.is_empty() {
             return Err(ErreurMoteur::Configuration(
-                "aucune source, média ni texte configuré".to_string(),
+                "aucune source, média, texte ni chat configuré".to_string(),
             ));
         }
         for source in &sources {
@@ -305,6 +379,7 @@ impl Moteur for MoteurNatif {
         let compteurs = Arc::clone(&self.compteurs);
         let apercu = Arc::clone(&self.apercu);
         let encodeur_partage = Arc::clone(&self.encodeur);
+        let chat = Arc::clone(&self.chat);
         let fil = std::thread::Builder::new()
             .name("sos-moteur-natif".to_string())
             .spawn(move || {
@@ -314,6 +389,9 @@ impl Moteur for MoteurNatif {
                         sources,
                         medias,
                         textes,
+                        cadres,
+                        chats,
+                        chat,
                     },
                     Arc::clone(&compteurs),
                     apercu,
@@ -366,11 +444,16 @@ impl Moteur for MoteurNatif {
     }
 }
 
-/// Contenu figé d'une session d'enregistrement (captures, médias, textes).
+/// Contenu figé d'une session d'enregistrement (captures, médias, textes,
+/// cadres, chat).
 struct SceneChargee {
     sources: Vec<SourceCfg>,
     medias: Vec<MediaCfg>,
     textes: Vec<TexteCfg>,
+    cadres: Vec<CadreCfg>,
+    chats: Vec<ChatCfg>,
+    /// Buffer vivant : l'app y pousse pendant la session.
+    chat: Arc<Mutex<FileChat>>,
 }
 
 /// Une capture active + sa copie GPU persistante.
@@ -383,6 +466,8 @@ struct CaptureActive {
     taille: (u32, u32),
     rect: (f64, f64, f64, f64),
     z: i32,
+    /// Cadre du widget trou (découpe au polygone).
+    cadre: Option<CadreCfg>,
     prete: bool,
 }
 
@@ -400,6 +485,9 @@ fn boucle(
         sources,
         medias: medias_cfg,
         textes: textes_cfg,
+        cadres,
+        chats,
+        chat,
     } = scene;
     let (cw, ch) = cfg.canvas;
     let fps = cfg.fps;
@@ -438,8 +526,9 @@ fn boucle(
         }
         let desc = DescTexture::new(Format::Bgra8, taille.0, taille.1)
             .map_err(|e| format!("texture « {} » : {e}", source.nom))?;
+        // Échantillonnable : une capture à cadre est découpée par Direct2D.
         let cible = contexte
-            .creer_texture(&desc)
+            .creer_texture_echantillonnable(&desc)
             .map_err(|e| format!("texture « {} » : {e}", source.nom))?;
         captures.push(CaptureActive {
             session,
@@ -447,6 +536,7 @@ fn boucle(
             taille,
             rect: source.rect,
             z: source.z,
+            cadre: source.cadre.clone(),
             prete: false,
         });
     }
@@ -458,37 +548,93 @@ fn boucle(
         medias.push(chargee);
     }
 
-    // Plan de composition : médias et captures triés par z (stable).
-    let mut plan: Vec<(i32, u8, usize)> = Vec::new();
+    // Plan de composition : ordre z, puis contenu → cadre (le cadre d'un
+    // widget passe au-dessus de son contenu, comme `.cadre-overlay` z-index 5).
+    let mut plan: Vec<(i32, GenreCalque, usize)> = Vec::new();
     for (i, media) in medias.iter().enumerate() {
-        plan.push((media.z, 0, i));
+        plan.push((media.z, GenreCalque::Media, i));
     }
     for (i, capture) in captures.iter().enumerate() {
-        plan.push((capture.z, 1, i));
+        plan.push((capture.z, GenreCalque::Capture, i));
     }
-    plan.sort_by_key(|(z, _, _)| *z);
+    for (i, cfg_chat) in chats.iter().enumerate() {
+        plan.push((cfg_chat.z, GenreCalque::Chat, i));
+    }
+    for (i, cadre) in cadres.iter().enumerate() {
+        plan.push((cadre.z, GenreCalque::Cadre, i));
+    }
+    plan.sort_by_key(|(z, genre, _)| (*z, *genre));
 
-    // Voie A du texte (2026-10-28) : quand des titres existent, la
-    // composition se fait dans un canvas **BGRA** (Direct2D y dessine le
-    // texte avec un alpha réel), puis une passe `VideoProcessorBlt` convertit
-    // ce canvas en NV12 pour l'encodeur. Sans texte, le chemin direct
+    // Voie A du rendu (2026-10-28) : quand il y a un texte, un cadre ou un
+    // chat, la composition se fait dans un canvas **BGRA** (Direct2D y dessine
+    // avec un alpha réel), puis une passe `VideoProcessorBlt` convertit ce
+    // canvas en NV12 pour l'encodeur. Sans aucun, le chemin direct
     // NV12 → encodeur reste inchangé (aucune passe ajoutée).
-    let mut voie_texte = if textes_cfg.is_empty() {
+    let mut voie = if textes_cfg.is_empty() && cadres.is_empty() && chats.is_empty() {
         None
     } else {
-        Some(VoieTexte::nouveau(&contexte, cw, ch, fps, textes_cfg).map_err(|e| format!("texte : {e}"))?)
+        Some(
+            VoieRendu::nouveau(&contexte, cw, ch, fps, textes_cfg, cadres, chats)
+                .map_err(|e| format!("rendu : {e}"))?,
+        )
     };
 
-    let mut compositeur = match voie_texte.as_ref() {
+    // Bitmaps Direct2D des couches à cadre + index de leur polygone. Construits
+    // **une fois** : la géométrie et la vue Direct2D ne changent pas.
+    let mut bitmaps_medias: Vec<Option<windows::Win32::Graphics::Direct2D::ID2D1Bitmap1>> =
+        vec![None; medias.len()];
+    let mut bitmaps_captures: Vec<Option<windows::Win32::Graphics::Direct2D::ID2D1Bitmap1>> =
+        vec![None; captures.len()];
+    let mut index_cadre_media: Vec<Option<usize>> = vec![None; medias.len()];
+    let mut index_cadre_capture: Vec<Option<usize>> = vec![None; captures.len()];
+    if let Some(v) = voie.as_mut() {
+        for (i, media) in medias.iter().enumerate() {
+            if let Some(cadre) = &media.cadre {
+                index_cadre_media[i] = v.cadres.iter().position(|c| c == cadre);
+                let Some(_) = index_cadre_media[i] else {
+                    // Pas de polygone : la couche repasse par le video
+                    // processor (rectangle), et l'état le dit.
+                    compteurs.degrader("cadre de média introuvable : couche non découpée");
+                    continue;
+                };
+                bitmaps_medias[i] = Some(
+                    v.bitmap_media(&media.texture)
+                        .map_err(|e| format!("bitmap média : {e}"))?,
+                );
+            }
+        }
+        for (i, capture) in captures.iter().enumerate() {
+            if let Some(cadre) = &capture.cadre {
+                index_cadre_capture[i] = v.cadres.iter().position(|c| c == cadre);
+                let Some(_) = index_cadre_capture[i] else {
+                    compteurs.degrader("cadre de capture introuvable : couche non découpée");
+                    continue;
+                };
+                bitmaps_captures[i] = Some(
+                    v.bitmap_media(&capture.cible)
+                        .map_err(|e| format!("bitmap capture : {e}"))?,
+                );
+            }
+        }
+    }
+
+    // Segments D2D : dès qu'un cadre ou un chat existe, l'ordre z impose une
+    // composition par segments (un blt borné par calque), sinon le premier lot
+    // du compositeur repeindrait le canvas en noir par-dessus Direct2D.
+    let segments = voie
+        .as_ref()
+        .is_some_and(|v| !v.cadres.is_empty() || !v.chats.is_empty());
+
+    let mut compositeur = match voie.as_ref() {
         Some(v) => Compositeur::nouveau_sur(&contexte, &v.canvas, fps)
-            .map_err(|e| format!("compositeur (texte) : {e}"))?,
+            .map_err(|e| format!("compositeur (rendu) : {e}"))?,
         None => Compositeur::nouveau(&contexte, cw, ch, fps)
             .map_err(|e| format!("compositeur : {e}"))?,
     };
 
     // Texture que l'encodeur consomme : NV12 du compositeur (chemin direct)
-    // ou NV12 converti depuis le canvas BGRA (voie texte).
-    let cible_encode = match voie_texte.as_ref() {
+    // ou NV12 converti depuis le canvas BGRA (voie de rendu).
+    let cible_encode = match voie.as_ref() {
         Some(v) => v.nv12.clone(),
         None => compositeur.sortie().clone(),
     };
@@ -641,7 +787,6 @@ fn boucle(
         horloge.attendre();
         let pts_us = debut.elapsed().as_micros() as i64;
 
-        let mut calques: Vec<Calque<'_>> = Vec::with_capacity(plan.len());
         for media in medias.iter_mut() {
             media
                 .avancer(pts_us)
@@ -654,54 +799,110 @@ fn boucle(
                 compteurs.capture();
             }
         }
-        for (_, genre, index) in &plan {
-            if *genre == 0 {
-                let media = &medias[*index];
-                let (source, destination) = crate::media::geometrie(
-                    media.taille,
-                    media.rect,
-                    (cw, ch),
-                    media.fit,
-                );
-                calques.push(Calque {
-                    texture: &media.texture,
-                    source,
-                    destination,
-                });
-            } else {
-                let capture = &captures[*index];
-                if capture.prete {
-                    let (lw, lh) = capture.taille;
-                    calques.push(Calque {
-                        texture: &capture.cible,
-                        source: RECT {
-                            left: 0,
-                            top: 0,
-                            right: lw as i32,
-                            bottom: lh as i32,
-                        },
-                        destination: destination(capture.rect, cw, ch),
-                    });
+
+        if !segments {
+            let mut calques: Vec<Calque<'_>> = Vec::with_capacity(plan.len());
+            for (_, genre, index) in &plan {
+                if let Some(c) = calque_de(*genre, *index, &medias, &captures, cw, ch) {
+                    calques.push(c);
                 }
             }
-        }
-        // Sans calque, le canvas texte (créé à zéro par le pilote) reste noir :
-        // une scène « titre seul » doit quand même s'enregistrer.
-        if calques.is_empty() && voie_texte.is_none() {
-            compteurs.perdue();
-            continue;
-        }
-
-        if !calques.is_empty() {
-            if let Err(e) = compositeur.composer(&calques) {
-                return Err(format!("composition : {e}"));
+            // Sans calque, le canvas (créé à zéro par le pilote) reste noir :
+            // une scène « titre seul » doit quand même s'enregistrer.
+            if calques.is_empty() && voie.is_none() {
+                compteurs.perdue();
+                continue;
             }
-            compteurs.composite();
-        }
-
-        // Texte par-dessus les calques, puis conversion BGRA → NV12.
-        if let Some(v) = voie_texte.as_mut() {
-            v.dessiner().map_err(|e| format!("texte : {e}"))?;
+            if !calques.is_empty() {
+                compositeur
+                    .composer(&calques)
+                    .map_err(|e| format!("composition : {e}"))?;
+                compteurs.composite();
+            }
+            if let Some(v) = voie.as_mut() {
+                v.rendre_textes().map_err(|e| format!("rendu : {e}"))?;
+            }
+        } else {
+            let v = voie.as_mut().ok_or("voie de rendu absente")?;
+            v.debut();
+            v.effacer();
+            let mut calques: Vec<Calque<'_>> = Vec::with_capacity(plan.len());
+            let mut compose = false;
+            for (_, genre, index) in &plan {
+                match genre {
+                    GenreCalque::Media => {
+                        let media = &medias[*index];
+                        match (media.cadre.as_ref(), bitmaps_medias[*index].as_ref()) {
+                            (Some(_), Some(bitmap)) => {
+                                flush_run(&mut calques, &mut compositeur, v, &mut compose)?;
+                                let (source, dest) = crate::media::geometrie(
+                                    media.taille,
+                                    media.rect,
+                                    (cw, ch),
+                                    media.fit,
+                                );
+                                let ci = index_cadre_media[*index]
+                                    .ok_or_else(|| format!("cadre du média {index} introuvable"))?;
+                                v.dessiner_media(bitmap, source, dest, ci)
+                                    .map_err(|e| format!("média : {e}"))?;
+                            }
+                            _ => {
+                                if let Some(c) =
+                                    calque_de(*genre, *index, &medias, &captures, cw, ch)
+                                {
+                                    calques.push(c);
+                                }
+                            }
+                        }
+                    }
+                    GenreCalque::Capture => {
+                        let capture = &captures[*index];
+                        match (capture.cadre.as_ref(), bitmaps_captures[*index].as_ref()) {
+                            (Some(_), Some(bitmap)) if capture.prete => {
+                                flush_run(&mut calques, &mut compositeur, v, &mut compose)?;
+                                let (lw, lh) = capture.taille;
+                                let source = RECT {
+                                    left: 0,
+                                    top: 0,
+                                    right: lw as i32,
+                                    bottom: lh as i32,
+                                };
+                                let ci = index_cadre_capture[*index].ok_or_else(|| {
+                                    format!("cadre de la capture {index} introuvable")
+                                })?;
+                                v.dessiner_media(bitmap, source, destination(capture.rect, cw, ch), ci)
+                                    .map_err(|e| format!("capture : {e}"))?;
+                            }
+                            _ => {
+                                if let Some(c) =
+                                    calque_de(*genre, *index, &medias, &captures, cw, ch)
+                                {
+                                    calques.push(c);
+                                }
+                            }
+                        }
+                    }
+                    GenreCalque::Chat => {
+                        flush_run(&mut calques, &mut compositeur, v, &mut compose)?;
+                        let file = chat.lock().unwrap_or_else(|e| e.into_inner());
+                        v.dessiner_chat(*index, &file)
+                            .map_err(|e| format!("chat : {e}"))?;
+                    }
+                    GenreCalque::Cadre => {
+                        flush_run(&mut calques, &mut compositeur, v, &mut compose)?;
+                        v.dessiner_cadre(*index)
+                            .map_err(|e| format!("cadre : {e}"))?;
+                    }
+                }
+            }
+            flush_run(&mut calques, &mut compositeur, v, &mut compose)?;
+            v.dessiner_textes_passe()
+                .map_err(|e| format!("texte : {e}"))?;
+            v.fin().map_err(|e| format!("rendu : {e}"))?;
+            v.convertir().map_err(|e| format!("rendu : {e}"))?;
+            if compose {
+                compteurs.composite();
+            }
         }
 
         let mut resultat = encoder_actif(
@@ -856,54 +1057,204 @@ enum EncodeurActif {
     Mft(EncodeurMft),
 }
 
-/// Voie A du texte : canvas BGRA, textes Direct2D, conversion NV12.
+/// Voie de rendu : canvas BGRA, Direct2D (textes, cadres, médias découpés,
+/// chat), puis conversion NV12.
 ///
 /// Le canvas BGRA est la cible du compositeur ; la texture `nv12` est celle
 /// que l'encodeur a enregistrée **une fois** — la conversion réécrit la même
 /// surface à chaque frame (même contrat que le chemin zéro-copie).
-struct VoieTexte {
+struct VoieRendu {
     canvas: ID3D11Texture2D,
     nv12: ID3D11Texture2D,
     convertisseur: ConvertisseurNv12,
     dessinateur: DessinateurTexte,
     textes: Vec<TexteCfg>,
+    cadres: Vec<CadreCfg>,
+    chats: Vec<ChatCfg>,
+    /// Polygone de chaque cadre, **coordonnées canvas** — un seul polygone
+    /// pour le trait et la découpe des médias.
+    geometries: Vec<ID2D1PathGeometry>,
 }
 
-impl VoieTexte {
+impl VoieRendu {
     fn nouveau(
         contexte: &ContexteGpu,
         largeur: u32,
         hauteur: u32,
         fps: u32,
         textes: Vec<TexteCfg>,
+        cadres: Vec<CadreCfg>,
+        chats: Vec<ChatCfg>,
     ) -> Result<Self, String> {
         let desc = DescTexture::new(Format::Bgra8, largeur, hauteur)
-            .map_err(|e| format!("canvas texte : {e}"))?;
+            .map_err(|e| format!("canvas : {e}"))?;
         let canvas = contexte
             .creer_texture(&desc)
-            .map_err(|e| format!("canvas texte : {e}"))?;
+            .map_err(|e| format!("canvas : {e}"))?;
         let convertisseur = ConvertisseurNv12::nouveau(contexte, largeur, hauteur, fps)
             .map_err(|e| e.to_string())?;
         let nv12 = convertisseur.creer_cible().map_err(|e| e.to_string())?;
         let dessinateur = DessinateurTexte::nouveau(contexte, &canvas).map_err(|e| e.to_string())?;
+        let mut geometries = Vec::with_capacity(cadres.len());
+        for cadre in &cadres {
+            geometries.push(
+                dessinateur
+                    .geometrie_cadre(cadre)
+                    .map_err(|e| e.to_string())?,
+            );
+        }
         Ok(Self {
             canvas,
             nv12,
             convertisseur,
             dessinateur,
             textes,
+            cadres,
+            chats,
+            geometries,
         })
     }
 
-    /// Dessine les titres puis convertit le canvas en NV12.
-    fn dessiner(&mut self) -> Result<(), String> {
+    fn debut(&mut self) {
+        self.dessinateur.debut();
+    }
+
+    fn fin(&mut self) -> Result<(), String> {
+        self.dessinateur.fin().map_err(|e| e.to_string())
+    }
+
+    /// Efface le canvas en noir (le premier lot du compositeur ne le fait
+    /// plus en composition segmentée).
+    fn effacer(&mut self) {
+        self.dessinateur.effacer([0, 0, 0, 255]);
+    }
+
+    fn dessiner_textes_passe(&mut self) -> Result<(), String> {
         self.dessinateur
-            .dessiner(&self.textes)
-            .map_err(|e| e.to_string())?;
+            .dessiner_textes(&self.textes)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Chemin sans segments : textes, puis conversion NV12.
+    fn rendre_textes(&mut self) -> Result<(), String> {
+        self.debut();
+        self.dessiner_textes_passe()?;
+        self.fin()?;
+        self.convertir()
+    }
+
+    fn dessiner_chat(&mut self, index: usize, file: &FileChat) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_chat(std::slice::from_ref(&self.chats[index]), file)
+            .map_err(|e| e.to_string())
+    }
+
+    fn dessiner_cadre(&mut self, index: usize) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_cadre(&self.cadres[index], &self.geometries[index])
+            .map_err(|e| e.to_string())
+    }
+
+    fn dessiner_media(
+        &mut self,
+        bitmap: &ID2D1Bitmap1,
+        source: RECT,
+        destination: RECT,
+        cadre: usize,
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_media(bitmap, destination, source, &self.geometries[cadre])
+            .map_err(|e| e.to_string())
+    }
+
+    fn bitmap_media(&mut self, texture: &ID3D11Texture2D) -> Result<ID2D1Bitmap1, String> {
+        self.dessinateur
+            .bitmap_media(texture)
+            .map_err(|e| e.to_string())
+    }
+
+    fn convertir(&mut self) -> Result<(), String> {
         self.convertisseur
             .convertir_vers(&self.canvas, &self.nv12)
             .map_err(|e| e.to_string())
     }
+}
+
+/// Nature d'une entrée du plan de composition.
+///
+/// L'ordre de déclaration **est** l'ordre à `z` égal : le contenu passe avant
+/// son cadre (miroir de `.cadre-overlay`, `z-index: 5`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum GenreCalque {
+    Media,
+    Capture,
+    Chat,
+    Cadre,
+}
+
+/// Calque video processor d'une entrée du plan, si elle en produit un.
+fn calque_de<'a>(
+    genre: GenreCalque,
+    index: usize,
+    medias: &'a [crate::media::MediaChargee],
+    captures: &'a [CaptureActive],
+    cw: u32,
+    ch: u32,
+) -> Option<Calque<'a>> {
+    match genre {
+        GenreCalque::Media => {
+            let media = &medias[index];
+            let (source, destination) =
+                crate::media::geometrie(media.taille, media.rect, (cw, ch), media.fit);
+            Some(Calque {
+                texture: &media.texture,
+                source,
+                destination,
+            })
+        }
+        GenreCalque::Capture => {
+            let capture = &captures[index];
+            if !capture.prete {
+                return None;
+            }
+            let (lw, lh) = capture.taille;
+            Some(Calque {
+                texture: &capture.cible,
+                source: RECT {
+                    left: 0,
+                    top: 0,
+                    right: lw as i32,
+                    bottom: lh as i32,
+                },
+                destination: destination(capture.rect, cw, ch),
+            })
+        }
+        GenreCalque::Chat | GenreCalque::Cadre => None,
+    }
+}
+
+/// Vide le lot accumulé en une composition **bornée par calque**, puis
+/// rouvre la passe Direct2D.
+///
+/// Chaque calque n'écrit que sa destination : les dessins Direct2D déjà
+/// présents (cadres, médias découpés) ne sont jamais recouverts de noir.
+fn flush_run(
+    calques: &mut Vec<Calque<'_>>,
+    compositeur: &mut Compositeur,
+    voie: &mut VoieRendu,
+    compose: &mut bool,
+) -> Result<(), String> {
+    if calques.is_empty() {
+        return Ok(());
+    }
+    voie.fin()?;
+    compositeur
+        .composer_borne(calques)
+        .map_err(|e| format!("composition : {e}"))?;
+    *compose = true;
+    calques.clear();
+    voie.debut();
+    Ok(())
 }
 
 /// Ouvre le prochain MFT disponible, en avançant `index` (repli monotone).
@@ -1036,6 +1387,7 @@ mod tests {
             cible: CibleCapture::Moniteur { index: 0 },
             rect: (0.0, 0.0, 1920.0, 1080.0),
             z: 0,
+            cadre: None,
         }
     }
 
@@ -1131,5 +1483,47 @@ mod tests {
         let c = MoteurNatif::nouveau().capacites();
         assert!(c.capture_ecran && c.capture_fenetre);
         assert!(!c.camera && !c.fond_vert && !c.srt);
+    }
+
+    #[test]
+    fn configurer_scene_remplit_cadres_et_chats() {
+        let scene: sos_scene::Scene = serde_json::from_str(
+            r##"{
+                "canvasW": 1360, "canvasH": 768,
+                "cadreWidget": {"style":"mgstyle","strokeWidth":20,"couleur":"#000000",
+                                "couleurFin":"#8c00ff","actif":true,"bordActif":true},
+                "widgets": [
+                    {"id":"c","type":"chat","x":334,"y":669,"largeur":692,"hauteur":88,"z":14,
+                     "chatFiltre":"unifie","taillePolice":11,"chatStyle":"bulles"}
+                ]
+            }"##,
+        )
+        .expect("scène");
+        let moteur = MoteurNatif::nouveau();
+        moteur
+            .configurer_scene(&scene, &std::collections::HashMap::new(), std::path::Path::new("."))
+            .expect("scène acceptée");
+        // Bord du canvas seul : le chat en bulles n'a pas de cadre de widget.
+        assert_eq!(moteur.cadres().len(), 1);
+        assert_eq!(moteur.cadres()[0].z, i32::MAX);
+        assert_eq!(moteur.chats().len(), 1);
+        assert!(moteur.chats()[0].bulles);
+    }
+
+    #[test]
+    fn chat_pousse_meme_pendant_un_enregistrement_et_reste_borne() {
+        use crate::chat::{MessageChat, MAX_CHAT};
+        let moteur = MoteurNatif::nouveau();
+        *moteur.etat.lock().unwrap() = EtatInterne::Actif;
+        for i in 0..MAX_CHAT + 5 {
+            moteur.pousser_chat(MessageChat::nouveau(
+                "twitch",
+                "viewer",
+                format!("m{i}"),
+                None,
+            ));
+        }
+        // Aucun `DejaActif` : le chat est le canal des messages en direct.
+        assert_eq!(moteur.chat_len(), MAX_CHAT);
     }
 }

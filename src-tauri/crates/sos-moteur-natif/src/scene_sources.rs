@@ -12,8 +12,10 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use sos_scene::{CaptureCible, Scene};
+use sos_scene::{CadreConfig, CaptureCible, Scene, Widget};
 
+use crate::cadres::{couleur_hex, CadreCfg, StyleCadre};
+use crate::chat::{ChatCfg, FILTRE_UNIFIE};
 use crate::media::{Fit, MediaCfg};
 use crate::moteur::{CibleCapture, SourceCfg};
 use crate::texte::{CibleTitre, PositionTitre, StyleTexte, TexteCfg, POLICE_DEFAUT};
@@ -57,6 +59,7 @@ pub fn sources_depuis_scene(
                 cible,
                 rect: (w.x, w.y, w.largeur, w.hauteur),
                 z: w.z,
+                cadre: cadre_de_widget(scene, w),
             })
         })
         .collect()
@@ -88,6 +91,8 @@ pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
                 rect: (0.0, 0.0, scene.canvasW as f64, scene.canvasH as f64),
                 z: i32::MIN,
                 fit: Fit::depuis_nom(&scene.bgFit),
+                // Le fond n'est pas un widget : jamais de cadre.
+                cadre: None,
             });
         }
     }
@@ -101,6 +106,7 @@ pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
                 rect: (w.x, w.y, w.largeur, w.hauteur),
                 z: w.z,
                 fit: Fit::depuis_nom(&w.mediaFit),
+                cadre: cadre_de_widget(scene, w),
             });
         }
     }
@@ -121,35 +127,6 @@ fn degrade_defaut(scene: &Scene) -> ([u8; 4], [u8; 4]) {
     }
 }
 
-/// `#rgb`, `#rrggbb` ou `#rrggbbaa` → RGBA. `None` si la chaîne est invalide.
-fn couleur_hex(hex: &str) -> Option<[u8; 4]> {
-    let h = hex.trim().strip_prefix('#')?;
-    let octet = |s: &str| u8::from_str_radix(s, 16).ok();
-    match h.len() {
-        3 => {
-            let mut c = [255u8; 4];
-            for (i, ch) in h.chars().enumerate() {
-                let v = octet(&ch.to_string().repeat(2))?;
-                c[i] = v;
-            }
-            Some(c)
-        }
-        6 => Some([
-            octet(&h[0..2])?,
-            octet(&h[2..4])?,
-            octet(&h[4..6])?,
-            255,
-        ]),
-        8 => Some([
-            octet(&h[0..2])?,
-            octet(&h[2..4])?,
-            octet(&h[4..6])?,
-            octet(&h[6..8])?,
-        ]),
-        _ => None,
-    }
-}
-
 /// Couleur de début/fin d'un titre : explicite, sinon dégradé du cadre.
 fn couleurs_titre(
     debut: Option<&str>,
@@ -160,6 +137,102 @@ fn couleurs_titre(
         Some(c) => (c, fin.and_then(couleur_hex).unwrap_or(c)),
         None => defaut,
     }
+}
+
+/// Cadre de scène **actif** (même prédicat que `applyCadreWidget`).
+fn cadre_actif(scene: &Scene) -> Option<&CadreConfig> {
+    scene
+        .cadreWidget
+        .as_ref()
+        .filter(|c| c.actif && c.strokeWidth > 0.0)
+}
+
+/// Couleur de cadre validée comme `genererSVG` : `#rrggbb` exact, sinon repli.
+fn couleur_cadre(hex: &str, defaut: [u8; 4]) -> [u8; 4] {
+    if hex.len() == 7 && hex.starts_with('#') {
+        couleur_hex(hex).unwrap_or(defaut)
+    } else {
+        defaut
+    }
+}
+
+/// Traduit une `CadreConfig` en cadre natif ; `None` = style non porté.
+fn cadre_cfg(cadre: &CadreConfig, rect: (f64, f64, f64, f64), z: i32) -> Option<CadreCfg> {
+    let style = StyleCadre::depuis_nom(&cadre.style)?;
+    let couleur = couleur_cadre(&cadre.couleur, [255, 255, 255, 255]);
+    let couleur_fin = couleur_cadre(&cadre.couleurFin, couleur);
+    Some(CadreCfg {
+        rect,
+        style,
+        stroke_width: cadre.strokeWidth,
+        couleur,
+        couleur_fin,
+        gradient_angle: cadre.gradientAngle,
+        z,
+    })
+}
+
+/// Cadre qui s'applique à CE widget, ou `None`.
+///
+/// Miroir de `applyCadreWidget` + les exceptions du dépôt :
+/// - `sansCadre` (opt-out par instance — 8 widgets sur la scène de référence) ;
+/// - caméra (forme dédiée `cameraForme`, contrat 9 — et hors périmètre ici) ;
+/// - chat `bulles` : `diffusion.html` masque le cadre du widget et décore
+///   chaque bulle (hors tranche) → aucun cadre de widget.
+pub fn cadre_de_widget(scene: &Scene, w: &Widget) -> Option<CadreCfg> {
+    let cadre = cadre_actif(scene)?;
+    if w.sansCadre || w.widget_type == "camera" {
+        return None;
+    }
+    if w.widget_type == "chat" && w.chatStyle.as_deref() == Some("bulles") {
+        return None;
+    }
+    if w.largeur <= 0.0 || w.hauteur <= 0.0 {
+        return None;
+    }
+    cadre_cfg(cadre, (w.x, w.y, w.largeur, w.hauteur), w.z)
+}
+
+/// Cadres de la scène : bord du canvas (si `bordActif`) puis un par widget.
+///
+/// Le bord porte `z = i32::MAX` : il est dessiné **après** tous les calques,
+/// comme `#cadre-app-overlay` (`z-index: 100`). Un style non porté ne produit
+/// aucun cadre (jamais un tracé faux) — le moteur le signale au démarrage.
+pub fn cadres_depuis_scene(scene: &Scene) -> Vec<CadreCfg> {
+    let Some(cadre) = cadre_actif(scene) else {
+        return Vec::new();
+    };
+    let mut cadres = Vec::new();
+    if cadre.bordActif {
+        let rect = (0.0, 0.0, scene.canvasW as f64, scene.canvasH as f64);
+        if let Some(bord) = cadre_cfg(cadre, rect, i32::MAX) {
+            cadres.push(bord);
+        }
+    }
+    cadres.extend(scene.widgets.iter().filter_map(|w| cadre_de_widget(scene, w)));
+    cadres
+}
+
+/// Widgets chat de la scène (rect + filtre + taille + style + z).
+///
+/// Aucun message ici : le buffer vit dans `FileChat`, alimenté par l'app
+/// pendant l'enregistrement (le rendu se met à jour sans reconfigurer).
+pub fn chat_depuis_scene(scene: &Scene) -> Vec<ChatCfg> {
+    scene
+        .widgets
+        .iter()
+        .filter(|w| w.widget_type == "chat" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .map(|w| ChatCfg {
+            rect: (w.x, w.y, w.largeur, w.hauteur),
+            filtre: w
+                .chatFiltre
+                .clone()
+                .unwrap_or_else(|| FILTRE_UNIFIE.to_string()),
+            taille_police: w.taillePolice.unwrap_or(16) as f32,
+            bulles: w.chatStyle.as_deref() == Some("bulles"),
+            z: w.z,
+        })
+        .collect()
 }
 
 /// Construit les titres de la scène : 4 positions du fond, puis les titres
@@ -460,6 +533,115 @@ mod tests {
         assert_eq!(textes[0].position, PositionTitre::Haut);
         assert_eq!(textes[1].position, PositionTitre::Droite);
         assert!(textes[1].position.verticale());
+    }
+
+    #[test]
+    fn cadres_bord_plus_widgets_avec_exclusions() {
+        let scene = scene(
+            r##"{
+                "canvasW": 1360, "canvasH": 768,
+                "cadreWidget": {"style":"mgstyle","strokeWidth":20,"couleur":"#000000",
+                                "couleurFin":"#8c00ff","gradientAngle":135,
+                                "actif":true,"bordActif":true},
+                "widgets": [
+                    {"id":"a","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":2},
+                    {"id":"b","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":3,"sansCadre":true},
+                    {"id":"c","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":4},
+                    {"id":"d","type":"chat","x":0,"y":0,"largeur":100,"hauteur":100,"z":5,"chatStyle":"bulles"},
+                    {"id":"e","type":"chat","x":0,"y":0,"largeur":100,"hauteur":100,"z":6,"chatStyle":"compact"}
+                ]
+            }"##,
+        );
+        let cadres = cadres_depuis_scene(&scene);
+        assert_eq!(cadres.len(), 3, "bord + a + e");
+        assert_eq!(cadres[0].rect, (0.0, 0.0, 1360.0, 768.0));
+        assert_eq!(cadres[0].z, i32::MAX, "le bord passe au-dessus de tout");
+        assert_eq!(cadres[1].rect, (10.0, 20.0, 300.0, 200.0));
+        assert_eq!(cadres[1].z, 2);
+        assert_eq!(cadres[2].z, 6);
+        assert_eq!(cadres[1].style, StyleCadre::MgStyle);
+        assert_eq!(cadres[1].couleur, [0, 0, 0, 255]);
+        assert_eq!(cadres[1].couleur_fin, [0x8c, 0x00, 0xff, 255]);
+    }
+
+    #[test]
+    fn cadre_inactif_ou_style_non_porte_ne_produit_rien() {
+        let inactif = scene(
+            r##"{"cadreWidget":{"style":"mgstyle","strokeWidth":20,"actif":false},"widgets":[]}"##,
+        );
+        assert!(cadres_depuis_scene(&inactif).is_empty());
+        let epaisseur_nulle = scene(
+            r##"{"cadreWidget":{"style":"mgstyle","strokeWidth":0,"actif":true},"widgets":[]}"##,
+        );
+        assert!(cadres_depuis_scene(&epaisseur_nulle).is_empty());
+        let non_porte = scene(
+            r##"{"cadreWidget":{"style":"cyberpunk","strokeWidth":20,"actif":true},
+                 "widgets":[{"id":"a","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":0}]}"##,
+        );
+        assert!(cadres_depuis_scene(&non_porte).is_empty());
+    }
+
+    #[test]
+    fn bord_desactive_garde_les_cadres_de_widgets() {
+        let scene = scene(
+            r##"{"canvasW":800,"canvasH":600,
+                 "cadreWidget":{"style":"thin-line","strokeWidth":4,"actif":true,"bordActif":false},
+                 "widgets":[{"id":"a","type":"media","x":5,"y":6,"largeur":70,"hauteur":80,"z":1}]}"##,
+        );
+        let cadres = cadres_depuis_scene(&scene);
+        assert_eq!(cadres.len(), 1);
+        assert_eq!(cadres[0].z, 1);
+    }
+
+    #[test]
+    fn media_porte_le_cadre_du_widget() {
+        let scene = scene(
+            r##"{"cadreWidget":{"style":"mgstyle","strokeWidth":20,"couleur":"#000000",
+                                "couleurFin":"#8c00ff","actif":true,"bordActif":true},
+                 "widgets":[
+                    {"id":"a","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":2,
+                     "media":"medias/a.png"},
+                    {"id":"b","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":3,
+                     "media":"medias/b.png","sansCadre":true}
+                 ]}"##,
+        );
+        let medias = medias_depuis_scene(&scene, Path::new("C:/data"));
+        assert!(medias[0].cadre.is_some(), "média à cadre : découpé au polygone");
+        assert_eq!(
+            medias[0].cadre.as_ref().map(|c| c.rect),
+            Some((10.0, 20.0, 300.0, 200.0))
+        );
+        assert!(medias[1].cadre.is_none(), "sansCadre : aucun cadre");
+    }
+
+    #[test]
+    fn chat_depuis_scene_filtre_taille_et_style() {
+        let scene = scene(
+            r##"{"widgets":[
+                {"id":"c","type":"chat","x":334,"y":669,"largeur":692,"hauteur":88,"z":14,
+                 "chatFiltre":"twitch","taillePolice":11,"chatStyle":"bulles"},
+                {"id":"d","type":"chat","x":0,"y":0,"largeur":0,"hauteur":100,"z":15},
+                {"id":"m","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":16}
+            ]}"##,
+        );
+        let chats = chat_depuis_scene(&scene);
+        assert_eq!(chats.len(), 1, "rect nul ignoré, seul le type chat compte");
+        assert_eq!(chats[0].rect, (334.0, 669.0, 692.0, 88.0));
+        assert_eq!(chats[0].filtre, "twitch");
+        assert_eq!(chats[0].taille_police, 11.0);
+        assert!(chats[0].bulles);
+        assert_eq!(chats[0].z, 14);
+    }
+
+    #[test]
+    fn chat_sans_filtre_ni_taille_prend_les_defauts() {
+        let scene = scene(
+            r##"{"widgets":[{"id":"c","type":"chat","x":0,"y":0,"largeur":10,"hauteur":10,"z":0}]}"##,
+        );
+        let chats = chat_depuis_scene(&scene);
+        assert_eq!(chats[0].filtre, "unifie");
+        assert_eq!(chats[0].taille_police, 16.0);
+        assert!(!chats[0].bulles);
     }
 
     #[test]

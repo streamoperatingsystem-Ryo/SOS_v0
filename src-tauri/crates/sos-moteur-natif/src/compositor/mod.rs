@@ -208,15 +208,35 @@ impl Compositeur {
     /// lot en un appel (il peint tout le canvas, fond compris), puis un appel
     /// par calque restant borné à sa destination. Aucune limite de scène.
     pub fn composer(&mut self, calques: &[Calque<'_>]) -> Result<(), ErreurComposition> {
-        if calques.is_empty() {
-            return Err(ErreurComposition::AucunCalque);
-        }
+        verifier_calques(calques)?;
         let lot = (self.max_flux as usize).max(1);
         if calques.len() <= lot {
             return self.composer_en_un_appel(calques);
         }
         self.composer_en_un_appel(&calques[..lot])?;
         for calque in &calques[lot..] {
+            self.composer_un_calque(calque)?;
+        }
+        // La fenêtre de sortie est un état du processeur : la relâcher, sinon
+        // la frame suivante serait rognée.
+        unsafe {
+            self.video_context
+                .VideoProcessorSetOutputTargetRect(&self.processeur, false, None);
+        }
+        Ok(())
+    }
+
+    /// Compose chaque calque dans une passe **bornée à sa destination**.
+    ///
+    /// Aucune passe n'écrit toute la surface : ce qui est déjà présent hors
+    /// des destinations (dessins Direct2D, cadres) est **préservé**. C'est le
+    /// chemin de la voie « cadres » (2026-10-28), où l'ordre z est garanti
+    /// par un appel par calque : le premier lot de [`Compositeur::composer`]
+    /// peindrait tout le canvas en noir et effacerait les couches déjà
+    /// dessinées.
+    pub fn composer_borne(&mut self, calques: &[Calque<'_>]) -> Result<(), ErreurComposition> {
+        verifier_calques(calques)?;
+        for calque in calques {
             self.composer_un_calque(calque)?;
         }
         // La fenêtre de sortie est un état du processeur : la relâcher, sinon
@@ -379,6 +399,14 @@ impl Compositeur {
     }
 }
 
+/// Refuse une composition sans calque (aucun GPU touché).
+fn verifier_calques(calques: &[Calque<'_>]) -> Result<(), ErreurComposition> {
+    if calques.is_empty() {
+        return Err(ErreurComposition::AucunCalque);
+    }
+    Ok(())
+}
+
 /// Fenêtre de sortie d'une passe multi-calques : la destination du calque,
 /// bornée au canvas. `None` si elle est vide (calque hors canvas).
 fn fenetre_destination(destination: RECT, largeur: u32, hauteur: u32) -> Option<RECT> {
@@ -421,5 +449,10 @@ mod tests {
         assert!(fenetre_destination(rect(2000, 0, 2200, 100), 1920, 1080).is_none());
         assert!(fenetre_destination(rect(-50, 0, 0, 100), 1920, 1080).is_none());
         assert!(fenetre_destination(rect(10, 10, 10, 50), 1920, 1080).is_none());
+    }
+
+    #[test]
+    fn composition_sans_calque_refusee() {
+        assert_eq!(verifier_calques(&[]), Err(ErreurComposition::AucunCalque));
     }
 }

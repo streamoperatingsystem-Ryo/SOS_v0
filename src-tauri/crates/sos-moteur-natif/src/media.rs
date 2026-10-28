@@ -10,13 +10,7 @@ use std::path::{Path, PathBuf};
 
 use windows::core::{HSTRING, Interface};
 use windows::Win32::Foundation::{RECT, GENERIC_READ};
-use windows::Win32::Graphics::Direct3D11::{
-    ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_SUBRESOURCE_DATA, D3D11_TEXTURE2D_DESC,
-    D3D11_USAGE_DEFAULT,
-};
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_SAMPLE_DESC,
-};
+use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 use windows::Win32::Graphics::Imaging::{
     IWICImagingFactory, CLSID_WICImagingFactory, GUID_WICPixelFormat32bppBGRA,
     WICBitmapDitherTypeNone, WICBitmapPaletteTypeCustom, WICDecodeMetadataCacheOnLoad,
@@ -31,7 +25,8 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 
-use crate::gpu::ContexteGpu;
+use crate::cadres::CadreCfg;
+use crate::gpu::{ContexteGpu, DescTexture, Format};
 
 /// Erreurs de média. Aucune variante ne doit faire paniquer l'appelant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +76,10 @@ pub struct MediaCfg {
     pub rect: (f64, f64, f64, f64),
     pub z: i32,
     pub fit: Fit,
+    /// Cadre du widget porteur : `Some` = le média est **découpé au polygone**
+    /// du cadre (un seul polygone, miroir de `pointsClipPathCadre`). `None` =
+    /// média sans cadre, composé par le video processor.
+    pub cadre: Option<CadreCfg>,
 }
 
 /// Média décodé, prêt pour le compositeur.
@@ -90,6 +89,8 @@ pub struct MediaChargee {
     pub rect: (f64, f64, f64, f64),
     pub z: i32,
     pub fit: Fit,
+    /// Cadre du widget porteur (voir [`MediaCfg::cadre`]).
+    pub cadre: Option<CadreCfg>,
     video: Option<VideoLecteur>,
 }
 
@@ -290,6 +291,7 @@ fn charger_image(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee,
         rect: cfg.rect,
         z: cfg.z,
         fit: cfg.fit,
+        cadre: cfg.cadre.clone(),
         video: None,
     })
 }
@@ -346,6 +348,7 @@ fn charger_video(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee,
             rect: cfg.rect,
             z: cfg.z,
             fit: cfg.fit,
+            cadre: cfg.cadre.clone(),
             video: Some(VideoLecteur {
                 reader,
                 context: contexte.context().clone(),
@@ -362,25 +365,13 @@ fn creer_texture_video(
     largeur: u32,
     hauteur: u32,
 ) -> Result<ID3D11Texture2D, ErreurMedia> {
-    let desc = D3D11_TEXTURE2D_DESC {
-        Width: largeur,
-        Height: hauteur,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
-    };
-    let mut texture: Option<ID3D11Texture2D> = None;
-    unsafe { contexte.device().CreateTexture2D(&desc, None, Some(&mut texture)) }
-        .map_err(|e| ErreurMedia::Gpu(format!("CreateTexture2D vidéo : {}", e.message())))?;
-    texture.ok_or_else(|| ErreurMedia::Gpu("texture vidéo nulle".into()))
+    // Échantillonnable : une vidéo à cadre est dessinée par Direct2D
+    // (découpe au polygone), pas seulement composée par le video processor.
+    let desc = DescTexture::new(Format::Bgra8, largeur, hauteur)
+        .map_err(|e| ErreurMedia::Gpu(e.to_string()))?;
+    contexte
+        .creer_texture_echantillonnable(&desc)
+        .map_err(|e| ErreurMedia::Gpu(format!("texture vidéo : {e}")))
 }
 
 /// Décode un fichier image en BGRA8 linéaire (ligne par ligne, sans padding).
@@ -442,30 +433,26 @@ fn televerser(
     hauteur: u32,
     pixels: &[u8],
 ) -> Result<ID3D11Texture2D, ErreurMedia> {
-    let desc = D3D11_TEXTURE2D_DESC {
-        Width: largeur,
-        Height: hauteur,
-        MipLevels: 1,
-        ArraySize: 1,
-        Format: DXGI_FORMAT_B8G8R8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC {
-            Count: 1,
-            Quality: 0,
-        },
-        Usage: D3D11_USAGE_DEFAULT,
-        BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
-        CPUAccessFlags: 0,
-        MiscFlags: 0,
+    // Échantillonnable : une image à cadre est dessinée par Direct2D.
+    let desc = DescTexture::new(Format::Bgra8, largeur, hauteur)
+        .map_err(|e| ErreurMedia::Gpu(e.to_string()))?;
+    let texture = contexte
+        .creer_texture_echantillonnable(&desc)
+        .map_err(|e| ErreurMedia::Gpu(format!("texture : {e}")))?;
+    let ressource: windows::Win32::Graphics::Direct3D11::ID3D11Resource = texture
+        .cast()
+        .map_err(|e| ErreurMedia::Gpu(format!("texture → ressource : {}", e.message())))?;
+    unsafe {
+        contexte.context().UpdateSubresource(
+            Some(&ressource),
+            0,
+            None,
+            pixels.as_ptr() as *const c_void,
+            largeur * 4,
+            0,
+        )
     };
-    let donnees = D3D11_SUBRESOURCE_DATA {
-        pSysMem: pixels.as_ptr() as *const c_void,
-        SysMemPitch: largeur * 4,
-        SysMemSlicePitch: 0,
-    };
-    let mut texture: Option<ID3D11Texture2D> = None;
-    unsafe { contexte.device().CreateTexture2D(&desc, Some(&donnees), Some(&mut texture)) }
-        .map_err(|e| ErreurMedia::Gpu(format!("CreateTexture2D : {}", e.message())))?;
-    texture.ok_or_else(|| ErreurMedia::Gpu("texture nulle".into()))
+    Ok(texture)
 }
 
 #[cfg(test)]
@@ -479,6 +466,7 @@ mod tests {
             rect: (0.0, 0.0, 10.0, 10.0),
             z: 0,
             fit: Fit::Etirer,
+            cadre: None,
         };
         // Pas de contexte GPU nécessaire : l'erreur vient du fichier.
         let contexte = match ContexteGpu::creer(None) {

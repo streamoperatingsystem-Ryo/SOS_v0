@@ -13,6 +13,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use sos_moteur_api::{Capacites, Conteneur, Moteur, MoteurEtat, SortieCfg};
+use sos_moteur_natif::chat::MessageChat;
 use sos_moteur_natif::moteur::MoteurNatif;
 use tauri::{AppHandle, Manager, State};
 
@@ -332,6 +333,96 @@ pub fn moteur_obs_connexion(
     registre.obs().configurer_connexion(host, port, password);
 }
 
+/// Message chat tel qu'il circule dans `chat_tx` (`ChatMessage` sérialisé).
+#[derive(serde::Deserialize)]
+struct MessageChatBrut {
+    plateforme: String,
+    pseudo: String,
+    texte: String,
+    #[serde(default)]
+    color: Option<String>,
+}
+
+/// Frame `chat_tx` : `{ "type": "chat", "message": { … } }`.
+#[derive(serde::Deserialize)]
+struct FrameChat {
+    #[serde(rename = "type")]
+    type_frame: String,
+    #[serde(default)]
+    message: Option<MessageChatBrut>,
+}
+
+/// Décode un frame du canal ; `None` si ce n'est pas un message de chat.
+///
+/// Le préfixe est testé avant `serde_json` : `chat_tx` transporte aussi les
+/// spectres de l'égaliseur et les compteurs de viewers (plusieurs dizaines de
+/// frames par seconde) — inutile de les désérialiser.
+fn decoder_frame_chat(frame: &str) -> Option<MessageChat> {
+    if !frame.starts_with("{\"type\":\"chat\"") {
+        return None;
+    }
+    let frame: FrameChat = serde_json::from_str(frame).ok()?;
+    if frame.type_frame != "chat" {
+        return None;
+    }
+    let message = frame.message?;
+    Some(MessageChat::nouveau(
+        message.plateforme,
+        message.pseudo,
+        message.texte,
+        message.color.as_deref(),
+    ))
+}
+
+/// Pousse un message dans le moteur natif (harnais, tests, intégrations).
+///
+/// Le chemin de production est [`demarrer_ecoute_chat`] : cette commande
+/// existe pour injecter un message sans passer par une plateforme.
+#[tauri::command]
+pub fn moteur_chat_message(
+    registre: State<'_, RegistreMoteur>,
+    plateforme: String,
+    pseudo: String,
+    texte: String,
+    couleur: Option<String>,
+) {
+    registre.natif().pousser_chat(MessageChat::nouveau(
+        plateforme,
+        pseudo,
+        texte,
+        couleur.as_deref(),
+    ));
+}
+
+/// Abonne le moteur natif au flux chat de l'app (`chat_tx`).
+///
+/// Le crate du moteur reste **sans tokio** : c'est l'app qui écoute et pousse.
+/// Un seul abonné pour les 4 plateformes, aucun accès réseau supplémentaire.
+pub fn demarrer_ecoute_chat(app: AppHandle) {
+    let Some(state) = app.try_state::<crate::scenes::ScenesState>() else {
+        log::warn!("chat moteur : état des scènes absent, pont non démarré");
+        return;
+    };
+    let mut rx = state.chat_tx.subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(frame) => {
+                    if let Some(message) = decoder_frame_chat(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_chat(message);
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                    log::warn!("chat moteur : {n} frame(s) non traitées");
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +478,23 @@ mod tests {
         registre.arreter_natif();
         assert!(!registre.natif_actif());
         assert!(registre.session().is_none());
+    }
+
+    #[test]
+    fn frame_chat_decode_et_couleur_conservee() {
+        let frame = r##"{"type":"chat","message":{"plateforme":"twitch","pseudo":"Ryo","texte":"salut","color":"#ff0000"}}"##;
+        let message = decoder_frame_chat(frame).expect("message décodé");
+        assert_eq!(message.plateforme, "twitch");
+        assert_eq!(message.pseudo, "Ryo");
+        assert_eq!(message.texte, "salut");
+        assert_eq!(message.couleur, Some([255, 0, 0, 255]));
+    }
+
+    #[test]
+    fn frames_non_chat_ignores() {
+        // Spectre de l'égaliseur : plusieurs dizaines de frames par seconde.
+        assert!(decoder_frame_chat(r#"{"type":"eq-spectrum","data":[1,2,3]}"#).is_none());
+        assert!(decoder_frame_chat("pas du json").is_none());
+        assert!(decoder_frame_chat(r#"{"type":"chat"}"#).is_none());
     }
 }

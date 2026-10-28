@@ -296,8 +296,39 @@ impl ContexteGpu {
         &self,
         desc: &DescTexture,
     ) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, ErreurGpu> {
+        use windows::Win32::Graphics::Direct3D11::D3D11_BIND_RENDER_TARGET;
+
+        self.creer_texture_avec(desc, D3D11_BIND_RENDER_TARGET.0 as u32)
+    }
+
+    /// Texture **échantillonnable** : cible de rendu **et** ressource de
+    /// shader.
+    ///
+    /// Indispensable pour qu'un média (image ou vidéo) puisse être dessiné
+    /// par Direct2D — `CreateBitmapFromDxgiSurface` refuse une surface sans
+    /// `D3D11_BIND_SHADER_RESOURCE` (même piège que les cibles de texte,
+    /// §30.6). Le video processor continue de la consommer comme entrée.
+    pub fn creer_texture_echantillonnable(
+        &self,
+        desc: &DescTexture,
+    ) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, ErreurGpu> {
         use windows::Win32::Graphics::Direct3D11::{
-            ID3D11Texture2D, D3D11_BIND_RENDER_TARGET, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
+            D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE,
+        };
+
+        self.creer_texture_avec(
+            desc,
+            (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+        )
+    }
+
+    fn creer_texture_avec(
+        &self,
+        desc: &DescTexture,
+        bind: u32,
+    ) -> Result<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, ErreurGpu> {
+        use windows::Win32::Graphics::Direct3D11::{
+            ID3D11Texture2D, D3D11_TEXTURE2D_DESC, D3D11_USAGE_DEFAULT,
         };
         use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
 
@@ -312,7 +343,7 @@ impl ContexteGpu {
                 Quality: 0,
             },
             Usage: D3D11_USAGE_DEFAULT,
-            BindFlags: D3D11_BIND_RENDER_TARGET.0 as u32,
+            BindFlags: bind,
             CPUAccessFlags: 0,
             MiscFlags: 0,
         };

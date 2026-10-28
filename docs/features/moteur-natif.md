@@ -1461,3 +1461,193 @@ seek), pas une dérive : l'écart ne grandit pas entre t = 1 et t = 3.
    compteur d'image lisible dans la source et une mesure à deux instants.
 3. Les images (`video: None`) ne sont pas concernées : `avancer` sort
    immédiatement.
+
+---
+
+## 35. P3 — tranche 3 : cadres SVG (2026-10-28)
+
+### 35.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Moteur vectoriel | **Direct2D** (écart assumé au plan §25.1 qui proposait `lyon`) | `lyon` a été décidé **avant** l'existence de la voie texte ; Direct2D + `VoieRendu` savent remplir/dessiner un path avec dégradé, jointures et masque géométrique, **sans dépendance ni shader**. Vérifié : `windows 0.58` expose déjà `CreatePathGeometry`, `ID2D1GeometrySink`, `PushLayer(geometricMask)`, `DrawBitmap(sourceRect)`. |
+| Styles | **2** : `mgstyle` + `thin-line` | D3 du plan ; les 7 autres attendent la refonte du système de cadres. |
+| Découpe du média | **Direct2D sur le canvas BGRA** (option a) | `VideoProcessorBlt` n'a **pas d'alpha par pixel** : une texture pré-découpée ressort en rectangle noir. Un masque PNG (option b) réintroduirait la dérive que le dépôt combat. |
+| Ordre z avec cadres | **Composition par segments** : `Clear` noir, puis un `VideoProcessorBlt` **borné à la destination** de chaque calque, les dessins D2D s'intercalant dans l'ordre z | le premier lot de `Compositeur::composer` peint **tout** le canvas en noir : il effacerait les cadres et les médias découpés déjà dessinés. |
+| Fidélité au parent | **Clip au polygone** (comme `overflow:hidden` + `clip-path`) | mesuré : le parent rogne l'overlay → la moitié externe du trait et **tous** les ornements de marge sont invisibles dans la référence. Les porter aurait produit du code sans effet visible. |
+
+### 35.2 Livré
+
+- `cadres.rs` : `StyleCadre` (2 styles), `CadreCfg`, `points_polygone` (miroir
+  exact de `pointsClipPathCadre`), `path_cercle` / `points_cercle` (caméra,
+  non rendue ici), `stops_liseres`, `angle_vers_coords`, `eclaircir` /
+  `assombrir` / `couleur_hex`, `geometrie`, `dessiner`, `style_trait`.
+- `scene_sources.rs` : `cadre_de_widget` (exclusions `sansCadre` / caméra /
+  chat `bulles`), `cadres_depuis_scene` (bord `z = i32::MAX` + un par widget),
+  `chat_depuis_scene` ; `MediaCfg.cadre` / `SourceCfg.cadre` remplis.
+- `compositor/mod.rs` : `composer_borne` (une passe bornée par calque).
+- `gpu.rs` : `creer_texture_echantillonnable` (`RENDER_TARGET | SHADER_RESOURCE`).
+- `media.rs` : textures média échantillonnables + champ `cadre`.
+- `texte.rs` : `debut` / `fin` / `effacer`, `geometrie_cadre`,
+  `dessiner_cadre`, `bitmap_media`, `dessiner_media`.
+- `moteur.rs` : plan `(z, genre, index)` à 4 genres (media < capture < chat <
+  cadre), voie de rendu `VoieRendu`, `flush_run`.
+- Harnais `examples/cadres_scene.rs`.
+
+### 35.3 Le polygone — un seul, vérifié contre le TS
+
+`points_polygone` reproduit **au bit près** (`1e-9`) ce que produit
+`src/lib/cadres/points.ts` (exécuté via Node 26 pour la référence) :
+
+| Cas | Points | Remarque |
+|---|---|---|
+| `mgstyle` 692,548×88,625 sw20 | 9 | coupe bornée à `H/4` = 22,156 |
+| `mgstyle` 215,008×704,572 sw20 | 9 | coupe bornée à `W/4` = 53,752 |
+| `thin-line` 100×40 sw4 | **54** | le `Z` rejoue le point de départ → doublon final **conservé** |
+| `points_cercle` 129,176×88,552 | 50 | miroir de `pathCercle` |
+
+Deux pièges d'arithmétique JS, traités et testés : `Math.round` arrondit les
+demis vers **+∞** (pas hors de zéro), et `Math.abs(-2147483648)` reste positif
+→ `unsigned_abs()` côté Rust.
+
+### 35.4 Ce qui est réellement visible (et donc dessiné)
+
+| Style | Dessiné | Non porté (invisible dans la référence) |
+|---|---|---|
+| `mgstyle` | 3 traits (`2ep` @18 %, dégradé `ep`, accent `0.25ep` @55 %) + 4 arcs d'angle | triangles de coin, brackets, circuits, nœuds, diode, « ! », ticks |
+| `thin-line` | trait principal `ep` + fermoir (moitié basse) | filet externe, 4 accents L |
+
+### 35.5 Mesures (GTX 1070 Ti, 1360×768@60, NVENC zéro-copie)
+
+`cadres_scene` — 3 widgets (2 à cadre + 1 témoin `sansCadre`), fond noir,
+mire `testsrc2` (YAVG 125) comme média :
+
+| Contrôle | Résultat |
+|---|---|
+| Cadres configurés | **3** (bord + 2 widgets) |
+| Encodage | 169 frames / 2,81 s ≈ **60 fps**, NVENC H.264 zéro-copie |
+| `mgstyle` coin de w1 (coupé) | YAVG **0,49** / YMAX 41 |
+| `mgstyle` centre de w1 | YAVG **235** |
+| `mgstyle` coin de w2 | YAVG **0,01** |
+| `thin-line` coin de w1 | YAVG **0,66** / YMAX 12 |
+| `thin-line` centre | YAVG **235** |
+| Témoin `sansCadre`, même coin | YAVG **54** (média, **pas** coupé) |
+| Bord du canvas (bande 6 px) | YAVG 10,7, **U 153 / V 141** (chroma du violet #8c00ff) |
+
+Le contraste coin/centre est la preuve de la découpe : le coin coupé est noir
+alors que le centre porte la mire, et le témoin garde son coin plein.
+
+Scène de référence `af09059c` (11 calques + 3 cadres de widget + bord + chat) :
+**5 cadres**, 222 composites / 4 s (~55 fps), `ffmpeg -f null -` **exit 0,
+2 flux** (h264 1360×768 + AAC 48 kHz stéréo), chat `YMAX 255`, bord du trou
+`YAVG 2,75` (trait sur le fond).
+
+### 35.6 Limites (assumées)
+
+- **`animer` ignoré** : le cadre est rendu **statique**. `Capacites.cadres_animes`
+  reste `false` — jamais un rendu faux silencieux.
+- **7 styles non portés** : `arrondis`, `carre`, `cyberpunk`, `story`,
+  `hexagon`, `arena`, `tribal` ne produisent **aucun** cadre (le moteur
+  dégrade l'état au démarrage, il ne dessine pas un tracé faux).
+- **Caméra exclue** : `widget_type == "camera"` → aucun cadre (forme dédiée
+  `cameraForme` hors tranche).
+- **Titres dessinés après le bord du canvas** : dans `diffusion.html`,
+  `#cadre-app-overlay` (`z-index: 100`) passe au-dessus des `.bg-titre`. Écart
+  de quelques pixels au bord uniquement.
+- **Une passe par calque** dès qu'un cadre existe : 11 blts/frame sur la
+  scène de référence (l'encodeur reste le facteur limitant, ~56 fps).
+- **Captures à cadre** : le chemin existe (bitmap + polygone) mais n'a été
+  mesuré sur aucune scène réelle (le trou de la référence n'a pas de cible).
+- `thin-line` : le trait suit le **polygone aplati** (contrat « un seul
+  polygone »), alors que le SVG d'origine trace un `rect rx` (arcs) — écart
+  < 0,5 px, assumé.
+
+### 35.7 Pièges vérifiés — ne pas les redécouvrir
+
+1. **`ID2D1Factory1::CreatePathGeometry` rend un `ID2D1PathGeometry1`** (et
+   `CreateStrokeStyle` un `…Style1` avec `…PROPERTIES1`) : cast explicite vers
+   l'interface de base, sinon erreur de type à l'usage.
+2. **`D2D1_LAYER_PARAMETERS1.geometricMask` est en `ManuallyDrop`** : sans
+   `drop` explicite après `PopLayer`, une référence COM fuit **par frame**.
+3. **`PushLayer` / `PopLayer` / `PushAxisAlignedClip` / `FillRectangle` /
+   `DrawGeometry` rendent `()`** sur `ID2D1DeviceContext` / `ID2D1RenderTarget`
+   (pas de `Result`) — ne pas chaîner `map_err`.
+4. **Direct2D ne peut pas échantillonner une texture sans
+   `D3D11_BIND_SHADER_RESOURCE`** (même piège que les cibles de texte, §30.6).
+5. **Ne jamais laisser une passe Direct2D ouverte pendant un
+   `VideoProcessorBlt`** : `fin()` avant le blt, `debut()` après.
+6. **Le premier lot du compositeur peint tout le canvas en noir** : en
+   composition segmentée, c'est `Clear` qui remet le fond à zéro, une seule
+   fois par frame.
+
+---
+
+## 36. P3 — tranche 4 : chat (2026-10-28)
+
+### 36.1 Décisions
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Alimentation | **L'app s'abonne à `chat_tx`** et pousse dans le moteur | le crate reste **sans tokio** ; un seul abonné pour les 4 plateformes ; aucun accès réseau ajouté. |
+| Contrat | `MoteurNatif::pousser_chat` **jamais refusé** pendant une sortie | les messages arrivent après le démarrage : aucune reconfiguration de scène, donc aucun `DejaActif`. |
+| Buffer | **200**, drop-oldest | `MAX_CHAT` de `diffusion.html`. |
+| Contenu | **Texte + émojis Unicode** | les emotes/badges/avatars en images exigent des téléchargements : décision produit séparée (CONTRAT FIGÉ vie privée). |
+| Style | `bulles` = fond uniforme clair ; `compact` = zébrage noir/blanc | miroir du CSS ; **aucun cadre de widget** en `bulles` (comme `diffusion.html`), cadres par bulle hors tranche. |
+
+### 36.2 Livré
+
+- `chat.rs` : `MessageChat`, `FileChat` (buffer borné + `version`), `ChatCfg`,
+  `teinte_pseudo` / `couleur_depuis_nom` (miroirs de `couleurDepuisNom`).
+- `scene_sources::chat_depuis_scene` (rect, filtre, taille, style, z).
+- `texte.rs` : `dessiner_chat` (DirectWrite, wrap, couleur par plage),
+  `geometrie_chat` (métriques CSS), cache de blocs par version.
+- `moteur.rs` : `configurer_chats`, `pousser_chat`, `chat_len`, buffer partagé.
+- App : `moteur::demarrer_ecoute_chat` (abonnement `chat_tx`, filtre
+  `{"type":"chat"}`), commande `moteur_chat_message`.
+- Harnais `examples/chat_scene.rs`.
+
+### 36.3 Mesures
+
+`chat_scene` (widget 692×420, `bulles`, 18 px, 4 messages initiaux + 1/s) :
+
+| Contrôle | Résultat |
+|---|---|
+| Encodage | 351 frames / 5,85 s, NVENC zéro-copie |
+| Zone du widget à t = 0,5 s | YAVG **12,14**, YMAX **255** |
+| Zone du widget à t = 5,5 s | YAVG **22,40**, YMAX **255** |
+| md5 des deux frames | **différents** → les messages reçus **pendant** la sortie s'affichent sans redémarrage |
+| `composites` | **0** (aucun calque vidéo : la frame n'est faite que de Direct2D) |
+
+Scène de référence : zone chat `YMAX 255` sur un widget de 88 px de haut
+(~3 bulles visibles, défilement automatique vers le bas).
+
+### 36.4 Limites (assumées)
+
+- **Emotes / badges / avatars en images non rendus** : seuls le pseudo coloré
+  et le texte (émojis Unicode compris) le sont. Aucun téléchargement.
+- **Pas d'horodatage affiché** (la référence n'en affiche pas) ; l'ordre est
+  chronologique, l'insertion horodatée par la `version` du buffer.
+- **Reconstruction complète du bloc à chaque message** : jusqu'à 200 mises en
+  page DirectWrite par message. Mesuré non bloquant ici ; à rendre incrémental
+  si un chat à forte cadence le demande.
+- **Pas de défilement manuel** (widget de diffusion en lecture seule).
+- **Cadres par bulle non portés** : en `bulles`, le widget n'a **aucun**
+  cadre (miroir d'OBS).
+- Le style `compact` suit le même chemin que `bulles` (zébrage) : les autres
+  `chatStyle` se dégradent en bulles, comme annoncé.
+
+### 36.5 Pièges vérifiés
+
+1. **`SetDrawingEffect` attend un `Param<IUnknown>`** : caster la brosse
+   (`brosse.cast::<IUnknown>()`) — `&ID2D1SolidColorBrush` ne se convertit pas
+   implicitement dans cette signature.
+2. **Le layout DirectWrite ne possède ni le format ni la brosse** : les deux
+   sont conservés dans le bloc (`_format`, `_brosse`), sinon libération pendant
+   le dessin.
+3. **`chat_tx` transporte aussi les spectres de l'égaliseur** (plusieurs
+   dizaines de frames/s) : filtrer sur le préfixe `{"type":"chat"` **avant**
+   `serde_json`, sinon on désérialise tout le trafic de l'overlay.
+4. **`FileChat::is_empty`** (et pas `est_vide`) : `clippy::len_without_is_empty`
+   est une erreur dans ce dépôt (`-D warnings`).
+5. **`r#"…"#` et une couleur `"#ff0000"`** : la séquence `"#` ferme la chaîne
+   brute — utiliser `r##"…"##` dans les tests.
