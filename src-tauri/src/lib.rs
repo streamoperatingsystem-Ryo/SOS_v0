@@ -4516,6 +4516,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             moteur::moteur_etat,
+            moteur::moteur_diag,
             moteur::moteur_basculer,
             get_scene,
             update_scene,

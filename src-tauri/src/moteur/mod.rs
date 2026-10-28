@@ -49,6 +49,32 @@ pub fn moteur_etat(registre: State<'_, RegistreMoteur>) -> EtatMoteur {
     }
 }
 
+/// Diagnostic du moteur — valeurs honnêtes : `None` (`N/A`) tant que le natif
+/// n'est pas branché ; jamais de 0 inventé (plan §10.1).
+#[derive(Serialize, Clone)]
+pub struct DiagMoteur {
+    pub actif: bool,
+    pub mode: String,
+    pub natif_disponible: bool,
+    pub adaptateur: Option<String>,
+    pub encodeur: Option<String>,
+    pub resolution: Option<(u32, u32)>,
+    pub fps: Option<u32>,
+}
+
+#[tauri::command]
+pub fn moteur_diag(registre: State<'_, RegistreMoteur>) -> DiagMoteur {
+    DiagMoteur {
+        actif: false,
+        mode: registre.mode().nom().to_string(),
+        natif_disponible: registre.natif_disponible,
+        adaptateur: None,
+        encodeur: None,
+        resolution: None,
+        fps: None,
+    }
+}
+
 /// Bascule de mode. Refusée proprement si le natif n'est pas branché ou si
 /// une sortie OBS est active (jamais de coupure implicite, plan §11.2).
 #[tauri::command]
