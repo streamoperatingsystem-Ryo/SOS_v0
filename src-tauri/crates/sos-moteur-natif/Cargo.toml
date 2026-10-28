@@ -15,6 +15,11 @@ log = "0.4"
 # Contrats partagés (Sink, PaquetEncode, Conteneur, ErreurMoteur) : le moteur
 # les implémente, il ne les redéfinit pas. Contrat §3.2.
 sos-moteur-api = { path = "../sos-moteur-api" }
+# Contrats de scène (anneau 0) : mapping widget/trou -> source de capture.
+sos-scene = { path = "../sos-scene" }
+
+[dev-dependencies]
+serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
 windows = { version = "0.58", features = [

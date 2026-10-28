@@ -143,6 +143,16 @@ impl MoteurNatif {
             .clone()
     }
 
+    /// Remplace les sources depuis une scène + la table widget → cible.
+    /// Le mapping vit dans `scene_sources` (aucun champ ajouté à `Widget`).
+    pub fn configurer_scene(
+        &self,
+        scene: &sos_scene::Scene,
+        cibles: &std::collections::HashMap<String, CibleCapture>,
+    ) -> Result<(), ErreurMoteur> {
+        self.configurer_sources(crate::scene_sources::sources_depuis_scene(scene, cibles))
+    }
+
     /// Photographie des compteurs (diagnostic, lot 2.9).
     pub fn instantane(&self) -> Instantane {
         self.compteurs.instantane()

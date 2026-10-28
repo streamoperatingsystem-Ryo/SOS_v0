@@ -22,6 +22,7 @@ pub mod gpu;
 pub mod moteur;
 pub mod output;
 pub mod preview;
+pub mod scene_sources;
 
 /// Version du crate (affichée par le diagnostic, utile au support).
 pub fn version() -> &'static str {

@@ -4530,7 +4530,9 @@ name = "sos-moteur-natif"
 version = "0.1.0"
 dependencies = [
  "log",
+ "serde_json",
  "sos-moteur-api",
+ "sos-scene",
  "windows 0.58.0",
 ]
 

@@ -895,7 +895,7 @@ ffmpeg) était à 2,07 % / 183,5 Mo. Détails : `mesures-p0.md`.
 ```bash
 cd src-tauri
 cargo clippy -p sos-moteur-natif --all-targets -- -D warnings   # exit 0
-cargo test -p sos-moteur-natif                                  # 38 tests
+cargo test -p sos-moteur-natif                                  # 40 tests
 cargo clippy -p streamos-v0                                     # exit 0
 cargo test -p streamos-v0 moteur::mode                          # 4 tests
 ```
@@ -961,5 +961,12 @@ Le rendu natif (texte, chat, alertes, cadres, titres, médias) n'existe pas
 encore (phases P3/P4). L'orchestrateur enregistre **des captures**, pas la
 scène StreamOS. Les lots 2.8/2.9 sont techniquement débloqués (moteur réel,
 diagnostic réel) mais un bouton « enregistrer le stream » mentirait tant que
-P3 n'est pas livré. Le mapping widget/trou → cible de capture vit côté
-frontend et doit être poussé au moteur avant tout enregistrement de scène.
+P3 n'est pas livré.
+
+Le pont scène → sources existe côté moteur :
+`scene_sources::sources_depuis_scene(&Scene, &HashMap<widget_id, CibleCapture>)`
+et `MoteurNatif::configurer_scene`. Seuls les widgets `trou` avec une cible
+connue et un rect non nul produisent une source — **aucun champ ajouté à
+`Widget`**, le JSON des scènes reste identique. Reste à faire côté app :
+persister la table widget → cible (aujourd'hui la cible ne vit que dans OBS,
+le dialogue de capture ne la stocke pas) et la pousser au moteur.
