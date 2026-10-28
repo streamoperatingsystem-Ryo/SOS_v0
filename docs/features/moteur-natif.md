@@ -1,11 +1,12 @@
 # Moteur natif — capturer, composer et encoder sans OBS
 
-> **Feature NON IMPLÉMENTÉE** au 2026-10-27 (LOT 0 non commencé). Ce fichier
-> fixe ce qui est **décidé** et ce qui est **interdit** ; le déroulé complet
-> (mesures, matrices matérielles, algorithmes) vit dans
-> `PLAN-MOTEUR-NATIF.md` à la racine.
-> ⚠️ **Aucun chiffre de ce fichier n'est mesuré.** Toute valeur est une
-> **cible** du plan, jamais un résultat observé. Ne pas citer ces nombres
+> **Feature NON IMPLÉMENTÉE dans l'app** au 2026-10-28 — le crate
+> `sos-moteur-natif` existe et est **mesuré** (§27), mais rien n'est branché à
+> l'interface. Ce fichier fixe ce qui est **décidé** et ce qui est
+> **interdit** ; le déroulé complet (mesures, matrices matérielles,
+> algorithmes) vit dans `PLAN-MOTEUR-NATIF.md` à la racine.
+> ⚠️ **Aucun chiffre de ce fichier n'est mesuré, hors §27.** Toute valeur est
+> une **cible** du plan, jamais un résultat observé. Ne pas citer ces nombres
 > comme acquis.
 >
 > **Doc de feature — contrat technique.** Les règles figées (protocole
@@ -824,3 +825,88 @@ caméra virtuelle, plugins, SRT (phase P5), ROI (phase P5), multi-format
 - `docs/features/camera-details.md`, `fond-capture-obs.md`,
   `selecteur-capture.md`, `obs-sorties.md`, `just-chatting.md`,
   `equaliseur.md`, `diagnostic.md`, `telemetrie.md`.
+
+---
+
+## 27. État mesuré et pièges vérifiés (2026-10-28)
+
+> **Seule section avec des chiffres observés.** Le reste du fichier décrit des
+> cibles. Crate : `src-tauri/crates/sos-moteur-natif` (Windows x64, MSRV 1.77,
+> `windows 0.58` + `log`, aucune dépendance Tauri/app/domaine).
+
+### 27.1 Modules implémentés
+
+`gpu` (adaptateurs, `ContexteGpu`, `Format`, `DescTexture`, `PoolTextures`) ·
+`capture` (énumération DXGI, `CaptureWgc` moniteur **ou** fenêtre) ·
+`color_gpu` (BGRA→NV12 GPU, cible réutilisable) · `compositor` (`Calque`,
+`Compositeur` : N flux → canvas NV12 en **un** `VideoProcessorBlt`) ·
+`output` (`Sink`, `FileSink`, `FfmpegSink` fMP4/MKV, `TeeSink`) · `preview`
+(NV12→BGRA réduit, 10 fps) · `clock` (échéances absolues) · `gouverneur`
+(dégradation monotone + raison) · `compteurs` (atomics + `Instantane`) ·
+`audio` (WASAPI loopback/micro en liaisons directes, `mixage::mixer`).
+App : `moteur::mode` (machine obs/natif), `moteur_etat`/`moteur_diag`/
+`moteur_basculer`, `moteur.json`.
+
+### 27.2 Mesures P0-a — chemin zéro-copie (30 min, 1360×768@60)
+
+| | OBS 32.2.2 | spike zéro-copie | Ratio |
+|---|---|---|---|
+| CPU moy (p95) | 0,75 % (1,25 %) | **0,05 % (0,20 %)** | 0,07× (0,16×) |
+| RAM | 849,5 Mo | **59,6 Mo** | 0,07× |
+| GPU (indicatif) | 49,2 % | 28,8 % | 0,59× |
+| Frames | 0 drop | 14 en retard (0,013 %) | — |
+
+108 000 frames en 1 799 987 ms (**60,0 fps**), 83,3 % de frames capturées,
+décodage ffmpeg exit 0. L'ancien spike (readback BGRA + conversion CPU + pipe
+ffmpeg) était à 2,07 % / 183,5 Mo. Détails : `mesures-p0.md`.
+
+### 27.3 Limites constatées (ne pas promettre au-delà)
+
+- **NVIDIA seulement** (SDK NVENC) ; AMD jamais testé, Intel échoue au MFT.
+- Un moniteur par session (2 simultanées + 1 fenêtre vérifiées) ; pas de
+  caméra, pas de hot-plug.
+- Conteneur **vidéo seule** : le mixage audio existe mais n'est pas muxé.
+- Timing du conteneur par `-framerate` (pas de PTS dans un H.264 élémentaire).
+- Drops non mesurables côté spike (« en retard » seulement).
+- Rien n'est branché à l'UI : le natif est refusé proprement par `moteur_basculer`.
+
+### 27.4 Pièges vérifiés (ne pas réintroduire)
+
+1. **`NVENC_EXTERNAL_ME_HINT_COUNTS_PER_BLOCKTYPE` = 16 octets** (mot de
+   bitfields + `reserved1[3]`) : `maxMEHintCountsPerBlock[2]` = 32 o, donc
+   **`tuningInfo` est à l'offset 136**. Le « calcul manuel » de 116 était
+   impossible ; un test « +4 » glisse de +8 (alignement de `privData`).
+   Symptôme : `nvEncInitializeEncoder` statut 8 « Presets P1-P7 … tuningInfo ».
+2. **`RC_MODE_CBR = 0x2`** — `0x1` est **VBR** (enum 13.x : CONSTQP 0, VBR 1,
+   CBR 2).
+3. **`WAVEFORMATEXTENSIBLE` est `packed(1)`** : lire `SubFormat` via
+   `addr_of!(...).read_unaligned()`.
+4. **Le loopback WASAPI est post-volume** : muter la sortie coupe la capture
+   (comme la « desktop audio » d'OBS). Niveau bas = volume système bas.
+5. **WGC ne délivre des frames que sur changement d'écran** : compter les
+   frames « sans mise à jour », ne jamais bloquer la boucle.
+6. **`IMMDevice::Activate` n'a pas d'IID** (T inféré) ; `MMDeviceEnumerator`
+   est une constante GUID, pas une classe.
+7. **Video processor** : les flux de tailles source différentes passent dans un
+   même `Blt` (5 flux max constatés sur la GTX 1070 Ti).
+
+### 27.5 Vérification
+
+```bash
+cd src-tauri
+cargo clippy -p sos-moteur-natif --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif                                  # 27 tests
+cargo clippy -p streamos-v0                                     # exit 0
+cargo test -p streamos-v0 moteur::mode                          # 4 tests
+```
+
+Spikes : `nvenc_encode`, `capture_multi`, `compose_encode`
+(`[h264|mp4|mkv] [couper|exit]`), `audio_capture`.
+
+### 27.6 Lots faits / restants
+
+**Faits** : 0.2g-β, 0.2g-γ, P0-a zéro-copie, 2.1, 2.2, 2.3, 2.4, 2.6, 2.7,
+audio WASAPI, mixage, compteurs, app 1.4 (registre de mode).
+**Restants** : 1.1 (`sos-scene`), 1.2 (`sos-moteur-api`), 1.3 (adaptateur
+`MoteurObs`), 1.5 (UI OBS/Rust), 2.8 (bouton d'enregistrement natif),
+2.9/2.10 (diagnostic « Moteur »), P0-b, caméra, hot-plug, RTMP/SRT, audio muxé.
