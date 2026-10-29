@@ -1569,6 +1569,14 @@ export const tauri = {
     return await invoke<string | null>("moteur_sortie_arreter");
   },
 
+  /// Ouvre/ferme le projecteur natif (mode Rust) : fenêtre détachée
+  /// affichant l'aperçu réduit du moteur (~10 fps). Équivalent du
+  /// projecteur OBS en mode natif — aucun select d'écran, la fenêtre se
+  /// déplace/maximise librement. Refusé hors mode natif.
+  async apercuFenetreToggle(): Promise<boolean> {
+    return await invoke<boolean>("apercu_fenetre_toggle");
+  },
+
   /// Liste les moniteurs vus par OBS (GetMonitorList) — sélecteur de la
   /// section Prévisualisation. Index OBS, PAS les index Win32.
   async obsProjecteurMoniteurs(

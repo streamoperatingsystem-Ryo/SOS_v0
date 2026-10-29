@@ -13,7 +13,7 @@
   import { fenetreMonitorIndex, fenetreMode, appliquerFenetre } from "../stores/fenetre";
   import { fondSidebar, importerFondSidebar, retirerFondSidebar } from "../stores/fondSidebar";
   import { fondDash, importerFondDash, retirerFondDash } from "../stores/fondDash";
-  import type { BordRaccourcis, ModeFenetre } from "../tauri";
+  import { tauri, type BordRaccourcis, type ModeFenetre } from "../tauri";
   import { t } from "../stores/langue";
   import { get } from "svelte/store";
   import { onMount } from "svelte";
@@ -297,9 +297,10 @@
   let previewScale = $derived(previewBoxW > 0 ? previewBoxW / previewCanvasW : 0);
 
   // Moniteurs OBS relus à l'ouverture de la section (non-fatal : [] si OBS
-  // absent — le select garde « Fenêtré »).
+  // absent — le select garde « Fenêtré »). Mode natif : le projecteur est
+  // une fenêtre détachée — pas de sélecteur d'écran OBS.
   $effect(() => {
-    if (open === "preview") void chargerMoniteursObs();
+    if (open === "preview" && !natifMode) void chargerMoniteursObs();
   });
   function onPreviewMoniteur(e: Event) {
     const idx = parseInt((e.target as HTMLSelectElement).value, 10);
@@ -307,18 +308,23 @@
     persisterPrev("previewMonIdx", String(previewMonIdx));
   }
   async function onOuvrirProjecteur() {
-    // PAS de gate status === "connected" : la commande est one-shot, elle se
-    // connecte à OBS elle-même (comme les toggles stream/record — le statut
-    // "connected" ne reflète que le dernier obsConnect réussi).
+    // Même bouton, deux moteurs : OBS → projecteur OBS (commande one-shot
+    // qui se connecte elle-même — pas de gate sur le statut) ; natif →
+    // fenêtre d'aperçu du moteur Rust.
     if (previewBusy) return;
     previewBusy = true;
     previewMsg = null;
     try {
-      await ouvrirProjecteurPreview(previewMonIdx);
-      previewMsg = $t("toolbar.previewOuvert");
+      if (natifMode) {
+        await tauri.apercuFenetreToggle();
+        previewMsg = $t("toolbar.previewOuvertNatif");
+      } else {
+        await ouvrirProjecteurPreview(previewMonIdx);
+        previewMsg = $t("toolbar.previewOuvert");
+      }
       previewMsgOk = true;
     } catch (e) {
-      previewMsg = get(obsError) ?? String(e);
+      previewMsg = natifMode ? String(e) : (get(obsError) ?? String(e));
       previewMsgOk = false;
     }
     previewBusy = false;
@@ -738,21 +744,23 @@
             style="width: {previewCanvasW}px; height: {previewCanvasH}px; transform: scale({previewScale});"
           ></iframe>
         </button>
-        <select onchange={onPreviewMoniteur} disabled={previewBusy}>
-          <option value="-1" selected={previewMonIdx === -1}>{$t("toolbar.previewFenetre")}</option>
-          {#each previewMoniteurs as m (m.monitorIndex)}
-            <option value={m.monitorIndex} selected={previewMonIdx === m.monitorIndex}>
-              {m.monitorName || $t("toolbar.previewMoniteur", { n: m.monitorIndex + 1 })} — {m.monitorWidth}×{m.monitorHeight}
-            </option>
-          {/each}
-        </select>
+        {#if !natifMode}
+          <select onchange={onPreviewMoniteur} disabled={previewBusy}>
+            <option value="-1" selected={previewMonIdx === -1}>{$t("toolbar.previewFenetre")}</option>
+            {#each previewMoniteurs as m (m.monitorIndex)}
+              <option value={m.monitorIndex} selected={previewMonIdx === m.monitorIndex}>
+                {m.monitorName || $t("toolbar.previewMoniteur", { n: m.monitorIndex + 1 })} — {m.monitorWidth}×{m.monitorHeight}
+              </option>
+            {/each}
+          </select>
+        {/if}
         <button class="action" onclick={onOuvrirProjecteur} disabled={previewBusy}>
           {previewBusy ? $t("toolbar.connexionEnCours") : $t("toolbar.previewOuvrir")}
         </button>
         {#if previewMsg}
           <p class="hint" class:msg-ok={previewMsgOk} class:msg-err={!previewMsgOk}>{previewMsg}</p>
         {/if}
-        <p class="hint">{$t(status === "connected" ? "toolbar.previewHint" : "toolbar.previewObsHint")}</p>
+        <p class="hint">{$t(natifMode ? "toolbar.previewNatifHint" : status === "connected" ? "toolbar.previewHint" : "toolbar.previewObsHint")}</p>
       </div>
     {/if}
   </div>

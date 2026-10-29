@@ -67,3 +67,23 @@ pendant drag, commit au change), « Vider la liste ».
 de `src`, pas de fondu). Morph/pixel preview : source = slide courante.
 Garde morph assouplie : `(!bgIsVideo || bgSlidesList)` (fond vidéo +
 carrousel d'images → slides morphables).
+
+### Moteur natif (lot T5, 2026-10-28)
+
+Le carrousel est porté dans `sos-moteur-natif` (§44 de
+`moteur-natif.md`) : slides décodées en textures au chargement
+(`charger_carrousel`), avance au mur (`Carrousel::fenetre(t)` — équivalent
+du `setInterval`), fondu en deux passes `DrawBitmap` (précédente à
+`1 − k`, courante à `k`).
+
+Écarts de forme assumés, sémantique identique :
+
+- Widget : `ease-in-out` évalué exactement (`cubic-bezier(0,42 ; 0 ; 0,58 ;
+  1)`, Newton) — miroir de la transition CSS `.slide`.
+- Fond : `k` linéaire — miroir du `globalAlpha = kFade` de
+  `dessinerContenuFond`.
+- Chemin morph : slide courante seule, sans fondu (swap `src` du DOM).
+- Le fit (`mediaFit`/`bgFit`) se recalcule **par slide** ; une slide
+  illisible est ignorée ; pile vide = rien dessiné.
+- Les champs vidéo (`mediaPaused`, `mediaLoopA/B`, `bgPaused`, `bgLoopA/B`)
+  n'ont aucun effet sur un carrousel — comme dans le DOM.

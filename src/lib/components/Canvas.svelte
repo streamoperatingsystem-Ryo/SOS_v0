@@ -29,6 +29,7 @@
   import { gradientCadre } from "../cadres/registre";
   import { POLICE_TITRE_DEFAUT, TAILLE_TITRE_DEFAUT, ESPACEMENT_TITRE_DEFAUT } from "../fonts";
   import { t } from "../stores/langue";
+  import { moteurEtat } from "../stores/moteur";
 
   // Dims canvas = résolution OBS lue au connect (fallback 1920×1080).
   // Un vrai changement de résolution (> 10 %) rescale la scène côté Rust
@@ -391,6 +392,8 @@
   let wgIsVideo = $derived(wgKind === "video");
   let wgIsTrou = $derived(ctxWidget?.trou === true);
   let wgHasObsSource = $derived(!!ctxWidget?.obsSource);
+  // Mode natif (lot N3b) : item « Lier une capture » au lieu de « source OBS ».
+  let natifMode = $derived($moteurEtat.mode === "natif");
   let wgFlottant = $derived(ctxWidget?.sansCadre === true);
   let wgFit = $derived(ctxWidget?.mediaFit ?? "ajuster");
   let wgMiroirH = $derived(ctxWidget?.mediaMiroirH === true);
@@ -996,7 +999,7 @@
           {#if wgHasObsSource}
             <button class="ctx-item" role="menuitem" onclick={() => ctxWgSupprObsSource(ctxWidget!.id)}>{$t("carteEdition.sourceObsSupprimer")}</button>
           {:else}
-            <button class="ctx-item" role="menuitem" onclick={() => ctxWgObsDialog(ctxWidget!.id)}>{$t("carteEdition.sourceObsLier")}</button>
+            <button class="ctx-item" role="menuitem" onclick={() => ctxWgObsDialog(ctxWidget!.id)}>{natifMode ? $t("carteEdition.sourceLierNatif") : $t("carteEdition.sourceObsLier")}</button>
           {/if}
         {/if}
       {/if}

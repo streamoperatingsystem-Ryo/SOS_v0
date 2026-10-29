@@ -2079,6 +2079,24 @@ export async function createObsTrouFromPc(
   return name;
 }
 
+/// Natif (D9) : choisir une capture sans OBS — pose `trou:true` +
+/// `captureCible` en UNE update (obsSource inchangé), puis commit.
+/// Aucun appel Tauri/OBS. `trou` reste écrit : tout le dashboard
+/// (overlay pointillé, menu clic droit, sélecteur) en dépend ; le moteur
+/// natif l'ignore (D8) et ne lit que `captureCible`.
+export async function setWidgetCaptureCible(
+  id: string,
+  cible: CaptureCible
+): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((x) =>
+      x.id === id ? { ...x, trou: true, captureCible: cible } : x
+    ),
+  }));
+  await commitScene();
+}
+
 // ===== Grille magnétique (snap entre widgets + canvas) =====
 // Cibles figées au début du drag (snapshot) → pas de get(sceneStore) par frame.
 // Seuil en px canvas (pas screen). Bypass si Alt enfoncé (free-drag).

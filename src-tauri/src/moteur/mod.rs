@@ -14,6 +14,7 @@ use std::sync::Mutex;
 use serde::Serialize;
 use sos_moteur_api::{Capacites, Conteneur, Moteur, MoteurEtat, SortieCfg};
 use sos_moteur_natif::chat::MessageChat;
+use sos_moteur_natif::input::{EtatInput, EtatManette, EtatSouris};
 use sos_moteur_natif::moteur::MoteurNatif;
 use tauri::{AppHandle, Manager, State};
 
@@ -315,6 +316,10 @@ pub fn moteur_basculer(
         verifier_bascule(actuel, cible, live_actif, natif_actif).map_err(|e| e.to_string())?;
     if nouveau != actuel {
         *registre.mode.lock().unwrap_or_else(|e| e.into_inner()) = nouveau;
+        // Bascule hors du mode Rust : la session aperçu n'a plus lieu de
+        // composer (la fenêtre se ferme côté page ; le poll refuse hors
+        // mode natif). Idempotent si aucune session ne tourne.
+        registre.natif().arreter_apercu();
         crate::config::sauver_mode_moteur(&app, nouveau.nom())?;
     }
     Ok(nouveau.nom().to_string())
@@ -354,11 +359,17 @@ struct FrameChat {
 
 /// Décode un frame du canal ; `None` si ce n'est pas un message de chat.
 ///
-/// Le préfixe est testé avant `serde_json` : `chat_tx` transporte aussi les
-/// spectres de l'égaliseur et les compteurs de viewers (plusieurs dizaines de
-/// frames par seconde) — inutile de les désérialiser.
+/// ⚠️ **`serde_json::json!` trie les clés** (pas de `preserve_order` dans ce
+/// dépôt) : une frame réelle commence par `{"message"…`, jamais par
+/// `{"type"…`. Un filtre `starts_with("{\"type\"…")` ne matchait **aucune**
+/// frame — le pont chat du moteur natif était muet (bug trouvé le 2026-10-28,
+/// verrouillé par `decoder_chat_accepte_une_frame_serde_json`).
+///
+/// Le test reste un `contains` sur la sous-chaîne : `chat_tx` transporte aussi
+/// les spectres de l'égaliseur et l'état de l'input viewer (plusieurs
+/// dizaines de frames par seconde) — inutile de les désérialiser.
 fn decoder_frame_chat(frame: &str) -> Option<MessageChat> {
-    if !frame.starts_with("{\"type\":\"chat\"") {
+    if !frame.contains("\"type\":\"chat\"") {
         return None;
     }
     let frame: FrameChat = serde_json::from_str(frame).ok()?;
@@ -372,6 +383,85 @@ fn decoder_frame_chat(frame: &str) -> Option<MessageChat> {
         message.texte,
         message.color.as_deref(),
     ))
+}
+
+/// Extrait l'état d'une frame `input-viewer-etat` (30 Hz).
+///
+/// Même piège de tri des clés que [`decoder_frame_chat`] : test par
+/// sous-chaîne, puis validation du champ `type` après désérialisation.
+fn decoder_frame_input(frame: &str) -> Option<EtatInput> {
+    if !frame.contains("\"type\":\"input-viewer-etat\"") {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameInput {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        etat: EtatInputBrut,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct EtatInputBrut {
+        #[serde(default)]
+        touches: Vec<String>,
+        #[serde(default)]
+        souris: SourisBrute,
+        #[serde(default)]
+        manette: ManetteBrute,
+    }
+    // Le crate moteur n'a pas serde (CONTRAT : aucune dépendance d'app) :
+    // la désérialisation vit ici, dans le pont.
+    #[derive(serde::Deserialize, Default)]
+    struct SourisBrute {
+        #[serde(default)]
+        gauche: bool,
+        #[serde(default)]
+        milieu: bool,
+        #[serde(default)]
+        droite: bool,
+        #[serde(default)]
+        x: i32,
+        #[serde(default)]
+        y: i32,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ManetteBrute {
+        #[serde(default)]
+        connectee: bool,
+        #[serde(default)]
+        boutons: Vec<bool>,
+        #[serde(default)]
+        axes: Vec<f32>,
+    }
+    let frame: FrameInput = serde_json::from_str(frame).ok()?;
+    if frame.type_frame != "input-viewer-etat" {
+        return None;
+    }
+    // Vecteurs de la frame → tableaux fixes : le payload peut porter moins
+    // de 20 boutons / 6 axes (voire `[]`) — padding/troncage tolérant.
+    let mut boutons = [false; 20];
+    for (i, b) in frame.etat.manette.boutons.iter().enumerate().take(20) {
+        boutons[i] = *b;
+    }
+    let mut axes = [0.0; 6];
+    for (i, a) in frame.etat.manette.axes.iter().enumerate().take(6) {
+        axes[i] = *a;
+    }
+    Some(EtatInput {
+        touches: frame.etat.touches,
+        souris: EtatSouris {
+            gauche: frame.etat.souris.gauche,
+            milieu: frame.etat.souris.milieu,
+            droite: frame.etat.souris.droite,
+            x: frame.etat.souris.x,
+            y: frame.etat.souris.y,
+        },
+        manette: EtatManette {
+            connectee: frame.etat.manette.connectee,
+            boutons,
+            axes,
+        },
+    })
 }
 
 /// Pousse un message dans le moteur natif (harnais, tests, intégrations).
@@ -412,6 +502,10 @@ pub fn demarrer_ecoute_chat(app: AppHandle) {
                         if let Some(registre) = app.try_state::<RegistreMoteur>() {
                             registre.natif().pousser_chat(message);
                         }
+                    } else if let Some(touches) = decoder_frame_input(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_input(touches);
+                        }
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
@@ -423,9 +517,181 @@ pub fn demarrer_ecoute_chat(app: AppHandle) {
     });
 }
 
+/// Redémarre la session aperçu à chaque mutation de scène (`snapshot_tx`) :
+/// le projecteur natif reflète ainsi la scène courante. L'arrêt est
+/// idempotent — le poll de la fenêtre relance la session sur la scène
+/// fraîche à la prochaine frame.
+pub fn demarrer_veille_apercu(app: AppHandle) {
+    let Some(state) = app.try_state::<crate::scenes::ScenesState>() else {
+        log::warn!("veille aperçu : état des scènes absent, veille non démarrée");
+        return;
+    };
+    let mut rx = state.snapshot_tx.subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(_) => {
+                    if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                        registre.natif().arreter_apercu();
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            }
+        }
+    });
+}
+
+/// Aperçu natif : dernière frame réduite du moteur (BGRA8, ~10 fps).
+///
+/// Effet de bord : si ni enregistrement ni session aperçu ne tournent, la
+/// commande **démarre** la session aperçu (fenêtre du projecteur ouverte =
+/// la demande — aucun autre déclencheur, rien ne compose pour rien). Un
+/// enregistrement actif alimente déjà l'aperçu partagé : les frames sont
+/// servies telles quelles.
+///
+/// Corps binaire : `[w u32 LE][h u32 LE][pixels BGRA]` — vide tant qu'aucune
+/// frame n'a été produite. Réservé au mode Rust (`moteur_basculer` arrête
+/// la session en quittant le mode natif).
+#[tauri::command]
+pub fn moteur_apercu(
+    app: AppHandle,
+    registre: State<'_, RegistreMoteur>,
+    scenes: State<'_, crate::scenes::ScenesState>,
+) -> Result<tauri::ipc::Response, String> {
+    if registre.mode() != Mode::Natif {
+        return Err("l'aperçu du projecteur exige le mode Rust".to_string());
+    }
+    let natif = registre.natif();
+    if !natif.en_cours() && !natif.apercu_en_cours() {
+        if let Some(erreur) = natif.apercu_erreur() {
+            return Err(erreur);
+        }
+        let scene = scenes
+            .scene
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let base = crate::config::data_dir(&app)?;
+        natif
+            .configurer_scene(&scene, &HashMap::new(), &base)
+            .map_err(|e| e.to_string())?;
+        natif
+            .demarrer_apercu((scene.canvasW, scene.canvasH), 30)
+            .map_err(|e| e.to_string())?;
+    }
+    let frame = match natif.apercu() {
+        Some(f) if f.valide() => f,
+        _ => return Ok(tauri::ipc::Response::new(Vec::new())),
+    };
+    let mut corps = Vec::with_capacity(8 + frame.data.len());
+    corps.extend_from_slice(&frame.largeur.to_le_bytes());
+    corps.extend_from_slice(&frame.hauteur.to_le_bytes());
+    corps.extend_from_slice(&frame.data);
+    Ok(tauri::ipc::Response::new(corps))
+}
+
+/// Ouvre ou ferme le projecteur natif (toggle) — équivalent du projecteur
+/// OBS en mode Rust : fenêtre détachée, déplaçable, maximisable, qui
+/// affiche l'aperçu réduit du moteur (~10 fps, composition sans encodeur).
+///
+/// Navigation : custom protocol `streamos-apercu://localhost/` → HTML
+/// embarqué servi par `register_uri_scheme_protocol` (même recette que
+/// chat/speedpop — PAS d'about:blank, PAS d'URL :4321 directe).
+/// ASYNC obligatoire : sur Windows, créer une webview dans une commande
+/// sync deadlock Webview2 (`chat_popout_toggle`).
+#[tauri::command]
+pub async fn apercu_fenetre_toggle(
+    app: AppHandle,
+    registre: State<'_, RegistreMoteur>,
+) -> Result<bool, String> {
+    use tauri::webview::WebviewWindowBuilder;
+
+    const LABEL: &str = "apercu-natif";
+
+    if let Some(win) = app.get_webview_window(LABEL) {
+        let _ = win.close();
+        return Ok(false);
+    }
+    if registre.mode() != Mode::Natif {
+        return Err("le projecteur natif exige le mode Rust".to_string());
+    }
+    // Acquitte une éventuelle erreur/session précédente avant le premier poll.
+    registre.natif().arreter_apercu();
+
+    let url = tauri::Url::parse("streamos-apercu://localhost/")
+        .map_err(|e| format!("URL invalide : {e}"))?;
+    let win = WebviewWindowBuilder::new(&app, LABEL, tauri::WebviewUrl::CustomProtocol(url))
+        .title("Aperçu — StreamOS")
+        .inner_size(640.0, 360.0)
+        .resizable(true)
+        .decorations(true)
+        .build()
+        .map_err(|e| format!("Création fenêtre aperçu : {e}"))?;
+
+    // Fenêtre détruite → la session aperçu s'arrête : plus aucun poll ne
+    // viendra, le moteur ne doit pas continuer à composer pour rien.
+    let app_clone = app.clone();
+    win.on_window_event(move |event| {
+        if let tauri::WindowEvent::Destroyed = event {
+            if let Some(registre) = app_clone.try_state::<RegistreMoteur>() {
+                registre.natif().arreter_apercu();
+            }
+        }
+    });
+
+    Ok(true)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoder_chat_accepte_une_frame_serde_json() {
+        // `chat_tx` transporte des frames construites par `serde_json::json!`.
+        // Sans `preserve_order`, les clés sortent **triées** (`message` avant
+        // `type`) : un filtre `starts_with("{\"type\"…")` ne matche jamais.
+        let frame = serde_json::json!({
+            "type": "chat",
+            "message": {
+                "plateforme": "twitch",
+                "pseudo": "viewer",
+                "texte": "salut",
+            },
+        })
+        .to_string();
+        assert!(
+            decoder_frame_chat(&frame).is_some(),
+            "frame non reconnue : {frame}"
+        );
+    }
+
+    #[test]
+    fn decoder_input_accepte_une_frame_serde_json() {
+        let frame = serde_json::json!({
+            "type": "input-viewer-etat",
+            "etat": {
+                "touches": ["KeyW", "Space"],
+                "souris": { "gauche": true, "milieu": false, "droite": false, "x": 120, "y": 340 },
+                "manette": { "connectee": true, "boutons": [true, false, true], "axes": [0.5] },
+            },
+        })
+        .to_string();
+        let etat = decoder_frame_input(&frame).expect("frame input reconnue");
+        assert_eq!(etat.touches, vec!["KeyW".to_string(), "Space".to_string()]);
+        assert!(etat.souris.gauche && !etat.souris.droite);
+        assert_eq!((etat.souris.x, etat.souris.y), (120, 340));
+        // Vecteurs courts → tableaux fixes paddés (boutons 0 et 2, axe 0).
+        assert!(etat.manette.connectee);
+        assert!(etat.manette.boutons[0] && !etat.manette.boutons[1] && etat.manette.boutons[2]);
+        assert!(!etat.manette.boutons[19]);
+        assert_eq!(etat.manette.axes[0], 0.5);
+        assert_eq!(etat.manette.axes[5], 0.0);
+        // Les autres frames du canal ne sont pas des états de touches.
+        assert!(decoder_frame_input(r#"{"etat":{"spectre":[1,2]},"type":"eq"}"#).is_none());
+        assert!(decoder_frame_input("pas du json").is_none());
+    }
 
     #[test]
     fn capacites_aucune_ne_produit_aucun_id() {

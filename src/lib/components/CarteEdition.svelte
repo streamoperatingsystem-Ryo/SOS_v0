@@ -59,6 +59,7 @@
   import { get } from "svelte/store";
   import { listen } from "@tauri-apps/api/event";
   import { obsStatus, obsHost, obsPort, obsPassword } from "../stores/obs";
+  import { moteurEtat } from "../stores/moteur";
   import { open as openDialog } from "@tauri-apps/plugin-dialog";
   import Gizmo3D from "./Gizmo3D.svelte";
   import PlayerBar from "./PlayerBar.svelte";
@@ -73,6 +74,9 @@
   let selectedWidget = $derived(
     $sceneStore.widgets.find((w) => w.id === selectedId) ?? null
   );
+
+  // Mode natif (lot N3b) : labels « capture » à la place de « source OBS ».
+  let natifMode = $derived($moteurEtat.mode === "natif");
 
   // ===== Détection automatique de la cible =====
   // Si un widget est sélectionné → cible "widget". Sinon → "fond".
@@ -1063,7 +1067,7 @@
                 <p class="hint">{$t("carteEdition.musiqueHint")}</p>
               {:else}
                 <!-- Widget média : fenêtre de capture + source OBS -->
-                <div class="section-titre">{$t("carteEdition.sectionFenetreObs")}</div>
+                <div class="section-titre">{natifMode ? $t("carteEdition.sectionFenetreNatif") : $t("carteEdition.sectionFenetreObs")}</div>
                 <button type="button" class="toggle-row" onclick={onToggleTrou}>
                   <span class="toggle-label">{$t("carteEdition.fenetreCapture")}</span>
                   <span class="etat-chip" class:actif={selectedTrou}>{selectedTrou ? $t("commun.on") : $t("commun.off")}</span>
@@ -1072,7 +1076,7 @@
                   {#if selectedObsSource}
                     <button class="action danger" onclick={onDeleteObsSource}>{$t("carteEdition.sourceObsSupprimer")}</button>
                   {:else}
-                    <button class="action" onclick={onOpenObsDialog}>{$t("carteEdition.sourceObsLier")}</button>
+                    <button class="action" onclick={onOpenObsDialog}>{natifMode ? $t("carteEdition.sourceLierNatif") : $t("carteEdition.sourceObsLier")}</button>
                   {/if}
                 {/if}
                 {#if isMediaWidget}

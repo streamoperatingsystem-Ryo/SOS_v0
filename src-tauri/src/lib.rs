@@ -883,6 +883,10 @@ async fn obs_projecteur_fermer() -> u32 {
 /// HTML embarqué du pop-out chat (include_str! — recompile si le fichier change).
 const CHAT_POPOUT_HTML: &str = include_str!("../resources/chat-popout.html");
 
+/// HTML embarqué du projecteur natif (include_str!) — fenêtre d'aperçu du
+/// moteur Rust servie par le protocole `streamos-apercu://`.
+const APERCU_HTML: &str = include_str!("../resources/apercu.html");
+
 /// Ouvre ou ferme la fenêtre pop-out chat (toggle).
 /// - Si fermée → ouvre (always_on_top, 360×520, décorations simples).
 /// - Si ouverte → ferme (destroy). IRC inchangé.
@@ -4125,6 +4129,15 @@ pub fn run() {
                 .body(raccourcis::RACCOURCIS_HTML.as_bytes().to_vec())
                 .unwrap()
         })
+        // Projecteur natif : custom protocol servant le HTML embarqué.
+        // Toute URL streamos-apercu://localhost/* → APERCU_HTML (même
+        // recette que le pop-out chat — vraie origine, invoke fiable).
+        .register_uri_scheme_protocol("streamos-apercu", |_ctx, _request| {
+            tauri::http::Response::builder()
+                .header("Content-Type", "text/html; charset=utf-8")
+                .body(APERCU_HTML.as_bytes().to_vec())
+                .unwrap()
+        })
         // Splash de démarrage : custom protocol servant le HTML embarqué
         // (/) + le wallpaper Windows (/wallpaper) + la mascotte (/mascotte).
         // Routage par path dans splash::repondre.
@@ -4177,6 +4190,10 @@ pub fn run() {
             // Pont chat → moteur natif : le crate ne connaît pas tokio, l'app
             // écoute `chat_tx` et pousse dans le buffer borné du moteur.
             moteur::demarrer_ecoute_chat(app.handle().clone());
+            // Veille aperçu : une mutation de scène (snapshot_tx) arrête la
+            // session aperçu — le poll du projecteur la relance sur la
+            // scène fraîche.
+            moteur::demarrer_veille_apercu(app.handle().clone());
 
             // État Équaliseur — sync initiale au boot : si la scène chargée a
             // le module déjà actif (persisté), la capture démarre dès
@@ -4528,6 +4545,8 @@ pub fn run() {
             moteur::moteur_sortie_arreter,
             moteur::moteur_sortie_etat,
             moteur::moteur_chat_message,
+            moteur::moteur_apercu,
+            moteur::apercu_fenetre_toggle,
             get_scene,
             update_scene,
             import_media,

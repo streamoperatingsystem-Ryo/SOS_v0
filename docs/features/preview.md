@@ -50,3 +50,8 @@ ouverte = miniature + sélecteur écran + bouton projecteur. Deux fonctions :
   `obs_projecteur_moniteurs` / `obs_projecteur_preview` /
   `obs_projecteur_fermer` (lib.rs) → `moniteurs_liste` /
   `ouvrir_projecteur_preview` / `fermer_projecteurs` (obs.rs).
+- **Mode Rust natif (2026-10-28)** : le même bouton ouvre le **projecteur
+  natif** — fenêtre Tauri détachée (`apercu-natif`) affichant l'aperçu
+  réduit du moteur (~10 fps, session « aperçu seul » sans encodeur).
+  Le select d'écrans OBS est masqué (fenêtre libre) et la miniature
+  `:4321` reste inchangée. Détails → `moteur-natif.md` §39.

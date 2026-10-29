@@ -1651,3 +1651,597 @@ Scène de référence : zone chat `YMAX 255` sur un widget de 88 px de haut
    est une erreur dans ce dépôt (`-D warnings`).
 5. **`r#"…"#` et une couleur `"#ff0000"`** : la séquence `"#` ferme la chaîne
    brute — utiliser `r##"…"##` dans les tests.
+
+---
+
+## 37. P3 — tranche 5 : parité de rendu, composition 100 % Direct2D (2026-10-28)
+
+Le rendu natif est devenu **celui de `diffusion.html`** sur les formes et les
+couleurs : alpha par pixel, découpe polygonale, voile et bordure de widget. Le
+video processor ne compose plus rien — il ne fait que la conversion NV12.
+
+### 37.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Composition | **100 % Direct2D** sur un canvas BGRA, une passe par frame | `VideoProcessorBlt` ne sait faire ni alpha par pixel, ni clip polygonnal, ni rotation ; deux chemins = deux jeux de bugs |
+| VP | **conversion NV12 uniquement** (`ConvertisseurNv12`) | 0,145 ms en 1360×768, 0,468 ms en 4K (§30.3) |
+| Alpha | décodage **WIC `32bppPBGRA`** (prémultiplié) | D2D prémultiplié attend PBGRA ; `32bppBGRA` = alpha droit |
+| Bitmap média | `PREMULTIPLIED` si `MediaChargee.alpha`, `IGNORE` sinon | l'octet alpha d'un `RGB32` (MF) n'est pas garanti : jamais un média qui disparaît |
+| **Trou** | **supprimé côté natif** | le trou n'existe que pour laisser voir une source OBS *sous* la browser source ; en natif la capture est le **contenu** du widget, à son `z` |
+| Captures | **`Fit::Remplir`** (cover + crop) | même sémantique que le mode OBS (`OBS_BOUNDS_SCALE_OUTER` + `crop_source`, contrat 6 d'`AGENTS.md`) |
+| Voile / bordure | parité CSS exacte | `.widget` 0,15 + bordure 1 px ; **bordure retirée sous un cadre** (`applyCadreWidget`) ; rien pour `sansCadre` / trou / caméra |
+| Fit | calculé sur la **boîte entière**, rognage canvas **proportionnel** après | `object-fit` ignore le rognage ; borner avant écrasait le média (D11) |
+| `composites` | **une par frame composée** | plus de `VideoProcessorBlt` à compter |
+
+### 37.2 Livré
+
+- `media.rs` : `decoder_pbgra` (WIC `PBGRA`), `MediaChargee.alpha` (inspection
+  de l'octet alpha au chargement), `geometrie` = fit sur la boîte + `rogner_au_canvas`
+  (source recadrée dans la même proportion, jamais de déformation).
+- `texte.rs` : `bitmap_media(texture, alpha)` (cache clé `(pointeur, alpha)`),
+  `dessiner_media(…, clip: Option<&PathGeometry>)` (aucune couche sans cadre),
+  `dessiner_fond` (voile, `FillGeometry` si cadre sinon `FillRectangle` élargi
+  1 px), `dessiner_bordure` (bande 1 px hors de la boîte de contenu).
+- `scene_sources.rs` : `BoiteCfg` + `boites_depuis_scene` (exclusions
+  `sansCadre` / trou / caméra, rect nul).
+- `moteur.rs` : plan unique `(z, genre, index)` à 6 genres (`Boite < Media <
+  Capture < Chat < Bordure < Cadre`), `VoieRendu` **toujours** active,
+  `ContenuRendu` (regroupement des 4 listes), suppression de `segments`,
+  `flush_run`, `calque_de`, `destination`, `rendre_textes`.
+- `compositor/mod.rs` : `composer_borne` supprimée (plus aucun appelant ; le
+  compositeur VP reste pour les harnais).
+- Harnais `examples/parite_scene.rs` : scène JSON réelle → MP4.
+
+### 37.3 Mesures (GTX 1070 Ti, NVENC zéro-copie)
+
+| Scène | Frames / durée | fps | drops | latence |
+|---|---|---|---|---|
+| `af09059c` (13 widgets, 11 couches, 5 cadres, 1 chat, 4 boîtes) | 282 / 5 s | **56,4** | **0** | 19 ms |
+| `cadres_scene` (3 widgets, 2 cadres) | 161 / 3 s | ~54 | 0 | — |
+
+Le coût des couches Direct2D n'est pas mesurable ici : l'encodeur reste le
+facteur limitant (~56 fps, comme à 4 calques).
+
+**D1 — alpha, avant/après** (même région, 1070,0 → 1360,380) : avant, le PNG
+`rgba` sortait sur un **rectangle noir plein** ; après, le fond de scène passe
+à travers (dégradé, texte du fond, objet cyan).
+
+**D5 — voile et bordure**, sondes sur la frame de `af09059c` :
+
+| Sonde | Mesure | Attendu |
+|---|---|---|
+| Voile du chat (400,690) | YMIN 37 / YAVG 37,9 / YMAX 39 — **uniforme** | `rgba(224,224,224,0.15)` |
+| Bordure haute (y = 668) | YAVG 93,8 / YMAX 151 | trait 1 px à 0,6 |
+| Bordure gauche (x = 333) | YAVG 92,5 | idem |
+| Hors boîte (x = 326) | YAVG 16 | rien |
+| Bande `ajuster` du speedrun | YAVG 43,3 uniforme | voile dans la bande |
+| Trou sans cible | YAVG 18,5 / YMAX 127 | **fond visible** (plus de trou) |
+
+### 37.4 Pièges vérifiés — ne pas les redécouvrir
+
+1. **`ID2D1RenderTarget::DrawRectangle` / `FillRectangle` / `FillGeometry`
+   rendent `()`** (pas de `Result`) — reconfirmé (§35.7.3).
+2. **`background-clip: border-box`** : le voile couvre la boîte de **bordure**,
+   donc `rect + 1 px` quand le widget a une bordure — et **pas** d'élargissement
+   quand un cadre est actif (le CSS met `border: none`).
+3. **`object-fit` se calcule sur la boîte entière**, pas sur sa partie visible :
+   borner le rect au canvas avant le fit écrasait le média (`06de1ec7` :
+   311 px au lieu de 452). Rogner la destination **et** recadrer la source dans
+   la même proportion donne les pixels exacts du CSS.
+4. **`VideoProcessorSetStreamAlpha` est constant par flux** : aucune
+   transparence par pixel, jamais (§30.1) — c'est la raison d'être du §37.
+5. **`too_many_arguments` (clippy 8/7)** : `VoieRendu::nouveau` prend un
+   `ContenuRendu` — regroupement, pas un `allow`.
+6. **La bordure CSS est hors de la boîte de contenu** (`content-box`) : le trait
+   se centre sur le bord extérieur (`left - 0,5`, `right + 0,5`, épaisseur 1).
+
+### 37.5 Limites (assumées)
+
+- **Le trou n'est plus percé** : une scène OBS à widget `trou` sans
+  `captureCible` rend le **fond de scène**, pas du noir. C'est le comportement
+  natif voulu (aucune source OBS derrière), et la comparaison région par région
+  avec le projecteur OBS ne vaut plus pour cette zone.
+- **Un widget de capture sans cible ne rend rien** — l'avertissement « source
+  possible sur ce widget » vit dans le dashboard, jamais brûlé dans la sortie.
+- **Caméra, speedrun, goal, musique, overlays** : toujours absents (lots 1.6d
+  à 1.6f). L'input viewer est porté par le §38 ; le voile/bordure des autres
+  widgets est en revanche correct.
+- **Titres peints après le bord du canvas** (D10) : écart de quelques pixels au
+  bord uniquement.
+- **Transformations média** : `zoom`/`rot`/`offset`/`miroir` (widget et
+  fond) + `bgZoom` (zoom écran), les fits `centrer`/`vignette`/`etendre`
+  (§40) et `rotateX/Y` + `bgRotX/Y` en perspective (§41) sont portés.
+  Restent : effets (lum/contraste/teinte/flou/pixel), morphs, lecture
+  vidéo, carrousels (lots T3–T5).
+- **Chat** : texte + pseudos colorés, sans emotes/badges/avatars en images.
+- **SSIM non instrumenté** : `ffmpeg` (sidecar du dépôt) sait le faire, aucun
+  rasteriseur SVG n'est embarqué. Les sondes `signalstats` restent la preuve
+  utilisée ici.
+- **Une couche Direct2D par média à cadre** (`PushLayer`) : coût non mesurable
+  sur cette machine, à surveiller si l'encodeur cesse d'être le facteur limitant.
+
+### 37.6 Vérification
+
+```bash
+cd src-tauri
+cargo clippy --workspace --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif                          # 103
+# scène réelle, sans capture :
+cargo run --release --example parite_scene -- \
+  "%APPDATA%/com.streamos.v0/scenes/af09059c.json" "%APPDATA%/com.streamos.v0" sortie.mp4 5
+# frame + sondes :
+ffmpeg -ss 2.5 -i sortie.mp4 -frames:v 1 frame.png
+ffmpeg -i frame.png -vf "crop=200:40:400:690,signalstats,metadata=print:file=-" -f null -
+```
+
+Sortie attendue du harnais : `13 widgets, 0 source(s) de capture, 0 texte(s),
+5 cadre(s), 1 chat(s), 4 boîte(s)` puis `drops=0`, ~56 fps, `ffmpeg -f null -`
+exit 0.
+
+---
+
+## 38. Lot 1.6c — input viewer natif : clavier, numpad, souris, manettes (2026-10-28)
+
+Le widget `input-viewer` est rendu par le moteur natif pour ses 4 modes :
+clavier AZERTY/QWERTY + numpad (c1), souris (c2), manettes 3 skins (c3).
+Même gabarit partout : **état → géométrie pure (`input.rs`) → dessin D2D
+(`texte.rs`) → pont (`src/moteur/mod.rs`) → harnais (`parite_scene`)**.
+
+### 38.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| État | frame `input-viewer-etat` (chat_tx, 30 Hz) → `EtatInput {touches, souris, manette}` | canal déjà publié par `input_viewer.rs` — zéro nouvelle capture |
+| Géométrie | viewBox `xMidYMid meet`, formes mises à l'échelle en px canvas | même calcul que `souris()` ; un seul tracé partout |
+| Manette | `Vec<GroupeManette>` en **ordre de document SVG** (`lien` Statique/Bouton/Dpad/Stick × primitives Forme/Texte) | ordre = peinture ; transcription littérale des 3 `ivGenererManette*SVG` |
+| Presse | couleur unie `inputCouleur` + liseré-halo α 0,3 sous la forme | approximation du `drop-shadow` (rayon ÷ 2 : 12 px→6e, 10→5e, 8→4e) |
+| `connectee` | porté par l'état, **aucun rendu** | `majInputViewerEtat` ne le lit pas non plus (vérifié) |
+| `inputMapping` | remap `boutons[affiché]=physique` (garde `idx<len` → 16/17 identité) ; D-pad **jamais remappé** ; `dpadInvertX/Y` uniquement dans le fallback 8bitdo | parité exacte `majInputViewerEtat` |
+
+### 38.2 Pièges vérifiés — ne pas les redécouvrir
+
+1. **Fallback 8bitdo** : si le skin est 8bitdo ET le D-pad (boutons 12-15)
+   inactif → `axes[0]`/`axes[1]` (stick gauche) servent de D-pad, seuil 0,5,
+   `axes[1] < 0` = haut. Inexistant sur les autres skins.
+2. **Flèches D-pad** : hors des `<g data-dpad>` sur 8bitdo/xbox → elles
+   restent grises quand le bras est pressé ; la flèche PS est **dans** le
+   `<g>` → blanche quand pressée.
+3. **Sticks** : translate `axes × 26` en **px viewBox** (× `echelle`) ;
+   `.actif` (|ax|>0,15) éclaire le cap comme `.presse` ; le cap porte aussi
+   `data-bouton` 10/11 (L3/R3).
+4. **`.iv-fig-home`** garde son filet blanc 0,10 quand pressé (fill seul
+   passe à la couleur) ; `iv-fig-pad` pareil.
+5. **Dégradés `iv*-dish` sont radiaux** : centre (50 %, 45 %) de la boîte,
+   rayons 0,62 × boîte → `CreateRadialGradientBrush` (premier usage du
+   dépôt).
+6. **`EtatManette` = tableaux fixes `[bool;20]`/`[f32;6]`** : le payload
+   `Vec` est paddé/tronqué dans le pont (une frame peut porter `[]`).
+
+### 38.3 Vérification
+
+```bash
+cargo clippy -p sos-moteur-natif --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif                                 # 119
+cargo test -p streamos-v0 decoder_input
+cargo run --release -p sos-moteur-natif --example parite_scene -- \
+  "$APPDATA/com.streamos.v0/scenes/af09059c.json" "$APPDATA/com.streamos.v0" out.mp4 5 \
+  "manette=connectee,btn=0,btn=12,axe0=0.8"
+```
+
+Sondes sur le widget manette (1124, 328, 213×197, skin 8bitdo) : zone
+YAVG 82,1 / YMAX 250 ; bouton A pressé YAVG 88,8 > bouton X relâché 72,5 ;
+crop visuel : fightpad complète, A allumé `#214bf2`, média de fond
+transparaissant (corps 0,62), cadre mgstyle.
+
+---
+
+## 39. Projecteur natif — fenêtre d'aperçu du moteur (2026-10-28)
+
+Équivalent natif du projecteur OBS de la section Prévisualisation : **le
+même bouton** « Ouvrir le projecteur » ouvre, en mode Rust, une fenêtre
+Tauri détachée (déplaçable, redimensionnable, maximisable) qui affiche le
+rendu réel du moteur — très légère, **aucun encodeur ni sink** n'est créé.
+
+### 39.1 Chaînage
+
+```
+Toolbar.onOuvrirProjecteur (natifMode)
+  → tauri.apercuFenetreToggle()
+  → moteur::apercu_fenetre_toggle  (fenêtre "apercu-natif",
+      streamos-apercu://localhost/ → resources/apercu.html)
+  → page : invoke("moteur_apercu") toutes les 100 ms
+  → moteur::moteur_apercu        (réponse binaire, PAS de JSON)
+      └─ si rien ne tourne : configurer_scene + demarrer_apercu
+  → boucle (SinkCfg::Apercu seul, 30 fps, audio None)
+      └─ composition D2D + NV12 → Apercu (BGRA réduit, 10 fps)
+  → page : ImageData BGRA→RGBA → canvas letterboxé
+```
+
+### 39.2 Session « aperçu seul » (moteur.rs)
+
+- Champs dédiés `fil_apercu` / `arret_apercu` / `etat_apercu` :
+  **invisible pour `en_cours()`/`etat()`/`natif_actif()`** — elle ne bloque
+  ni la bascule de mode ni l'état « enregistrement » affiché dans l'UI.
+- `demarrer_apercu(canvas, fps)` : idempotent ; pendant un enregistrement,
+  retour immédiat (l'enregistrement alimente déjà `apercu`). Une erreur
+  terminale persiste dans `etat_apercu` tant que `arreter_apercu` n'a pas
+  acquitté — jamais de respawn en boucle sur la même panne.
+- `encode_requis` dans `boucle` : `sinks = [Apercu]` seul → pas de
+  NVENC/MFT, pas de sinks, pas d'audio ; la composition et l'aperçu sont
+  inchangés.
+- **La commande `moteur_apercu` démarre la session** : fenêtre ouverte =
+  demande ; rien ne compose tant que personne ne regarde.
+- Cycle de vie : fermeture fenêtre (`Destroyed`) → `arreter_apercu` ;
+  mutation de scène (`snapshot_tx`, veille `demarrer_veille_apercu`) →
+  `arreter_apercu` → le poll relance sur la scène fraîche ; bascule OBS →
+  `arreter_apercu` ; démarrage d'enregistrement → `arreter_apercu` (accès
+  exclusif captures) puis l'enregistrement sert l'aperçu.
+- Réponse brute `tauri::ipc::Response` `[w u32 LE][h u32 LE][BGRA]` :
+  **aucune route HTTP ajoutée** — les pixels ne sont pas exposés sur
+  :4321 (contrat vie privée : une page arbitraire ne peut pas lire le
+  flux du stream).
+
+---
+
+## 40. Lot T1 — transforms 2D, fits manquants, clip sans cadre (2026-10-28)
+
+Premier lot du portage « transformations média + modules HUD ». Le média
+natif applique désormais la chaîne CSS d'`applyMediaStyle` (widget) et de
+`dessinerContenuFond`/`renderBg` (fond) : zoom, rotation, offset, miroirs —
+plus les fits `centrer`/`vignette`/`etendre` qui tombaient sur `Etirer`.
+
+### 40.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Chaîne | `T(−c)·S(zoom·miroir)·R(rot)·T(offset)·T(c)` autour du centre de la boîte | miroir exact `transform: translate(o) rotate(r) scale(z·m)` + `transform-origin: center` ; convention `Matrix3x2` ligne `p·M` (le facteur de gauche s'applique au point en premier) |
+| `bgZoom` | porté ici (décision utilisateur) en `zoom_ecran` — `T(−c)·S(z)·T(c)` après toute la chaîne | `scale(z)` de `#bg` est un scale 2D en espace écran, trivial sans tilt ; les deux scènes MGS l'utilisent (1,5×) — restera en position externe pour la perspective (T2) |
+| `bgFit` ≠ `mediaFit` | `Fit::depuis_nom_fond` : `centrer` fond → `Vignette` | `fitRects` n'est PAS `object-fit: none` : naturel si le média tient, contain sinon — sortie identique à `scale-down` |
+| Fits ajoutés | `Centrer` (`none`, déborde) + `Vignette` (`scale-down`, jamais agrandi) + `etendre` → `Remplir` | `FIT_CSS` : ces valeurs sont réelles dans les scènes |
+| Clip sans cadre | `PushAxisAlignedClip(boite)` sur TOUT média sans cadre | `overflow: hidden` du `.widget` s'applique aussi sans transform — `Centrer` déborde la boîte |
+| Clip + transform | le masque (couche polygone ou clip axe-aligné) est posé **avant** `SetTransform` | il reste dans l'espace de la boîte comme le clip-path CSS ; sous transform `contentBounds` = la boîte |
+| Rognage canvas | ignoré sous transform (`fit_rects` pur, le clip rogne) | recadrer src/dst avant rotation/zoom retire des pixels qui peuvent tourner dans le champ |
+| Transform neutre | `Transform2D::NEUTRE` → chemin historique `geometrie` byte-identique | aucune régression sur les scènes déjà vérifiées |
+
+### 40.2 Livré
+
+- `media.rs` : `Transform2D` (+`NEUTRE`/`est_neutre`/`matrice`), `Fit` +=
+  `Centrer`/`Vignette`, `depuis_nom` étendu (`etendre`→`Remplir`),
+  `depuis_nom_fond`, `fit_rects` extrait de `geometrie`, champ `transform`
+  sur `MediaCfg`/`MediaChargee`.
+- `scene_sources.rs` : fond → `depuis_nom_fond` + transform (`bgRot`,
+  offsets, miroirs, `bgZoom`→`zoom_ecran`) ; widgets → transform
+  (`mediaZoom`/`mediaRot`/offsets/miroirs). Le transform couvre aussi le
+  média de fond des widgets à contenu (même `w.*`, comme `syncMediaFond`).
+- `texte.rs` : `dessiner_media(…, boite, transforme, clip)` — clip
+  axe-aligné `PER_PRIMITIVE` sans cadre, couche masquée sous cadre, puis
+  `tracer_bitmap` (`GetTransform`/`SetTransform`/`avant`).
+- `moteur.rs` : branche `Media` choisit `fit_rects` sous transform,
+  `geometrie` sinon ; accesseur `medias()`.
+- `parite_scene` : compte des médias transformés dans le résumé.
+
+### 40.3 Vérification
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif                          # 131 (8 nouveaux)
+npm run check                                          # 0 erreur
+cargo run --release -p sos-moteur-natif --example parite_scene -- \
+  "$APPDATA/com.streamos.v0/scenes/f35daefd.json" "$APPDATA/com.streamos.v0" out.mp4 5
+# → « 3 média(s) transformé(s) », ~56 fps, 0 drop
+# af09059c : zoom 4,3 du speedrun rogné net à la boîte (crop visuel)
+```
+
+### 40.4 Limites (assumées)
+
+- `rotateX`/`rotateY` (perspective 800 px widget, 2·canvasW fond) : lot T2,
+  porté au §41.
+- Effets `mediaLum/Contraste/Teinte/Flou/Pixel` et `bg*` : lot T3.
+- Morphs bulge/pinch : lot T4. Lecture vidéo (`paused`/`time`/seek/A-B),
+  `mediaSlides`/`bgSlides` : lot T5.
+- Sous rotation, un `Centrer` peut déborder la boîte **et** être rogné à
+  la boîte (parité `overflow: hidden`) — pas de rognage canvas préalable.
+
+---
+
+## 41. Lot T2 — perspective widget + fond (`rotateX/Y`, `bgRotX/Y`, `bgZoom`) (2026-10-28)
+
+Deuxième lot du portage « transformations média + modules HUD ». Le moteur
+projette désormais les plans `perspective(d) rotateX rotateY`
+(`applyWidgetStyle` sur `.widget`, `renderBg` sur `#bg`) via l'effet
+`CLSID_D2D13DPerspectiveTransform` : chaque plan est d'abord rasterisé dans
+une texture intermédiaire, puis projeté sur le canvas.
+
+### 41.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Rasterisation | une texture offscreen **taille canvas** par plan (`BITMAP_OPTIONS_TARGET`, PBGRA) | `DrawBitmap` ne sait pas la perspective ; les calques y dessinent en coords canvas, comme le DOM |
+| Regroupement | clé `(rect, z)` : voile/média/capture/bordure/cadre d'un widget partagent l'offscreen | tous portés par le même `.widget` DOM ; `Chat`/`Input` exclus (limite §41.4) |
+| Effet | `3DPerspectiveTransform` : LINEAR + BORDER_SOFT, `depth` = `perspective(d)`, origins perspective **et** rotation = centre de la boîte | miroir `perspective(d) rotateX() rotateY()` + `transform-origin: center` |
+| `bgZoom` | `PerspCfg.zoom_ecran`, appliqué **après** projection en espace écran autour du centre ; retiré de la matrice 2D pour les entrées groupées | `scale(z)` est posé en premier sur `#bg`, hors de la perspective — même lecture qu'en T1 (§40.1) |
+| Projection | `flusher_persps(z)` quand le plan sort de son z (persps triés par z à la config) | le plan projeté se pose à son niveau de z, comme le `.widget` DOM dans son stacking context |
+| `dirty` | un offscreen sans contenu n'est pas projeté | les plans ne recoivent du contenu que si leurs calques dessinent |
+| Rognage canvas | `fit_rects` sous perspective (pas de rognage préalable), comme sous transform 2D | la projection peut ramener des pixels hors canvas dans le champ |
+
+### 41.2 Livré
+
+- `media.rs` : `PerspCfg {rect, z, rot_x, rot_y, profondeur, zoom_ecran}`.
+- `scene_sources.rs` : `persps_depuis_scene` — widget `rotateX/Y` ≠ 0 →
+  `profondeur` 800 ; fond `bgRotX/Y` ≠ 0 → `profondeur` 2·canvasW +
+  `zoom_ecran` = `bgZoom`, exclu si `bgObsSource` ; tri par `z`.
+- `texte.rs` : `PlanPersp` (texture + bitmap + effet + `dirty`),
+  `configurer_persps`, `effacer_persps`, `groupe_de`/`cible_pour`
+  (`SetTarget` en cours de passe), `flusher_persps`/`_fin`,
+  `peindre_persp` (effet + `zoom_ecran` post-projection).
+- `moteur.rs` : `persps` dans `ContenuRendu`, accesseur `persps()`, boucle
+  : `flusher_persps(z)` par entrée, `groupe_de`/`cible_pour` par calque ;
+  `zoom_ecran` retiré du transform 2D d'une entrée groupée.
+- `parite_scene` : compte des plans perspective dans le résumé.
+
+### 41.3 Pièges vérifiés — ne pas les redécouvrir
+
+1. **`ID2D1Properties::SetValue` et les propriétés déclarées** : le champ
+   `type` doit être `D2D1_PROPERTY_TYPE_UNKNOWN` (« type déjà enregistré »)
+   ou le type exact de la propriété. Les enums
+   (`INTERPOLATION_MODE`, `BORDER_MODE`) sont enregistrés `ENUM`, pas
+   `UINT32` → `SetValue(idx, UINT32, …)` = `E_INVALIDARG`
+   (« Paramètre incorrect »). `UNKNOWN` convient pour les six propriétés.
+2. **`octets(&temporaire)`** : le `&[u8]` d'un `[f32; N]` temporaire meurt
+   en fin de statement (E0716) — chaque valeur est nommée avant le
+   tableau de propriétés.
+3. **`GetOutput` relu au moment du flush** (`peindre_persp`), jamais mis
+   en cache : l'effet recalcule sa sortie depuis la bitmap d'entrée.
+4. **Un plan = une texture canvas + une passe d'effet** : mesuré 52–56 fps
+   sur les deux scènes MGS (1 plan chacune) — l'encodeur reste le facteur
+   limitant.
+
+### 41.4 Limites (assumées)
+
+- **Contenu chat / input-viewer d'un widget 3D reste plat** : les genres
+  `Chat`/`Input` ne sont pas regroupés dans l'offscreen (leur rendu
+  DirectWrite devrait y être re-routé). En OBS tout le `.widget` est
+  tourné — écart visible uniquement sur un widget 3D de ces types.
+- Deux widgets au même `(rect, z)` fusionneraient en un seul plan — cas
+  dégénéré accepté.
+- `mediaLum/Contraste/Teinte/Flou/Pixel` et `bg*` : lot T3 ; morphs : T4 ;
+  lecture vidéo + carrousels : T5.
+
+### 41.5 Vérification
+
+```bash
+cd src-tauri
+cargo clippy --workspace --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif                          # 133 (2 nouveaux)
+npm run check                                          # 0 erreur
+cargo run --release -p sos-moteur-natif --example parite_scene -- \
+  "$APPDATA/com.streamos.v0/scenes/f35daefd.json" "$APPDATA/com.streamos.v0" out.mp4 5
+# → « 1 plan(s) perspective », ~52 fps, 0 drop : jacquette rotateY 38,25°
+#   projetée (crop visuel — bord droit reculant, cadre projeté avec).
+# af09059c → « 1 plan(s) perspective », 56 fps, latence 11 ms.
+```
+
+---
+
+## 42. Lot T3 — effets visuels (`lum`/`contraste`/`teinte`/`flou`/`pixel`) (2026-10-28)
+
+Troisième lot du portage « transformations média + modules HUD ». Le média
+natif applique désormais `chaineFilter` (diffusion.html) : une seule
+`ColorMatrix` pour brightness/contrast/hue-rotate, puis `GaussianBlur`,
+plus la pixelisation `bgPixel` du chemin canvas du fond.
+
+### 42.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Couleur | **une** `D2D1ColorMatrix` composant `brightness·contrast` (diagonale `k = b·c` + offset `o`) puis `hue-rotate` — `M = k·H`, offset inchangé | les trois filtres CSS sont linéaires et commutent dans l'ordre brightness→contrast→hue-rotate |
+| Alpha | `D2D1_COLORMATRIX_ALPHA_MODE_STRAIGHT` | les filtres CSS opèrent sur l'alpha **non prémultiplié** ; nos bitmaps sont PBGRA |
+| Flou | `GaussianBlur` chaîné après la matrice, `σ_src = flou / s_fit` | `blur(px)` CSS vaut dans l'espace de l'élément (post-fit) ; le flou d'une image mise à l'échelle `s` par σ vaut `σ·s` |
+| `marge` | `imageRectangle` élargi de `⌈3σ_src⌉` | le halo du flou déborde la source ; sans marge il est rogné |
+| Pixel | buffer réduit `boite/pf` + upscale `NEAREST` | miroir du petit canvas DOM (`imageSmoothingEnabled = false`) |
+| `mediaPixel` | **non porté ici** | parité DOM : aucun `filter` pixel côté widget — il n'agit qu'en chemin morph (T4) |
+| `zoom_ecran` + pixel | appliqué à l'**upscale** (espace écran), pas dans le petit buffer | `scale(bgZ)` est posé sur `#bg` entier (§40/§41) |
+
+### 42.2 Livré
+
+- `media.rs` : `EffetsCfg` (`lum`/`contraste`/`teinte`/`flou`/`pixel`,
+  `NEUTRE`, `couleur_active`, `pixel_active`, `matrice_couleur` — la H de
+  hue-rotate transposée en convention ligne D2D, luminance préservée,
+  gris teinté comme le CSS).
+- `scene_sources.rs` : `effets` du fond (`bg*`) et des widgets (`media*`,
+  `pixel: 0` — morph uniquement en T4).
+- `texte.rs` : `TraceMedia`/`TracePixel` (regroupement clippy), cache
+  `effets` clé (bitmap, matrice, σ), `petits` (buffers `boite/pf`),
+  `image_effets` (chaîne bitmap→`ColorMatrix`→`GaussianBlur`),
+  `tracer_image` (la paire src→dst devient un transform, `DrawImage` ne
+  scale pas), `dessiner_media_pixel`.
+- `moteur.rs` : `TraceCouche`/`PixelCouche`, branche `pixel_active()`.
+
+### 42.3 Pièges vérifiés
+
+1. **`hue-rotate` ne préserve PAS le gris** : il conserve la luminance
+   (pondération 0.213/0.715/0.072) — un gris pur est teinté, comme en CSS.
+2. **`blur` est en px de destination**, pas de source : `σ_src = flou /
+   s_fit` (isotrope ; moyenne géométrique des deux axes sous `Etirer`).
+3. **Dans le petit buffer, le flou est en px réduits** : `σ` calculé sur
+   l'échelle vers `boite/pf` → halo ×pf à l'upscale (quirck DOM reproduit).
+4. **`SetInput` chaîne les effets** via `GetOutput` de l'amont (pas de
+   `SetInputEffect` en windows 0.58).
+
+### 42.4 Limites (assumées)
+
+- `mediaPixel` : ignoré hors chemin morph (T4).
+- Flou non uniforme (`Etirer` anisotrope) : approché par σ isotrope.
+- Morphs : T4 ; lecture vidéo + carrousels : lot T5 (§44).
+
+### 42.5 Vérification
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif                          # 137 (6 nouveaux)
+# scène synthétique (f35daefd + bgLum −40/bgPixel 8/bgTeinte 90 +
+# mediaLum/Contraste/Flou) → fond pixelisé-assombri-teinté, média filtré,
+# ~55 fps, 0 drop (crop visuel).
+```
+
+---
+
+## 43. Lot T4 — morphs bulge/pinch (warp `MORPH_FRAG`) (2026-10-28)
+
+Quatrième lot du portage. Les points de morph `w.morphs` / `scene.bgMorphs`
+sont honorés : rasterisation offscreen **taille boîte** puis warp par
+pixel shader D3D11, réplique exacte de `MORPH_FRAG` (diffusion.html
+~5400).
+
+### 43.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Warp | pixel shader D3D11 dédié (`morph.rs`), pas de mesh | `MORPH_FRAG` est un warp par échantillonnage — le mesh D2D ne sait pas le faire |
+| Offscreen | texture `RT|SRV` taille boîte + bitmap `TARGET` ; sortie `RT|SRV` + bitmap `NONE` | même motif que les offscreens de perspective ; D2D peint, D3D lit puis écrit, D2D relit |
+| Uniforms | `float4 u_morphs[20]` `(x, y, rayon, k)` + `u_count` (bits int !) + `u_aspect = w/h` | miroir exact du WebGL ; `k = intensite/100` en `retrecir`, `−intensite/200` sinon |
+| `mediaPixel` | pixelisation dessinée **dans** l'offscreen (`peindre_media_local`) | le DOM applique `mPixel` dans `morphOffscreen` ; hors morph il n'est rien (parité) |
+| `zoom_ecran` | retiré du transform interne (appliqué au plan par T2) | `scale(bgZ)` agit hors de l'offscreen, comme le `transform` de `#bg` |
+| Clip | posé **après** le warp sur la sortie (cadre ou axe-aligné) | le warp déplace les pixels ; le clip doit rogner le résultat, pas la source |
+
+### 43.2 Livré
+
+- `morph.rs` (nouveau) : `WarpMorph` — VS fullscreen triangle (aucun
+  buffer vertex), PS = `MORPH_FRAG` traduite en HLSL, constant buffer
+  20×vec4 + count + aspect, sampler linéaire clamp. Compilation runtime
+  via `D3DCompile` (feature `Win32_Graphics_Direct3D_Fxc` ajoutée à
+  `Cargo.toml` — nécessaire, hors liste blanche des sources mais requis
+  pour compiler).
+- `media.rs` : `MediaCfg`/`MediaChargee` += `morphs` + `pixel_morph` ;
+  `PartialEq` retiré (`MorphPoint` ne le porte pas et `sos-scene` est
+  hors périmètre).
+- `scene_sources.rs` : fond ← `bgMorphs` + `pixel_morph = bgPixel` ;
+  widget ← `w.morphs` + `pixel_morph = w.mediaPixel`.
+- `texte.rs` : `dessiner_media_morphe` (offscreen → contenu → `Flush` →
+  warp → `DrawBitmap` sous clip), `peindre_media_local`,
+  `buffers_morphe` (caches `morphes`/`sorties_morph` par rect).
+- `moteur.rs` : branche `!media.morphs.is_empty()` → `MorpheCouche`.
+
+### 43.3 Pièges vérifiés
+
+1. **`u_count` est un `int` HLSL** — écrire ses *bits* (`f32::from_bits`),
+   pas `n as f32`.
+2. **Les factories D3D11 de windows 0.58 sont en out-param** —
+   `CreateVertexShader/CreatePixelShader/CreateBuffer/CreateSamplerState/
+   CreateShaderResourceView/CreateRenderTargetView` retournent
+   `Result<()>` + `Some(&mut out)`.
+3. **L'écriture `u_count` en float faisait boucler 0 fois** (bits de
+   `1.0f32` ≠ int 1) — le warp sortait identique.
+4. **`D3DCompile` (d3dcompiler_47.dll)** : `PCSTR` pour les noms
+   d'entrée (`s!("VSMain")`), blob d'erreurs en UTF-8 dans `pperrormsgs`.
+
+### 43.4 Limites (assumées)
+
+- ≤ 20 points de morph par média (comme le DOM).
+- Le warp échantillonne en `CLAMP` linéaire — les pixels en dehors du
+  rayon n'ont aucune déformation (identique à `MORPH_FRAG`).
+- Lecture vidéo + carrousels : livrés, lot T5 (§44).
+
+### 43.5 Vérification
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif                          # 137
+# scène synthétique (f35daefd + morphs agrandir 100 @0.5,0.5 + retrecir
+# 80 @0.15,0.15 sur le 1er média) → bulge+pinch nets au crop, ~54 fps,
+# 0 drop, NVENC actif.
+```
+
+## 44. Lot T5 — lecture vidéo (`paused`/boucle/A–B) + carrousels (2026-10-28)
+
+### 44.1 Décisions tranchées
+
+- **`mediaTime`/`bgTime` NON portés** — le DOM seede le tracker à la
+  création (`entry.mediaTime = w.mediaTime` puis `applyMediaState` compare
+  à cette valeur) → aucun seek initial n'existe. Une session native = un
+  rechargement de page : la vignette d'une vidéo en pause est sa **frame 0**,
+  jamais `mediaTime`.
+- **Boucle A–B par position affichée** (`position_us ≥ B → seek A`) — le
+  `timeupdate` ~4 Hz du DOM est approximé à la frame près ; **un seul seek
+  par appel `avancer`** : un fichier dont le seek retomberait ≥ B bouclerait
+  à l'infini.
+- **Boucle simple** (`v.loop = !paused && !ab`) = reseek à 0 en fin de flux ;
+  vidéo en pause = première frame chargée puis plus aucune avance ; fin de
+  flux sans boucle = dernière image figée.
+- **`decalage_us` = horloge vidéo** : un seek à `p` au temps moteur `t` pose
+  `decalage = t − p` — les frames post-seek redeviennent dues en rythme
+  (miroir du `v.currentTime = …` du DOM ; sans lui, tout le segment A→B se
+  viderait d'un coup après un reseek).
+- **Carrousel** : `sec = max(1, sec||5)`, `fondu = min(0,8 s, sec/2)`
+  (contrat `carrousel.md`) ; < 2 slides = statique (le DOM n'arme aucun
+  timer). Widget = fondu `ease-in-out` (transition CSS `.slide`, courbe
+  Bézier évaluée par Newton) ; fond = alpha linéaire (`globalAlpha` de
+  `dessinerContenuFond`).
+- **Morph + slides = swap sec** : la slide courante seule, sans fondu (le
+  DOM remplace `src`, pas de fondu dans `morphRendreWidget`).
+- **Slide illisible ignorée, jamais fatale** (miroir d'un `<img>` en échec) ;
+  pile entièrement vide = rien dessiné.
+- **Le fit se recalcule par slide** (`taille_slide`) — tailles possibles
+  différentes, comme les `<img>` du DOM.
+
+### 44.2 Livré
+
+- `media.rs` : `LectureCfg`/`CarrouselCfg` (config), `Carrousel`/
+  `SlideChargee` (chargé), `Carrousel::fenetre` (+ `fenetre_carrousel` pur,
+  testable), `ease_in_out` (Bézier CSS exacte), `MediaChargee::taille_slide`,
+  `charger_carrousel` (slides → textures), `VideoLecteur` += `paused`/
+  `boucle`/`position_us`/`decalage_us`/`taille`, `seeker`
+  (`SetCurrentPosition`, hectonanosecondes) + `afficher` ; `avancer`
+  réécrit (pause/A–B/EOS/horloge vidéo).
+- `scene_sources.rs` : `lecture(paused, a, b)` (b > a ou rien) + `carrousel`
+  (liste non vide → `CarrouselCfg`, `ease` vrai widget/faux fond) câblés
+  sur le fond (`bgPaused`/`bgLoopA/B`/`bgSlides`/`bgSlidesSec`) et les
+  widgets (`mediaPaused`/`mediaLoopA/B`/`mediaSlides`/`mediaSlidesSec`).
+- `texte.rs` : `TraceMedia`/`TracePixel` += `opacite` ; `tracer_bitmap` +=
+  opacité (`DrawBitmap`) ; `image_opacite` (`ColorMatrix` diag k en
+  **prémultiplié** — diag(k,k,k,k) ; en STRAIGHT il faudrait (1,1,1,k) et
+  diag k produirait k² sur RVB) ; `dessiner_media_pixel` upscale à
+  `t.opacite`.
+- `moteur.rs` : `bitmaps_medias` → `Vec<Vec<ID2D1Bitmap1>>` (une bitmap par
+  slide) ; la branche `Media` calcule `carrousel.fenetre(t)` puis trace
+  `(précédente, 1−k)` puis `(courante, k)` ; `TraceCouche`/`PixelCouche` +=
+  `opacite` (capture : 1,0).
+
+### 44.3 Pièges vérifiés
+
+1. **`globalAlpha` s'applique UNE fois** — au `drawImage` final du canvas,
+   pas au remplissage du petit buffer (chemin pixel : l'upscale porte
+   l'opacité, les passes internes restent à 1,0).
+2. **`SetCurrentPosition(GUID_NULL, VT_I8 hns)`** : `PROPVARIANT::from(i64)`
+   + `&GUID::zeroed()` ; la frame post-seek peut précéder A (keyframe) — la
+   position remonte seule, pas de reseek côté bas (comme le DOM).
+3. **Première frame hors fenêtre temporelle** : `position_us = −1` tant
+   qu'aucune frame n'est affichée — la première est téléversée même si son
+   PTS > temps (vignette DOM d'une vidéo en pause, et démarrage plus
+   fidèle qu'un écran noir jusqu'au PTS).
+4. **`ease-in-out` CSS ≠ smoothstep** : la courbe exacte est
+   `cubic-bezier(0,42 ; 0 ; 0,58 ; 1)` — inversée en x par Newton (4 it.),
+   y évalué ensuite ; bornes exactes 0/1, milieu = 0,5.
+
+### 44.4 Limites (assumées)
+
+- Carrousels **images uniquement** (contrat `carrousel.md` — un `.mp4` en
+  slide est ignoré comme un `<img>` cassé du DOM).
+- `mediaPaused`/`bgPaused`/`bgLoop*` **ignorés sur les carrousels** (le DOM
+  de même : ce sont des images).
+- Pas de seek live (`mediaTime` interactif = PlayerBar/dashboard —
+  l'événement n'emprunte pas `chat_tx` ; hors périmètre T5).
+- Modules HUD (horloge, objectifs), équaliseur, spots : lots M1/M2.
+
+### 44.5 Vérification
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings   # exit 0
+cargo test -p sos-moteur-natif                          # 140 (+ 3 tests
+#   fenetre_carrousel statique/avance/bouclage + ease_in_out bornes/monotone)
+# media_scene sur un .mp4 réel : 159 composites en 3 s, NVENC zéro-copie,
+# 0 drop — le nouveau `avancer` ne casse pas la lecture.
+# parite_scene af09059c : composition OK (la capture WGC échoue ici — hwnd
+#   périmé de session, sans rapport avec le lot).
+```

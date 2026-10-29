@@ -2,7 +2,8 @@
   import { onDestroy } from "svelte";
   import { get } from "svelte/store";
   import { tauri, type CaptureCible } from "../tauri";
-  import { createObsTrouFromPc, lierFondCapture } from "../stores/scene";
+  import { createObsTrouFromPc, lierFondCapture, setWidgetCaptureCible } from "../stores/scene";
+  import { moteurEtat } from "../stores/moteur";
   import Modal from "./Modal.svelte";
   import { t } from "../stores/langue";
 
@@ -50,6 +51,11 @@
   let working = $state(false);
   let ferme = false;
   onDestroy(() => (ferme = true));
+
+  // Mode natif (D9) : la capture est persistée sans OBS (trou:true +
+  // captureCible, aucun appel OBS) ; la caméra n'est pas offerte (pas de
+  // variant CaptureCible). En mode OBS, chemin inchangé.
+  let natifMode = $derived($moteurEtat.mode === "natif");
 
   const cleItem = (i: Item) => i.obs_value ?? i.nom;
 
@@ -161,7 +167,11 @@
         await lierFondCapture(kind, target);
       } else {
         if (!widgetId) return;
-        await createObsTrouFromPc(widgetId, kind, target, cible);
+        if (natifMode) {
+          if (cible) await setWidgetCaptureCible(widgetId, cible);
+        } else {
+          await createObsTrouFromPc(widgetId, kind, target, cible);
+        }
       }
       onClose();
     } catch (e) {
@@ -184,19 +194,25 @@
 </script>
 
 <Modal
-  title={mode === "fond" ? $t("obsSourceDialog.titreFond") : $t("obsSourceDialog.titreWidget")}
+  title={mode === "fond"
+    ? $t("obsSourceDialog.titreFond")
+    : natifMode
+      ? $t("obsSourceDialog.titreWidgetNatif")
+      : $t("obsSourceDialog.titreWidget")}
   onClose={onClose}
   crochet="var(--crochet-dore)"
   maxWidth="56rem"
   hint={mode === "fond"
     ? $t("obsSourceDialog.hintFond")
-    : $t("obsSourceDialog.hintWidget")}
+    : natifMode
+      ? $t("obsSourceDialog.hintWidgetNatif")
+      : $t("obsSourceDialog.hintWidget")}
 >
   <div class="dialog-body">
     {#if etape === "type"}
       <p class="hint">{$t("obsSourceDialog.choisirType")}</p>
       <div class="type-buttons">
-        {#if mode !== "fond"}
+        {#if mode !== "fond" && !natifMode}
           <button class="action centre" onclick={() => pickType("camera")}>📷 {$t("obsSourceDialog.kind.camera")}</button>
         {/if}
         <button class="action centre" onclick={() => pickType("window")}>🪟 {$t("obsSourceDialog.kind.window")}</button>
