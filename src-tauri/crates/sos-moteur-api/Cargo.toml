@@ -7,6 +7,8 @@ publish = false
 description = "StreamOS — contrats des moteurs de diffusion (sans Tauri, sans Windows)"
 
 # Contrat de l'anneau 2 : uniquement des types et des traits, aucune
-# dépendance. Il ne dépend ni de Tauri, ni du domaine, ni de `windows`.
-# Contrat : docs/features/moteur-natif.md §3.1 à §3.3.
+# dépendance externe. Il ne dépend ni de Tauri, ni du domaine, ni de
+# `windows` ; seul `sos-scene` (anneau 0) fournit le type `Scene` que
+# `appliquer_scene` reçoit. Contrat : docs/features/moteur-natif.md §3.1 à §3.3.
 [dependencies]
+sos-scene = { path = "../sos-scene" }

@@ -464,6 +464,27 @@ fn decoder_frame_input(frame: &str) -> Option<EtatInput> {
     })
 }
 
+/// Extrait la scène d'une frame `snapshot` (`{"scene":…,"sceneId":…,"type":…}`).
+///
+/// Même piège de tri des clés que [`decoder_frame_chat`] : test par
+/// sous-chaîne, puis validation du champ `type` après désérialisation.
+/// La scène de la frame porte déjà l'override « !cadres » (injecté par
+/// `snapshot_json`) : le moteur applique exactement ce que la diffusion
+/// affiche.
+fn decoder_frame_snapshot(frame: &str) -> Option<sos_scene::Scene> {
+    if !frame.contains("\"type\":\"snapshot\"") {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameSnapshot {
+        #[serde(rename = "type")]
+        type_frame: String,
+        scene: sos_scene::Scene,
+    }
+    let frame: FrameSnapshot = serde_json::from_str(frame).ok()?;
+    (frame.type_frame == "snapshot").then_some(frame.scene)
+}
+
 /// Pousse un message dans le moteur natif (harnais, tests, intégrations).
 ///
 /// Le chemin de production est [`demarrer_ecoute_chat`] : cette commande
@@ -517,10 +538,11 @@ pub fn demarrer_ecoute_chat(app: AppHandle) {
     });
 }
 
-/// Redémarre la session aperçu à chaque mutation de scène (`snapshot_tx`) :
-/// le projecteur natif reflète ainsi la scène courante. L'arrêt est
-/// idempotent — le poll de la fenêtre relance la session sur la scène
-/// fraîche à la prochaine frame.
+/// Applique la scène à chaud dans le moteur natif à chaque mutation
+/// (`snapshot_tx`) : la session aperçu — comme un enregistrement — reflète
+/// la scène courante sans être tuée ni relancée (application différentielle,
+/// trait `Moteur`). Hors session, l'application ne fait que mettre à jour
+/// la configuration consommée par le prochain démarrage — idempotent.
 pub fn demarrer_veille_apercu(app: AppHandle) {
     let Some(state) = app.try_state::<crate::scenes::ScenesState>() else {
         log::warn!("veille aperçu : état des scènes absent, veille non démarrée");
@@ -530,9 +552,19 @@ pub fn demarrer_veille_apercu(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
-                Ok(_) => {
+                Ok(frame) => {
+                    let Some(scene) = decoder_frame_snapshot(&frame) else {
+                        continue;
+                    };
                     if let Some(registre) = app.try_state::<RegistreMoteur>() {
-                        registre.natif().arreter_apercu();
+                        // `medias/` est relatif à `base` — posée par
+                        // `configurer_scene`, elle peut manquer si le
+                        // snapshot précède toute session : la fixer garantit
+                        // la résolution des chemins médias.
+                        if let Ok(base) = crate::config::data_dir(&app) {
+                            registre.natif().configurer_base(&base);
+                        }
+                        registre.natif().appliquer_scene(&scene);
                     }
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
@@ -762,5 +794,27 @@ mod tests {
         assert!(decoder_frame_chat(r#"{"type":"eq-spectrum","data":[1,2,3]}"#).is_none());
         assert!(decoder_frame_chat("pas du json").is_none());
         assert!(decoder_frame_chat(r#"{"type":"chat"}"#).is_none());
+    }
+
+    #[test]
+    fn decoder_snapshot_extrait_la_scene_de_la_frame() {
+        let mut scene = sos_scene::Scene::default();
+        scene.canvasW = 1360;
+        scene.canvasH = 768;
+        // Clés triées par serde_json::json! : "scene" < "sceneId" < "type" —
+        // même piège que les décodeurs chat/input (starts_with interdit).
+        let frame = serde_json::json!({
+            "type": "snapshot",
+            "sceneId": "abc",
+            "scene": scene,
+        })
+        .to_string();
+        let scene = decoder_frame_snapshot(&frame).expect("scène décodée");
+        assert_eq!((scene.canvasW, scene.canvasH), (1360, 768));
+        // Les autres frames du canal ne sont pas des snapshots ; un snapshot
+        // sans champ `scene` ne désérialise pas.
+        assert!(decoder_frame_snapshot(r#"{"type":"chat","message":{}}"#).is_none());
+        assert!(decoder_frame_snapshot(r#"{"type":"snapshot"}"#).is_none());
+        assert!(decoder_frame_snapshot("pas du json").is_none());
     }
 }

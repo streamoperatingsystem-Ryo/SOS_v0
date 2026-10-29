@@ -1,5 +1,13 @@
 //! Compositeur GPU — N calques → canvas NV12, en un `VideoProcessorBlt`.
 //!
+//! ⚠️ **Hors chemin de production depuis le 2026-10-28** (§37) : la
+//! composition réelle est 100 % Direct2D sur un canvas BGRA (`texte.rs`,
+//! `VoieRendu` de `moteur.rs`) et `VideoProcessorBlt` ne sert plus qu'à la
+//! conversion NV12 (`color_gpu::ConvertisseurNv12`) — `VideoProcessorBlt`
+//! ne sait faire ni alpha par pixel ni clip polygonal. Ce module reste pour
+//! les **harnais `examples/`** (`passe_nv12`, `compose_encode`) — décision
+//! §37.2. Ne pas l'étendre pour la production.
+//!
 //! Composition et conversion colorimétrique (BT.709, 4:2:0) sont fusionnées :
 //! l'encodeur consomme directement la texture de sortie (zéro-copie).
 //! Z-order = ordre des calques (le premier est en dessous).
@@ -92,12 +100,12 @@ impl Compositeur {
         Self::nouveau_sur(contexte, &sortie, fps)
     }
 
-    /// Compose vers une texture **existante** — voie A du texte (2026-10-28).
+    /// Compose vers une texture **existante** (canvas externe, ex. BGRA).
     ///
-    /// Le canvas de composition est alors en BGRA : Direct2D dessine les
-    /// textes dessus (alpha réel), puis `color_gpu::ConvertisseurNv12`
-    /// convertit vers la texture NV12 enregistrée auprès de l'encodeur.
-    /// La texture NV12 du chemin direct reste produite par [`Compositeur::nouveau`].
+    /// Cœur du constructeur : [`Compositeur::nouveau`] crée sa texture NV12
+    /// puis délègue ici. N'a plus d'appelant hors `nouveau` (la voie texte
+    /// qui l'utilisait a migré vers `VoieRendu`, §37) ; conservé public pour
+    /// les harnais.
     pub fn nouveau_sur(
         contexte: &ContexteGpu,
         sortie: &ID3D11Texture2D,

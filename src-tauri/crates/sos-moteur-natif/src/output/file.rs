@@ -1,6 +1,8 @@
 //! Sink fichier brut — bitstream élémentaire (`.h264`), sans conteneur.
 //!
-//! Utile au diagnostic et aux tests ; un lecteur a besoin d'un remux
+//! ⚠️ **Harnais uniquement** : appelé par `examples/compose_encode.rs`,
+//! jamais par le chemin de production — `moteur.rs` ne pousse que dans
+//! `FfmpegSink`. Un lecteur a besoin d'un remux
 //! (`ffmpeg -i x.h264 -c copy x.mp4`).
 
 use std::fs::File;

@@ -1,20 +1,24 @@
-//! Orchestrateur du moteur natif (lot 1.6).
+//! Orchestrateur du moteur natif.
 //!
-//! Assemble les briques validées : WGC (N sources) → canvas **BGRA composé
-//! par Direct2D** (alpha réel, cadres, voiles, chat) → conversion NV12 →
-//! encodeur (NVENC d'abord, repli MFT) → sinks → aperçu, cadencé par
-//! l'horloge, surveillé par le gouverneur et les compteurs.
+//! Assemble les briques : WGC (N sources) → canvas **BGRA composé
+//! par Direct2D** (alpha réel, médias, cadres, voiles, chat, input viewer,
+//! morphs, plans à perspective) → conversion NV12 → encodeur (NVENC
+//! d'abord, repli MFT) → sinks → aperçu, cadencé par l'horloge, surveillé
+//! par le gouverneur et les compteurs.
 //!
 //! Contrat : `docs/features/moteur-natif.md` §3.1. `MoteurNatif` implémente
-//! `sos_moteur_api::Moteur` ; les sources viennent de `configurer_sources`
-//! tant que `appliquer_scene` n'existe pas (lot 1.1 de l'API).
+//! `sos_moteur_api::Moteur` ; la scène arrive par `configurer_scene`
+//! (snapshot de pré-session) et se ré-applique **à chaud** par
+//! `appliquer_scene` (trait — différentiel, file bornée drop-oldest).
 //!
-//! Limites assumées de ce lot :
+//! Limites assumées :
 //! - sorties fichier seulement (MP4 fragmenté / MKV) ; RTMP/SRT plus tard ;
-//! - pas de caméra (Media Foundation Source Reader) ;
+//! - caméra Media Foundation (`capture/camera.rs`) : ni fond vert ni
+//!   anneau `cameraBord` à ce lot ;
 //! - le gouverneur **constate** et trace sa décision, il ne reconfigure pas
-//!   encore le compositeur/l'encodeur à chaud.
+//!   encore le rendu/l'encodeur à chaud.
 
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
@@ -31,7 +35,9 @@ use sos_moteur_api::{
 };
 
 use crate::cadres::CadreCfg;
+use crate::capture::camera::CaptureCamera;
 use crate::capture::enumeration::enumerer_moniteurs;
+use crate::capture::Moniteur;
 use crate::capture::wgc::CaptureWgc;
 use crate::chat::{ChatCfg, FileChat, MessageChat};
 use crate::clock::Horloge;
@@ -44,17 +50,34 @@ use crate::encode::{detect::EncodeurDispo, ErreurEncodage};
 use crate::gouverneur::{Action, Gouverneur, Mesures};
 use crate::gpu::{ContexteGpu, DescTexture, Format};
 use crate::input::{EtatInput, FileInput, InputCfg};
-use crate::media::{MediaCfg, PerspCfg};
+use crate::media::{CarrouselCfg, MediaCfg, MediaChargee, PerspCfg};
 use crate::output::ffmpeg::FfmpegSink;
 use crate::preview::Apercu;
 use crate::scene_sources::BoiteCfg;
 use crate::texte::{DessinateurTexte, TexteCfg};
 
 /// Ce que le moteur capture.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CibleCapture {
     Moniteur { index: u32 },
     Fenetre { hwnd: isize },
+    /// Caméra locale (Media Foundation) — `device` = nom convivial
+    /// (`cameraDeviceId` persisté, FriendlyName MF) ; `None` = device par
+    /// défaut du système.
+    Camera { device: Option<String> },
+}
+
+/// Forme de découpe dédiée d'une source (widget caméra `cameraForme`,
+/// contrat 9). `None` = rectangle de la boîte (clip axe-aligné par défaut) :
+/// l'absence de forme dédiée suit le cadre de scène en mode OBS — hors
+/// périmètre de ce lot, elle est rendue comme `Carre`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FormeCamera {
+    /// Rectangle : le clip axe-aligné de la boîte (`"carre"` explicite).
+    Carre,
+    /// Cercle inscrit : diamètre `min(w,h)`, centré — même polygone que
+    /// `pathCercle` (`cadres::points_cercle`).
+    Cercle,
 }
 
 /// Une source du moteur : cible native + destination dans le canvas.
@@ -69,6 +92,8 @@ pub struct SourceCfg {
     /// Cadre du widget porteur : `Some` = la capture est **découpée au
     /// polygone** du cadre (même contrat que les médias).
     pub cadre: Option<CadreCfg>,
+    /// Forme dédiée d'un widget caméra (`None` pour toute autre source).
+    pub forme_camera: Option<FormeCamera>,
 }
 
 impl SourceCfg {
@@ -141,6 +166,18 @@ pub struct MoteurNatif {
     /// `arreter_apercu` n'a pas acquitté — jamais de respawn en boucle sur
     /// la même panne (le poll de la fenêtre relancerait à chaque appel).
     etat_apercu: Arc<Mutex<Option<String>>>,
+    /// Dossier des données (`medias/` y est relatif) — posé par
+    /// `configurer_scene` / `configurer_base`, relu par `appliquer_scene`.
+    /// Vide tant qu'aucune scène n'a été configurée.
+    base: Mutex<PathBuf>,
+    /// Canvas de la dernière scène chargée — comparé au canvas de session
+    /// à l'application à chaud (mismatch = dégradation signalée).
+    canvas: Mutex<(u32, u32)>,
+    /// Courrier de la scène à appliquer à chaud : file bornée à **un**
+    /// élément — une nouvelle application écrase la précédente non
+    /// consommée (drop-oldest, contrat §3.1). Consommée par `boucle` en
+    /// début de frame, jamais bloquante côté appelant.
+    scene_maj: Arc<Mutex<Option<SceneChargee>>>,
 }
 
 impl Default for MoteurNatif {
@@ -171,6 +208,9 @@ impl MoteurNatif {
             arret_apercu: Mutex::new(None),
             fil_apercu: Mutex::new(None),
             etat_apercu: Arc::new(Mutex::new(None)),
+            base: Mutex::new(PathBuf::new()),
+            canvas: Mutex::new((0, 0)),
+            scene_maj: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -342,6 +382,9 @@ impl MoteurNatif {
 
     /// Remplace sources et médias depuis une scène + la table widget → cible.
     /// `base` = dossier des données (`medias/` y est relatif).
+    ///
+    /// Refusé pendant un enregistrement (snapshot de pré-session) :
+    /// l'application à chaud passe par `Moteur::appliquer_scene`.
     pub fn configurer_scene(
         &self,
         scene: &sos_scene::Scene,
@@ -351,13 +394,32 @@ impl MoteurNatif {
         if self.en_cours() {
             return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
         }
-        let sources = crate::scene_sources::sources_depuis_scene(scene, cibles);
-        let medias = crate::scene_sources::medias_depuis_scene(scene, base);
-        let textes = crate::scene_sources::textes_depuis_scene(scene);
-        let cadres = crate::scene_sources::cadres_depuis_scene(scene);
-        let chats = crate::scene_sources::chat_depuis_scene(scene);
-        let boites = crate::scene_sources::boites_depuis_scene(scene);
-        let inputs = crate::scene_sources::input_depuis_scene(scene);
+        self.configurer_base(base);
+        let lot = self.lot_scene(scene, cibles, base);
+        for source in &lot.sources {
+            source.valider()?;
+        }
+        self.ecrire_lot(&lot);
+        *self.canvas.lock().unwrap_or_else(|e| e.into_inner()) =
+            (scene.canvasW, scene.canvasH);
+        Ok(())
+    }
+
+    /// Dossier des données (`medias/` y est relatif) — relu par
+    /// `appliquer_scene`. Posé par `configurer_scene` ; peut être fixé
+    /// directement pour une application sans session préalable.
+    pub fn configurer_base(&self, base: &std::path::Path) {
+        *self.base.lock().unwrap_or_else(|e| e.into_inner()) = base.to_path_buf();
+    }
+
+    /// Mapping scène → lot de configurations (partagé par `configurer_scene`
+    /// et `Moteur::appliquer_scene` — une seule source de vérité).
+    fn lot_scene(
+        &self,
+        scene: &sos_scene::Scene,
+        cibles: &std::collections::HashMap<String, CibleCapture>,
+        base: &std::path::Path,
+    ) -> LotScene {
         // Un style non porté ne produit aucun cadre : le dire, plutôt que de
         // laisser croire que la scène est rendue à l'identique.
         if let Some(cadre) = scene
@@ -372,19 +434,29 @@ impl MoteurNatif {
                 ));
             }
         }
-        for source in &sources {
-            source.valider()?;
+        LotScene {
+            sources: crate::scene_sources::sources_depuis_scene(scene, cibles),
+            medias: crate::scene_sources::medias_depuis_scene(scene, base),
+            textes: crate::scene_sources::textes_depuis_scene(scene),
+            cadres: crate::scene_sources::cadres_depuis_scene(scene),
+            chats: crate::scene_sources::chat_depuis_scene(scene),
+            boites: crate::scene_sources::boites_depuis_scene(scene),
+            inputs: crate::scene_sources::input_depuis_scene(scene),
+            persps: crate::scene_sources::persps_depuis_scene(scene),
         }
-        *self.sources.lock().unwrap_or_else(|e| e.into_inner()) = sources;
-        *self.medias.lock().unwrap_or_else(|e| e.into_inner()) = medias;
-        *self.textes.lock().unwrap_or_else(|e| e.into_inner()) = textes;
-        *self.cadres.lock().unwrap_or_else(|e| e.into_inner()) = cadres;
-        *self.chats.lock().unwrap_or_else(|e| e.into_inner()) = chats;
-        *self.boites.lock().unwrap_or_else(|e| e.into_inner()) = boites;
-        *self.inputs.lock().unwrap_or_else(|e| e.into_inner()) = inputs;
-        *self.persps.lock().unwrap_or_else(|e| e.into_inner()) =
-            crate::scene_sources::persps_depuis_scene(scene);
-        Ok(())
+    }
+
+    /// Écrit le lot dans les mutexes — la configuration lue par le prochain
+    /// `demarrer_*` et photographiée par `scene_chargee`.
+    fn ecrire_lot(&self, lot: &LotScene) {
+        *self.sources.lock().unwrap_or_else(|e| e.into_inner()) = lot.sources.clone();
+        *self.medias.lock().unwrap_or_else(|e| e.into_inner()) = lot.medias.clone();
+        *self.textes.lock().unwrap_or_else(|e| e.into_inner()) = lot.textes.clone();
+        *self.cadres.lock().unwrap_or_else(|e| e.into_inner()) = lot.cadres.clone();
+        *self.chats.lock().unwrap_or_else(|e| e.into_inner()) = lot.chats.clone();
+        *self.boites.lock().unwrap_or_else(|e| e.into_inner()) = lot.boites.clone();
+        *self.inputs.lock().unwrap_or_else(|e| e.into_inner()) = lot.inputs.clone();
+        *self.persps.lock().unwrap_or_else(|e| e.into_inner()) = lot.persps.clone();
     }
 
     /// Photographie des compteurs (diagnostic, lot 2.9).
@@ -429,6 +501,7 @@ impl MoteurNatif {
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
+            canvas: *self.canvas.lock().unwrap_or_else(|e| e.into_inner()),
             chat: Arc::clone(&self.chat),
             input: Arc::clone(&self.input),
         }
@@ -475,6 +548,13 @@ impl MoteurNatif {
         for source in &scene.sources {
             source.valider()?;
         }
+        // Le courrier n'a de sens que pour la boucle à venir : toute
+        // application déposée avant le snapshot y est déjà incluse.
+        self.scene_maj
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let maj_scene = Arc::clone(&self.scene_maj);
         let arret = Arc::new(AtomicBool::new(false));
         *self.arret_apercu.lock().unwrap_or_else(|e| e.into_inner()) =
             Some(Arc::clone(&arret));
@@ -499,6 +579,7 @@ impl MoteurNatif {
                 let resultat = boucle(
                     cfg,
                     scene,
+                    maj_scene,
                     Arc::clone(&compteurs),
                     apercu,
                     arret,
@@ -555,7 +636,7 @@ impl Moteur for MoteurNatif {
             capture_ecran: true,
             capture_fenetre: true,
             capture_jeu: false,
-            camera: false,
+            camera: true,
             fond_vert: false,
             masque_shader: false,
             cadres_animes: false,
@@ -568,6 +649,35 @@ impl Moteur for MoteurNatif {
             srt: false,
             ndi: false,
         }
+    }
+
+    /// Application à chaud (contrat §3.1) : la scène est re-mappée, écrite
+    /// dans les mutexes puis déposée dans le courrier de la boucle — file
+    /// bornée à un élément, drop-oldest, jamais bloquante. La boucle
+    /// applique la différence au début de la frame suivante : une capture
+    /// ou un média inchangé garde sa session, sa texture et son encodeur.
+    ///
+    /// La table `cibles` du harnais n'existe pas côté trait : seule la
+    /// cible persistée (`captureCible`) est lue — comme l'app, qui passe
+    /// toujours une table vide. Une source invalide annule l'application
+    /// (dégradation signalée), jamais la session en cours. Hors session,
+    /// seuls les mutexes sont mis à jour : le prochain démarrage les
+    /// consomme par `scene_chargee`.
+    fn appliquer_scene(&self, scene: &sos_scene::Scene) {
+        let base = self.base.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let lot = self.lot_scene(scene, &std::collections::HashMap::new(), &base);
+        for source in &lot.sources {
+            if let Err(e) = source.valider() {
+                self.compteurs
+                    .degrader(format!("scène refusée à chaud : {e}"));
+                return;
+            }
+        }
+        self.ecrire_lot(&lot);
+        *self.canvas.lock().unwrap_or_else(|e| e.into_inner()) =
+            (scene.canvasW, scene.canvasH);
+        *self.scene_maj.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some(self.scene_chargee());
     }
 
     fn demarrer_sortie(&self, cfg: SortieCfg) -> Result<(), ErreurMoteur> {
@@ -627,6 +737,13 @@ impl Moteur for MoteurNatif {
             source.valider()?;
         }
 
+        // Le courrier n'a de sens que pour la boucle à venir : toute
+        // application déposée avant le snapshot y est déjà incluse.
+        self.scene_maj
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take();
+        let maj_scene = Arc::clone(&self.scene_maj);
         let arret = Arc::new(AtomicBool::new(false));
         *self.etat.lock().unwrap_or_else(|e| e.into_inner()) = EtatInterne::Actif;
         *self.arret.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&arret));
@@ -641,6 +758,7 @@ impl Moteur for MoteurNatif {
                 let resultat = boucle(
                     cfg,
                     scene,
+                    maj_scene,
                     Arc::clone(&compteurs),
                     apercu,
                     arret,
@@ -695,6 +813,19 @@ impl Moteur for MoteurNatif {
     }
 }
 
+/// Lot de configurations dérivées d'une scène — produit du mapping
+/// `scene_sources`, écrit dans les mutexes par `ecrire_lot`.
+struct LotScene {
+    sources: Vec<SourceCfg>,
+    medias: Vec<MediaCfg>,
+    textes: Vec<TexteCfg>,
+    cadres: Vec<CadreCfg>,
+    chats: Vec<ChatCfg>,
+    boites: Vec<BoiteCfg>,
+    inputs: Vec<InputCfg>,
+    persps: Vec<PerspCfg>,
+}
+
 /// Contenu figé d'une session d'enregistrement (captures, médias, textes,
 /// cadres, chat, boîtes).
 struct SceneChargee {
@@ -707,25 +838,456 @@ struct SceneChargee {
     inputs: Vec<InputCfg>,
     /// Plans à perspective (offscreen + effet par plan).
     persps: Vec<PerspCfg>,
+    /// Canvas de la scène d'origine — comparé au canvas de la session à
+    /// l'application à chaud (mismatch = dégradation, jamais de resize).
+    canvas: (u32, u32),
     /// Buffer vivant : l'app y pousse pendant la session.
     chat: Arc<Mutex<FileChat>>,
     /// État vivant des touches : l'app y pousse pendant la session.
     input: Arc<Mutex<FileInput>>,
 }
 
+/// Session de capture d'une source : WGC (moniteur/fenêtre) ou Media
+/// Foundation (caméra). Même rôle pour le moteur : une session refcountée
+/// par source, rafraîchie sur le thread de composition.
+enum SessionCapture {
+    Wgc(CaptureWgc),
+    Camera(CaptureCamera),
+}
+
+impl SessionCapture {
+    /// Taille de la source capturée, en pixels.
+    fn taille(&self) -> (u32, u32) {
+        match self {
+            SessionCapture::Wgc(s) => s.taille(),
+            SessionCapture::Camera(s) => s.taille(),
+        }
+    }
+
+    /// Rafraîchit `destination` avec la frame la plus récente — **sur le
+    /// thread appelant** (composition) : copie de la texture du pool WGC,
+    /// ou `UpdateSubresource` du slot dernière-frame caméra. `false` =
+    /// aucune frame neuve, la destination garde son contenu.
+    fn rafraichir(&self, destination: &ID3D11Texture2D, contexte: &ContexteGpu) -> bool {
+        match self {
+            SessionCapture::Wgc(session) => {
+                if let Ok(texture) = session.prochaine_texture(Duration::ZERO) {
+                    unsafe { contexte.context().CopyResource(destination, &texture) };
+                    true
+                } else {
+                    false
+                }
+            }
+            SessionCapture::Camera(session) => {
+                session.copier_dans(destination).unwrap_or(false)
+            }
+        }
+    }
+}
+
 /// Une capture active + sa copie GPU persistante.
 ///
 /// La texture WGC appartient au frame pool : elle est copiée immédiatement,
-/// sinon la frame suivante l'invalide.
+/// sinon la frame suivante l'invalide. La caméra reçoit sa frame par
+/// `UpdateSubresource` — dans les deux cas `cible` persiste toute la session.
 struct CaptureActive {
-    session: CaptureWgc,
+    session: SessionCapture,
     cible: ID3D11Texture2D,
     taille: (u32, u32),
-    rect: (f64, f64, f64, f64),
-    z: i32,
-    /// Cadre du widget de capture (découpe au polygone).
-    cadre: Option<CadreCfg>,
+    /// Source d'origine (nom, cible, destination `rect`, `z`, cadre) —
+    /// clé du diff d'application à chaud : même `nom` + même `cible` =
+    /// session WGC, texture et bitmap conservées.
+    cfg: SourceCfg,
     prete: bool,
+}
+
+/// La scène chargée telle qu'elle vit dans la boucle : captures, médias
+/// décodés, bitmaps Direct2D, index de cadres et plan de composition.
+/// `appliquer` la fait évoluer **différentiellement** en cours de
+/// session — contrat §3.1 : un déplacement de widget ne recrée ni la
+/// session de capture, ni la texture, ni l'encodeur.
+struct SceneVivante {
+    captures: Vec<CaptureActive>,
+    medias: Vec<MediaChargee>,
+    /// Parallèle à `medias` : la config qui a produit chaque média —
+    /// nécessaire au diff (`MediaChargee` ne garde pas son `chemin`).
+    medias_cfg: Vec<MediaCfg>,
+    bitmaps_medias: Vec<Vec<ID2D1Bitmap1>>,
+    bitmaps_captures: Vec<Option<ID2D1Bitmap1>>,
+    /// Parallèle à `captures` : géométrie du **cercle inscrit** pour les
+    /// sources à forme dédiée `FormeCamera::Cercle` (`None` partout ailleurs).
+    /// Reconstruite à chaque application — un widget caméra est singleton.
+    cercles_capture: Vec<Option<ID2D1PathGeometry>>,
+    /// Index du polygone de chaque calque dans `voie.geometries`.
+    index_cadre_media: Vec<Option<usize>>,
+    index_cadre_capture: Vec<Option<usize>>,
+    index_cadre_input: Vec<Option<usize>>,
+    plan: Vec<(i32, GenreCalque, usize)>,
+}
+
+impl SceneVivante {
+    /// Application **différentielle** d'une scène en cours de session.
+    ///
+    /// Jamais fatale : chaque élément irrécupérable (capture qui refuse de
+    /// démarrer, média indécodable, bitmap en échec) est signalé par
+    /// `compteurs.degrader` et omis — une scène déposée pendant un
+    /// enregistrement ne doit pas le tuer.
+    fn appliquer(
+        &mut self,
+        nouvelle: SceneChargee,
+        contexte: &Arc<ContexteGpu>,
+        moniteurs: &[Moniteur],
+        voie: &mut VoieRendu,
+        compteurs: &CompteursMoteur,
+        canvas: (u32, u32),
+    ) {
+        let SceneChargee {
+            sources,
+            medias: medias_cfg,
+            textes,
+            cadres,
+            chats,
+            boites,
+            inputs,
+            persps,
+            canvas: canvas_scene,
+            ..
+        } = nouvelle;
+        // Le canvas est figé à la création de la session (textures, NV12) :
+        // une scène d'un autre canvas s'applique quand même, mais signalée.
+        if canvas_scene != canvas {
+            compteurs.degrader(format!(
+                "scène {}×{} appliquée sur un canvas {}×{}",
+                canvas_scene.0, canvas_scene.1, canvas.0, canvas.1
+            ));
+        }
+        if let Err(e) = voie.mettre_a_jour(
+            contexte,
+            canvas.0,
+            canvas.1,
+            ContenuRendu {
+                textes,
+                cadres,
+                chats,
+                boites,
+                inputs,
+                persps,
+            },
+        ) {
+            compteurs.degrader(format!("application scène : {e}"));
+        }
+        self.appliquer_captures(&sources, contexte, moniteurs, voie, compteurs);
+        self.appliquer_medias(&medias_cfg, contexte, voie, compteurs);
+        self.maj_cercles_capture(voie, compteurs);
+        self.maj_index_cadres(voie, compteurs);
+        self.plan = construire_plan(self, voie);
+    }
+
+    /// Captures : match par `nom` (id du widget) — même `cible` → session,
+    /// texture et bitmap conservées ; cible différente ou nom nouveau →
+    /// nouvelle session ; nom disparu → relâchée (drop libère le WGC).
+    fn appliquer_captures(
+        &mut self,
+        sources: &[SourceCfg],
+        contexte: &Arc<ContexteGpu>,
+        moniteurs: &[Moniteur],
+        voie: &mut VoieRendu,
+        compteurs: &CompteursMoteur,
+    ) {
+        let anciennes = std::mem::take(&mut self.captures);
+        let anciennes_bm = std::mem::take(&mut self.bitmaps_captures);
+        let mut pool: Vec<(CaptureActive, Option<ID2D1Bitmap1>)> =
+            anciennes.into_iter().zip(anciennes_bm).collect();
+        for src in sources {
+            let position = pool.iter().position(|(c, _)| c.cfg.nom == src.nom);
+            let (capture, bitmap) = match position {
+                // Même cible : session WGC, texture et bitmap conservées —
+                // seules la géométrie et le cadre sont ré-appliqués.
+                Some(i) if pool[i].0.cfg.cible == src.cible => {
+                    let (mut c, b) = pool.remove(i);
+                    c.cfg = src.clone();
+                    (c, b)
+                }
+                autre => {
+                    // Cible changée ou source nouvelle : l'ancienne session
+                    // (s'il y en a une) est relâchée, puis re-création.
+                    if let Some(i) = autre {
+                        pool.remove(i);
+                    }
+                    let nouvelle = match creer_capture(src, moniteurs, contexte) {
+                        Ok(c) => c,
+                        Err(e) => {
+                            compteurs.degrader(e);
+                            continue;
+                        }
+                    };
+                    match voie.bitmap_media(&nouvelle.cible, false) {
+                        Ok(b) => (nouvelle, Some(b)),
+                        Err(e) => {
+                            compteurs
+                                .degrader(format!("bitmap capture « {} » : {e}", src.nom));
+                            continue;
+                        }
+                    }
+                }
+            };
+            self.captures.push(capture);
+            self.bitmaps_captures.push(bitmap);
+        }
+    }
+
+    /// (Re)construit la géométrie du cercle inscrit des sources caméra —
+    /// suit `cfg.rect` : un widget déplacé/redimensionné reçoit son nouveau
+    /// clip sans toucher à la session de capture.
+    fn maj_cercles_capture(&mut self, voie: &VoieRendu, compteurs: &CompteursMoteur) {
+        self.cercles_capture = self
+            .captures
+            .iter()
+            .map(|c| match c.cfg.forme_camera {
+                Some(FormeCamera::Cercle) => match voie.geometrie_cercle(c.cfg.rect) {
+                    Ok(geo) => Some(geo),
+                    Err(e) => {
+                        // Jamais un clip faux silencieux : rendu rectangle.
+                        compteurs.degrader(format!("clip cercle « {} » : {e}", c.cfg.nom));
+                        None
+                    }
+                },
+                _ => None,
+            })
+            .collect();
+    }
+
+    /// Médias : identité de contenu = même `chemin` + mêmes slides →
+    /// texture décodée et bitmap conservées, seuls les paramètres (rect,
+    /// z, fit, transform, effets, cadre, morphs, rythme du carrousel) sont
+    /// ré-appliqués. Une vidéo dont la lecture change est rechargée : son
+    /// lecteur MF interne n'est pas reconfigurable de l'extérieur.
+    fn appliquer_medias(
+        &mut self,
+        cfgs: &[MediaCfg],
+        contexte: &ContexteGpu,
+        voie: &mut VoieRendu,
+        compteurs: &CompteursMoteur,
+    ) {
+        let anciens_cfg = std::mem::take(&mut self.medias_cfg);
+        let anciens = std::mem::take(&mut self.medias);
+        let anciennes_bm = std::mem::take(&mut self.bitmaps_medias);
+        let mut pool: Vec<(MediaCfg, MediaChargee, Vec<ID2D1Bitmap1>)> = anciens_cfg
+            .into_iter()
+            .zip(anciens)
+            .zip(anciennes_bm)
+            .map(|((c, m), b)| (c, m, b))
+            .collect();
+        for cfg in cfgs {
+            let position = pool.iter().position(|(ancienne_cfg, media, _)| {
+                ancienne_cfg.chemin == cfg.chemin
+                    && memes_slides(&ancienne_cfg.carrousel, &cfg.carrousel)
+                    && !(media.est_video() && ancienne_cfg.lecture != cfg.lecture)
+            });
+            let (media, bitmaps) = match position {
+                Some(i) => {
+                    let (_, mut media, b) = pool.remove(i);
+                    media.rect = cfg.rect;
+                    media.z = cfg.z;
+                    media.fit = cfg.fit;
+                    media.transform = cfg.transform;
+                    media.effets = cfg.effets;
+                    media.cadre = cfg.cadre.clone();
+                    media.morphs = cfg.morphs.clone();
+                    media.pixel_morph = cfg.pixel_morph;
+                    media.lecture = cfg.lecture;
+                    if let (Some(carrousel), Some(c)) = (media.carrousel.as_mut(), &cfg.carrousel)
+                    {
+                        carrousel.sec = c.sec;
+                        carrousel.fondu_s = (c.sec / 2.0).min(0.8);
+                        carrousel.ease = c.ease;
+                    }
+                    (media, b)
+                }
+                None => {
+                    let media = match crate::media::charger(contexte, cfg) {
+                        Ok(m) => m,
+                        Err(e) => {
+                            compteurs
+                                .degrader(format!("média {} : {e}", cfg.chemin.display()));
+                            continue;
+                        }
+                    };
+                    match bitmaps_media_de(&media, voie) {
+                        Ok(b) => (media, b),
+                        Err(e) => {
+                            compteurs.degrader(e);
+                            continue;
+                        }
+                    }
+                }
+            };
+            self.medias_cfg.push(cfg.clone());
+            self.medias.push(media);
+            self.bitmaps_medias.push(bitmaps);
+        }
+    }
+
+    /// Recharge les index cadre → géométrie (`voie.geometries` indexé par
+    /// position dans `voie.cadres`) — après une application, le cadre
+    /// référencé par un calque a pu changer de place ou disparaître.
+    fn maj_index_cadres(&mut self, voie: &VoieRendu, compteurs: &CompteursMoteur) {
+        self.index_cadre_media = self
+            .medias
+            .iter()
+            .map(|m| {
+                m.cadre
+                    .as_ref()
+                    .and_then(|cadre| voie.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        if self
+            .medias
+            .iter()
+            .zip(&self.index_cadre_media)
+            .any(|(m, i)| m.cadre.is_some() && i.is_none())
+        {
+            // Jamais un rendu faux silencieux : la couche sort non découpée.
+            compteurs.degrader("cadre de média introuvable : couche non découpée");
+        }
+        self.index_cadre_capture = self
+            .captures
+            .iter()
+            .map(|c| {
+                c.cfg
+                    .cadre
+                    .as_ref()
+                    .and_then(|cadre| voie.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        if self
+            .captures
+            .iter()
+            .zip(&self.index_cadre_capture)
+            .any(|(c, i)| c.cfg.cadre.is_some() && i.is_none())
+        {
+            compteurs.degrader("cadre de capture introuvable : couche non découpée");
+        }
+        self.index_cadre_input = voie
+            .inputs
+            .iter()
+            .map(|i| {
+                i.cadre
+                    .as_ref()
+                    .and_then(|cadre| voie.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+    }
+}
+
+/// Crée une capture WGC + sa texture de destination — partagé par le
+/// démarrage de session et la re-création à l'application à chaud.
+fn creer_capture(
+    source: &SourceCfg,
+    moniteurs: &[Moniteur],
+    contexte: &Arc<ContexteGpu>,
+) -> Result<CaptureActive, String> {
+    let session = match &source.cible {
+        CibleCapture::Moniteur { index } => {
+            let moniteur = moniteurs
+                .iter()
+                .find(|m| m.index == *index)
+                .ok_or_else(|| format!("moniteur {index} introuvable"))?;
+            SessionCapture::Wgc(
+                CaptureWgc::demarrer_avec(moniteur, Arc::clone(contexte))
+                    .map_err(|e| format!("capture « {} » : {e}", source.nom))?,
+            )
+        }
+        CibleCapture::Fenetre { hwnd } => SessionCapture::Wgc(
+            CaptureWgc::demarrer_fenetre_avec(*hwnd, Arc::clone(contexte))
+                .map_err(|e| format!("capture « {} » : {e}", source.nom))?,
+        ),
+        // Bloquant (négociation MF ~1-2 s, bornée à 10 s) — même contrat
+        // qu'une session WGC, créée une fois par (nom, cible) du diff.
+        CibleCapture::Camera { device } => SessionCapture::Camera(
+            CaptureCamera::demarrer_avec(device.as_deref(), Arc::clone(contexte))
+                .map_err(|e| format!("capture « {} » : {e}", source.nom))?,
+        ),
+    };
+    let taille = session.taille();
+    if taille.0 == 0 || taille.1 == 0 {
+        return Err(format!("capture « {} » : taille nulle", source.nom));
+    }
+    let desc = DescTexture::new(Format::Bgra8, taille.0, taille.1)
+        .map_err(|e| format!("texture « {} » : {e}", source.nom))?;
+    // Échantillonnable : une capture à cadre est découpée par Direct2D.
+    let cible = contexte
+        .creer_texture_echantillonnable(&desc)
+        .map_err(|e| format!("texture « {} » : {e}", source.nom))?;
+    Ok(CaptureActive {
+        session,
+        cible,
+        taille,
+        cfg: source.clone(),
+        prete: false,
+    })
+}
+
+/// Bitmaps Direct2D d'un média : une par slide de carrousel (la pile
+/// `<img class="slide">` du DOM), sinon une seule. Partagé démarrage /
+/// application à chaud.
+fn bitmaps_media_de(media: &MediaChargee, voie: &mut VoieRendu) -> Result<Vec<ID2D1Bitmap1>, String> {
+    let mut bitmaps = Vec::new();
+    if let Some(carrousel) = &media.carrousel {
+        for slide in &carrousel.slides {
+            bitmaps.push(
+                voie.bitmap_media(&slide.texture, slide.alpha)
+                    .map_err(|e| format!("bitmap slide : {e}"))?,
+            );
+        }
+    } else {
+        bitmaps.push(
+            voie.bitmap_media(&media.texture, media.alpha)
+                .map_err(|e| format!("bitmap média : {e}"))?,
+        );
+    }
+    Ok(bitmaps)
+}
+
+/// Plan de composition : ordre z, puis voile → contenu → bordure → cadre.
+/// Un widget est un empilement : `.widget` (fond) sous son contenu, la
+/// bordure au-dessus, puis `.cadre-overlay` (z-index 5). La bordure n'existe
+/// que sans cadre actif (`applyCadreWidget` met `border: none`).
+fn construire_plan(vivante: &SceneVivante, voie: &VoieRendu) -> Vec<(i32, GenreCalque, usize)> {
+    let mut plan = Vec::new();
+    for (i, boite) in voie.boites.iter().enumerate() {
+        plan.push((boite.z, GenreCalque::Boite, i));
+        if boite.cadre.is_none() {
+            plan.push((boite.z, GenreCalque::Bordure, i));
+        }
+    }
+    for (i, media) in vivante.medias.iter().enumerate() {
+        plan.push((media.z, GenreCalque::Media, i));
+    }
+    for (i, capture) in vivante.captures.iter().enumerate() {
+        plan.push((capture.cfg.z, GenreCalque::Capture, i));
+    }
+    for (i, cfg_chat) in voie.chats.iter().enumerate() {
+        plan.push((cfg_chat.z, GenreCalque::Chat, i));
+    }
+    for (i, cfg_input) in voie.inputs.iter().enumerate() {
+        plan.push((cfg_input.z, GenreCalque::Input, i));
+    }
+    for (i, cadre) in voie.cadres.iter().enumerate() {
+        plan.push((cadre.z, GenreCalque::Cadre, i));
+    }
+    plan.sort_by_key(|(z, genre, _)| (*z, *genre));
+    plan
+}
+
+/// Identité de contenu d'un carrousel : les chemins des slides (les
+/// textures décodées en dépendent, pas le rythme `sec`/`ease`).
+fn memes_slides(a: &Option<CarrouselCfg>, b: &Option<CarrouselCfg>) -> bool {
+    match (a, b) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.slides == b.slides,
+        _ => false,
+    }
 }
 
 /// Corps du fil moteur. Toute erreur remonte à l'état (`Erreur`) ; aucune
@@ -733,6 +1295,8 @@ struct CaptureActive {
 fn boucle(
     cfg: SortieCfg,
     scene: SceneChargee,
+    // Courrier des applications à chaud (`Moteur::appliquer_scene`).
+    maj_scene: Arc<Mutex<Option<SceneChargee>>>,
     compteurs: Arc<CompteursMoteur>,
     apercu_partage: Arc<Mutex<Option<ApercuFrame>>>,
     arret: Arc<AtomicBool>,
@@ -747,6 +1311,7 @@ fn boucle(
         boites,
         inputs,
         persps,
+        canvas: _,
         chat,
         input,
     } = scene;
@@ -754,12 +1319,12 @@ fn boucle(
     let fps = cfg.fps;
 
     let moniteurs = enumerer_moniteurs().map_err(|e| format!("moniteurs : {e}"))?;
-    let adaptateur = sources.iter().find_map(|s| match s.cible {
+    let adaptateur = sources.iter().find_map(|s| match &s.cible {
         CibleCapture::Moniteur { index } => moniteurs
             .iter()
-            .find(|m| m.index == index)
+            .find(|m| m.index == *index)
             .map(|m| m.adaptateur_index),
-        CibleCapture::Fenetre { .. } => None,
+        _ => None,
     });
     let contexte = Arc::new(
         ContexteGpu::creer(adaptateur).map_err(|e| format!("contexte GPU : {e}"))?,
@@ -767,75 +1332,15 @@ fn boucle(
 
     let mut captures: Vec<CaptureActive> = Vec::with_capacity(sources.len());
     for source in &sources {
-        let session = match source.cible {
-            CibleCapture::Moniteur { index } => {
-                let moniteur = moniteurs
-                    .iter()
-                    .find(|m| m.index == index)
-                    .ok_or_else(|| format!("moniteur {index} introuvable"))?;
-                CaptureWgc::demarrer_avec(moniteur, Arc::clone(&contexte))
-                    .map_err(|e| format!("capture « {} » : {e}", source.nom))?
-            }
-            CibleCapture::Fenetre { hwnd } => {
-                CaptureWgc::demarrer_fenetre_avec(hwnd, Arc::clone(&contexte))
-                    .map_err(|e| format!("capture « {} » : {e}", source.nom))?
-            }
-        };
-        let taille = session.taille();
-        if taille.0 == 0 || taille.1 == 0 {
-            return Err(format!("capture « {} » : taille nulle", source.nom));
-        }
-        let desc = DescTexture::new(Format::Bgra8, taille.0, taille.1)
-            .map_err(|e| format!("texture « {} » : {e}", source.nom))?;
-        // Échantillonnable : une capture à cadre est découpée par Direct2D.
-        let cible = contexte
-            .creer_texture_echantillonnable(&desc)
-            .map_err(|e| format!("texture « {} » : {e}", source.nom))?;
-        captures.push(CaptureActive {
-            session,
-            cible,
-            taille,
-            rect: source.rect,
-            z: source.z,
-            cadre: source.cadre.clone(),
-            prete: false,
-        });
+        captures.push(creer_capture(source, &moniteurs, &contexte)?);
     }
 
-    let mut medias: Vec<crate::media::MediaChargee> = Vec::with_capacity(medias_cfg.len());
+    let mut medias: Vec<MediaChargee> = Vec::with_capacity(medias_cfg.len());
     for cfg_media in &medias_cfg {
         let chargee = crate::media::charger(&contexte, cfg_media)
             .map_err(|e| format!("média {} : {e}", cfg_media.chemin.display()))?;
         medias.push(chargee);
     }
-
-    // Plan de composition : ordre z, puis voile → contenu → bordure → cadre.
-    // Un widget est un empilement : `.widget` (fond) sous son contenu, la
-    // bordure au-dessus, puis `.cadre-overlay` (z-index 5). La bordure n'existe
-    // que sans cadre actif (`applyCadreWidget` met `border: none`).
-    let mut plan: Vec<(i32, GenreCalque, usize)> = Vec::new();
-    for (i, boite) in boites.iter().enumerate() {
-        plan.push((boite.z, GenreCalque::Boite, i));
-        if boite.cadre.is_none() {
-            plan.push((boite.z, GenreCalque::Bordure, i));
-        }
-    }
-    for (i, media) in medias.iter().enumerate() {
-        plan.push((media.z, GenreCalque::Media, i));
-    }
-    for (i, capture) in captures.iter().enumerate() {
-        plan.push((capture.z, GenreCalque::Capture, i));
-    }
-    for (i, cfg_chat) in chats.iter().enumerate() {
-        plan.push((cfg_chat.z, GenreCalque::Chat, i));
-    }
-    for (i, cfg_input) in inputs.iter().enumerate() {
-        plan.push((cfg_input.z, GenreCalque::Input, i));
-    }
-    for (i, cadre) in cadres.iter().enumerate() {
-        plan.push((cadre.z, GenreCalque::Cadre, i));
-    }
-    plan.sort_by_key(|(z, genre, _)| (*z, *genre));
 
     // Composition **100 % Direct2D** (2026-10-28) : le canvas BGRA est la
     // cible de tous les calques (alpha réel, découpe polygonale, voiles), puis
@@ -862,59 +1367,40 @@ fn boucle(
     // Construits **une fois** : la vue Direct2D ne change pas (une vidéo met à
     // jour sa texture, pas son bitmap). Un carrousel a une bitmap **par
     // slide** (la pile `<img class="slide">` du DOM).
-    let mut bitmaps_medias: Vec<Vec<windows::Win32::Graphics::Direct2D::ID2D1Bitmap1>> =
-        Vec::with_capacity(medias.len());
-    let mut bitmaps_captures: Vec<Option<windows::Win32::Graphics::Direct2D::ID2D1Bitmap1>> =
-        vec![None; captures.len()];
-    let mut index_cadre_media: Vec<Option<usize>> = vec![None; medias.len()];
-    let mut index_cadre_capture: Vec<Option<usize>> = vec![None; captures.len()];
-    let mut index_cadre_input: Vec<Option<usize>> = vec![None; voie.inputs.len()];
-    {
-        for (i, media) in medias.iter().enumerate() {
-            index_cadre_media[i] = media
-                .cadre
-                .as_ref()
-                .and_then(|cadre| voie.cadres.iter().position(|c| c == cadre));
-            if media.cadre.is_some() && index_cadre_media[i].is_none() {
-                // Jamais un rendu faux silencieux : la couche sort non découpée.
-                compteurs.degrader("cadre de média introuvable : couche non découpée");
-            }
-            let mut bitmaps = Vec::new();
-            if let Some(carrousel) = &media.carrousel {
-                for slide in &carrousel.slides {
-                    bitmaps.push(
-                        voie.bitmap_media(&slide.texture, slide.alpha)
-                            .map_err(|e| format!("bitmap slide : {e}"))?,
-                    );
-                }
-            } else {
-                bitmaps.push(
-                    voie.bitmap_media(&media.texture, media.alpha)
-                        .map_err(|e| format!("bitmap média : {e}"))?,
-                );
-            }
-            bitmaps_medias.push(bitmaps);
-        }
-        for (i, capture) in captures.iter().enumerate() {
-            index_cadre_capture[i] = capture
-                .cadre
-                .as_ref()
-                .and_then(|cadre| voie.cadres.iter().position(|c| c == cadre));
-            if capture.cadre.is_some() && index_cadre_capture[i].is_none() {
-                compteurs.degrader("cadre de capture introuvable : couche non découpée");
-            }
-            bitmaps_captures[i] = Some(
-                voie.bitmap_media(&capture.cible, false)
-                    .map_err(|e| format!("bitmap capture : {e}"))?,
-            );
-        }
-        for (i, cfg_input) in voie.inputs.iter().enumerate() {
-            index_cadre_input[i] = cfg_input
-                .cadre
-                .as_ref()
-                .and_then(|cadre| voie.cadres.iter().position(|c| c == cadre));
-        }
+    // Bitmaps Direct2D de **toutes** les couches + index de leur polygone.
+    // Construits **une fois** : la vue Direct2D ne change pas (une vidéo met à
+    // jour sa texture, pas son bitmap). Un carrousel a une bitmap **par
+    // slide** (la pile `<img class="slide">` du DOM).
+    let mut bitmaps_medias: Vec<Vec<ID2D1Bitmap1>> = Vec::with_capacity(medias.len());
+    for media in &medias {
+        bitmaps_medias.push(bitmaps_media_de(media, &mut voie)?);
     }
+    let mut bitmaps_captures: Vec<Option<ID2D1Bitmap1>> = Vec::with_capacity(captures.len());
+    for capture in &captures {
+        bitmaps_captures.push(Some(
+            voie.bitmap_media(&capture.cible, false)
+                .map_err(|e| format!("bitmap capture : {e}"))?,
+        ));
+    }
+    // État vivant de la composition — `appliquer_scene` le fait évoluer en
+    // cours de session par le courrier `maj_scene`.
+    let mut vivante = SceneVivante {
+        captures,
+        medias,
+        medias_cfg,
+        bitmaps_medias,
+        bitmaps_captures,
+        cercles_capture: Vec::new(),
+        index_cadre_media: Vec::new(),
+        index_cadre_capture: Vec::new(),
+        index_cadre_input: Vec::new(),
+        plan: Vec::new(),
+    };
+    vivante.maj_cercles_capture(&voie, &compteurs);
+    vivante.maj_index_cadres(&voie, &compteurs);
+    let plan = construire_plan(&vivante, &voie);
+    vivante.plan = plan;
+
     // Texture que l'encodeur consomme : le NV12 converti depuis le canvas BGRA.
     let cible_encode = voie.nv12.clone();
 
@@ -1079,14 +1565,46 @@ fn boucle(
         horloge.attendre();
         let pts_us = debut.elapsed().as_micros() as i64;
 
+        // Application à chaud : la scène la plus récente déposée par
+        // `appliquer_scene` remplace la composition — différentiel : les
+        // captures et médias inchangés gardent sessions, textures et
+        // bitmaps ; l'encodeur et les sinks ne sont jamais touchés.
+        if let Some(nouvelle) = maj_scene
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .take()
+        {
+            vivante.appliquer(
+                nouvelle,
+                &contexte,
+                &moniteurs,
+                &mut voie,
+                &compteurs,
+                (cw, ch),
+            );
+        }
+        let SceneVivante {
+            captures,
+            medias,
+            bitmaps_medias,
+            bitmaps_captures,
+            cercles_capture,
+            index_cadre_media,
+            index_cadre_capture,
+            index_cadre_input,
+            plan,
+            ..
+        } = &mut vivante;
+
         for media in medias.iter_mut() {
             media
                 .avancer(pts_us)
                 .map_err(|e| format!("média vidéo : {e}"))?;
         }
         for capture in captures.iter_mut() {
-            if let Ok(texture) = capture.session.prochaine_texture(Duration::ZERO) {
-                unsafe { contexte.context().CopyResource(&capture.cible, &texture) };
+            // Copie WGC ou `UpdateSubresource` caméra — sur ce thread dans
+            // les deux cas ; `false` = pas de frame neuve, texture gardée.
+            if capture.session.rafraichir(&capture.cible, &contexte) {
                 capture.prete = true;
                 compteurs.capture();
             }
@@ -1099,7 +1617,7 @@ fn boucle(
         voie.debut();
         voie.effacer();
         voie.effacer_persps();
-        for (z, genre, index) in &plan {
+        for (z, genre, index) in plan.iter() {
             // Plans à perspective (`perspective(d) rotateX/Y`, lot T2) : les
             // calques du plan (voile/média/capture/bordure/cadre — pas le
             // contenu chat/input, limite §41) dessinent dans l'offscreen du
@@ -1110,7 +1628,7 @@ fn boucle(
                     voie.groupe_de(voie.boites[*index].rect, *z)
                 }
                 GenreCalque::Media => voie.groupe_de(medias[*index].rect, *z),
-                GenreCalque::Capture => voie.groupe_de(captures[*index].rect, *z),
+                GenreCalque::Capture => voie.groupe_de(captures[*index].cfg.rect, *z),
                 GenreCalque::Cadre => voie.groupe_de(voie.cadres[*index].rect, *z),
                 GenreCalque::Chat | GenreCalque::Input => None,
             };
@@ -1212,6 +1730,7 @@ fn boucle(
                                     boite: rect_boite(media.rect),
                                     transforme,
                                     cadre: index_cadre_media[*index],
+                                    clip_geo: None,
                                     effets: &media.effets,
                                     opacite,
                                 },
@@ -1235,13 +1754,13 @@ fn boucle(
                     let (source, dest) = if gid.is_some() {
                         crate::media::fit_rects(
                             capture.taille,
-                            capture.rect,
+                            capture.cfg.rect,
                             crate::media::Fit::Remplir,
                         )
                     } else {
                         crate::media::geometrie(
                             capture.taille,
-                            capture.rect,
+                            capture.cfg.rect,
                             (cw, ch),
                             crate::media::Fit::Remplir,
                         )
@@ -1251,9 +1770,12 @@ fn boucle(
                         &TraceCouche {
                             source,
                             destination: dest,
-                            boite: rect_boite(capture.rect),
+                            boite: rect_boite(capture.cfg.rect),
                             transforme: None,
                             cadre: index_cadre_capture[*index],
+                            // Forme dédiée caméra (cercle inscrit) : prime
+                            // sur le cadre, absent de `voie.geometries`.
+                            clip_geo: cercles_capture[*index].as_ref(),
                             effets: &crate::media::EffetsCfg::NEUTRE,
                             opacite: 1.0,
                         },
@@ -1468,9 +1990,13 @@ struct VoieRendu {
     geometries: Vec<ID2D1PathGeometry>,
     /// Index du polygone de chaque boîte (`None` = pas de cadre → bordure).
     index_cadre_boite: Vec<Option<usize>>,
+    /// Config des plans à perspective actifs — référence du diff de
+    /// `mettre_a_jour` (`dessinateur.persps` garde les offscreens, privés).
+    persps_cfg: Vec<PerspCfg>,
 }
 
-/// Contenu dessiné par la voie de rendu (figé au démarrage de la sortie).
+/// Contenu dessiné par la voie de rendu (figé au démarrage de la sortie,
+/// remplacé par `mettre_a_jour` à l'application à chaud).
 struct ContenuRendu {
     textes: Vec<TexteCfg>,
     cadres: Vec<CadreCfg>,
@@ -1539,7 +2065,61 @@ impl VoieRendu {
             inputs,
             geometries,
             index_cadre_boite,
+            persps_cfg: persps,
         })
+    }
+
+    /// Met à jour le contenu dessiné (application à chaud) : géométries
+    /// des cadres et plans à perspective ne sont reconstruits **que s'ils
+    /// ont changé** — l'idempotence du contrat §3.1 tient à ce diff. Les
+    /// vecs de calques sont toujours remplacés (coût nul).
+    fn mettre_a_jour(
+        &mut self,
+        contexte: &ContexteGpu,
+        largeur: u32,
+        hauteur: u32,
+        contenu: ContenuRendu,
+    ) -> Result<(), String> {
+        let ContenuRendu {
+            textes,
+            cadres,
+            chats,
+            boites,
+            inputs,
+            persps,
+        } = contenu;
+        if persps != self.persps_cfg {
+            self.dessinateur
+                .configurer_persps(contexte, largeur, hauteur, &persps)
+                .map_err(|e| e.to_string())?;
+            self.persps_cfg = persps;
+        }
+        if cadres != self.cadres {
+            let mut geometries = Vec::with_capacity(cadres.len());
+            for cadre in &cadres {
+                geometries.push(
+                    self.dessinateur
+                        .geometrie_cadre(cadre)
+                        .map_err(|e| e.to_string())?,
+                );
+            }
+            self.geometries = geometries;
+            self.cadres = cadres;
+        }
+        self.index_cadre_boite = boites
+            .iter()
+            .map(|boite| {
+                boite
+                    .cadre
+                    .as_ref()
+                    .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        self.textes = textes;
+        self.chats = chats;
+        self.boites = boites;
+        self.inputs = inputs;
+        Ok(())
     }
 
     fn debut(&mut self) {
@@ -1609,12 +2189,18 @@ impl VoieRendu {
     }
 
     fn dessiner_media(&mut self, bitmap: &ID2D1Bitmap1, t: &TraceCouche) -> Result<(), String> {
+        // `clip_geo` (forme dédiée caméra, hors `geometries`) prime sur le
+        // polygone du cadre — une caméra n'a jamais de cadre, mais la
+        // priorité est explicitée pour toute future combinaison.
+        let clip = t
+            .clip_geo
+            .or_else(|| t.cadre.map(|index| &self.geometries[index]));
         let trace = crate::texte::TraceMedia {
             destination: t.destination,
             source: t.source,
             boite: t.boite,
             transforme: t.transforme,
-            clip: t.cadre.map(|index| &self.geometries[index]),
+            clip,
             effets: t.effets,
             opacite: t.opacite,
         };
@@ -1706,6 +2292,21 @@ impl VoieRendu {
             .map_err(|e| e.to_string())
     }
 
+    /// Géométrie du **cercle inscrit** du rect (coordonnées canvas) — forme
+    /// dédiée `FormeCamera::Cercle`. Même polygone que `pathCercle`
+    /// (`cadres::points_cercle`) : une seule source de vérité pour le trou
+    /// diffusion, le clip DOM et le masque OBS — contrat 9 d'AGENTS.md.
+    fn geometrie_cercle(&self, rect: (f64, f64, f64, f64)) -> Result<ID2D1PathGeometry, String> {
+        let (x, y, w, h) = rect;
+        let points: Vec<(f64, f64)> = crate::cadres::points_cercle(w, h)
+            .into_iter()
+            .map(|(px, py)| (px + x, py + y))
+            .collect();
+        self.dessinateur
+            .geometrie_points(&points)
+            .map_err(|e| e.to_string())
+    }
+
     fn convertir(&mut self) -> Result<(), String> {
         self.convertisseur
             .convertir_vers(&self.canvas, &self.nv12)
@@ -1733,6 +2334,9 @@ struct TraceCouche<'a> {
     boite: RECT,
     transforme: Option<Matrix3x2>,
     cadre: Option<usize>,
+    /// Clip géométrique direct (cercle caméra) — prime sur `cadre`, qui
+    /// n'indexe que les polygones de `VoieRendu::geometries`.
+    clip_geo: Option<&'a ID2D1PathGeometry>,
     effets: &'a crate::media::EffetsCfg,
     /// Opacité du calque (fondu du carrousel — 1,0 hors fondu/capture).
     opacite: f32,
@@ -1895,6 +2499,7 @@ mod tests {
             rect: (0.0, 0.0, 1920.0, 1080.0),
             z: 0,
             cadre: None,
+            forme_camera: None,
         }
     }
 
@@ -2012,7 +2617,8 @@ mod tests {
     fn capacites_du_lot() {
         let c = MoteurNatif::nouveau().capacites();
         assert!(c.capture_ecran && c.capture_fenetre);
-        assert!(!c.camera && !c.fond_vert && !c.srt);
+        assert!(c.camera);
+        assert!(!c.fond_vert && !c.srt);
     }
 
     #[test]
@@ -2080,5 +2686,62 @@ mod tests {
         }
         // Aucun `DejaActif` : le chat est le canal des messages en direct.
         assert_eq!(moteur.chat_len(), MAX_CHAT);
+    }
+
+    #[test]
+    fn appliquer_scene_hors_session_met_a_jour_et_est_idempotente() {
+        let scene: sos_scene::Scene = serde_json::from_str(
+            r#"{"canvasW":1360,"canvasH":768,
+                "widgets":[{"id":"c","type":"chat","x":1,"y":2,"largeur":100,"hauteur":80,"z":3}]}"#,
+        )
+        .expect("scène");
+        let moteur = MoteurNatif::nouveau();
+        moteur.appliquer_scene(&scene);
+        assert_eq!(moteur.chats().len(), 1);
+        // Idempotente : une seconde application identique, aucun effet.
+        moteur.appliquer_scene(&scene);
+        assert_eq!(moteur.chats().len(), 1);
+        assert_eq!(moteur.chats()[0].rect, (1.0, 2.0, 100.0, 80.0));
+        assert_eq!(moteur.chats()[0].z, 3);
+        // Le courrier attend la prochaine session.
+        assert!(moteur.scene_maj.lock().unwrap().is_some());
+    }
+
+    #[test]
+    fn appliquer_scene_pendant_un_enregistrement_n_est_pas_refusee() {
+        // Jamais `DejaActif` : c'est le canal de mise à jour à chaud —
+        // les mutexes sont écrits, la boucle consomme le courrier à la
+        // frame suivante.
+        let moteur = MoteurNatif::nouveau();
+        *moteur.etat.lock().unwrap() = EtatInterne::Actif;
+        *moteur.fil.lock().unwrap() = Some(std::thread::spawn(|| {
+            std::thread::sleep(Duration::from_millis(50));
+        }));
+        let scene: sos_scene::Scene = serde_json::from_str(
+            r#"{"widgets":[{"id":"c","type":"chat","x":0,"y":0,"largeur":10,"hauteur":10,"z":1}]}"#,
+        )
+        .expect("scène");
+        moteur.appliquer_scene(&scene);
+        assert_eq!(moteur.chats().len(), 1);
+        moteur.arreter();
+    }
+
+    #[test]
+    fn appliquer_scene_avec_source_invalide_est_annulee_et_signalee() {
+        let scene: sos_scene::Scene = serde_json::from_str(
+            r#"{"widgets":[{"id":"","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":0,
+                "captureCible":{"kind":"moniteur","name":"\\\\.\\DISPLAY1","index":0}}]}"#,
+        )
+        .expect("scène");
+        let moteur = MoteurNatif::nouveau();
+        moteur.appliquer_scene(&scene);
+        assert!(moteur.sources().is_empty(), "application annulée");
+        assert!(
+            moteur
+                .instantane()
+                .raison_degradation
+                .is_some_and(|r| r.contains("source sans nom")),
+            "le refus doit être signalé, jamais silencieux"
+        );
     }
 }

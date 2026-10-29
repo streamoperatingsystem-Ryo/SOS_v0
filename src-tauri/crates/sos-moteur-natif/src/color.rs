@@ -1,9 +1,9 @@
-//! Conversions de format couleur.
+//! Conversions de format couleur **CPU**.
 //!
-//! ⚠️ **Spike uniquement** (lot 0.2c) : cette conversion BGRA→NV12 est faite
-//! en **CPU**. Le lot 0.2d la remplacera par `ID3D11VideoProcessor` (GPU,
-//! zéro-copie) avant toute mesure de performance P0 — sinon le spike serait
-//! pénalisé par un coût qui n'existera pas en production.
+//! ⚠️ **Harnais uniquement** (ex-spike, lot 0.2c) : la production convertit
+//! BGRA→NV12 sur GPU via `color_gpu::ConvertisseurNv12`
+//! (`ID3D11VideoProcessor`, zéro-copie). `bgra_vers_nv12` ne sert plus qu'aux
+//! exemples `encode.rs` / `encode_nvenc.rs`, jamais au chemin de production.
 //!
 //! Espace colorimétrique : BT.709, plage **limitée** (16-235 / 16-240), ce
 //! qu'attendent les encodeurs matériels.

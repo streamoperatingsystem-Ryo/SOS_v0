@@ -8,9 +8,11 @@
 //!
 //! Seuls les widgets portant une cible (`captureCible` persistée, ou à
 //! défaut `cibles[id]` pour le harnais) et un rect non nul produisent une
-//! source ; tout le reste (chat, médias, caméra tant que MF n'existe pas)
-//! est ignoré — jamais d'invention. Le flag `trou` est un concept du mode
-//! OBS : le moteur natif ne le lit pas (D8).
+//! source ; les widgets `camera` **non cachés** (`cameraCachee`) produisent
+//! une source `CibleCapture::Camera` (`cameraDeviceId` = nom convivial MF,
+//! `cameraForme` = forme de découpe). Tout le reste (chat, médias, caméra
+//! cachée) est ignoré — jamais d'invention. Le flag `trou` est un concept
+//! du mode OBS : le moteur natif ne le lit pas (D8).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -21,7 +23,7 @@ use crate::cadres::{couleur_hex, CadreCfg, StyleCadre};
 use crate::chat::{ChatCfg, FILTRE_UNIFIE};
 use crate::input::{Disposition, InputCfg, MappingManette, ModeInput};
 use crate::media::{CarrouselCfg, EffetsCfg, Fit, LectureCfg, MediaCfg, PerspCfg, Transform2D};
-use crate::moteur::{CibleCapture, SourceCfg};
+use crate::moteur::{CibleCapture, FormeCamera, SourceCfg};
 use crate::texte::{CibleTitre, PositionTitre, StyleBoite, StyleTexte, TexteCfg, POLICE_DEFAUT};
 
 /// Traduit la cible persistée dans la scène en cible du moteur.
@@ -40,12 +42,31 @@ fn cible_de(cible: &CaptureCible) -> CibleCapture {
 
 /// Vrai si le widget est un emplacement de capture : une cible existe
 /// (`captureCible` persistée, ou `cibles[id]` pour le harnais
-/// `parite_scene`). Remplace l'ancien marqueur `trou`, concept du mode OBS
-/// (D8). `medias_depuis_scene` / `boites_depuis_scene` ne reçoivent pas la
-/// table `cibles` (signature fixée par `moteur.rs`, hors périmètre N1) :
-/// leur exclusion équivalente est `w.captureCible.is_some()`.
+/// `parite_scene`), ou c'est une caméra **non cachée** (`cameraCachee` =
+/// œil du dashboard : la zone est repeinte par le fond, aucune session).
+/// Remplace l'ancien marqueur `trou`, concept du mode OBS (D8).
+/// `medias_depuis_scene` / `boites_depuis_scene` ne reçoivent pas la table
+/// `cibles` (signature fixée par `moteur.rs`, hors périmètre N1) : leur
+/// exclusion équivalente est `w.captureCible.is_some()`.
 fn est_capture(w: &Widget, cibles: &HashMap<String, CibleCapture>) -> bool {
-    w.captureCible.is_some() || cibles.contains_key(&w.id)
+    (w.widget_type == "camera" && !w.cameraCachee)
+        || w.captureCible.is_some()
+        || cibles.contains_key(&w.id)
+}
+
+/// Forme dédiée du widget caméra (`cameraForme`, contrat 9) : `"cercle"` →
+/// `Cercle`, `"carre"` → `Carre`. `None` pour tout autre widget **et** pour
+/// l'absence de forme dédiée (le suivi du cadre de scène de l'historique
+/// n'est pas porté à ce lot : rendu rectangle, comme `"carre"`).
+fn forme_camera(w: &Widget) -> Option<FormeCamera> {
+    if w.widget_type != "camera" {
+        return None;
+    }
+    match w.cameraForme.as_deref() {
+        Some("cercle") => Some(FormeCamera::Cercle),
+        Some("carre") => Some(FormeCamera::Carre),
+        _ => None,
+    }
 }
 
 /// État de lecture persisté d'un média — miroir `applyMediaState` /
@@ -87,7 +108,7 @@ fn carrousel(
 /// Priorité à `Widget.captureCible` (persisté dans la scène) ; `cibles` ne
 /// sert que de repli pour les scènes anciennes ou les widgets sans cible
 /// persistée. Un widget absent des deux est ignoré (pas de capture par
-/// défaut).
+/// défaut) — sauf la caméra non cachée, dont la cible est son device.
 pub fn sources_depuis_scene(
     scene: &Scene,
     cibles: &HashMap<String, CibleCapture>,
@@ -97,17 +118,23 @@ pub fn sources_depuis_scene(
         .iter()
         .filter(|w| est_capture(w, cibles) && w.largeur > 0.0 && w.hauteur > 0.0)
         .filter_map(|w| {
-            let cible = w
-                .captureCible
-                .as_ref()
-                .map(cible_de)
-                .or_else(|| cibles.get(&w.id).copied())?;
+            let cible = if w.widget_type == "camera" {
+                CibleCapture::Camera {
+                    device: w.cameraDeviceId.clone(),
+                }
+            } else {
+                w.captureCible
+                    .as_ref()
+                    .map(cible_de)
+                    .or_else(|| cibles.get(&w.id).cloned())?
+            };
             Some(SourceCfg {
                 nom: w.id.clone(),
                 cible,
                 rect: (w.x, w.y, w.largeur, w.hauteur),
                 z: w.z,
                 cadre: cadre_de_widget(scene, w),
+                forme_camera: forme_camera(w),
             })
         })
         .collect()
@@ -340,7 +367,8 @@ fn cadre_cfg(cadre: &CadreConfig, rect: (f64, f64, f64, f64), z: i32) -> Option<
 ///
 /// Miroir de `applyCadreWidget` + les exceptions du dépôt :
 /// - `sansCadre` (opt-out par instance — 8 widgets sur la scène de référence) ;
-/// - caméra (forme dédiée `cameraForme`, contrat 9 — et hors périmètre ici) ;
+/// - caméra : sa découpe est portée par `forme_camera` (contrat 9), jamais
+///   par le cadre de scène — et l'anneau `cameraBord` est hors lot ;
 /// - chat `bulles` : `diffusion.html` masque le cadre du widget et décore
 ///   chaque bulle (hors tranche) → aucun cadre de widget.
 pub fn cadre_de_widget(scene: &Scene, w: &Widget) -> Option<CadreCfg> {
@@ -657,8 +685,12 @@ mod tests {
         assert_eq!(medias[1].chemin, Path::new("C:/data/medias/a.png"));
         assert_eq!(medias[1].rect, (10.0, 20.0, 300.0, 200.0));
         // Cible + média → capture seule : pas de média dessiné, mais la
-        // source est bien produite.
-        assert_eq!(sources_depuis_scene(&scene, &HashMap::new()).len(), 1);
+        // source est bien produite. La caméra produit désormais sa propre
+        // source (`Camera`, device par défaut : pas de `cameraDeviceId`).
+        let sources = sources_depuis_scene(&scene, &HashMap::new());
+        assert_eq!(sources.len(), 2);
+        assert_eq!(sources[1].nom, "c");
+        assert_eq!(sources[1].cible, CibleCapture::Camera { device: None });
     }
 
     #[test]
@@ -684,6 +716,62 @@ mod tests {
         let sources = sources_depuis_scene(&scene, &cibles);
         assert_eq!(sources.len(), 1);
         assert_eq!(sources[0].cible, CibleCapture::Moniteur { index: 1 });
+    }
+
+    #[test]
+    fn widget_camera_produit_une_source_camera() {
+        let scene = scene(
+            r#"{"widgets":[
+                {"id":"cam","type":"camera","x":10,"y":20,"largeur":300,"hauteur":200,"z":4,
+                 "cameraDeviceId":"Logitech C920","cameraForme":"cercle"}
+            ]}"#,
+        );
+        let sources = sources_depuis_scene(&scene, &HashMap::new());
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].nom, "cam");
+        assert_eq!(
+            sources[0].cible,
+            CibleCapture::Camera {
+                device: Some("Logitech C920".to_string())
+            }
+        );
+        assert_eq!(sources[0].rect, (10.0, 20.0, 300.0, 200.0));
+        assert_eq!(sources[0].z, 4);
+        assert_eq!(sources[0].forme_camera, Some(FormeCamera::Cercle));
+        assert!(sources[0].cadre.is_none(), "jamais de cadre sur une caméra");
+    }
+
+    #[test]
+    fn camera_carre_ou_sans_forme_et_camera_cachee_exclue() {
+        let scene = scene(
+            r#"{"widgets":[
+                {"id":"carre","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":0,
+                 "cameraForme":"carre"},
+                {"id":"defaut","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":0},
+                {"id":"cachee","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":0,
+                 "cameraCachee":true},
+                {"id":"inconnue","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":0,
+                 "cameraForme":"hexagone"}
+            ]}"#,
+        );
+        let sources = sources_depuis_scene(&scene, &HashMap::new());
+        assert_eq!(sources.len(), 3, "cameraCachee ne produit rien");
+        assert_eq!(sources[0].forme_camera, Some(FormeCamera::Carre));
+        // Absence de forme dédiée et nom inconnu : `None` (rendu rectangle,
+        // jamais de forme inventée) ; device absent → caméra par défaut.
+        assert_eq!(sources[1].forme_camera, None);
+        assert_eq!(sources[1].cible, CibleCapture::Camera { device: None });
+        assert_eq!(sources[2].forme_camera, None);
+    }
+
+    #[test]
+    fn camera_sans_taille_ne_produit_aucune_source() {
+        let scene = scene(
+            r#"{"widgets":[
+                {"id":"nul","type":"camera","x":0,"y":0,"largeur":0,"hauteur":100,"z":0}
+            ]}"#,
+        );
+        assert!(sources_depuis_scene(&scene, &HashMap::new()).is_empty());
     }
 
     #[test]

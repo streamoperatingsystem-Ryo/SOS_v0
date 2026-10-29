@@ -7,7 +7,18 @@
 //! - ce crate ne dépend **jamais** de Tauri, de `src/` ni du domaine ;
 //! - il ne connaît que `sos-scene`, `sos-moteur-api` et `windows`.
 //!
-//! État au LOT 0.2a : socle + énumération des adaptateurs. Rien d'autre.
+//! État (2026-10-29) : enregistrement MP4/MKV + aperçu natif fonctionnels.
+//! Chemin de production (`moteur.rs`) : capture WGC (moniteurs/fenêtres) →
+//! canvas BGRA composé **100 % Direct2D** (médias, textes, cadres, voiles,
+//! chat, input viewer, morphs, plans à perspective) → conversion NV12 GPU →
+//! encodeur (NVENC direct, repli MFT) → `FfmpegSink` → audio loopback/micro
+//! muxé en AAC. Caméra MF native (`capture/camera.rs`). Absents assumés :
+//! RTMP/SRT, fond vert (§24).
+//!
+//! Modules conservés pour les **harnais `examples/`** uniquement — jamais
+//! appelés par le chemin de production : `compositor`, `color`, et parties
+//! de `output/file.rs`, `encode/ffmpeg.rs`, `capture/wgc.rs` (voir leurs
+//! en-têtes).
 
 pub mod audio;
 pub mod cadres;

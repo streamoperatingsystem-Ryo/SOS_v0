@@ -6,6 +6,11 @@
 //! telle quelle ; `prochaine_frame` ne sert qu'à la vérification (une copie
 //! CPU explicite, jamais dans le chemin de production).
 //!
+//! Chemin de production : `demarrer_avec` / `demarrer_fenetre_avec` (contexte
+//! partagé) + `prochaine_texture`. `demarrer`, `demarrer_fenetre`,
+//! `prochaine_frame`/`FrameBgra` et l'alias `CaptureMoniteur` sont des
+//! commodités **harnais** (`examples/`).
+//!
 //! Réglages (plan §7.3) : frame pool **free-threaded** de 4 buffers, curseur
 //! capturé, aucune exigence MTA.
 

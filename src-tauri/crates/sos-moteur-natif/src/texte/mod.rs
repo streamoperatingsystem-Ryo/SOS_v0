@@ -608,6 +608,15 @@ impl DessinateurTexte {
             .map_err(|e| ErreurTexte::Systeme(e.to_string()))
     }
 
+    /// Géométrie fermée d'une liste de points (coordonnées canvas) — forme
+    /// dédiée caméra (`cameraForme`, contrat 9) : le clip doit vivre dans la
+    /// même factory que la cible de rendu, d'où cet accès — une géométrie
+    /// créée par une autre `ID2D1Factory1` serait refusée au dessin.
+    pub fn geometrie_points(&self, points: &[(f64, f64)]) -> Result<ID2D1PathGeometry, ErreurTexte> {
+        crate::cadres::geometrie_fermee(&self.d2d, points)
+            .map_err(|e| ErreurTexte::Systeme(e.to_string()))
+    }
+
     /// Peint un cadre (clip au polygone, 2 styles) — dans une passe ouverte.
     pub fn dessiner_cadre(
         &mut self,

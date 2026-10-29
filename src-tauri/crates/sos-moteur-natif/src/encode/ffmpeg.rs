@@ -1,9 +1,17 @@
-//! Encodage H.264/HEVC/AV1 via le **sidecar FFmpeg** (NVENC / AMF / QSV).
+//! Encodage H.264/HEVC/AV1 via le **sidecar FFmpeg** (NVENC / AMF / QSV) +
+//! localisation du binaire.
 //!
-//! Pourquoi ce chemin : les MFT matériels refusent nos entrées sur la machine
-//! de test (E_UNEXPECTED, cf. commit a17f215). FFmpeg offre une voie matérielle
-//! robuste et multi-constructeur **sans bloquer le P0**. Le coût assumé est une
-//! copie CPU du NV12 dans le pipe — à remplacer plus tard par le zéro-copie.
+//! ⚠️ `EncodeurFfmpeg` / `ResumeFfmpeg` sont des **harnais** : appelés par
+//! `examples/encode_nvenc.rs`, jamais par le chemin de production
+//! (l'encodage réel passe par `encode::nvenc` puis repli `encode::mft`).
+//! `chemin_sidecar` est en revanche de production : `output::ffmpeg` s'en
+//! sert pour le muxage (`FfmpegSink`, `muxer_audio`).
+//!
+//! Pourquoi ce chemin (historique du spike) : les MFT matériels refusaient
+//! nos entrées sur la machine de test (E_UNEXPECTED, cf. commit a17f215).
+//! FFmpeg offrait une voie matérielle robuste et multi-constructeur **sans
+//! bloquer le P0**. Le coût assumé était une copie CPU du NV12 dans le
+//! pipe — remplacée depuis par le zéro-copie NVENC/MFT.
 //!
 //! Contrat : aucune frame brute ne doit être conservée, aucune clé de flux ne
 //! doit apparaître dans les logs.

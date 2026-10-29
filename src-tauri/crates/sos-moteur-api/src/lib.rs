@@ -7,8 +7,11 @@
 //!
 //! Contrat : `docs/features/moteur-natif.md` §3.1 à §3.3.
 //!
-//! État au lot 1.2 : contrats seuls. `appliquer_scene` / `appliquer_etat`
-//! arrivent avec `sos-scene` (lot 1.1) ; `MoteurDiag` avec le lot 2.9.
+//! État (2026-10-29) : `appliquer_scene` existe sur le trait `Moteur`
+//! (application à chaud, différentielle, idempotente) — la scène arrive
+//! aussi au moteur natif par `MoteurNatif::configurer_scene` (snapshot de
+//! pré-session, hors trait). `appliquer_etat` / `MoteurDiag` restent à
+//! faire (lot 2.9).
 
 use std::fmt;
 use std::path::PathBuf;
@@ -102,9 +105,10 @@ impl std::error::Error for ErreurSortie {}
 
 /// Destinataire des paquets encodés.
 ///
-/// Un seul encodeur, N sorties : `FileSink` (fMP4/MKV), `PreviewSink`,
-/// `RtmpSink`, `SrtSink`, `TeeSink`. Un sink en erreur est retiré sans
-/// arrêter les autres (règle portée par `TeeSink`).
+/// Un seul encodeur, N sorties. Implémentés dans `sos-moteur-natif` :
+/// `FfmpegSink` (fMP4/MKV, production) et `FileSink` (bitstream brut,
+/// harnais). Un sink en erreur est retiré sans arrêter les autres — règle
+/// portée par la boucle de `moteur.rs` (le fan-out y est direct).
 pub trait Sink: Send {
     /// Pousse un paquet (backpressure par `write_all`).
     fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurMoteur>;
@@ -431,14 +435,22 @@ impl From<ErreurSortie> for ErreurMoteur {
 /// Contrat de l'anneau 2 — implémenté par `MoteurNatif` et `MoteurObs`.
 ///
 /// Sémantique obligatoire (contrat §3.1) :
+/// - `appliquer_scene` **ne bloque pas** (file bornée, drop-oldest) et est
+///   **différentielle** : un déplacement de widget ne recrée ni la session
+///   de capture, ni la texture, ni l'encodeur ;
+/// - `appliquer_scene` est **idempotente** : deux fois la même scène =
+///   aucun effet ; hors session, elle met à jour la configuration que le
+///   prochain démarrage consommera ;
 /// - `demarrer_sortie` et `arreter_sortie` ne bloquent pas l'appelant ;
 /// - `arreter` est appelable dans n'importe quel état, plusieurs fois ;
 /// - `apercu` est optionnel : `None` si le moteur n'en produit pas.
 ///
-/// `appliquer_scene(&Scene)` / `appliquer_etat(&RuntimeState)` seront
-/// ajoutés au lot 1.1, avec `sos-scene` : ces types n'existent pas encore.
+/// `appliquer_etat(&RuntimeState)` n'est pas encore dans le trait : les
+/// données vivantes (chat, input viewer) arrivent au moteur natif par
+/// `pousser_chat` / `pousser_input`.
 pub trait Moteur: Send + Sync {
     fn capacites(&self) -> Capacites;
+    fn appliquer_scene(&self, scene: &sos_scene::Scene);
     fn demarrer_sortie(&self, cfg: SortieCfg) -> Result<(), ErreurMoteur>;
     fn arreter_sortie(&self, kind: SortieKind) -> Result<(), ErreurMoteur>;
     fn etat(&self) -> MoteurEtat;
@@ -603,6 +615,8 @@ mod tests {
             fn capacites(&self) -> Capacites {
                 Capacites::aucune()
             }
+
+            fn appliquer_scene(&self, _scene: &sos_scene::Scene) {}
 
             fn demarrer_sortie(&self, cfg: SortieCfg) -> Result<(), ErreurMoteur> {
                 cfg.valider()

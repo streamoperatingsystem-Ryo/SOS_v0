@@ -1,12 +1,12 @@
 //! Capture de sources.
 //!
-//! LOT 2.2 : **moniteurs et fenêtres** (WGC). La caméra et les médias
-//! arrivent aux lots suivants — ne pas élargir ce module sans mettre à jour
-//! le plan.
+//! Moniteurs et fenêtres (**WGC**, `wgc`), caméras (**Media Foundation**,
+//! `camera` — lot caméra native).
 //!
 //! Invariant du moteur : une source = **une** session refcountée, partagée
 //! par tous ses consommateurs (widgets, fond, aperçu, enregistrement).
 
+pub mod camera;
 pub mod enumeration;
 pub mod wgc;
 
@@ -49,6 +49,8 @@ pub enum ErreurCapture {
     Enumeration(String),
     /// Création ou lecture de la session WGC.
     Wgc(String),
+    /// Création ou lecture de la session caméra (Media Foundation).
+    Camera(String),
     /// Création du device / de la texture GPU.
     Gpu(String),
     /// Aucun moniteur exploitable.
@@ -62,6 +64,7 @@ impl fmt::Display for ErreurCapture {
         match self {
             ErreurCapture::Enumeration(m) => write!(f, "énumération : {m}"),
             ErreurCapture::Wgc(m) => write!(f, "WGC : {m}"),
+            ErreurCapture::Camera(m) => write!(f, "caméra : {m}"),
             ErreurCapture::Gpu(m) => write!(f, "GPU : {m}"),
             ErreurCapture::AucunMoniteur => write!(f, "aucun moniteur"),
             ErreurCapture::NonSupporte => write!(f, "plateforme non supportée"),

@@ -4524,6 +4524,9 @@ dependencies = [
 [[package]]
 name = "sos-moteur-api"
 version = "0.1.0"
+dependencies = [
+ "sos-scene",
+]
 
 [[package]]
 name = "sos-moteur-natif"

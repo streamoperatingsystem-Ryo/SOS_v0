@@ -137,6 +137,12 @@ impl Moteur for MoteurObs {
         }
     }
 
+    /// L'application à chaud ne passe **pas** par cet adaptateur : la scène
+    /// OBS est déjà pilotée par `obs_trou` / `scene_sync_captures` au fil
+    /// des snapshots (trous, sources SOS, caméra). Un second pilotage ici
+    /// enverrait des writes obs-websocket concurrents — no-op assumé.
+    fn appliquer_scene(&self, _scene: &sos_scene::Scene) {}
+
     fn demarrer_sortie(&self, cfg: SortieCfg) -> Result<(), ErreurMoteur> {
         cfg.valider()?;
         if self.connexion().is_none() {
