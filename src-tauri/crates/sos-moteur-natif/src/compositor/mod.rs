@@ -226,28 +226,6 @@ impl Compositeur {
         Ok(())
     }
 
-    /// Compose chaque calque dans une passe **bornée à sa destination**.
-    ///
-    /// Aucune passe n'écrit toute la surface : ce qui est déjà présent hors
-    /// des destinations (dessins Direct2D, cadres) est **préservé**. C'est le
-    /// chemin de la voie « cadres » (2026-10-28), où l'ordre z est garanti
-    /// par un appel par calque : le premier lot de [`Compositeur::composer`]
-    /// peindrait tout le canvas en noir et effacerait les couches déjà
-    /// dessinées.
-    pub fn composer_borne(&mut self, calques: &[Calque<'_>]) -> Result<(), ErreurComposition> {
-        verifier_calques(calques)?;
-        for calque in calques {
-            self.composer_un_calque(calque)?;
-        }
-        // La fenêtre de sortie est un état du processeur : la relâcher, sinon
-        // la frame suivante serait rognée.
-        unsafe {
-            self.video_context
-                .VideoProcessorSetOutputTargetRect(&self.processeur, false, None);
-        }
-        Ok(())
-    }
-
     /// Un appel, N flux : chemin historique (toute la surface est écrite).
     fn composer_en_un_appel(&mut self, calques: &[Calque<'_>]) -> Result<(), ErreurComposition> {
         let mut vues: Vec<ID3D11VideoProcessorInputView> = Vec::with_capacity(calques.len());

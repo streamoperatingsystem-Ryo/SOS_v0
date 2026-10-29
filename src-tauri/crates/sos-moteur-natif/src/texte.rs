@@ -32,26 +32,46 @@ use windows::core::{Interface, IUnknown, PCWSTR};
 use windows::Foundation::Numerics::Matrix3x2;
 use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct2D::Common::{
-    D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F, D2D1_GRADIENT_STOP,
-    D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
+    D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_BEZIER_SEGMENT, D2D1_COLOR_F,
+    D2D1_FIGURE_BEGIN_FILLED, D2D1_FIGURE_END_CLOSED, D2D1_FILL_MODE_ALTERNATE,
+    D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
-    D2D1CreateFactory, ID2D1Bitmap1, ID2D1Brush, ID2D1Device, ID2D1DeviceContext, ID2D1Factory1,
-    ID2D1Geometry, ID2D1GradientStopCollection, ID2D1Layer, ID2D1LinearGradientBrush,
-    ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush, ID2D1StrokeStyle,
-    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_OPTIONS_CANNOT_DRAW, D2D1_BITMAP_OPTIONS_NONE,
-    D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1, D2D1_DEVICE_CONTEXT_OPTIONS_NONE,
-    D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED,
-    D2D1_GAMMA_2_2, D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1,
-    D2D1_BITMAP_INTERPOLATION_MODE_LINEAR, D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES,
+    D2D1CreateFactory, ID2D1Bitmap1, ID2D1Brush, ID2D1Device, ID2D1DeviceContext, ID2D1Effect,
+    ID2D1Factory1, ID2D1Geometry, ID2D1GeometrySink, ID2D1GradientStopCollection, ID2D1Layer,
+    ID2D1LinearGradientBrush, ID2D1PathGeometry, ID2D1RenderTarget, ID2D1SolidColorBrush,
+    ID2D1StrokeStyle, ID2D1Image, CLSID_D2D13DPerspectiveTransform,
+    CLSID_D2D1ColorMatrix, CLSID_D2D1GaussianBlur,
+    D2D1_COLORMATRIX_PROP_ALPHA_MODE, D2D1_COLORMATRIX_PROP_COLOR_MATRIX,
+    D2D1_GAUSSIANBLUR_PROP_BORDER_MODE, D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION,
+    D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, D2D1_BITMAP_OPTIONS,
+    D2D1_3DPERSPECTIVETRANSFORM_INTERPOLATION_MODE_LINEAR,
+    D2D1_3DPERSPECTIVETRANSFORM_PROP_BORDER_MODE, D2D1_3DPERSPECTIVETRANSFORM_PROP_DEPTH,
+    D2D1_3DPERSPECTIVETRANSFORM_PROP_INTERPOLATION_MODE,
+    D2D1_3DPERSPECTIVETRANSFORM_PROP_PERSPECTIVE_ORIGIN,
+    D2D1_3DPERSPECTIVETRANSFORM_PROP_ROTATION,
+    D2D1_3DPERSPECTIVETRANSFORM_PROP_ROTATION_ORIGIN,
+    D2D1_ANTIALIAS_MODE_PER_PRIMITIVE, D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
+    D2D1_BITMAP_OPTIONS_NONE, D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
+    D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_ELLIPSE,
+    D2D1_EXTEND_MODE_CLAMP, D2D1_FACTORY_TYPE_SINGLE_THREADED, D2D1_GAMMA_2_2,
+    D2D1_INTERPOLATION_MODE_LINEAR, D2D1_LAYER_OPTIONS1_NONE, D2D1_LAYER_PARAMETERS1,
+    D2D1_PROPERTY_TYPE_UNKNOWN, D2D1_ROUNDED_RECT, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+    D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES, D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES,
     D2D1_TEXT_ANTIALIAS_MODE_GRAYSCALE, D2D1_UNIT_MODE_PIXELS,
+};
+use windows::Win32::Graphics::Direct2D::Common::{
+    D2D1_BORDER_MODE_SOFT, D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED,
+    D2D1_COLORMATRIX_ALPHA_MODE_STRAIGHT,
+    D2D1_COMPOSITE_MODE_SOURCE_OVER,
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteFontCollection1,
     IDWriteTextFormat, IDWriteTextLayout, IDWriteTextLayout1, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_METRICS, DWRITE_TEXT_RANGE,
-    DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
+    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_MEASURING_MODE_NATURAL,
+    DWRITE_PARAGRAPH_ALIGNMENT_CENTER, DWRITE_TEXT_ALIGNMENT_CENTER, DWRITE_TEXT_METRICS,
+    DWRITE_TEXT_RANGE, DWRITE_WORD_WRAPPING_NO_WRAP, DWRITE_WORD_WRAPPING_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -59,7 +79,12 @@ use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 
 use crate::cadres::{CadreCfg, ErreurCadre};
 use crate::chat::{ChatCfg, FileChat};
+use crate::media::{EffetsCfg, Fit, PerspCfg, Transform2D};
 use crate::gpu::{ContexteGpu, DescTexture, Format};
+use crate::input::{
+    bouton_physique, resoudre_dpad, FileInput, Forme, InputCfg, LienManette, ModeInput,
+    Primitive, Segment, SkinManette, StyleLabel, StyleManette,
+};
 
 /// Écart aux bords, en px canvas — valeur de `diffusion.html` (`.bg-titre`).
 pub const MARGE_TITRE: f32 = 8.0;
@@ -254,6 +279,71 @@ pub fn placement(t: &TexteCfg, tw: f32, th: f32) -> Placement {
     }
 }
 
+/// Style de fond et de bordure d'une boîte de widget.
+///
+/// Miroir des **surcharges CSS** de `.widget` par type (`diffusion.html`) :
+/// le verre clair générique ne vaut que pour les widgets qui ne le
+/// remplacent pas. Découvert le 2026-10-28 : le chat et l'input-viewer
+/// utilisaient à tort le verre clair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StyleBoite {
+    /// `.widget` : verre clair `rgba(224,224,224,0.15)` + bordure 1 px claire.
+    Generique,
+    /// `.widget.chat` : verre sombre 0,35, anneau inset 1 px, **pas de bordure**.
+    Chat,
+    /// `.widget.inputviewer` : verre sombre 0,55, bordure 0,12, rayon `1.2cqw`.
+    InputViewer,
+    /// `.widget.goal` : verre sombre 0,35 + bordure générique.
+    Goal,
+    /// `.widget.musique` : dégradé `#2e2e2e → #1c1c1c`, bordure 2 px, rayon 3 px.
+    Musique,
+}
+
+impl StyleBoite {
+    /// Épaisseur de la bordure CSS en px (0 = aucune bordure).
+    pub fn bordure(self) -> f32 {
+        match self {
+            StyleBoite::Chat => 0.0,
+            StyleBoite::Musique => 2.0,
+            _ => 1.0,
+        }
+    }
+
+    /// Rayon CSS en px pour une boîte de `largeur` px (`cqw` = 1 % de la largeur).
+    pub fn rayon(self, largeur: f32) -> f32 {
+        match self {
+            StyleBoite::InputViewer => 0.012 * largeur,
+            StyleBoite::Musique => 3.0,
+            _ => 0.0,
+        }
+    }
+
+    /// Couleur de fond ; `None` = dégradé (musique).
+    fn couleur_fond(self) -> Option<D2D1_COLOR_F> {
+        match self {
+            StyleBoite::Generique => Some(D2D1_COLOR_F {
+                r: 224.0 / 255.0,
+                g: 224.0 / 255.0,
+                b: 224.0 / 255.0,
+                a: 0.15,
+            }),
+            StyleBoite::Chat | StyleBoite::Goal => Some(D2D1_COLOR_F {
+                r: 10.0 / 255.0,
+                g: 10.0 / 255.0,
+                b: 10.0 / 255.0,
+                a: 0.35,
+            }),
+            StyleBoite::InputViewer => Some(D2D1_COLOR_F {
+                r: 12.0 / 255.0,
+                g: 14.0 / 255.0,
+                b: 22.0 / 255.0,
+                a: 0.55,
+            }),
+            StyleBoite::Musique => None,
+        }
+    }
+}
+
 /// Erreurs du rendu de texte. Aucune variante ne fait paniquer l'appelant.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ErreurTexte {
@@ -306,7 +396,9 @@ pub struct DessinateurTexte {
     /// `DrawBitmap`, `SetTransform` (l'héritage COM ne donne pas de `Deref`
     /// vers `ID2D1RenderTarget` dans `windows` 0.58 — cast explicite).
     cible_rt: ID2D1RenderTarget,
-    _cible_bitmap: ID2D1Bitmap1,
+    /// Bitmap cible du canvas — référence conservée pour `SetTarget`
+    /// (retour au canvas après un offscreen de perspective).
+    cible_bitmap: ID2D1Bitmap1,
     collection: IDWriteFontCollection,
     /// TTF décodés : les références de police pointent dedans, ils doivent
     /// vivre aussi longtemps que la collection.
@@ -315,10 +407,10 @@ pub struct DessinateurTexte {
     /// Trait des cadres (miter, limite 4) — créé une fois.
     style_trait: ID2D1StrokeStyle,
     cache: HashMap<u64, CacheTexte>,
-    /// Bitmaps Direct2D des médias, clé = pointeur de la texture. L'entrée
-    /// conserve la texture : `ID2D1Bitmap1` ne la possède pas.
+    /// Bitmaps Direct2D des médias, clé = (pointeur de la texture, alpha).
+    /// L'entrée conserve la texture : `ID2D1Bitmap1` ne la possède pas.
     bitmaps: HashMap<
-        usize,
+        (usize, bool),
         (
             windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
             ID2D1Bitmap1,
@@ -326,6 +418,114 @@ pub struct DessinateurTexte {
     >,
     /// Blocs de chat mis en page, clé = (version du buffer, filtre, métriques).
     blocs: HashMap<u64, BlocChat>,
+    /// Formats de libellés input-viewer, clé = (taille en dixièmes, gras).
+    formats_input: HashMap<(u32, bool), IDWriteTextFormat>,
+    /// Plans à perspective : offscreen intermédiaire + effet de projection,
+    /// triés par `z` (`persps_depuis_scene`).
+    persps: Vec<PlanPersp>,
+    /// Chaînes d'effets média (`ColorMatrix` [→ `GaussianBlur`]) par
+    /// (bitmap, matrice, σ) — l'effet final garde son graphe en vie.
+    effets: HashMap<u64, Vec<ID2D1Effect>>,
+    /// Buffers de pixelisation (`boite / pf`) : effets + transform y sont
+    /// dessinés avant l'upscale sans lissage — miroir des petits canvas de
+    /// `dessinerContenuFond` / du chemin morph.
+    petits: HashMap<(u32, u32), (windows::Win32::Graphics::Direct3D11::ID3D11Texture2D, ID2D1Bitmap1)>,
+    /// Pipeline du warp morph (bulge/pinch), initialisé à la demande.
+    warp: Option<crate::morph::WarpMorph>,
+    /// Offscreen pré-warp par boîte (`morphOffscreen` du DOM).
+    morphes: HashMap<CleBoite, EntreeMorphIn>,
+    /// Sortie du warp par boîte : texture RT+SRV + bitmap D2D de lecture + RTV.
+    sorties_morph: HashMap<CleBoite, EntreeMorphOut>,
+}
+
+/// Paramètres de tracé d'un média dans sa boîte — regroupement clippy
+/// (`too_many_arguments`, convention §37.4.5).
+pub struct TraceMedia<'a> {
+    /// Destination du fit en coords canvas (`geometrie` ou `fit_rects`).
+    pub destination: RECT,
+    /// Portion source du fit.
+    pub source: RECT,
+    /// Boîte du widget (ou le canvas pour le fond) — clip `overflow`.
+    pub boite: RECT,
+    /// `Transform2D::matrice` autour du centre de `boite` — `None` = neutre.
+    pub transforme: Option<Matrix3x2>,
+    /// Polygone du cadre — couche masquée ; `None` = clip axe-aligné.
+    pub clip: Option<&'a ID2D1PathGeometry>,
+    /// Chaîne `chaineFilter` — `EffetsCfg::NEUTRE` = `DrawBitmap` historique.
+    pub effets: &'a EffetsCfg,
+    /// Opacité globale du média — fondu du carrousel (`opacity` des
+    /// `.slide` / `globalAlpha` de `dessinerContenuFond`). 1,0 hors fondu.
+    pub opacite: f32,
+}
+
+/// Clé d'une boîte morphée : bits du rect canvas `(x, y, w, h)`.
+type CleBoite = (u64, u64, u64, u64);
+/// Offscreen pré-warp : texture RT+SRV + bitmap D2D TARGET + vue SRV.
+type EntreeMorphIn = (
+    windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    ID2D1Bitmap1,
+    windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
+);
+/// Sortie du warp : texture RT+SRV + bitmap D2D de lecture + vue RTV.
+type EntreeMorphOut = (
+    windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    ID2D1Bitmap1,
+    windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView,
+);
+
+/// Paramètres d'un média morphé (bulge/pinch, lot T4) — regroupement
+/// clippy (`too_many_arguments`, convention §37.4.5).
+pub struct TraceMorphe<'a> {
+    /// Taille source du média.
+    pub taille: (u32, u32),
+    /// Boîte en coords canvas — l'offscreen vaut `w×h` de la boîte.
+    pub boite: (f64, f64, f64, f64),
+    pub fit: Fit,
+    /// Transform 2D complet (`zoom_ecran` est retiré à l'appel — il vit
+    /// hors de l'offscreen : `scale(bgZ)` est appliqué au plan entier).
+    pub transform: &'a Transform2D,
+    /// Polygone du cadre — couche masquée ; `None` = clip axe-aligné.
+    pub clip: Option<&'a ID2D1PathGeometry>,
+    /// Chaîne `chaineFilter` dessinée **dans** l'offscreen (`ctx.filter`).
+    pub effets: &'a EffetsCfg,
+    /// Points de morph (`w.morphs` / `scene.bgMorphs`).
+    pub morphs: &'a [sos_scene::MorphPoint],
+    /// Pixelisation en chemin morph (`mediaPixel` / `bgPixel`).
+    pub pixel_morph: f64,
+}
+
+/// Paramètres d'un média pixelisé (`bgPixel`, chemin canvas du fond) —
+/// regroupement clippy (`too_many_arguments`, convention §37.4.5).
+pub struct TracePixel<'a> {
+    /// Taille source du média (fit recalculé dans le petit espace).
+    pub taille: (u32, u32),
+    /// Boîte en coords canvas — le petit buffer vaut `boite / pf`.
+    pub boite: (f64, f64, f64, f64),
+    pub fit: Fit,
+    /// Transform 2D complet (`zoom_ecran` appliqué à l'upscale).
+    pub transform: &'a Transform2D,
+    /// Polygone du cadre — couche masquée ; `None` = clip axe-aligné.
+    pub clip: Option<&'a ID2D1PathGeometry>,
+    /// Chaîne `chaineFilter` + facteur `pixel`.
+    pub effets: &'a EffetsCfg,
+    /// Opacité globale — fondu du carrousel de fond (`globalAlpha = kFade`).
+    pub opacite: f32,
+}
+
+/// Un plan à perspective (`perspective(d) rotateX rotateY`, diffusion.html) :
+/// les calques du plan (voile/média/capture/bordure/cadre d'un widget, ou le
+/// média de fond) sont d'abord rasterisés dans `bitmap` — taille canvas,
+/// coords canvas comme le DOM — puis l'effet `3DPerspectiveTransform`
+/// projette le tout sur le canvas. `DrawBitmap` ne sait pas faire de
+/// perspective ; la texture intermédiaire est incontournable.
+struct PlanPersp {
+    cfg: PerspCfg,
+    bitmap: ID2D1Bitmap1,
+    effet: ID2D1Effect,
+    /// Texture porteuse de `bitmap` (la bitmap ne la possède pas).
+    _texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    /// Contenu peint cette frame : un plan vierge n'est pas projeté.
+    dirty: bool,
 }
 
 /// Un message mis en page : layout DirectWrite + hauteur rendue.
@@ -410,14 +610,13 @@ impl DessinateurTexte {
             .map_err(|e| ErreurTexte::Systeme(format!("IDWriteFontCollection : {}", e.message())))?;
         let style_trait = crate::cadres::style_trait(&d2d)
             .map_err(|e| ErreurTexte::Systeme(e.to_string()))?;
-
         Ok(Self {
             dwrite,
             device,
             d2d,
             ctx: cible,
             cible_rt,
-            _cible_bitmap: cible_bitmap,
+            cible_bitmap,
             collection,
             _donnees_polices: donnees,
             device_d3d: contexte.device().clone(),
@@ -425,6 +624,13 @@ impl DessinateurTexte {
             cache: HashMap::new(),
             bitmaps: HashMap::new(),
             blocs: HashMap::new(),
+            formats_input: HashMap::new(),
+            persps: Vec::new(),
+            effets: HashMap::new(),
+            petits: HashMap::new(),
+            warp: None,
+            morphes: HashMap::new(),
+            sorties_morph: HashMap::new(),
         })
     }
 
@@ -530,14 +736,21 @@ impl DessinateurTexte {
 
     /// Vue Direct2D d'une texture média (créée une fois, réutilisée).
     ///
-    /// Clé = pointeur de la texture : les médias vivent toute la session.
-    /// La texture doit porter `D3D11_BIND_SHADER_RESOURCE` (voir
+    /// Clé = (pointeur de la texture, alpha) : les médias vivent toute la
+    /// session. La texture doit porter `D3D11_BIND_SHADER_RESOURCE` (voir
     /// `ContexteGpu::creer_texture_echantillonnable`).
+    ///
+    /// `alpha` = le média porte de l'alpha par pixel (`MediaChargee::alpha`) :
+    /// les pixels sont alors **prémultipliés** et Direct2D doit le savoir,
+    /// sinon les zones transparentes ressortent sur un rectangle noir
+    /// (défaut D1 du 2026-10-28). Une vidéo ou une image opaque reste en
+    /// `IGNORE` : l'octet alpha d'un RGB32 n'est pas garanti.
     pub fn bitmap_media(
         &mut self,
         texture: &windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+        alpha: bool,
     ) -> Result<ID2D1Bitmap1, ErreurTexte> {
-        let cle = texture.as_raw() as usize;
+        let cle = (texture.as_raw() as usize, alpha);
         if let Some((_, bitmap)) = self.bitmaps.get(&cle) {
             return Ok(bitmap.clone());
         }
@@ -547,7 +760,11 @@ impl DessinateurTexte {
         let props = D2D1_BITMAP_PROPERTIES1 {
             pixelFormat: D2D1_PIXEL_FORMAT {
                 format: DXGI_FORMAT_B8G8R8A8_UNORM,
-                alphaMode: D2D1_ALPHA_MODE_IGNORE,
+                alphaMode: if alpha {
+                    D2D1_ALPHA_MODE_PREMULTIPLIED
+                } else {
+                    D2D1_ALPHA_MODE_IGNORE
+                },
             },
             dpiX: 96.0,
             dpiY: 96.0,
@@ -560,34 +777,73 @@ impl DessinateurTexte {
         Ok(bitmap)
     }
 
-    /// Dessine un média **découpé au polygone** du cadre — dans une passe.
+    /// Dessine un média dans sa boîte — dans une passe ouverte.
     ///
-    /// `source`/`destination` sont ceux du video processor
-    /// (`media::geometrie`) : le rendu est identique, seule la découpe change.
+    /// `source`/`destination` viennent de `media::geometrie` (fit + rognage
+    /// canvas, chemin neutre) ou de `media::fit_rects` (fit seul, chemin
+    /// transformé). `boite` = rect du widget (ou le canvas pour le fond) :
+    /// c'est le clip `overflow: hidden` quand il n'y a pas de cadre, posé
+    /// **avant** le transform pour rester dans l'espace de la boîte comme le
+    /// clip-path CSS. `transforme` = matrice `Transform2D::matrice` (zoom,
+    /// rotation, offset, miroir, zoom écran) autour du centre de `boite`.
+    /// `clip` = polygone du cadre : couche masquée, même rôle que le clip
+    /// axe-aligné — le média transformé est rogné, jamais le masque.
+    /// `effets` = la chaîne `chaineFilter` (`ColorMatrix` [→ `GaussianBlur`])
+    /// — `EffetsCfg::NEUTRE` = le `DrawBitmap` historique.
     pub fn dessiner_media(
         &mut self,
         bitmap: &ID2D1Bitmap1,
-        destination: RECT,
-        source: RECT,
-        clip: &ID2D1PathGeometry,
+        t: &TraceMedia,
     ) -> Result<(), ErreurTexte> {
+        let (transforme, clip, effets) = (t.transforme, t.clip, t.effets);
+        let Some(dst) = rect_visible(t.destination) else {
+            // Destination vide : rien à peindre.
+            return Ok(());
+        };
+        let src = D2D_RECT_F {
+            left: t.source.left as f32,
+            top: t.source.top as f32,
+            right: t.source.right as f32,
+            bottom: t.source.bottom as f32,
+        };
+        let boite_f = D2D_RECT_F {
+            left: t.boite.left as f32,
+            top: t.boite.top as f32,
+            right: t.boite.right as f32,
+            bottom: t.boite.bottom as f32,
+        };
+        let trace = |s: &mut Self| -> Result<(), ErreurTexte> {
+            if effets.couleur_active() || effets.flou > 0.0 {
+                let image = s.image_effets(bitmap, src, dst, effets)?;
+                let image = if t.opacite < 1.0 {
+                    s.image_opacite(&image, t.opacite)?
+                } else {
+                    image
+                };
+                s.tracer_image(&image, src, dst, transforme, marge_flou(effets, src, dst));
+            } else {
+                s.tracer_bitmap(bitmap, dst, src, transforme, t.opacite);
+            }
+            Ok(())
+        };
+        let Some(clip) = clip else {
+            // Sans cadre : `overflow: hidden` du widget = clip axe-aligné
+            // sur la boîte (même mode que les clips chat/input du fichier).
+            // Posé avant le transform : la boîte rogne le média transformé.
+            unsafe {
+                self.cible_rt
+                    .PushAxisAlignedClip(&boite_f, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+            };
+            trace(self)?;
+            unsafe { self.cible_rt.PopAxisAlignedClip() };
+            return Ok(());
+        };
         let masque: ID2D1Geometry = clip
             .cast()
             .map_err(|e| ErreurTexte::Gpu(format!("ID2D1Geometry : {}", e.message())))?;
-        let dst = D2D_RECT_F {
-            left: destination.left as f32,
-            top: destination.top as f32,
-            right: destination.right as f32,
-            bottom: destination.bottom as f32,
-        };
-        let src = D2D_RECT_F {
-            left: source.left as f32,
-            top: source.top as f32,
-            right: source.right as f32,
-            bottom: source.bottom as f32,
-        };
         let mut params = D2D1_LAYER_PARAMETERS1 {
-            contentBounds: dst,
+            // Sous transform le contenu déborde `dst` : borner à la boîte.
+            contentBounds: if transforme.is_some() { boite_f } else { dst },
             geometricMask: ManuallyDrop::new(Some(masque)),
             maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
             maskTransform: Matrix3x2::identity(),
@@ -598,18 +854,1037 @@ impl DessinateurTexte {
         let layer: ID2D1Layer = unsafe { self.cible_rt.CreateLayer(None) }
             .map_err(|e| ErreurTexte::Gpu(format!("CreateLayer média : {}", e.message())))?;
         unsafe { self.ctx.PushLayer(&params, &layer) };
-        unsafe {
-            self.cible_rt.DrawBitmap(
-                bitmap,
-                Some(&dst),
-                1.0,
-                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
-                Some(&src),
-            )
-        };
+        trace(self)?;
         unsafe { self.ctx.PopLayer() };
         unsafe { ManuallyDrop::drop(&mut params.geometricMask) };
         Ok(())
+    }
+
+    /// `DrawBitmap` sous transform éventuel — dans une passe et un clip
+    /// déjà posés. Le transform existant est restauré ensuite (la cible
+    /// est à l'identité en pratique, mais le motif `avant` du fichier est
+    /// suivi).
+    fn tracer_bitmap(
+        &self,
+        bitmap: &ID2D1Bitmap1,
+        dst: D2D_RECT_F,
+        src: D2D_RECT_F,
+        transforme: Option<Matrix3x2>,
+        opacite: f32,
+    ) {
+        unsafe {
+            let mut avant = Matrix3x2::identity();
+            if let Some(m) = transforme {
+                self.cible_rt.GetTransform(&mut avant);
+                self.cible_rt.SetTransform(&(m * avant));
+            }
+            self.cible_rt.DrawBitmap(
+                bitmap,
+                Some(&dst),
+                opacite,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                Some(&src),
+            );
+            if transforme.is_some() {
+                self.cible_rt.SetTransform(&avant);
+            }
+        }
+    }
+
+    /// `image × opacite` — `ColorMatrix` diagonale en alpha **prémultiplié**
+    /// (entrées/sorties déjà PBGRA : k uniforme sur r,g,b,a = l'`opacity`/
+    /// `globalAlpha` du DOM). Construite à chaque appel : `k` varie à chaque
+    /// frame de fondu — le cache `cle_effets` n'y a pas de sens.
+    fn image_opacite(
+        &mut self,
+        image: &ID2D1Image,
+        opacite: f32,
+    ) -> Result<ID2D1Image, ErreurTexte> {
+        let e = unsafe { self.ctx.CreateEffect(&CLSID_D2D1ColorMatrix) }
+            .map_err(|e| ErreurTexte::Gpu(format!("effet opacité : {}", e.message())))?;
+        unsafe { e.SetInput(0, image, true) };
+        let mut matrice = [[0.0f32; 4]; 5];
+        for (i, ligne) in matrice.iter_mut().take(4).enumerate() {
+            ligne[i] = opacite;
+        }
+        for (idx, data) in [
+            (
+                D2D1_COLORMATRIX_PROP_COLOR_MATRIX.0 as u32,
+                octets(&matrice) as &[u8],
+            ),
+            (
+                D2D1_COLORMATRIX_PROP_ALPHA_MODE.0 as u32,
+                octets(&(D2D1_COLORMATRIX_ALPHA_MODE_PREMULTIPLIED.0 as u32)),
+            ),
+        ] {
+            unsafe { e.SetValue(idx, D2D1_PROPERTY_TYPE_UNKNOWN, data) }.map_err(|e| {
+                ErreurTexte::Gpu(format!("propriété opacité {idx} : {}", e.message()))
+            })?;
+        }
+        unsafe { e.GetOutput() }
+            .map_err(|e| ErreurTexte::Gpu(format!("sortie opacité : {}", e.message())))
+    }
+
+    /// Sortie de la chaîne d'effets d'un média, construite une fois par
+    /// (bitmap, matrice, σ) : `bitmap → [ColorMatrix] → [GaussianBlur]`
+    /// — même ordre que `chaineFilter` (le `blur` est dernier).
+    ///
+    /// `src`/`dst` servent à convertir `flou` (px de l'espace destination —
+    /// `blur(px)` sur l'élément DOM) en écart-type de l'espace source :
+    /// `σ_src = flou / s_fit`, `s_fit` = moyenne géométrique des échelles
+    /// (approximation isotrope sous étirement non uniforme).
+    fn image_effets(
+        &mut self,
+        bitmap: &ID2D1Bitmap1,
+        src: D2D_RECT_F,
+        dst: D2D_RECT_F,
+        effets: &EffetsCfg,
+    ) -> Result<ID2D1Image, ErreurTexte> {
+        let s = echelle_fit(src, dst);
+        let sigma = (effets.flou / s) as f32;
+        let cle = cle_effets(bitmap, effets, sigma);
+        if let Some(chaine) = self.effets.get(&cle) {
+            if let Some(sortie) = chaine.last() {
+                return unsafe { sortie.GetOutput() }.map_err(|e| {
+                    ErreurTexte::Gpu(format!("sortie effet média : {}", e.message()))
+                });
+            }
+        }
+        let mut chaine: Vec<ID2D1Effect> = Vec::new();
+        if effets.couleur_active() {
+            let matrice = effets.matrice_couleur();
+            let e = unsafe { self.ctx.CreateEffect(&CLSID_D2D1ColorMatrix) }
+                .map_err(|e| ErreurTexte::Gpu(format!("effet couleur : {}", e.message())))?;
+            unsafe { e.SetInput(0, bitmap, true) };
+            for (idx, data) in [
+                (
+                    D2D1_COLORMATRIX_PROP_COLOR_MATRIX.0 as u32,
+                    octets(&matrice) as &[u8],
+                ),
+                (
+                    D2D1_COLORMATRIX_PROP_ALPHA_MODE.0 as u32,
+                    octets(&(D2D1_COLORMATRIX_ALPHA_MODE_STRAIGHT.0 as u32)),
+                ),
+            ] {
+                unsafe { e.SetValue(idx, D2D1_PROPERTY_TYPE_UNKNOWN, data) }.map_err(|e| {
+                    ErreurTexte::Gpu(format!("propriété couleur {idx} : {}", e.message()))
+                })?;
+            }
+            chaine.push(e);
+        }
+        if sigma > 0.0 {
+            let e = unsafe { self.ctx.CreateEffect(&CLSID_D2D1GaussianBlur) }
+                .map_err(|e| ErreurTexte::Gpu(format!("effet flou : {}", e.message())))?;
+            match chaine.last() {
+                Some(couleur) => {
+                    let sortie = unsafe { couleur.GetOutput() }.map_err(|e| {
+                        ErreurTexte::Gpu(format!("sortie couleur : {}", e.message()))
+                    })?;
+                    unsafe { e.SetInput(0, &sortie, true) };
+                }
+                None => unsafe { e.SetInput(0, bitmap, true) },
+            }
+            for (idx, data) in [
+                (
+                    D2D1_GAUSSIANBLUR_PROP_STANDARD_DEVIATION.0 as u32,
+                    octets(&sigma) as &[u8],
+                ),
+                (
+                    D2D1_GAUSSIANBLUR_PROP_BORDER_MODE.0 as u32,
+                    octets(&(D2D1_BORDER_MODE_SOFT.0 as u32)),
+                ),
+            ] {
+                unsafe { e.SetValue(idx, D2D1_PROPERTY_TYPE_UNKNOWN, data) }.map_err(|e| {
+                    ErreurTexte::Gpu(format!("propriété flou {idx} : {}", e.message()))
+                })?;
+            }
+            chaine.push(e);
+        }
+        let Some(sortie) = chaine.last() else {
+            return Err(ErreurTexte::Gpu("chaîne d'effets vide".to_string()));
+        };
+        let image = unsafe { sortie.GetOutput() }
+            .map_err(|e| ErreurTexte::Gpu(format!("sortie effet média : {}", e.message())))?;
+        self.effets.insert(cle, chaine);
+        Ok(image)
+    }
+
+    /// `DrawImage` d'une sortie d'effet — l'image vit en **espace source**
+    /// (mêmes pixels que la bitmap) et `DrawImage` ne sait pas scaler : la
+    /// paire `src`→`dst` du fit devient le transform
+    /// `T(−src)·S(dst/src)·T(dst)` enfilé dans le transform éventuel.
+    /// `marge` = débord du flou (3σ) dans l'image : l'`imageRectangle` est
+    /// étendu d'autant, sinon le halo serait rogné à la source.
+    fn tracer_image(
+        &self,
+        image: &ID2D1Image,
+        src: D2D_RECT_F,
+        dst: D2D_RECT_F,
+        transforme: Option<Matrix3x2>,
+        marge: f32,
+    ) {
+        let sw = (src.right - src.left).max(f32::EPSILON);
+        let sh = (src.bottom - src.top).max(f32::EPSILON);
+        let m_fit = Matrix3x2::translation(-src.left, -src.top)
+            * Matrix3x2 {
+                M11: (dst.right - dst.left) / sw,
+                M12: 0.0,
+                M21: 0.0,
+                M22: (dst.bottom - dst.top) / sh,
+                M31: 0.0,
+                M32: 0.0,
+            }
+            * Matrix3x2::translation(dst.left, dst.top);
+        let m = transforme.map(|t| m_fit * t).unwrap_or(m_fit);
+        let echantillon = D2D_RECT_F {
+            left: src.left - marge,
+            top: src.top - marge,
+            right: src.right + marge,
+            bottom: src.bottom + marge,
+        };
+        let offset = D2D_POINT_2F {
+            x: echantillon.left,
+            y: echantillon.top,
+        };
+        unsafe {
+            let mut avant = Matrix3x2::identity();
+            self.cible_rt.GetTransform(&mut avant);
+            self.cible_rt.SetTransform(&(m * avant));
+            self.ctx.DrawImage(
+                image,
+                Some(&offset),
+                Some(&echantillon),
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+            );
+            self.cible_rt.SetTransform(&avant);
+        }
+    }
+
+    /// Bitmap réduit `largeur×hauteur` du chemin de pixelisation —
+    /// renderable + échantillonnable, PBGRA (mêmes propriétés que les
+    /// offscreens de perspective).
+    fn bitmap_petit(
+        &mut self,
+        largeur: u32,
+        hauteur: u32,
+    ) -> Result<ID2D1Bitmap1, ErreurTexte> {
+        if let Some((_, bitmap)) = self.petits.get(&(largeur, hauteur)) {
+            return Ok(bitmap.clone());
+        }
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
+            D3D11_USAGE_DEFAULT,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: largeur,
+            Height: hauteur,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut texture: Option<windows::Win32::Graphics::Direct3D11::ID3D11Texture2D> = None;
+        unsafe {
+            self.device_d3d
+                .CreateTexture2D(&desc, None, Some(&mut texture))
+        }
+        .map_err(|e| ErreurTexte::Gpu(format!("texture petit : {}", e.message())))?;
+        let texture = texture
+            .ok_or_else(|| ErreurTexte::Gpu("texture petit nulle".to_string()))?;
+        let surface: IDXGISurface = texture
+            .cast()
+            .map_err(|e| ErreurTexte::Gpu(format!("IDXGISurface petit : {}", e.message())))?;
+        let props = D2D1_BITMAP_PROPERTIES1 {
+            pixelFormat: D2D1_PIXEL_FORMAT {
+                format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+            },
+            dpiX: 96.0,
+            dpiY: 96.0,
+            bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
+            colorContext: ManuallyDrop::new(None),
+        };
+        let bitmap = unsafe { self.ctx.CreateBitmapFromDxgiSurface(&surface, Some(&props)) }
+            .map_err(|e| ErreurTexte::Gpu(format!("bitmap petit : {}", e.message())))?;
+        self.petits
+            .insert((largeur, hauteur), (texture, bitmap.clone()));
+        Ok(bitmap)
+    }
+
+    /// Média morphé (bulge/pinch, lot T4) : le contenu (fit + transform +
+    /// effets + pixelisation) est d'abord rasterisé dans un offscreen
+    /// **taille boîte** — miroir de `entry.morphOffscreen` — puis le pixel
+    /// shader `WarpMorph` (réplique de `MORPH_FRAG`) le warpe dans une
+    /// sortie dessinée sur la boîte sous le clip.
+    pub fn dessiner_media_morphe(
+        &mut self,
+        bitmap: &ID2D1Bitmap1,
+        t: &TraceMorphe,
+    ) -> Result<(), ErreurTexte> {
+        let (bw, bh) = (
+            (t.boite.2.round() as u32).max(1),
+            (t.boite.3.round() as u32).max(1),
+        );
+        let cle = (
+            t.boite.0.to_bits(),
+            t.boite.1.to_bits(),
+            t.boite.2.to_bits(),
+            t.boite.3.to_bits(),
+        );
+        let (off_bmp, srv, sortie_bmp, rtv) = self.buffers_morphe(cle, bw, bh)?;
+        // 1. Contenu dans l'offscreen, en espace boîte local (0,0 → bw,bh)
+        //    — même dessin que le canvas DOM : fit + transform + effets.
+        let cible_avant = unsafe { self.ctx.GetTarget() }.ok();
+        unsafe { self.ctx.SetTarget(&off_bmp) };
+        unsafe { self.cible_rt.Clear(Some(&couleur_d2d([0, 0, 0, 0]))) };
+        self.peindre_media_local(bitmap, t, (bw, bh))?;
+        if let Some(cible) = &cible_avant {
+            unsafe { self.ctx.SetTarget(cible) };
+        }
+        // 2. Warp D3D11 (mêmes coords normalisées que le WebGL).
+        if self.warp.is_none() {
+            self.warp = Some(
+                crate::morph::WarpMorph::nouveau(&self.device_d3d)
+                    .map_err(|e| ErreurTexte::Gpu(e.to_string()))?,
+            );
+        }
+        unsafe { self.ctx.Flush(None, None) }
+            .map_err(|e| ErreurTexte::Gpu(format!("Flush morph : {}", e.message())))?;
+        self.warp
+            .as_ref()
+            .ok_or_else(|| ErreurTexte::Gpu("warp absent".to_string()))?
+            .warper(&srv, &rtv, t.morphs, bw, bh)
+            .map_err(|e| ErreurTexte::Gpu(e.to_string()))?;
+        // 3. Sortie 1:1 sur la boîte, sous le clip (cadre ou overflow).
+        let boite_f = D2D_RECT_F {
+            left: t.boite.0 as f32,
+            top: t.boite.1 as f32,
+            right: (t.boite.0 + t.boite.2) as f32,
+            bottom: (t.boite.1 + t.boite.3) as f32,
+        };
+        let src_tout = D2D_RECT_F {
+            left: 0.0,
+            top: 0.0,
+            right: bw as f32,
+            bottom: bh as f32,
+        };
+        let trace = |s: &Self| unsafe {
+            s.cible_rt.DrawBitmap(
+                &sortie_bmp,
+                Some(&boite_f),
+                1.0,
+                D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
+                Some(&src_tout),
+            );
+        };
+        let Some(masque_geo) = t.clip else {
+            unsafe {
+                self.cible_rt
+                    .PushAxisAlignedClip(&boite_f, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+            };
+            trace(self);
+            unsafe { self.cible_rt.PopAxisAlignedClip() };
+            return Ok(());
+        };
+        let masque: ID2D1Geometry = masque_geo
+            .cast()
+            .map_err(|e| ErreurTexte::Gpu(format!("ID2D1Geometry : {}", e.message())))?;
+        let mut params = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: boite_f,
+            geometricMask: ManuallyDrop::new(Some(masque)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
+        let layer: ID2D1Layer = unsafe { self.cible_rt.CreateLayer(None) }
+            .map_err(|e| ErreurTexte::Gpu(format!("CreateLayer morph : {}", e.message())))?;
+        unsafe { self.ctx.PushLayer(&params, &layer) };
+        trace(self);
+        unsafe { self.ctx.PopLayer() };
+        unsafe { ManuallyDrop::drop(&mut params.geometricMask) };
+        Ok(())
+    }
+
+    /// Dessine le contenu d'un média dans la cible courante, en espace
+    /// **boîte locale** `(0,0) → (bw,bh)` — l'intérieur du `morphOffscreen`
+    /// DOM : fit + transform + effets (+ pixelisation si `pixel_morph`).
+    fn peindre_media_local(
+        &mut self,
+        bitmap: &ID2D1Bitmap1,
+        t: &TraceMorphe,
+        dims: (u32, u32),
+    ) -> Result<(), ErreurTexte> {
+        let boite_l = (0.0, 0.0, dims.0 as f64, dims.1 as f64);
+        if t.pixel_morph > 1.0 {
+            // Petit buffer `boite/pf` + upscale sans lissage dans
+            // l'offscreen — miroir du `mPixel` du chemin morph DOM.
+            let pf = t.pixel_morph.max(1.0);
+            let (pw, ph) = (
+                ((dims.0 as f64 / pf).round() as u32).max(1),
+                ((dims.1 as f64 / pf).round() as u32).max(1),
+            );
+            let petit = self.bitmap_petit(pw, ph)?;
+            let cible_avant = unsafe { self.ctx.GetTarget() }.ok();
+            unsafe { self.ctx.SetTarget(&petit) };
+            unsafe { self.cible_rt.Clear(Some(&couleur_d2d([0, 0, 0, 0]))) };
+            let (src_i, dst_i) =
+                crate::media::fit_rects(t.taille, (0.0, 0.0, pw as f64, ph as f64), t.fit);
+            let t_p = Transform2D {
+                offset_x: t.transform.offset_x / pf,
+                offset_y: t.transform.offset_y / pf,
+                zoom_ecran: 1.0,
+                ..*t.transform
+            };
+            let transforme_p = (!t_p.est_neutre())
+                .then(|| t_p.matrice((pw as f64 / 2.0, ph as f64 / 2.0)));
+            let (src, dst) = (rect_d2d(&src_i), rect_d2d(&dst_i));
+            if t.effets.couleur_active() || t.effets.flou > 0.0 {
+                let image = self.image_effets(bitmap, src, dst, t.effets)?;
+                self.tracer_image(&image, src, dst, transforme_p, marge_flou(t.effets, src, dst));
+            } else {
+                self.tracer_bitmap(bitmap, dst, src, transforme_p, 1.0);
+            }
+            if let Some(cible) = &cible_avant {
+                unsafe { self.ctx.SetTarget(cible) };
+            }
+            unsafe {
+                self.cible_rt.DrawBitmap(
+                    &petit,
+                    Some(&D2D_RECT_F {
+                        left: 0.0,
+                        top: 0.0,
+                        right: dims.0 as f32,
+                        bottom: dims.1 as f32,
+                    }),
+                    1.0,
+                    D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                    Some(&D2D_RECT_F {
+                        left: 0.0,
+                        top: 0.0,
+                        right: pw as f32,
+                        bottom: ph as f32,
+                    }),
+                )
+            };
+            return Ok(());
+        }
+        let (src_i, dst_i) = crate::media::fit_rects(t.taille, boite_l, t.fit);
+        let t_l = Transform2D {
+            zoom_ecran: 1.0,
+            ..*t.transform
+        };
+        let transforme = (!t_l.est_neutre())
+            .then(|| t_l.matrice((dims.0 as f64 / 2.0, dims.1 as f64 / 2.0)));
+        let (src, dst) = (rect_d2d(&src_i), rect_d2d(&dst_i));
+        if t.effets.couleur_active() || t.effets.flou > 0.0 {
+            let image = self.image_effets(bitmap, src, dst, t.effets)?;
+            self.tracer_image(&image, src, dst, transforme, marge_flou(t.effets, src, dst));
+        } else {
+            self.tracer_bitmap(bitmap, dst, src, transforme, 1.0);
+        }
+        Ok(())
+    }
+
+    /// Offscreen pré-warp + sortie d'une boîte morphée (créés une fois).
+    /// Les deux textures portent `RENDER_TARGET | SHADER_RESOURCE` : D2D
+    /// peint l'entrée, D3D la lit puis écrit la sortie, D2D la lit.
+    fn buffers_morphe(
+        &mut self,
+        cle: CleBoite,
+        bw: u32,
+        bh: u32,
+    ) -> Result<
+        (
+            ID2D1Bitmap1,
+            windows::Win32::Graphics::Direct3D11::ID3D11ShaderResourceView,
+            ID2D1Bitmap1,
+            windows::Win32::Graphics::Direct3D11::ID3D11RenderTargetView,
+        ),
+        ErreurTexte,
+    > {
+        if self.morphes.contains_key(&cle) && self.sorties_morph.contains_key(&cle) {
+            let (_, bmp_in, srv) = &self.morphes[&cle];
+            let (_, bmp_out, rtv) = &self.sorties_morph[&cle];
+            return Ok((bmp_in.clone(), srv.clone(), bmp_out.clone(), rtv.clone()));
+        }
+        use windows::Win32::Graphics::Direct3D11::{
+            D3D11_BIND_RENDER_TARGET, D3D11_BIND_SHADER_RESOURCE, D3D11_TEXTURE2D_DESC,
+            D3D11_USAGE_DEFAULT,
+        };
+        use windows::Win32::Graphics::Dxgi::Common::DXGI_SAMPLE_DESC;
+        let desc = D3D11_TEXTURE2D_DESC {
+            Width: bw,
+            Height: bh,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                Quality: 0,
+            },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let creer = |opts: D2D1_BITMAP_OPTIONS| -> Result<_, ErreurTexte> {
+            let mut texture = None;
+            unsafe { self.device_d3d.CreateTexture2D(&desc, None, Some(&mut texture)) }
+                .map_err(|e| ErreurTexte::Gpu(format!("texture morph : {}", e.message())))?;
+            let texture = texture
+                .ok_or_else(|| ErreurTexte::Gpu("texture morph nulle".to_string()))?;
+            let surface: IDXGISurface = texture
+                .cast()
+                .map_err(|e| ErreurTexte::Gpu(format!("IDXGISurface morph : {}", e.message())))?;
+            let props = D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: opts,
+                colorContext: ManuallyDrop::new(None),
+            };
+            let bitmap = unsafe { self.ctx.CreateBitmapFromDxgiSurface(&surface, Some(&props)) }
+                .map_err(|e| ErreurTexte::Gpu(format!("bitmap morph : {}", e.message())))?;
+            Ok((texture, bitmap))
+        };
+        let (tex_in, bmp_in) = creer(D2D1_BITMAP_OPTIONS_TARGET)?;
+        let (tex_out, bmp_out) = creer(D2D1_BITMAP_OPTIONS_NONE)?;
+        let mut srv = None;
+        unsafe { self.device_d3d.CreateShaderResourceView(&tex_in, None, Some(&mut srv)) }
+            .map_err(|e| ErreurTexte::Gpu(format!("SRV morph : {}", e.message())))?;
+        let srv = srv.ok_or_else(|| ErreurTexte::Gpu("SRV morph nulle".to_string()))?;
+        let mut rtv = None;
+        unsafe { self.device_d3d.CreateRenderTargetView(&tex_out, None, Some(&mut rtv)) }
+            .map_err(|e| ErreurTexte::Gpu(format!("RTV morph : {}", e.message())))?;
+        let rtv = rtv.ok_or_else(|| ErreurTexte::Gpu("RTV morph nulle".to_string()))?;
+        self.morphes.insert(cle, (tex_in, bmp_in.clone(), srv.clone()));
+        self.sorties_morph
+            .insert(cle, (tex_out, bmp_out.clone(), rtv.clone()));
+        Ok((bmp_in, srv, bmp_out, rtv))
+    }
+
+    /// Média pixelisé (`bgPixel`, chemin canvas du fond — parité
+    /// `dessinerContenuFond`) : effets + transform sont dessinés dans un
+    /// buffer réduit `boite / pf`, puis l'upscale vers la boîte se fait
+    /// **sans lissage** (`imageSmoothingEnabled = false` → NEAREST).
+    /// `zoom_ecran` (`scale` de `#bg`) s'applique à l'upscale, en espace
+    /// écran — pas dans le petit buffer. `clip` = polygone du cadre.
+    ///
+    /// DOM : le `ctx.filter` est posé **dans** le petit canvas → `blur(f)`
+    /// vaut f px du petit espace (le halo grossit ×pf à l'upscale — la
+    /// formule `flou / s_fit` le reproduit, `s_fit` étant l'échelle vers le
+    /// petit buffer).
+    pub fn dessiner_media_pixel(
+        &mut self,
+        bitmap: &ID2D1Bitmap1,
+        t: &TracePixel,
+    ) -> Result<(), ErreurTexte> {
+        let (taille, boite, fit, transform, clip, effets) =
+            (t.taille, t.boite, t.fit, t.transform, t.clip, t.effets);
+        let pf = effets.pixel.max(1.0);
+        let (pw, ph) = (
+            ((boite.2 / pf).round() as u32).max(1),
+            ((boite.3 / pf).round() as u32).max(1),
+        );
+        let petit = self.bitmap_petit(pw, ph)?;
+        // Le contenu se dessine dans le petit buffer, en coords `boite / pf`
+        // (le canvas réduit du DOM). Pas de clip : les bornes du buffer
+        // rognent, comme le petit canvas.
+        let cible_avant = unsafe { self.ctx.GetTarget() }.ok();
+        unsafe { self.ctx.SetTarget(&petit) };
+        unsafe { self.cible_rt.Clear(Some(&couleur_d2d([0, 0, 0, 0]))) };
+        let boite_p = (boite.0 / pf, boite.1 / pf, boite.2 / pf, boite.3 / pf);
+        let (src_i, dst_i) = crate::media::fit_rects(taille, boite_p, fit);
+        let t_p = Transform2D {
+            offset_x: transform.offset_x / pf,
+            offset_y: transform.offset_y / pf,
+            zoom_ecran: 1.0,
+            ..*transform
+        };
+        let transforme_p = (!t_p.est_neutre()).then(|| {
+            t_p.matrice((
+                boite_p.0 + boite_p.2 / 2.0,
+                boite_p.1 + boite_p.3 / 2.0,
+            ))
+        });
+        let src = D2D_RECT_F {
+            left: src_i.left as f32,
+            top: src_i.top as f32,
+            right: src_i.right as f32,
+            bottom: src_i.bottom as f32,
+        };
+        let dst = D2D_RECT_F {
+            left: dst_i.left as f32,
+            top: dst_i.top as f32,
+            right: dst_i.right as f32,
+            bottom: dst_i.bottom as f32,
+        };
+        if effets.couleur_active() || effets.flou > 0.0 {
+            let image = self.image_effets(bitmap, src, dst, effets)?;
+            self.tracer_image(&image, src, dst, transforme_p, marge_flou(effets, src, dst));
+        } else {
+            self.tracer_bitmap(bitmap, dst, src, transforme_p, 1.0);
+        }
+        if let Some(cible) = &cible_avant {
+            unsafe { self.ctx.SetTarget(cible) };
+        }
+        // Upscale ×pf sans lissage sur la boîte entière, sous le clip et le
+        // `zoom_ecran` (transform externe, espace écran autour du centre).
+        let boite_f = D2D_RECT_F {
+            left: boite.0 as f32,
+            top: boite.1 as f32,
+            right: (boite.0 + boite.2) as f32,
+            bottom: (boite.1 + boite.3) as f32,
+        };
+        let ze = (transform.zoom_ecran != 1.0).then(|| {
+            let (cx, cy) = ((boite.0 + boite.2 / 2.0) as f32, (boite.1 + boite.3 / 2.0) as f32);
+            let z = transform.zoom_ecran as f32;
+            Matrix3x2::translation(-cx, -cy)
+                * Matrix3x2 {
+                    M11: z,
+                    M12: 0.0,
+                    M21: 0.0,
+                    M22: z,
+                    M31: 0.0,
+                    M32: 0.0,
+                }
+                * Matrix3x2::translation(cx, cy)
+        });
+        let src_petit = D2D_RECT_F {
+            left: 0.0,
+            top: 0.0,
+            right: pw as f32,
+            bottom: ph as f32,
+        };
+        let trace = |s: &Self| unsafe {
+            let mut avant = Matrix3x2::identity();
+            if let Some(m) = ze {
+                s.cible_rt.GetTransform(&mut avant);
+                s.cible_rt.SetTransform(&(m * avant));
+            }
+            s.cible_rt.DrawBitmap(
+                &petit,
+                Some(&boite_f),
+                t.opacite,
+                D2D1_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+                Some(&src_petit),
+            );
+            if ze.is_some() {
+                s.cible_rt.SetTransform(&avant);
+            }
+        };
+        let Some(masque_geo) = clip else {
+            unsafe {
+                self.cible_rt
+                    .PushAxisAlignedClip(&boite_f, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+            };
+            trace(self);
+            unsafe { self.cible_rt.PopAxisAlignedClip() };
+            return Ok(());
+        };
+        let masque: ID2D1Geometry = masque_geo
+            .cast()
+            .map_err(|e| ErreurTexte::Gpu(format!("ID2D1Geometry : {}", e.message())))?;
+        let mut params = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: boite_f,
+            geometricMask: ManuallyDrop::new(Some(masque)),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
+        let layer: ID2D1Layer = unsafe { self.cible_rt.CreateLayer(None) }
+            .map_err(|e| ErreurTexte::Gpu(format!("CreateLayer pixel : {}", e.message())))?;
+        unsafe { self.ctx.PushLayer(&params, &layer) };
+        trace(self);
+        unsafe { self.ctx.PopLayer() };
+        unsafe { ManuallyDrop::drop(&mut params.geometricMask) };
+        Ok(())
+    }
+
+    /// Crée l'offscreen + l'effet de projection de chaque plan à
+    /// perspective (taille du canvas : les calques y dessinent en coords
+    /// canvas, comme le DOM — l'effet projette ensuite le plan entier).
+    pub fn configurer_persps(
+        &mut self,
+        contexte: &ContexteGpu,
+        largeur: u32,
+        hauteur: u32,
+        persps: &[PerspCfg],
+    ) -> Result<(), ErreurTexte> {
+        self.persps.clear();
+        for cfg in persps {
+            let desc = DescTexture::new(Format::Bgra8, largeur, hauteur)
+                .map_err(|e| ErreurTexte::Gpu(e.to_string()))?;
+            let texture = contexte
+                .creer_texture_echantillonnable(&desc)
+                .map_err(|e| ErreurTexte::Gpu(format!("offscreen persp : {e}")))?;
+            let surface: IDXGISurface = texture
+                .cast()
+                .map_err(|e| ErreurTexte::Gpu(format!("IDXGISurface persp : {}", e.message())))?;
+            let props = D2D1_BITMAP_PROPERTIES1 {
+                pixelFormat: D2D1_PIXEL_FORMAT {
+                    format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                    // Le plan garde son alpha : les zones vides de
+                    // l'offscreen ne recouvrent pas le canvas.
+                    alphaMode: D2D1_ALPHA_MODE_PREMULTIPLIED,
+                },
+                dpiX: 96.0,
+                dpiY: 96.0,
+                bitmapOptions: D2D1_BITMAP_OPTIONS_TARGET,
+                colorContext: ManuallyDrop::new(None),
+            };
+            let bitmap = unsafe { self.ctx.CreateBitmapFromDxgiSurface(&surface, Some(&props)) }
+                .map_err(|e| ErreurTexte::Gpu(format!("bitmap persp : {}", e.message())))?;
+            let effet = unsafe { self.ctx.CreateEffect(&CLSID_D2D13DPerspectiveTransform) }
+                .map_err(|e| ErreurTexte::Gpu(format!("effet persp : {}", e.message())))?;
+            unsafe { effet.SetInput(0, &bitmap, true) };
+            let (cx, cy) = (
+                (cfg.rect.0 + cfg.rect.2 / 2.0) as f32,
+                (cfg.rect.1 + cfg.rect.3 / 2.0) as f32,
+            );
+            // Même sémantique que `perspective(d) rotateX() rotateY()` avec
+            // `transform-origin: center` : rotation en degrés, origines au
+            // centre de la boîte, profondeur = la constante CSS.
+            // `D2D1_PROPERTY_TYPE_UNKNOWN` = « type déjà déclaré par l'effet » :
+            // les enums s'enregistrent en `ENUM`, pas `UINT32` (E_INVALIDARG).
+            let interpolation = D2D1_3DPERSPECTIVETRANSFORM_INTERPOLATION_MODE_LINEAR.0 as u32;
+            let bordure = D2D1_BORDER_MODE_SOFT.0 as u32;
+            let profondeur = cfg.profondeur as f32;
+            let origine_p = [cx, cy];
+            let origine_r = [cx, cy, 0.0];
+            let rotation = [cfg.rot_x as f32, cfg.rot_y as f32, 0.0];
+            let props: [(u32, &[u8]); 6] = [
+                (
+                    D2D1_3DPERSPECTIVETRANSFORM_PROP_INTERPOLATION_MODE.0 as u32,
+                    octets(&interpolation),
+                ),
+                (
+                    D2D1_3DPERSPECTIVETRANSFORM_PROP_BORDER_MODE.0 as u32,
+                    octets(&bordure),
+                ),
+                (
+                    D2D1_3DPERSPECTIVETRANSFORM_PROP_DEPTH.0 as u32,
+                    octets(&profondeur),
+                ),
+                (
+                    D2D1_3DPERSPECTIVETRANSFORM_PROP_PERSPECTIVE_ORIGIN.0 as u32,
+                    octets(&origine_p),
+                ),
+                (
+                    D2D1_3DPERSPECTIVETRANSFORM_PROP_ROTATION_ORIGIN.0 as u32,
+                    octets(&origine_r),
+                ),
+                (
+                    D2D1_3DPERSPECTIVETRANSFORM_PROP_ROTATION.0 as u32,
+                    octets(&rotation),
+                ),
+            ];
+            for (idx, data) in props {
+                unsafe { effet.SetValue(idx, D2D1_PROPERTY_TYPE_UNKNOWN, data) }.map_err(|e| {
+                    ErreurTexte::Gpu(format!("propriété persp {idx} : {}", e.message()))
+                })?;
+            }
+            self.persps.push(PlanPersp {
+                cfg: cfg.clone(),
+                bitmap,
+                effet,
+                _texture: texture,
+                dirty: false,
+            });
+        }
+        Ok(())
+    }
+
+    /// Efface chaque offscreen de perspective en transparent — début de
+    /// frame, puisque chaque plan est re-rasterisé entièrement.
+    pub fn effacer_persps(&mut self) {
+        if self.persps.is_empty() {
+            return;
+        }
+        for p in &mut self.persps {
+            unsafe { self.ctx.SetTarget(&p.bitmap) };
+            unsafe { self.cible_rt.Clear(Some(&couleur_d2d([0, 0, 0, 0]))) };
+            p.dirty = false;
+        }
+        unsafe { self.ctx.SetTarget(&self.cible_bitmap) };
+    }
+
+    /// Plan à perspective couvrant (`rect`, `z`) — clé de regroupement des
+    /// calques d'un widget (tous partagent son rect et son z, voir
+    /// `persps_depuis_scene`). `None` = dessiner sur le canvas.
+    pub fn groupe_de(&self, rect: (f64, f64, f64, f64), z: i32) -> Option<usize> {
+        self.persps
+            .iter()
+            .position(|p| p.cfg.z == z && p.cfg.rect == rect)
+    }
+
+    /// Redirige la cible de dessin : offscreen du plan, ou canvas.
+    ///
+    /// `SetTarget` en cours de passe est légal sur `ID2D1DeviceContext` ;
+    /// les clips/transforms des `dessiner_*` sont équilibrés avant retour,
+    /// le basculement entre deux calques est donc sûr.
+    pub fn cible_pour(&mut self, groupe: Option<usize>) {
+        match groupe {
+            Some(g) => {
+                let p = &mut self.persps[g];
+                p.dirty = true;
+                unsafe { self.ctx.SetTarget(&p.bitmap) };
+            }
+            None => unsafe { self.ctx.SetTarget(&self.cible_bitmap) },
+        }
+    }
+
+    /// Projette sur le canvas les plans dépassés (`cfg.z < z`) qui ont du
+    /// contenu — le plan transformé se pose à son niveau de z, comme le
+    /// `.widget` DOM dans son stacking context.
+    pub fn flusher_persps(&mut self, z: i32) -> Result<(), ErreurTexte> {
+        // `persps` est trié par z à la configuration — l'ordre de balayage
+        // est déjà l'ordre de projection.
+        for g in 0..self.persps.len() {
+            if self.persps[g].dirty && self.persps[g].cfg.z < z {
+                self.peindre_persp(g)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Projette tous les plans restants — fin du plan de composition.
+    pub fn flusher_persps_fin(&mut self) -> Result<(), ErreurTexte> {
+        self.flusher_persps(i32::MAX)
+    }
+
+    /// Projette un plan sur le canvas : sortie de l'effet
+    /// `3DPerspectiveTransform`, puis `scale(bgZ)` éventuel appliqué en
+    /// espace écran autour du centre (`scale` en premier sur `#bg`).
+    fn peindre_persp(&mut self, g: usize) -> Result<(), ErreurTexte> {
+        unsafe { self.ctx.SetTarget(&self.cible_bitmap) };
+        let p = &self.persps[g];
+        let ze = p.cfg.zoom_ecran as f32;
+        let (cx, cy) = (
+            (p.cfg.rect.0 + p.cfg.rect.2 / 2.0) as f32,
+            (p.cfg.rect.1 + p.cfg.rect.3 / 2.0) as f32,
+        );
+        let image = unsafe { p.effet.GetOutput() }
+            .map_err(|e| ErreurTexte::Gpu(format!("sortie effet persp : {}", e.message())))?;
+        unsafe {
+            let mut avant = Matrix3x2::identity();
+            if ze != 1.0 {
+                self.cible_rt.GetTransform(&mut avant);
+                let t_mc = Matrix3x2::translation(-cx, -cy);
+                let t_c = Matrix3x2::translation(cx, cy);
+                let z = Matrix3x2 {
+                    M11: ze,
+                    M12: 0.0,
+                    M21: 0.0,
+                    M22: ze,
+                    M31: 0.0,
+                    M32: 0.0,
+                };
+                self.cible_rt.SetTransform(&(t_mc * z * t_c * avant));
+            }
+            self.ctx.DrawImage(
+                &image,
+                None,
+                None,
+                D2D1_INTERPOLATION_MODE_LINEAR,
+                D2D1_COMPOSITE_MODE_SOURCE_OVER,
+            );
+            if ze != 1.0 {
+                self.cible_rt.SetTransform(&avant);
+            }
+        }
+        self.persps[g].dirty = false;
+        Ok(())
+    }
+
+    /// Voile d'un widget, selon son type (surcharges CSS de `.widget`).
+    ///
+    /// `rect` = **boîte de contenu**. `clip` = polygone du cadre quand le
+    /// widget en a un : le CSS applique le `clip-path` à l'élément entier,
+    /// donc au fond comme au contenu — et retire alors bordure et rayon.
+    /// Sans cadre, le fond couvre la boîte de bordure (`background-clip:
+    /// border-box`) : il est élargi de l'épaisseur de la bordure.
+    pub fn dessiner_fond(
+        &mut self,
+        style: StyleBoite,
+        rect: RECT,
+        clip: Option<&ID2D1PathGeometry>,
+    ) -> Result<(), ErreurTexte> {
+        let marge = if clip.is_some() { 0.0 } else { style.bordure() };
+        let boite = RECT {
+            left: rect.left - marge as i32,
+            top: rect.top - marge as i32,
+            right: rect.right + marge as i32,
+            bottom: rect.bottom + marge as i32,
+        };
+        let Some(dst) = rect_visible(boite) else {
+            return Ok(());
+        };
+        let rayon = if clip.is_some() {
+            0.0
+        } else {
+            style.rayon(boite.right as f32 - boite.left as f32)
+        };
+        let brosse = self.brosse_fond(style, &dst)?;
+        match clip {
+            Some(geo) => unsafe { self.cible_rt.FillGeometry(geo, &brosse, None) },
+            None if rayon > 0.0 => unsafe {
+                self.cible_rt.FillRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: dst,
+                        radiusX: rayon,
+                        radiusY: rayon,
+                    },
+                    &brosse,
+                )
+            },
+            None => unsafe { self.cible_rt.FillRectangle(&dst, &brosse) },
+        };
+        if style == StyleBoite::Chat {
+            // `box-shadow: inset 0 0 0 1px` — ce n'est **pas** une bordure :
+            // l'anneau survit à un cadre actif (seul `border` est retiré).
+            let anneau = D2D_RECT_F {
+                left: dst.left + 0.5,
+                top: dst.top + 0.5,
+                right: dst.right - 0.5,
+                bottom: dst.bottom - 0.5,
+            };
+            let brosse = unsafe {
+                self.cible_rt.CreateSolidColorBrush(
+                    &D2D1_COLOR_F {
+                        r: 1.0,
+                        g: 1.0,
+                        b: 1.0,
+                        a: 0.18,
+                    },
+                    None,
+                )
+            }
+            .map_err(|e| ErreurTexte::Systeme(format!("brosse anneau : {}", e.message())))?;
+            unsafe { self.cible_rt.DrawRectangle(&anneau, &brosse, 1.0, None) };
+        }
+        Ok(())
+    }
+
+    /// Bordure d'un widget — **uniquement sans cadre actif** (`applyCadreWidget`
+    /// met `border: none`). Trait centré sur le bord extérieur de la boîte de
+    /// contenu, comme une bordure CSS en `content-box`.
+    pub fn dessiner_bordure(&mut self, style: StyleBoite, rect: RECT) -> Result<(), ErreurTexte> {
+        let epaisseur = style.bordure();
+        if epaisseur <= 0.0 {
+            return Ok(());
+        }
+        let Some(_) = rect_visible(rect) else {
+            return Ok(());
+        };
+        let couleur = match style {
+            StyleBoite::InputViewer => D2D1_COLOR_F {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 0.12,
+            },
+            StyleBoite::Musique => couleur_d2d([0x55, 0x55, 0x55, 255]),
+            _ => D2D1_COLOR_F {
+                r: 224.0 / 255.0,
+                g: 224.0 / 255.0,
+                b: 224.0 / 255.0,
+                a: 0.6,
+            },
+        };
+        let brosse = unsafe { self.cible_rt.CreateSolidColorBrush(&couleur, None) }
+            .map_err(|e| ErreurTexte::Systeme(format!("brosse bordure : {}", e.message())))?;
+        let demi = epaisseur / 2.0;
+        let trait_rect = D2D_RECT_F {
+            left: rect.left as f32 - demi,
+            top: rect.top as f32 - demi,
+            right: rect.right as f32 + demi,
+            bottom: rect.bottom as f32 + demi,
+        };
+        let rayon = style.rayon(rect.right as f32 - rect.left as f32);
+        // `ID2D1RenderTarget::DrawRectangle` rend `()` (piège §35.7.3).
+        if rayon > 0.0 {
+            unsafe {
+                self.cible_rt.DrawRoundedRectangle(
+                    &D2D1_ROUNDED_RECT {
+                        rect: trait_rect,
+                        radiusX: rayon,
+                        radiusY: rayon,
+                    },
+                    &brosse,
+                    epaisseur,
+                    None,
+                )
+            };
+        } else {
+            unsafe { self.cible_rt.DrawRectangle(&trait_rect, &brosse, epaisseur, None) };
+        }
+        Ok(())
+    }
+
+    /// Brosse du fond d'une boîte : unie, ou dégradé vertical pour la musique.
+    fn brosse_fond(
+        &self,
+        style: StyleBoite,
+        dst: &D2D_RECT_F,
+    ) -> Result<ID2D1Brush, ErreurTexte> {
+        let Some(couleur) = style.couleur_fond() else {
+            let stops = [
+                D2D1_GRADIENT_STOP {
+                    position: 0.0,
+                    color: couleur_d2d([0x2e, 0x2e, 0x2e, 255]),
+                },
+                D2D1_GRADIENT_STOP {
+                    position: 1.0,
+                    color: couleur_d2d([0x1c, 0x1c, 0x1c, 255]),
+                },
+            ];
+            let collection = unsafe {
+                self.cible_rt
+                    .CreateGradientStopCollection(&stops, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)
+            }
+            .map_err(|e| {
+                ErreurTexte::Systeme(format!("CreateGradientStopCollection : {}", e.message()))
+            })?;
+            let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+                startPoint: D2D_POINT_2F {
+                    x: dst.left,
+                    y: dst.top,
+                },
+                endPoint: D2D_POINT_2F {
+                    x: dst.left,
+                    y: dst.bottom,
+                },
+            };
+            let brosse = unsafe { self.cible_rt.CreateLinearGradientBrush(&props, None, &collection) }
+                .map_err(|e| {
+                    ErreurTexte::Systeme(format!("CreateLinearGradientBrush : {}", e.message()))
+                })?;
+            return brosse
+                .cast()
+                .map_err(|e| ErreurTexte::Systeme(format!("ID2D1Brush : {}", e.message())));
+        };
+        let brosse = unsafe { self.cible_rt.CreateSolidColorBrush(&couleur, None) }
+            .map_err(|e| ErreurTexte::Systeme(format!("brosse fond : {}", e.message())))?;
+        brosse
+            .cast()
+            .map_err(|e| ErreurTexte::Systeme(format!("ID2D1Brush : {}", e.message())))
     }
 
     /// Dessine les widgets chat — dans une passe ouverte.
@@ -695,6 +1970,1141 @@ impl DessinateurTexte {
             unsafe { self.cible_rt.PopAxisAlignedClip() };
         }
         Ok(())
+    }
+
+    /// Dessine un widget input-viewer (clavier / numpad / souris / manette) —
+    /// dans une passe.
+    ///
+    /// Le contenu est rogné au rect du widget (`overflow: hidden`) **et** au
+    /// polygone de son cadre (`clip-path`), comme le CSS.
+    pub fn dessiner_input(
+        &mut self,
+        cfg: &InputCfg,
+        etat: &FileInput,
+        clip: Option<&ID2D1PathGeometry>,
+    ) -> Result<(), ErreurTexte> {
+        let geometrie = crate::input::disposition(cfg);
+        if geometrie.chassis.is_none()
+            && geometrie.touches.is_empty()
+            && geometrie.souris.is_none()
+            && geometrie.manette.is_none()
+        {
+            return Ok(());
+        }
+        let (x, y, w, h) = cfg.rect;
+        let zone = D2D_RECT_F {
+            left: x as f32,
+            top: y as f32,
+            right: (x + w) as f32,
+            bottom: (y + h) as f32,
+        };
+        unsafe {
+            self.cible_rt
+                .PushAxisAlignedClip(&zone, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+        };
+        let masque: Option<ID2D1Geometry> = match clip {
+            Some(geo) => Some(
+                geo.cast()
+                    .map_err(|e| ErreurTexte::Gpu(format!("ID2D1Geometry : {}", e.message())))?,
+            ),
+            None => None,
+        };
+        let mut params = D2D1_LAYER_PARAMETERS1 {
+            contentBounds: zone,
+            geometricMask: ManuallyDrop::new(masque),
+            maskAntialiasMode: D2D1_ANTIALIAS_MODE_PER_PRIMITIVE,
+            maskTransform: Matrix3x2::identity(),
+            opacity: 1.0,
+            opacityBrush: ManuallyDrop::new(None),
+            layerOptions: D2D1_LAYER_OPTIONS1_NONE,
+        };
+        let avec_couche = params.geometricMask.is_some();
+        if avec_couche {
+            let layer = unsafe { self.cible_rt.CreateLayer(None) }
+                .map_err(|e| ErreurTexte::Gpu(format!("CreateLayer input : {}", e.message())))?;
+            unsafe { self.ctx.PushLayer(&params, &layer) };
+        }
+        let resultat = self.dessiner_input_interne(cfg, etat, &geometrie);
+        if avec_couche {
+            unsafe { self.ctx.PopLayer() };
+            unsafe { ManuallyDrop::drop(&mut params.geometricMask) };
+        }
+        unsafe { self.cible_rt.PopAxisAlignedClip() };
+        resultat
+    }
+
+    fn dessiner_input_interne(
+        &mut self,
+        cfg: &InputCfg,
+        etat: &FileInput,
+        geometrie: &crate::input::GeometrieInput,
+    ) -> Result<(), ErreurTexte> {
+        let largeur = cfg.rect.2 as f32;
+        let cqw = largeur / 100.0;
+        if let Some(chassis) = &geometrie.chassis {
+            self.dessiner_chassis(cfg, chassis, cqw, etat)?;
+        }
+        for touche in &geometrie.touches {
+            self.dessiner_touche(cfg, cqw, touche, etat)?;
+        }
+        if let Some(souris) = &geometrie.souris {
+            self.dessiner_souris(cfg, etat, souris)?;
+        }
+        if let Some(manette) = &geometrie.manette {
+            self.dessiner_manette(cfg, etat, manette)?;
+        }
+        Ok(())
+    }
+
+    /// Souris (`ivGenererSourisHTML`) : corps, zones de clic, molette crantée,
+    /// bouton DPI, reflet, coordonnées.
+    ///
+    /// `fill: var(--inputviewer-couleur-presse)` du CSS remplace le dégradé
+    /// des zones/molette par la couleur de presse **unie** ; le
+    /// `drop-shadow(0 0 12px)` est approché par un liseré large translucide
+    /// sous la forme (même convention que le halo des LEDs).
+    fn dessiner_souris(
+        &mut self,
+        cfg: &InputCfg,
+        etat: &FileInput,
+        s: &crate::input::SourisGeometrie,
+    ) -> Result<(), ErreurTexte> {
+        let e = s.echelle;
+        let etat_s = etat.souris();
+        let presse = couleur_d2d(cfg.couleur);
+        let halo_presse = D2D1_COLOR_F {
+            a: 0.3,
+            ..presse
+        };
+
+        // Corps translucide (fill-opacity 0.62) — le média transparaît.
+        let corps = self.chemin_d2d(&s.corps)?;
+        let (cx, y0, _, y1) = bornes_chemin(&s.corps);
+        let brosse_corps = self.brosse_degrade_stops(
+            &[
+                (0.0, couleur_d2d_alpha([0x3a, 0x3f, 0x4d, 255], 0.62)),
+                (0.5, couleur_d2d_alpha([0x26, 0x2a, 0x33, 255], 0.62)),
+                (1.0, couleur_d2d_alpha([0x14, 0x16, 0x1c, 255], 0.62)),
+            ],
+            (cx, y0),
+            (cx, y1),
+        )?;
+        unsafe { self.cible_rt.FillGeometry(&corps, &brosse_corps, None) };
+        let filet = self.brosse_unie(D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.12,
+        })?;
+        unsafe {
+            self.cible_rt
+                .DrawGeometry(&corps, &filet, (2.0 * e).max(0.5), None)
+        };
+
+        // Zones de clic gauche/droite (opaques, dégradé `ivs-btn`).
+        for (chemin, enfoncee) in [
+            (&s.zone_gauche, etat_s.gauche),
+            (&s.zone_droite, etat_s.droite),
+        ] {
+            let geo = self.chemin_d2d(chemin)?;
+            let (zx, z0, _, z1) = bornes_chemin(chemin);
+            if enfoncee {
+                let halo = self.brosse_unie(halo_presse)?;
+                unsafe {
+                    self.cible_rt
+                        .DrawGeometry(&geo, &halo, (6.0 * e).max(1.0), None)
+                };
+            }
+            let remplissage = if enfoncee {
+                self.brosse_unie(presse)?
+            } else {
+                self.brosse_degrade_stops(
+                    &[
+                        (0.0, couleur_d2d([0x48, 0x4e, 0x5c, 255])),
+                        (1.0, couleur_d2d([0x22, 0x25, 0x2d, 255])),
+                    ],
+                    (zx, z0),
+                    (zx, z1),
+                )?
+            };
+            unsafe { self.cible_rt.FillGeometry(&geo, &remplissage, None) };
+            let contour = self.brosse_unie(if enfoncee {
+                presse
+            } else {
+                D2D1_COLOR_F {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 0.10,
+                }
+            })?;
+            unsafe {
+                self.cible_rt
+                    .DrawGeometry(&geo, &contour, (1.5 * e).max(0.4), None)
+            };
+        }
+
+        // Coutures (centrale + séparation sous les clics).
+        let couture = self.brosse_unie(D2D1_COLOR_F {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.4,
+        })?;
+        unsafe {
+            self.cible_rt.DrawLine(
+                pt(s.couture_verticale.0),
+                pt(s.couture_verticale.1),
+                &couture,
+                (2.0 * e).max(0.5),
+                None,
+            );
+            self.cible_rt.DrawLine(
+                pt(s.couture_horizontale.0),
+                pt(s.couture_horizontale.1),
+                &couture,
+                (2.0 * e).max(0.5),
+                None,
+            );
+        }
+
+        // Logement de la molette.
+        let loge = rounded(s.loge, 22.0 * e);
+        let noir = self.brosse_unie(D2D1_COLOR_F {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.25,
+        })?;
+        unsafe { self.cible_rt.FillRoundedRectangle(&loge, &noir) };
+
+        // Molette (clic milieu) — crantée.
+        if etat_s.milieu {
+            let halo = self.brosse_unie(halo_presse)?;
+            unsafe {
+                self.cible_rt
+                    .DrawRoundedRectangle(&rounded(s.molette, 14.0 * e), &halo, 6.0 * e, None)
+            };
+        }
+        let molette = rounded(s.molette, 14.0 * e);
+        let brosse_molette = if etat_s.milieu {
+            self.brosse_unie(presse)?
+        } else {
+            self.brosse_degrade_stops(
+                &[
+                    (0.0, couleur_d2d([0x56, 0x5e, 0x6e, 255])),
+                    (1.0, couleur_d2d([0x2a, 0x2e, 0x37, 255])),
+                ],
+                (s.molette.x, s.molette.y),
+                (s.molette.x, s.molette.y + s.molette.hauteur),
+            )?
+        };
+        unsafe { self.cible_rt.FillRoundedRectangle(&molette, &brosse_molette) };
+        let bord_molette = self.brosse_unie(if etat_s.milieu {
+            presse
+        } else {
+            D2D1_COLOR_F {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 0.18,
+            }
+        })?;
+        unsafe {
+            self.cible_rt
+                .DrawRoundedRectangle(&molette, &bord_molette, (1.5 * e).max(0.4), None)
+        };
+        // Les crans ne sont PAS dans le sélecteur `.presse` du CSS : toujours
+        // noirs translucides.
+        let cran = self.brosse_unie(D2D1_COLOR_F {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.35,
+        })?;
+        for (a, b) in &s.crans {
+            unsafe {
+                self.cible_rt
+                    .DrawLine(pt(*a), pt(*b), &cran, (2.0 * e).max(0.5), None)
+            };
+        }
+
+        // Bouton DPI.
+        let dpi = D2D1_ELLIPSE {
+            point: pt(s.dpi.0),
+            radiusX: s.dpi.1,
+            radiusY: s.dpi.1,
+        };
+        let remplissage_dpi = self.brosse_unie(D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.08,
+        })?;
+        unsafe { self.cible_rt.FillEllipse(&dpi, &remplissage_dpi) };
+        let bord_dpi = self.brosse_unie(D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.10,
+        })?;
+        unsafe {
+            self.cible_rt
+                .DrawEllipse(&dpi, &bord_dpi, (1.0 * e).max(0.3), None)
+        };
+
+        // Reflet sur la coque (ellipse tournée de -16° autour de son centre).
+        let mut avant = Matrix3x2::identity();
+        unsafe { self.cible_rt.GetTransform(&mut avant) };
+        let rotation = Matrix3x2::rotation(
+            s.reflet.angle.to_radians(),
+            s.reflet.centre.x,
+            s.reflet.centre.y,
+        );
+        unsafe { self.cible_rt.SetTransform(&(rotation * avant)) };
+        let reflet = self.brosse_unie(D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.12,
+        })?;
+        unsafe {
+            self.cible_rt.FillEllipse(
+                &D2D1_ELLIPSE {
+                    point: pt(s.reflet.centre),
+                    radiusX: s.reflet.rayon_x,
+                    radiusY: s.reflet.rayon_y,
+                },
+                &reflet,
+            )
+        };
+        unsafe { self.cible_rt.SetTransform(&avant) };
+
+        // Coordonnées curseur (`X: … · Y: …`, ancre médiane, taille 16 viewBox).
+        let (ancre, taille) = s.coordonnees;
+        let format = self.format_input(taille, true)?;
+        let texte: Vec<u16> = format!("X: {} · Y: {}", etat_s.x, etat_s.y)
+            .encode_utf16()
+            .collect();
+        let rect = D2D_RECT_F {
+            left: ancre.x - 80.0 * e,
+            top: ancre.y - 0.95 * taille,
+            right: ancre.x + 80.0 * e,
+            bottom: ancre.y + 0.25 * taille,
+        };
+        let encre = self.brosse_unie(couleur_d2d([0xae, 0xb4, 0xc2, 255]))?;
+        unsafe {
+            self.cible_rt.DrawText(
+                &texte,
+                &format,
+                &rect,
+                &encre,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            )
+        };
+        Ok(())
+    }
+
+    /// Manette (`ivGenererManette*SVG`) : peint les `groupes` dans l'ordre du
+    /// document SVG et résout leur état via le `lien`.
+    ///
+    /// Presse : couleur unie `cfg.couleur` + liseré-halo translucide dessiné
+    /// **sous** la forme (approche du `drop-shadow` CSS, même convention que
+    /// les zones de la souris). `connectee` n'a pas de rendu dédié :
+    /// `majInputViewerEtat` ne le lit pas non plus — une manette débranchée
+    /// n'est que « tout relâché ».
+    fn dessiner_manette(
+        &mut self,
+        cfg: &InputCfg,
+        etat: &FileInput,
+        m: &crate::input::ManetteGeometrie,
+    ) -> Result<(), ErreurTexte> {
+        let e = m.echelle;
+        let etat_m = etat.manette();
+        let mapping = cfg.mapping.as_ref();
+        let dpad = resoudre_dpad(&etat_m, m.skin, mapping);
+        let presse = PresseManette {
+            allume: false,
+            couleur: couleur_d2d(cfg.couleur),
+            halo: D2D1_COLOR_F {
+                a: 0.3,
+                ..couleur_d2d(cfg.couleur)
+            },
+        };
+
+        for groupe in &m.groupes {
+            let (allume, deplacement) = match groupe.lien {
+                LienManette::Statique => (false, (0.0, 0.0)),
+                LienManette::Bouton(idx) => {
+                    let phys = bouton_physique(idx, mapping);
+                    (etat_m.boutons.get(phys).copied().unwrap_or(false), (0.0, 0.0))
+                }
+                LienManette::Dpad(dir) => (dir.activee(dpad), (0.0, 0.0)),
+                LienManette::Stick { gauche, bouton } => {
+                    let (ax, ay) = if gauche {
+                        (etat_m.axes[0], etat_m.axes[1])
+                    } else {
+                        (etat_m.axes[2], etat_m.axes[3])
+                    };
+                    let phys = bouton_physique(bouton, mapping);
+                    let enfonce = etat_m.boutons.get(phys).copied().unwrap_or(false);
+                    // `.actif` : le cap s'éclaire aussi quand le stick bouge
+                    // (`translate(ax*26, ay*26)` px viewBox, seuil 0,15).
+                    let actif = ax.abs() > 0.15 || ay.abs() > 0.15;
+                    (enfonce || actif, (ax * 26.0 * e, ay * 26.0 * e))
+                }
+            };
+
+            let deplace = deplacement != (0.0, 0.0);
+            let mut avant = Matrix3x2::identity();
+            if deplace {
+                unsafe { self.cible_rt.GetTransform(&mut avant) };
+                let t = Matrix3x2::translation(deplacement.0, deplacement.1);
+                unsafe { self.cible_rt.SetTransform(&(t * avant)) };
+            }
+            let resultat = self.dessiner_primitives_manette(
+                groupe,
+                m.skin,
+                PresseManette { allume, ..presse },
+                e,
+            );
+            if deplace {
+                unsafe { self.cible_rt.SetTransform(&avant) };
+            }
+            resultat?;
+        }
+        Ok(())
+    }
+
+    /// Primitives d'un `<g>` manette — erreurs propagées, transform déjà posé.
+    fn dessiner_primitives_manette(
+        &mut self,
+        groupe: &crate::input::GroupeManette,
+        skin: SkinManette,
+        presse: PresseManette,
+        e: f32,
+    ) -> Result<(), ErreurTexte> {
+        for primitive in &groupe.primitives {
+            match primitive {
+                Primitive::Forme { forme, style } => {
+                    self.dessiner_forme_manette(skin, *style, forme, presse, e)?;
+                }
+                Primitive::Texte {
+                    ancre,
+                    taille,
+                    contenu,
+                    style,
+                } => {
+                    self.dessiner_label_manette(*ancre, *taille, contenu, *style, presse.allume)?;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Une forme de la figure : `style` → fill/stroke du CSS `iv-fig-*` ;
+    /// `presse.allume` applique la convention presse (liseré-halo + couleur
+    /// unie). Le liseré-halo ≈ moitié du rayon du `drop-shadow` : 12 px → 6e,
+    /// 10 px → 5e, 8 px → 4e.
+    fn dessiner_forme_manette(
+        &mut self,
+        skin: SkinManette,
+        style: StyleManette,
+        forme: &Forme,
+        presse: PresseManette,
+        e: f32,
+    ) -> Result<(), ErreurTexte> {
+        let lumiere = |a: f32| D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a,
+        };
+        // `?` sur le liseré-halo : dessiné sous la forme, largeur en e.
+        let allumer = |largeur: f32| -> Result<(), ErreurTexte> {
+            let brosse = self.brosse_unie(presse.halo)?;
+            self.tracer_forme(forme, &brosse, (largeur * e).max(0.8))
+        };
+        let allume = presse.allume;
+        let couleur = presse.couleur;
+        match style {
+            StyleManette::Corps => {
+                let (x0, y0, x1, y1) = bornes_forme(forme);
+                let stops = stops_corps(skin)
+                    .map(|(p, rgb)| (p, couleur_d2d_alpha(rgb, 0.62)));
+                let brosse =
+                    self.brosse_degrade_stops(&stops, ((x0 + x1) / 2.0, y0), ((x0 + x1) / 2.0, y1))?;
+                self.remplir_forme(forme, &brosse)?;
+                let filet = self.brosse_unie(lumiere(0.12))?;
+                self.tracer_forme(forme, &filet, (2.0 * e).max(0.5))
+            }
+            StyleManette::CorpsInner => {
+                let brosse = self.brosse_unie(lumiere(0.03))?;
+                self.remplir_forme(forme, &brosse)?;
+                let filet = self.brosse_unie(lumiere(0.05))?;
+                self.tracer_forme(forme, &filet, (1.5 * e).max(0.4))
+            }
+            StyleManette::Bouton | StyleManette::Home | StyleManette::StickCap => {
+                if allume {
+                    allumer(if style == StyleManette::Home { 4.0 } else { 6.0 })?;
+                }
+                let brosse = if allume {
+                    self.brosse_unie(couleur)?
+                } else {
+                    let (x0, y0, x1, y1) = bornes_forme(forme);
+                    let stops = stops_btn(skin).map(|(p, rgb)| (p, couleur_d2d(rgb)));
+                    self.brosse_degrade_stops(&stops, ((x0 + x1) / 2.0, y0), ((x0 + x1) / 2.0, y1))?
+                };
+                self.remplir_forme(forme, &brosse)?;
+                // `.iv-fig-home` garde son filet blanc quand pressé ; face/
+                // shoulder/pill/cap passent le filet à la couleur de presse.
+                let teinte = if allume && style != StyleManette::Home {
+                    couleur
+                } else {
+                    lumiere(if style == StyleManette::StickCap { 0.16 } else { 0.15 })
+                };
+                let filet = self.brosse_unie(teinte)?;
+                self.tracer_forme(forme, &filet, (1.5 * e).max(0.4))
+            }
+            StyleManette::Zone => {
+                if !allume {
+                    return Ok(()); // `fill: transparent` au repos.
+                }
+                allumer(5.0)?;
+                let brosse = self.brosse_unie(D2D1_COLOR_F {
+                    a: 0.85,
+                    ..couleur
+                })?;
+                self.remplir_forme(forme, &brosse)
+            }
+            StyleManette::Diag => {
+                if allume {
+                    allumer(4.0)?;
+                }
+                let brosse = self.brosse_unie(if allume { couleur } else { lumiere(0.12) })?;
+                self.remplir_forme(forme, &brosse)
+            }
+            StyleManette::Pad => {
+                if allume {
+                    allumer(6.0)?;
+                    let brosse = self.brosse_unie(couleur)?;
+                    self.remplir_forme(forme, &brosse)?;
+                } else {
+                    let brosse = self.brosse_dish(skin, forme)?;
+                    self.remplir_forme(forme, &brosse)?;
+                }
+                // Le filet 0,10 du touchpad est identique pressé ou non.
+                let filet = self.brosse_unie(lumiere(0.10))?;
+                self.tracer_forme(forme, &filet, (1.5 * e).max(0.4))
+            }
+            StyleManette::Dish | StyleManette::StickBase => {
+                let brosse = self.brosse_dish(skin, forme)?;
+                self.remplir_forme(forme, &brosse)?;
+                let filet = self.brosse_unie(lumiere(0.08))?;
+                self.tracer_forme(forme, &filet, (2.0 * e).max(0.5))
+            }
+            StyleManette::Cross | StyleManette::Hub => {
+                let (x0, y0, x1, y1) = bornes_forme(forme);
+                // Hub : dégradé « cross » (8bitdo/xbox) ou « btn » (ps).
+                let stops = if skin == SkinManette::Ps && style == StyleManette::Hub {
+                    stops_btn(skin)
+                } else {
+                    stops_cross(skin)
+                };
+                let stops = stops.map(|(p, rgb)| (p, couleur_d2d(rgb)));
+                let brosse =
+                    self.brosse_degrade_stops(&stops, ((x0 + x1) / 2.0, y0), ((x0 + x1) / 2.0, y1))?;
+                self.remplir_forme(forme, &brosse)?;
+                let filet = self.brosse_unie(lumiere(0.10))?;
+                self.tracer_forme(forme, &filet, (1.5 * e).max(0.4))
+            }
+            StyleManette::HubDot => {
+                let brosse = self.brosse_unie(lumiere(0.08))?;
+                self.remplir_forme(forme, &brosse)
+            }
+            StyleManette::StickRing => {
+                let filet = self.brosse_unie(lumiere(0.08))?;
+                self.tracer_forme(forme, &filet, (2.0 * e).max(0.5))
+            }
+            StyleManette::Ombre => {
+                let brosse = self.brosse_unie(D2D1_COLOR_F {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 0.35,
+                })?;
+                self.remplir_forme(forme, &brosse)
+            }
+            StyleManette::Sheen => {
+                let brosse = self.brosse_unie(lumiere(0.12))?;
+                self.remplir_forme(forme, &brosse)
+            }
+            StyleManette::SheenLine => {
+                let filet = self.brosse_unie(lumiere(0.07))?;
+                self.tracer_forme(forme, &filet, (3.0 * e).max(0.7))
+            }
+            StyleManette::Ico => {
+                let brosse = self.brosse_unie(couleur_d2d([0xae, 0xb4, 0xc2, 255]))?;
+                self.remplir_forme(forme, &brosse)
+            }
+            StyleManette::Deco => {
+                let brosse = self.brosse_unie(lumiere(0.10))?;
+                self.remplir_forme(forme, &brosse)
+            }
+        }
+    }
+
+    /// `radialGradient` des `iv*-dish` : centre (50 %, 45 %) de la boîte,
+    /// rayons 0,62 × boîte — alpha 0,75 comme le `fill-opacity` du CSS.
+    fn brosse_dish(&self, skin: SkinManette, forme: &Forme) -> Result<ID2D1Brush, ErreurTexte> {
+        let (x0, y0, x1, y1) = bornes_forme(forme);
+        let stops = stops_dish(skin).map(|(p, rgb)| (p, couleur_d2d_alpha(rgb, 0.75)));
+        self.brosse_radiale(
+            &stops,
+            ((x0 + x1) / 2.0, y0 + 0.45 * (y1 - y0)),
+            0.62 * (x1 - x0),
+            0.62 * (y1 - y0),
+        )
+    }
+
+    /// Brosse dégradée radial (`CreateRadialGradientBrush`, comme le linéaire).
+    fn brosse_radiale(
+        &self,
+        stops: &[(f32, D2D1_COLOR_F)],
+        centre: (f32, f32),
+        rayon_x: f32,
+        rayon_y: f32,
+    ) -> Result<ID2D1Brush, ErreurTexte> {
+        let arrets: Vec<D2D1_GRADIENT_STOP> = stops
+            .iter()
+            .map(|(position, color)| D2D1_GRADIENT_STOP {
+                position: *position,
+                color: *color,
+            })
+            .collect();
+        let collection = unsafe {
+            self.cible_rt
+                .CreateGradientStopCollection(&arrets, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)
+        }
+        .map_err(|e| ErreurTexte::Systeme(format!("CreateGradientStopCollection : {}", e.message())))?;
+        let props = D2D1_RADIAL_GRADIENT_BRUSH_PROPERTIES {
+            center: D2D_POINT_2F {
+                x: centre.0,
+                y: centre.1,
+            },
+            gradientOriginOffset: D2D_POINT_2F { x: 0.0, y: 0.0 },
+            radiusX: rayon_x,
+            radiusY: rayon_y,
+        };
+        let brosse = unsafe {
+            self.cible_rt
+                .CreateRadialGradientBrush(&props, None, &collection)
+        }
+        .map_err(|e| ErreurTexte::Systeme(format!("CreateRadialGradientBrush : {}", e.message())))?;
+        brosse
+            .cast()
+            .map_err(|e| ErreurTexte::Systeme(format!("ID2D1Brush : {}", e.message())))
+    }
+
+    /// `<text>` de la figure : `text-anchor: middle` + `dominant-baseline:
+    /// central` → boîte centrée sur l'ancre ; blanc si le groupe est allumé.
+    fn dessiner_label_manette(
+        &mut self,
+        ancre: crate::input::Point,
+        taille: f32,
+        contenu: &str,
+        style: StyleLabel,
+        allume: bool,
+    ) -> Result<(), ErreurTexte> {
+        let format = self.format_input(taille, true)?;
+        let texte: Vec<u16> = contenu.encode_utf16().collect();
+        let rect = D2D_RECT_F {
+            left: ancre.x - 4.0 * taille,
+            top: ancre.y - 0.7 * taille,
+            right: ancre.x + 4.0 * taille,
+            bottom: ancre.y + 0.6 * taille,
+        };
+        let encre = self.brosse_unie(if allume {
+            D2D1_COLOR_F {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 1.0,
+            }
+        } else {
+            match style {
+                StyleLabel::Lbl => couleur_d2d([0xdf, 0xe3, 0xec, 255]),
+                StyleLabel::LblSm => couleur_d2d([0xae, 0xb4, 0xc2, 255]),
+                StyleLabel::Arrow => D2D1_COLOR_F {
+                    r: 223.0 / 255.0,
+                    g: 227.0 / 255.0,
+                    b: 236.0 / 255.0,
+                    a: 0.40,
+                },
+                StyleLabel::Couleur(rgb) => couleur_d2d([rgb[0], rgb[1], rgb[2], 255]),
+            }
+        })?;
+        unsafe {
+            self.cible_rt.DrawText(
+                &texte,
+                &format,
+                &rect,
+                &encre,
+                D2D1_DRAW_TEXT_OPTIONS_NONE,
+                DWRITE_MEASURING_MODE_NATURAL,
+            )
+        };
+        Ok(())
+    }
+
+    /// Remplit une `Forme` manette (ellipse / rect arrondi / chemin).
+    fn remplir_forme(&self, forme: &Forme, brosse: &ID2D1Brush) -> Result<(), ErreurTexte> {
+        match forme {
+            Forme::Cercle { centre, rayon } => unsafe {
+                self.cible_rt.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(*centre),
+                        radiusX: *rayon,
+                        radiusY: *rayon,
+                    },
+                    brosse,
+                )
+            },
+            Forme::Ellipse {
+                centre,
+                rayon_x,
+                rayon_y,
+            } => unsafe {
+                self.cible_rt.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(*centre),
+                        radiusX: *rayon_x,
+                        radiusY: *rayon_y,
+                    },
+                    brosse,
+                )
+            },
+            Forme::Rect { rect, rayon } => unsafe {
+                self.cible_rt
+                    .FillRoundedRectangle(&rounded(*rect, *rayon), brosse)
+            },
+            Forme::Chemin(chemin) => unsafe {
+                self.cible_rt
+                    .FillGeometry(&self.chemin_d2d(chemin)?, brosse, None)
+            },
+        }
+        Ok(())
+    }
+
+    /// Trace le contour d'une `Forme` manette (filet ou liseré-halo).
+    fn tracer_forme(&self, forme: &Forme, brosse: &ID2D1Brush, largeur: f32) -> Result<(), ErreurTexte> {
+        match forme {
+            Forme::Cercle { centre, rayon } => unsafe {
+                self.cible_rt.DrawEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(*centre),
+                        radiusX: *rayon,
+                        radiusY: *rayon,
+                    },
+                    brosse,
+                    largeur,
+                    None,
+                )
+            },
+            Forme::Ellipse {
+                centre,
+                rayon_x,
+                rayon_y,
+            } => unsafe {
+                self.cible_rt.DrawEllipse(
+                    &D2D1_ELLIPSE {
+                        point: pt(*centre),
+                        radiusX: *rayon_x,
+                        radiusY: *rayon_y,
+                    },
+                    brosse,
+                    largeur,
+                    None,
+                )
+            },
+            Forme::Rect { rect, rayon } => unsafe {
+                self.cible_rt.DrawRoundedRectangle(
+                    &rounded(*rect, *rayon),
+                    brosse,
+                    largeur,
+                    None,
+                )
+            },
+            Forme::Chemin(chemin) => unsafe {
+                self.cible_rt
+                    .DrawGeometry(&self.chemin_d2d(chemin)?, brosse, largeur, None)
+            },
+        }
+        Ok(())
+    }
+
+    /// `Chemin` (données pures) → `ID2D1Geometry` Direct2D.
+    ///
+    /// La géométrie de chemin est transformée en interface de base : les
+    /// `Fill`/`Draw` n'utilisent que `ID2D1Geometry`.
+    fn chemin_d2d(&self, chemin: &crate::input::Chemin) -> Result<ID2D1Geometry, ErreurTexte> {
+        let geo: ID2D1PathGeometry = unsafe { self.d2d.CreatePathGeometry() }
+            .and_then(|g| g.cast())
+            .map_err(|e| ErreurTexte::Gpu(format!("CreatePathGeometry : {}", e.message())))?;
+        let sink: ID2D1GeometrySink = unsafe { geo.Open() }
+            .map_err(|e| ErreurTexte::Gpu(format!("GeometrySink : {}", e.message())))?;
+        unsafe {
+            sink.SetFillMode(D2D1_FILL_MODE_ALTERNATE);
+            for segment in &chemin.segments {
+                match segment {
+                    Segment::Debut(p) => {
+                        sink.BeginFigure(pt(*p), D2D1_FIGURE_BEGIN_FILLED)
+                    }
+                    Segment::Ligne(p) => sink.AddLine(pt(*p)),
+                    Segment::Cubique(a, b, d) => sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                        point1: pt(*a),
+                        point2: pt(*b),
+                        point3: pt(*d),
+                    }),
+                    Segment::Fermer => sink.EndFigure(D2D1_FIGURE_END_CLOSED),
+                }
+            }
+        }
+        unsafe { sink.Close() }
+            .map_err(|e| ErreurTexte::Gpu(format!("Close : {}", e.message())))?;
+        geo.cast()
+            .map_err(|e| ErreurTexte::Gpu(format!("ID2D1Geometry : {}", e.message())))
+    }
+
+    /// Châssis du clavier/numpad : plaque translucide, plateau encaissé, LEDs.
+    fn dessiner_chassis(
+        &mut self,
+        cfg: &InputCfg,
+        chassis: &crate::input::Chassis,
+        _cqw: f32,
+        etat: &FileInput,
+    ) -> Result<(), ErreurTexte> {
+        let largeur = cfg.rect.2 as f32;
+        let plaque = rounded(chassis.plaque, chassis.rayon);
+        let brosse = self.brosse_degrade_stops(
+            &[
+                (0.0, couleur_d2d_alpha([0x33, 0x38, 0x44, 255], 0.55)),
+                (0.5, couleur_d2d_alpha([0x23, 0x26, 0x2e, 255], 0.55)),
+                (1.0, couleur_d2d_alpha([0x14, 0x16, 0x1b, 255], 0.55)),
+            ],
+            (chassis.plaque.x, chassis.plaque.y),
+            (chassis.plaque.x, chassis.plaque.y + chassis.plaque.hauteur),
+        )?;
+        unsafe { self.cible_rt.FillRoundedRectangle(&plaque, &brosse) };
+        let filet = self.brosse_unie(D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.10,
+        })?;
+        unsafe {
+            self.cible_rt.DrawRoundedRectangle(
+                &plaque,
+                &filet,
+                (0.004 * largeur).max(0.4),
+                None,
+            )
+        };
+
+        let cable = rounded(chassis.cable, chassis.rayon * 0.27);
+        let noir = self.brosse_unie(D2D1_COLOR_F {
+            r: 0.0,
+            g: 0.0,
+            b: 0.0,
+            a: 0.35,
+        })?;
+        unsafe { self.cible_rt.FillRoundedRectangle(&cable, &noir) };
+
+        let plateau = rounded(chassis.plateau, chassis.rayon * 0.67);
+        unsafe { self.cible_rt.FillRoundedRectangle(&plateau, &noir) };
+        let filet_plateau = self.brosse_unie(D2D1_COLOR_F {
+            r: 1.0,
+            g: 1.0,
+            b: 1.0,
+            a: 0.06,
+        })?;
+        unsafe {
+            self.cible_rt.DrawRoundedRectangle(
+                &plateau,
+                &filet_plateau,
+                (0.003 * largeur).max(0.3),
+                None,
+            )
+        };
+
+        for led in &chassis.leds {
+            let pressee = etat.est_pressee(led.code);
+            let [cr, cg, cb, _] = cfg.couleur;
+            let (r, g, b, a) = if pressee {
+                (cr as f32 / 255.0, cg as f32 / 255.0, cb as f32 / 255.0, 1.0)
+            } else {
+                (1.0, 1.0, 1.0, 0.14)
+            };
+            let centre = D2D_POINT_2F {
+                x: led.centre.0,
+                y: led.centre.1,
+            };
+            if pressee {
+                // `filter: drop-shadow(0 0 8px couleur)` : halo approximé par
+                // un disque translucide plus grand, dessiné **sous** la LED.
+                let halo = self.brosse_unie(D2D1_COLOR_F {
+                    r,
+                    g,
+                    b,
+                    a: 0.35,
+                })?;
+                unsafe {
+                    self.cible_rt.FillEllipse(
+                        &D2D1_ELLIPSE {
+                            point: centre,
+                            radiusX: led.rayon * 2.2,
+                            radiusY: led.rayon * 2.2,
+                        },
+                        &halo,
+                    )
+                };
+            }
+            let disque = self.brosse_unie(D2D1_COLOR_F { r, g, b, a })?;
+            unsafe {
+                self.cible_rt.FillEllipse(
+                    &D2D1_ELLIPSE {
+                        point: centre,
+                        radiusX: led.rayon,
+                        radiusY: led.rayon,
+                    },
+                    &disque,
+                )
+            };
+            let format = self.format_input(led.taille, true)?;
+            let texte: Vec<u16> = led.label.encode_utf16().collect();
+            let demi = 3.0 * led.taille;
+            let rect = D2D_RECT_F {
+                left: led.centre.0 - demi,
+                top: led.centre.1 + led.rayon,
+                right: led.centre.0 + demi,
+                bottom: led.centre.1 + led.rayon + 2.0 * led.taille,
+            };
+            let encre = self.brosse_unie(if pressee {
+                D2D1_COLOR_F {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                }
+            } else {
+                D2D1_COLOR_F {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 0.35,
+                }
+            })?;
+            unsafe {
+                self.cible_rt.DrawText(
+                    &texte,
+                    &format,
+                    &rect,
+                    &encre,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                )
+            };
+        }
+        Ok(())
+    }
+
+    /// Une keycap : dégradé vertical, bordure, presse (couleur + contour + scale).
+    fn dessiner_touche(
+        &mut self,
+        cfg: &InputCfg,
+        cqw: f32,
+        touche: &crate::input::TouchePlacee,
+        etat: &FileInput,
+    ) -> Result<(), ErreurTexte> {
+        let pressee = etat.est_pressee_parmi(touche.codes);
+        let numpad = cfg.mode == ModeInput::Numpad;
+        let rayon = if numpad { 1.6 * cqw } else { 0.9 * cqw };
+        let mut r = touche.rect;
+        if pressee {
+            // `transform: scale(0.92) translateY(0.1cqw)` autour du centre.
+            let (cx, cy) = (
+                r.x + r.largeur / 2.0,
+                r.y + r.hauteur / 2.0 + 0.1 * cqw,
+            );
+            r = crate::input::RectF {
+                x: cx - r.largeur * 0.46,
+                y: cy - r.hauteur * 0.46,
+                largeur: r.largeur * 0.92,
+                hauteur: r.hauteur * 0.92,
+            };
+        }
+        let cap = rounded(r, rayon);
+        let brosse = if pressee {
+            let [cr, cg, cb, _] = cfg.couleur;
+            self.brosse_degrade_stops(
+                &[
+                    (0.0, couleur_d2d([cr, cg, cb, 255])),
+                    (1.0, couleur_d2d(melange_noir([cr, cg, cb, 255], 0.7))),
+                ],
+                (r.x, r.y),
+                (r.x, r.y + r.hauteur),
+            )?
+        } else {
+            self.brosse_degrade_stops(
+                &[
+                    (0.0, couleur_d2d([0x3d, 0x42, 0x4e, 255])),
+                    (0.55, couleur_d2d([0x27, 0x2b, 0x33, 255])),
+                    (1.0, couleur_d2d([0x1d, 0x20, 0x27, 255])),
+                ],
+                (r.x, r.y),
+                (r.x, r.y + r.hauteur),
+            )?
+        };
+        unsafe { self.cible_rt.FillRoundedRectangle(&cap, &brosse) };
+        let bord = if pressee {
+            couleur_d2d(cfg.couleur)
+        } else {
+            D2D1_COLOR_F {
+                r: 1.0,
+                g: 1.0,
+                b: 1.0,
+                a: 0.16,
+            }
+        };
+        let brosse_bord = self.brosse_unie(bord)?;
+        unsafe { self.cible_rt.DrawRoundedRectangle(&cap, &brosse_bord, 1.0, None) };
+
+        if pressee {
+            // `outline: 3px; outline-offset: 3px` → bande [3, 6] px.
+            let dehors = rounded(
+                crate::input::RectF {
+                    x: r.x - 4.5,
+                    y: r.y - 4.5,
+                    largeur: r.largeur + 9.0,
+                    hauteur: r.hauteur + 9.0,
+                },
+                rayon + 4.5,
+            );
+            let brosse_outline = self.brosse_unie(couleur_d2d(cfg.couleur))?;
+            unsafe { self.cible_rt.DrawRoundedRectangle(&dehors, &brosse_outline, 3.0, None) };
+        }
+
+        if !touche.label.is_empty() {
+            let taille = if numpad { 2.0 * cqw } else { 1.9 * cqw };
+            let format = self.format_input(taille, numpad)?;
+            let texte: Vec<u16> = touche.label.encode_utf16().collect();
+            let rect = D2D_RECT_F {
+                left: r.x,
+                top: r.y,
+                right: r.x + r.largeur,
+                bottom: r.y + r.hauteur,
+            };
+            let encre = self.brosse_unie(if pressee {
+                D2D1_COLOR_F {
+                    r: 1.0,
+                    g: 1.0,
+                    b: 1.0,
+                    a: 1.0,
+                }
+            } else {
+                couleur_d2d([0xf0, 0xf0, 0xf0, 255])
+            })?;
+            unsafe {
+                self.cible_rt.DrawText(
+                    &texte,
+                    &format,
+                    &rect,
+                    &encre,
+                    D2D1_DRAW_TEXT_OPTIONS_NONE,
+                    DWRITE_MEASURING_MODE_NATURAL,
+                )
+            };
+        }
+        Ok(())
+    }
+
+    /// `IDWriteTextFormat` centré (deux axes) pour les libellés input-viewer.
+    fn format_input(&mut self, taille: f32, gras: bool) -> Result<IDWriteTextFormat, ErreurTexte> {
+        let cle = ((taille * 10.0).round().max(1.0) as u32, gras);
+        if let Some(format) = self.formats_input.get(&cle) {
+            return Ok(format.clone());
+        }
+        let nom: Vec<u16> = "Segoe UI".encode_utf16().chain(std::iter::once(0)).collect();
+        let locale: Vec<u16> = "fr-fr".encode_utf16().chain(std::iter::once(0)).collect();
+        let format = unsafe {
+            self.dwrite.CreateTextFormat(
+                PCWSTR(nom.as_ptr()),
+                None,
+                if gras {
+                    DWRITE_FONT_WEIGHT_BOLD
+                } else {
+                    DWRITE_FONT_WEIGHT_NORMAL
+                },
+                DWRITE_FONT_STYLE_NORMAL,
+                DWRITE_FONT_STRETCH_NORMAL,
+                taille.max(1.0),
+                PCWSTR(locale.as_ptr()),
+            )
+        }
+        .map_err(|e| ErreurTexte::Systeme(format!("CreateTextFormat input : {}", e.message())))?;
+        unsafe { format.SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER) }
+            .map_err(|e| ErreurTexte::Systeme(format!("alignement : {}", e.message())))?;
+        unsafe { format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER) }
+            .map_err(|e| ErreurTexte::Systeme(format!("paragraphe : {}", e.message())))?;
+        unsafe { format.SetWordWrapping(DWRITE_WORD_WRAPPING_NO_WRAP) }
+            .map_err(|e| ErreurTexte::Systeme(format!("nowrap : {}", e.message())))?;
+        self.formats_input.insert(cle, format.clone());
+        Ok(format)
+    }
+
+    /// Brosse unie (couleur déjà en flottants).
+    fn brosse_unie(&self, couleur: D2D1_COLOR_F) -> Result<ID2D1Brush, ErreurTexte> {
+        let brosse = unsafe { self.cible_rt.CreateSolidColorBrush(&couleur, None) }
+            .map_err(|e| ErreurTexte::Systeme(format!("brosse : {}", e.message())))?;
+        brosse
+            .cast()
+            .map_err(|e| ErreurTexte::Systeme(format!("ID2D1Brush : {}", e.message())))
+    }
+
+    /// Brosse dégradée linéaire entre deux points, avec arrêts explicites.
+    fn brosse_degrade_stops(
+        &self,
+        stops: &[(f32, D2D1_COLOR_F)],
+        debut: (f32, f32),
+        fin: (f32, f32),
+    ) -> Result<ID2D1Brush, ErreurTexte> {
+        let arrets: Vec<D2D1_GRADIENT_STOP> = stops
+            .iter()
+            .map(|(position, color)| D2D1_GRADIENT_STOP {
+                position: *position,
+                color: *color,
+            })
+            .collect();
+        let collection = unsafe {
+            self.cible_rt
+                .CreateGradientStopCollection(&arrets, D2D1_GAMMA_2_2, D2D1_EXTEND_MODE_CLAMP)
+        }
+        .map_err(|e| ErreurTexte::Systeme(format!("CreateGradientStopCollection : {}", e.message())))?;
+        let props = D2D1_LINEAR_GRADIENT_BRUSH_PROPERTIES {
+            startPoint: D2D_POINT_2F {
+                x: debut.0,
+                y: debut.1,
+            },
+            endPoint: D2D_POINT_2F { x: fin.0, y: fin.1 },
+        };
+        let brosse = unsafe { self.cible_rt.CreateLinearGradientBrush(&props, None, &collection) }
+            .map_err(|e| {
+                ErreurTexte::Systeme(format!("CreateLinearGradientBrush : {}", e.message()))
+            })?;
+        brosse
+            .cast()
+            .map_err(|e| ErreurTexte::Systeme(format!("ID2D1Brush : {}", e.message())))
     }
 
     /// Met en page tous les messages d'un widget (une fois par version).
@@ -1139,6 +3549,221 @@ fn couleur_d2d(rgba: [u8; 4]) -> D2D1_COLOR_F {
         b: rgba[2] as f32 / 255.0,
         a: rgba[3] as f32 / 255.0,
     }
+}
+
+/// Couleur RGBA avec une opacité explicite (`fill-opacity` du SVG).
+fn couleur_d2d_alpha(rgba: [u8; 4], alpha: f32) -> D2D1_COLOR_F {
+    D2D1_COLOR_F {
+        r: rgba[0] as f32 / 255.0,
+        g: rgba[1] as f32 / 255.0,
+        b: rgba[2] as f32 / 255.0,
+        a: alpha,
+    }
+}
+
+/// `color-mix(in srgb, couleur 70%, #000)` : assombrit sans changer l'alpha.
+fn melange_noir(rgba: [u8; 4], ratio: f32) -> [u8; 4] {
+    [
+        (rgba[0] as f32 * ratio).round() as u8,
+        (rgba[1] as f32 * ratio).round() as u8,
+        (rgba[2] as f32 * ratio).round() as u8,
+        rgba[3],
+    ]
+}
+
+// =============================================================================
+// Manette — état allumé d'un groupe + dégradés des 3 skins (`ivg*`/`ivgx*`/`ivgp*`)
+// =============================================================================
+
+/// Couleurs de l'état d'un groupe manette : `allume` + couleur de presse et
+/// son halo translucide (regroupement pour `too_many_arguments`).
+#[derive(Clone, Copy)]
+struct PresseManette {
+    allume: bool,
+    couleur: D2D1_COLOR_F,
+    halo: D2D1_COLOR_F,
+}
+
+/// Dégradé de coque (`ivg-corps` / `ivgx-corps` / `ivgp-corps`).
+fn stops_corps(skin: SkinManette) -> [(f32, [u8; 4]); 3] {
+    match skin {
+        SkinManette::Bitdo => [
+            (0.0, [0x3a, 0x3f, 0x4d, 255]),
+            (0.45, [0x26, 0x2a, 0x33, 255]),
+            (1.0, [0x14, 0x16, 0x1c, 255]),
+        ],
+        SkinManette::Xbox => [
+            (0.0, [0x33, 0x37, 0x3f, 255]),
+            (0.45, [0x21, 0x24, 0x2b, 255]),
+            (1.0, [0x12, 0x14, 0x18, 255]),
+        ],
+        SkinManette::Ps => [
+            (0.0, [0x34, 0x3a, 0x46, 255]),
+            (0.45, [0x22, 0x26, 0x2e, 255]),
+            (1.0, [0x13, 0x15, 0x19, 255]),
+        ],
+    }
+}
+
+/// Dégradé des boutons (`ivg-btn` / `ivgx-btn` / `ivgp-btn`).
+fn stops_btn(skin: SkinManette) -> [(f32, [u8; 4]); 2] {
+    match skin {
+        SkinManette::Bitdo => [(0.0, [0x4a, 0x50, 0x60, 255]), (1.0, [0x22, 0x25, 0x2d, 255])],
+        SkinManette::Xbox => [(0.0, [0x45, 0x4b, 0x57, 255]), (1.0, [0x1f, 0x22, 0x29, 255])],
+        SkinManette::Ps => [(0.0, [0x47, 0x4e, 0x5c, 255]), (1.0, [0x21, 0x24, 0x2c, 255])],
+    }
+}
+
+/// Dégradé de la croix D-pad (`ivg-cross` / `ivgx-cross`) — pas de `ivgp-cross`
+/// (le moyeu PS prend le dégradé bouton).
+fn stops_cross(skin: SkinManette) -> [(f32, [u8; 4]); 2] {
+    match skin {
+        SkinManette::Bitdo => [(0.0, [0x2f, 0x33, 0x3e, 255]), (1.0, [0x1c, 0x1f, 0x26, 255])],
+        SkinManette::Xbox => [(0.0, [0x2c, 0x30, 0x38, 255]), (1.0, [0x19, 0x1c, 0x21, 255])],
+        SkinManette::Ps => stops_btn(skin),
+    }
+}
+
+/// Dégradé radial des creux (`ivg-dish` / `ivgx-dish` / `ivgp-dish`).
+fn stops_dish(skin: SkinManette) -> [(f32, [u8; 4]); 2] {
+    match skin {
+        SkinManette::Bitdo => [(0.0, [0x20, 0x24, 0x2c, 255]), (1.0, [0x10, 0x13, 0x18, 255])],
+        _ => [(0.0, [0x1e, 0x21, 0x28, 255]), (1.0, [0x0e, 0x11, 0x14, 255])],
+    }
+}
+
+/// Boîte englobante (x0, y0, x1, y1) d'une `Forme` manette — base des
+/// dégradés `objectBoundingBox`.
+fn bornes_forme(forme: &Forme) -> (f32, f32, f32, f32) {
+    match forme {
+        Forme::Cercle { centre, rayon } => (
+            centre.x - rayon,
+            centre.y - rayon,
+            centre.x + rayon,
+            centre.y + rayon,
+        ),
+        Forme::Ellipse {
+            centre,
+            rayon_x,
+            rayon_y,
+        } => (
+            centre.x - rayon_x,
+            centre.y - rayon_y,
+            centre.x + rayon_x,
+            centre.y + rayon_y,
+        ),
+        Forme::Rect { rect, .. } => (
+            rect.x,
+            rect.y,
+            rect.x + rect.largeur,
+            rect.y + rect.hauteur,
+        ),
+        Forme::Chemin(c) => {
+            // `bornes_chemin` rend (x milieu, y0, x1, y1) → x0 = 2·xm − x1.
+            let (xm, y0, x1, y1) = bornes_chemin(c);
+            (2.0 * xm - x1, y0, x1, y1)
+        }
+    }
+}
+
+/// Rect arrondi D2D d'un rect flottant.
+fn rounded(rect: crate::input::RectF, rayon: f32) -> D2D1_ROUNDED_RECT {
+    D2D1_ROUNDED_RECT {
+        rect: D2D_RECT_F {
+            left: rect.x,
+            top: rect.y,
+            right: rect.x + rect.largeur,
+            bottom: rect.y + rect.hauteur,
+        },
+        radiusX: rayon.max(0.0),
+        radiusY: rayon.max(0.0),
+    }
+}
+
+/// Point D2D d'un `Point` de la géométrie input.
+fn pt(p: crate::input::Point) -> D2D_POINT_2F {
+    D2D_POINT_2F { x: p.x, y: p.y }
+}
+
+/// Bornes (x milieu, y haut, x droit, y bas) d'un `Chemin` — pour les
+/// dégradés `objectBoundingBox` du SVG (direction verticale sur la boîte
+/// englobante).
+fn bornes_chemin(chemin: &crate::input::Chemin) -> (f32, f32, f32, f32) {
+    let mut min = (f32::MAX, f32::MAX);
+    let mut max = (f32::MIN, f32::MIN);
+    let mut acc = |p: &crate::input::Point| {
+        min = (min.0.min(p.x), min.1.min(p.y));
+        max = (max.0.max(p.x), max.1.max(p.y));
+    };
+    for segment in &chemin.segments {
+        match segment {
+            Segment::Debut(p) | Segment::Ligne(p) => acc(p),
+            Segment::Cubique(a, b, d) => {
+                acc(a);
+                acc(b);
+                acc(d);
+            }
+            Segment::Fermer => {}
+        }
+    }
+    ((min.0 + max.0) / 2.0, min.1, max.0, max.1)
+}
+
+/// Clé du cache `effets` : bitmap + matrice couleur + σ (la pixelisation
+/// ne fait pas partie de la chaîne — chemins distincts).
+fn cle_effets(bitmap: &ID2D1Bitmap1, effets: &EffetsCfg, sigma: f32) -> u64 {
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    (bitmap.as_raw() as usize).hash(&mut h);
+    effets.lum.to_bits().hash(&mut h);
+    effets.contraste.to_bits().hash(&mut h);
+    effets.teinte.to_bits().hash(&mut h);
+    sigma.to_bits().hash(&mut h);
+    h.finish()
+}
+
+/// Échelle géométrique du fit `src`→`dst` (moyenne des deux axes —
+/// isotrope sous `Etirer` non uniforme, approximation documentée).
+fn echelle_fit(src: D2D_RECT_F, dst: D2D_RECT_F) -> f64 {
+    let sw = (src.right - src.left).abs().max(f32::EPSILON) as f64;
+    let sh = (src.bottom - src.top).abs().max(f32::EPSILON) as f64;
+    let dw = (dst.right - dst.left).abs() as f64;
+    let dh = (dst.bottom - dst.top).abs() as f64;
+    ((dw * dh) / (sw * sh)).sqrt().max(f64::MIN_POSITIVE)
+}
+
+/// Marge d'échantillonnage du flou dans l'image source : `blur` déborde
+/// ~3σ des bornes — ramené à l'espace source comme l'écart-type.
+fn marge_flou(effets: &EffetsCfg, src: D2D_RECT_F, dst: D2D_RECT_F) -> f32 {
+    if effets.flou <= 0.0 {
+        return 0.0;
+    }
+    (3.0 * effets.flou / echelle_fit(src, dst)).ceil() as f32
+}
+
+/// Octets bruts d'une valeur POD — pour `ID2D1Properties::SetValue`
+/// (propriétés d'effets : float, u32, Vector2/3 de f32, matrice 5×4).
+fn octets<T>(v: &T) -> &[u8] {
+    unsafe { std::slice::from_raw_parts((v as *const T).cast::<u8>(), std::mem::size_of::<T>()) }
+}
+
+/// `RECT` → `D2D_RECT_F` (simple cast, jamais vide-filtré).
+fn rect_d2d(r: &RECT) -> D2D_RECT_F {
+    D2D_RECT_F {
+        left: r.left as f32,
+        top: r.top as f32,
+        right: r.right as f32,
+        bottom: r.bottom as f32,
+    }
+}
+
+/// Rect D2D d'un `RECT`, `None` s'il est vide (rien à peindre).
+fn rect_visible(rect: RECT) -> Option<D2D_RECT_F> {
+    (rect.right > rect.left && rect.bottom > rect.top).then_some(D2D_RECT_F {
+        left: rect.left as f32,
+        top: rect.top as f32,
+        right: rect.right as f32,
+        bottom: rect.bottom as f32,
+    })
 }
 
 #[cfg(test)]

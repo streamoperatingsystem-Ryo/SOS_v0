@@ -19,7 +19,7 @@ wuff = "0.2"
 # Contrats partagés (Sink, PaquetEncode, Conteneur, ErreurMoteur) : le moteur
 # les implémente, il ne les redéfinit pas. Contrat §3.2.
 sos-moteur-api = { path = "../sos-moteur-api" }
-# Contrats de scène (anneau 0) : mapping widget/trou -> source de capture.
+# Contrats de scène (anneau 0) : mapping widget porteur d'une cible -> source de capture.
 sos-scene = { path = "../sos-scene" }
 
 [dev-dependencies]
@@ -34,6 +34,7 @@ windows = { version = "0.58", features = [
     # Capture WGC (Windows Graphics Capture) + interop WinRT/D3D11.
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Direct3D_Fxc",
     "Win32_System_WinRT",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",

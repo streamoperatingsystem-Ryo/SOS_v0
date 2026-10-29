@@ -1,13 +1,16 @@
 //! Mapping scène → sources du moteur natif.
 //!
-//! La scène décrit **où** capturer (rect du widget `trou`), pas **quoi** :
-//! la cible native (moniteur ou fenêtre) vit côté application, choisie par
-//! l'utilisateur dans le sélecteur de capture. Ce module fait le pont, sans
-//! modifier le contrat JSON des scènes (aucun champ ajouté à `Widget`).
+//! La scène décrit **où** capturer (rect du widget porteur d'une cible),
+//! pas **quoi** : la cible native (moniteur ou fenêtre) vit côté
+//! application, choisie par l'utilisateur dans le sélecteur de capture. Ce
+//! module fait le pont, sans modifier le contrat JSON des scènes (aucun
+//! champ ajouté à `Widget`).
 //!
-//! Seuls les widgets `trou` avec une cible connue et un rect non nul
-//! produisent une source ; tout le reste (chat, médias, caméra tant que MF
-//! n'existe pas) est ignoré — jamais d'invention.
+//! Seuls les widgets portant une cible (`captureCible` persistée, ou à
+//! défaut `cibles[id]` pour le harnais) et un rect non nul produisent une
+//! source ; tout le reste (chat, médias, caméra tant que MF n'existe pas)
+//! est ignoré — jamais d'invention. Le flag `trou` est un concept du mode
+//! OBS : le moteur natif ne le lit pas (D8).
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -16,9 +19,10 @@ use sos_scene::{CadreConfig, CaptureCible, Scene, Widget};
 
 use crate::cadres::{couleur_hex, CadreCfg, StyleCadre};
 use crate::chat::{ChatCfg, FILTRE_UNIFIE};
-use crate::media::{Fit, MediaCfg};
+use crate::input::{Disposition, InputCfg, MappingManette, ModeInput};
+use crate::media::{CarrouselCfg, EffetsCfg, Fit, LectureCfg, MediaCfg, PerspCfg, Transform2D};
 use crate::moteur::{CibleCapture, SourceCfg};
-use crate::texte::{CibleTitre, PositionTitre, StyleTexte, TexteCfg, POLICE_DEFAUT};
+use crate::texte::{CibleTitre, PositionTitre, StyleBoite, StyleTexte, TexteCfg, POLICE_DEFAUT};
 
 /// Traduit la cible persistée dans la scène en cible du moteur.
 ///
@@ -34,6 +38,50 @@ fn cible_de(cible: &CaptureCible) -> CibleCapture {
     }
 }
 
+/// Vrai si le widget est un emplacement de capture : une cible existe
+/// (`captureCible` persistée, ou `cibles[id]` pour le harnais
+/// `parite_scene`). Remplace l'ancien marqueur `trou`, concept du mode OBS
+/// (D8). `medias_depuis_scene` / `boites_depuis_scene` ne reçoivent pas la
+/// table `cibles` (signature fixée par `moteur.rs`, hors périmètre N1) :
+/// leur exclusion équivalente est `w.captureCible.is_some()`.
+fn est_capture(w: &Widget, cibles: &HashMap<String, CibleCapture>) -> bool {
+    w.captureCible.is_some() || cibles.contains_key(&w.id)
+}
+
+/// État de lecture persisté d'un média — miroir `applyMediaState` /
+/// `applyBgState` (diffusion.html). La boucle A–B n'existe que si les deux
+/// bornes sont des nombres valides avec `b > a` (le DOM rejette sinon).
+/// `mediaTime`/`bgTime` ne sont volontairement pas portés : le tracker DOM
+/// est seedé à la création → aucun seek initial, cf. `LectureCfg`.
+fn lecture(paused: bool, a: Option<f64>, b: Option<f64>) -> LectureCfg {
+    LectureCfg {
+        paused,
+        boucle: match (a, b) {
+            (Some(a), Some(b)) if b > a => Some((a, b)),
+            _ => None,
+        },
+    }
+}
+
+/// Carrousel persisté d'un média — la liste **non vide** est prioritaire
+/// sur le média unique (`carrousel.md`) ; `slidesSecOf` = `max(1, sec||5)`
+/// (min 1 s du `Math.max(1, …)` DOM, défaut 5 s quand le champ est absent).
+/// `ease` : fondu `ease-in-out` CSS des `.slide` (widget) vs alpha linéaire
+/// `kFade` de `dessinerContenuFond` (fond).
+fn carrousel(
+    slides: Option<&[sos_scene::MediaSlide]>,
+    sec: Option<f64>,
+    base: &Path,
+    ease: bool,
+) -> Option<CarrouselCfg> {
+    let slides = slides.filter(|s| !s.is_empty())?;
+    Some(CarrouselCfg {
+        slides: slides.iter().map(|s| base.join(&s.rel)).collect(),
+        sec: sec.unwrap_or(5.0).max(1.0),
+        ease,
+    })
+}
+
 /// Construit les sources du moteur depuis la scène et la table des cibles.
 ///
 /// Priorité à `Widget.captureCible` (persisté dans la scène) ; `cibles` ne
@@ -47,7 +95,7 @@ pub fn sources_depuis_scene(
     scene
         .widgets
         .iter()
-        .filter(|w| w.trou && w.largeur > 0.0 && w.hauteur > 0.0)
+        .filter(|w| est_capture(w, cibles) && w.largeur > 0.0 && w.hauteur > 0.0)
         .filter_map(|w| {
             let cible = w
                 .captureCible
@@ -71,7 +119,15 @@ pub fn sources_depuis_scene(
 /// les chemins de la scène sont relatifs (`medias/<uuid>.<ext>`).
 /// Le fond (`bgSlides` prioritaire sur `bgMedia`) est composé sous tout le
 /// reste (`z = i32::MIN`). Une page transparente (`bgObsSource`) n'a pas de
-/// média. Les trous et la caméra sont exclus (captures, pas des médias).
+/// média. Les widgets de capture (cible persistée) et la caméra sont
+/// exclus (captures, pas des médias).
+///
+/// Transforms 2D (miroir `applyMediaStyle` / `dessinerContenuFond`) : le fond
+/// porte `bgRot`/`bgOffset*`/`bgMiroir*` en chaîne interne et `bgZoom` en
+/// `zoom_ecran` (le `scale(z)` posé sur `#bg`, espace écran) ; un widget
+/// porte `mediaZoom`/`mediaRot`/`mediaOffset*`/`mediaMiroir*`. `bgFit` et
+/// `mediaFit` n'ont PAS le même `centrer` (`depuis_nom_fond`, cf.
+/// `fitRects`).
 pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
     let mut medias = Vec::new();
     if scene.bgObsSource.is_none() {
@@ -90,14 +146,49 @@ pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
                 chemin: base.join(rel),
                 rect: (0.0, 0.0, scene.canvasW as f64, scene.canvasH as f64),
                 z: i32::MIN,
-                fit: Fit::depuis_nom(&scene.bgFit),
+                fit: Fit::depuis_nom_fond(&scene.bgFit),
+                transform: Transform2D {
+                    // `bgZoom` n'est pas dans la chaîne du canvas (peint sur
+                    // `#bg` entier, espace écran) → `zoom_ecran`, pas `zoom`.
+                    zoom: 1.0,
+                    rot: scene.bgRot,
+                    offset_x: scene.bgOffsetX,
+                    offset_y: scene.bgOffsetY,
+                    miroir_h: scene.bgMiroirH,
+                    miroir_v: scene.bgMiroirV,
+                    zoom_ecran: scene.bgZoom,
+                },
+                // `chaineFilter` + `bgPixel` (chemin canvas du fond).
+                effets: EffetsCfg {
+                    lum: scene.bgLum,
+                    contraste: scene.bgContraste,
+                    teinte: scene.bgTeinte,
+                    flou: scene.bgFlou,
+                    pixel: scene.bgPixel,
+                },
                 // Le fond n'est pas un widget : jamais de cadre.
                 cadre: None,
+                morphs: scene.bgMorphs.clone().unwrap_or_default(),
+                // `bgPixel` est déjà dans `effets.pixel` — chemin morph
+                // inclus (le DOM pixellise aussi dans l'offscreen).
+                pixel_morph: scene.bgPixel,
+                lecture: lecture(scene.bgPaused, scene.bgLoopA, scene.bgLoopB),
+                // `bgSlides` gagne sur `bgMedia` (priorité du DOM). Le fondu
+                // du fond est linéaire (`globalAlpha`), pas eased.
+                carrousel: carrousel(
+                    scene.bgSlides.as_deref(),
+                    scene.bgSlidesSec,
+                    base,
+                    false,
+                ),
             });
         }
     }
     for w in &scene.widgets {
-        if w.trou || w.widget_type == "camera" {
+        // Même exclusion que `boites_depuis_scene` : la table `cibles`
+        // n'atteint pas cette fonction (signature fixée par `moteur.rs`,
+        // hors périmètre N1) → seule la cible persistée exclut le média.
+        if w.captureCible.is_some() || w.widget_type == "camera" {
             continue;
         }
         if let Some(rel) = &w.media {
@@ -106,11 +197,84 @@ pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
                 rect: (w.x, w.y, w.largeur, w.hauteur),
                 z: w.z,
                 fit: Fit::depuis_nom(&w.mediaFit),
+                transform: Transform2D {
+                    zoom: w.mediaZoom,
+                    rot: w.mediaRot,
+                    offset_x: w.mediaOffsetX,
+                    offset_y: w.mediaOffsetY,
+                    miroir_h: w.mediaMiroirH,
+                    miroir_v: w.mediaMiroirV,
+                    zoom_ecran: 1.0,
+                },
+                // `mediaPixel` n'est rendu qu'en chemin morph (T4) — parité
+                // DOM : aucun `filter` pixel n'existe côté widget.
+                effets: EffetsCfg {
+                    lum: w.mediaLum,
+                    contraste: w.mediaContraste,
+                    teinte: w.mediaTeinte,
+                    flou: w.mediaFlou,
+                    pixel: 0.0,
+                },
                 cadre: cadre_de_widget(scene, w),
+                morphs: w.morphs.clone().unwrap_or_default(),
+                // `mediaPixel` n'agit qu'en chemin morph (parité DOM :
+                // aucun `filter` pixel côté widget).
+                pixel_morph: w.mediaPixel,
+                lecture: lecture(w.mediaPaused, w.mediaLoopA, w.mediaLoopB),
+                // `mediaSlides` gagne sur `media` ; le fondu widget est
+                // `ease-in-out` (transition CSS `.slide`).
+                carrousel: carrousel(
+                    w.mediaSlides.as_deref(),
+                    w.mediaSlidesSec,
+                    base,
+                    true,
+                ),
             });
         }
     }
     medias
+}
+
+/// Plans à perspective de la scène — widgets `rotateX`/`rotateY` ≠ 0 et
+/// fond `bgRotX`/`bgRotY` ≠ 0 (`applyWidgetStyle` / `renderBg`).
+///
+/// `rect`+`z` servent de clé : tous les calques d'un widget (voile, média,
+/// capture, bordure, cadre) partagent son rect et son z — miroir du
+/// `.widget` DOM qui porte la perspective. Le bord du canvas (`z = MAX`)
+/// ne matche jamais le fond (`z = MIN`) : `#cadre-app-overlay` est hors
+/// `#bg`, il reste plat. Deux widgets au même (rect, z) fusionneraient en
+/// un seul plan — cas dégénéré accepté.
+///
+/// `bgObsSource` exclut le plan du fond : page transparente, pas de média à
+/// projeter. `bgZoom` est porté par le plan (post-projection), PAS par le
+/// transform 2D du média — il est retiré de la matrice 2D pour les entrées
+/// groupées.
+pub fn persps_depuis_scene(scene: &Scene) -> Vec<PerspCfg> {
+    let mut groupes = Vec::new();
+    if scene.bgObsSource.is_none() && (scene.bgRotX != 0.0 || scene.bgRotY != 0.0) {
+        groupes.push(PerspCfg {
+            rect: (0.0, 0.0, scene.canvasW as f64, scene.canvasH as f64),
+            z: i32::MIN,
+            rot_x: scene.bgRotX,
+            rot_y: scene.bgRotY,
+            profondeur: 2.0 * scene.canvasW as f64,
+            zoom_ecran: scene.bgZoom,
+        });
+    }
+    for w in &scene.widgets {
+        if w.rotateX != 0.0 || w.rotateY != 0.0 {
+            groupes.push(PerspCfg {
+                rect: (w.x, w.y, w.largeur, w.hauteur),
+                z: w.z,
+                rot_x: w.rotateX,
+                rot_y: w.rotateY,
+                profondeur: 800.0,
+                zoom_ecran: 1.0,
+            });
+        }
+    }
+    groupes.sort_by_key(|g| g.z);
+    groupes
 }
 
 /// Couleurs du texte d'un titre : `couleur` explicite sinon dégradé du cadre.
@@ -191,6 +355,88 @@ pub fn cadre_de_widget(scene: &Scene, w: &Widget) -> Option<CadreCfg> {
         return None;
     }
     cadre_cfg(cadre, (w.x, w.y, w.largeur, w.hauteur), w.z)
+}
+
+/// Boîte d'un widget à voile (`.widget`) : rect de contenu, ordre z, cadre.
+#[derive(Debug, Clone, PartialEq)]
+pub struct BoiteCfg {
+    pub rect: (f64, f64, f64, f64),
+    pub z: i32,
+    /// Style de fond/bordure — chaque type de widget surcharge `.widget`.
+    pub style: StyleBoite,
+    /// Cadre du widget : `Some` = le voile est **clippé au polygone** et il
+    /// n'y a **aucune bordure** (`applyCadreWidget` met `border: none` sous un
+    /// cadre actif). `None` = voile rectangulaire élargi + bordure.
+    pub cadre: Option<CadreCfg>,
+}
+
+/// Style de boîte d'un widget — miroir des surcharges CSS de `.widget`.
+fn style_boite(w: &Widget) -> StyleBoite {
+    match w.widget_type.as_str() {
+        "chat" => StyleBoite::Chat,
+        "input-viewer" => StyleBoite::InputViewer,
+        "goal" => StyleBoite::Goal,
+        "musique" => StyleBoite::Musique,
+        _ => StyleBoite::Generique,
+    }
+}
+
+/// Boîtes à voile de la scène — miroir de `.widget` et de ses exceptions.
+///
+/// `renderScene` crée un `.widget` pour tout widget sauf trois cas :
+/// - `sansCadre` → `.widget.sans-cadre` : ni voile ni bordure ;
+/// - `trou` et caméra → `.widget.trou` : transparent côté DOM. **Divergence
+///   voulue** : en natif l'exclusion porte sur la cible (`captureCible`),
+///   pas le flag `trou` (D8) — un widget `trou: true` SANS cible reçoit sa
+///   boîte et son voile comme tout widget ordinaire ;
+/// - `cameraCachee` → le widget n'existe pas du tout.
+///
+/// Le cadre éventuel est celui de [`cadre_de_widget`] : le chat `bulles` n'en
+/// a pas (il garde donc sa bordure), les autres widgets à cadre en ont un.
+pub fn boites_depuis_scene(scene: &Scene) -> Vec<BoiteCfg> {
+    scene
+        .widgets
+        .iter()
+        .filter(|w| !w.sansCadre && w.captureCible.is_none() && w.widget_type != "camera")
+        .filter(|w| w.largeur > 0.0 && w.hauteur > 0.0)
+        .map(|w| BoiteCfg {
+            rect: (w.x, w.y, w.largeur, w.hauteur),
+            z: w.z,
+            style: style_boite(w),
+            cadre: cadre_de_widget(scene, w),
+        })
+        .collect()
+}
+
+/// Widgets input-viewer de la scène (mode, disposition, skin, couleur, cadre).
+///
+/// Miroir de la branche `input-viewer` de `renderScene` : le widget garde son
+/// média de fond (composé comme média) et reçoit en plus son rendu de touches.
+/// Couleur de presse : `--inputviewer-couleur-presse`, défaut `#8b5cf6`.
+pub fn input_depuis_scene(scene: &Scene) -> Vec<InputCfg> {
+    scene
+        .widgets
+        .iter()
+        .filter(|w| w.widget_type == "input-viewer" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .map(|w| InputCfg {
+            rect: (w.x, w.y, w.largeur, w.hauteur),
+            z: w.z,
+            mode: ModeInput::depuis_nom(w.inputMode.as_deref().unwrap_or("clavier")),
+            disposition: Disposition::depuis_nom(w.inputLayout.as_deref().unwrap_or("azerty")),
+            skin: w.inputSkin.clone().unwrap_or_else(|| "xbox".to_string()),
+            couleur: w
+                .inputCouleur
+                .as_deref()
+                .and_then(couleur_hex)
+                .unwrap_or([0x8b, 0x5c, 0xf6, 255]),
+            mapping: w.inputMapping.as_ref().map(|m| MappingManette {
+                boutons: m.buttons.clone(),
+                dpad_invert_x: m.dpadInvertX,
+                dpad_invert_y: m.dpadInvertY,
+            }),
+            cadre: cadre_de_widget(scene, w),
+        })
+        .collect()
 }
 
 /// Cadres de la scène : bord du canvas (si `bordActif`) puis un par widget.
@@ -352,20 +598,19 @@ mod tests {
     }
 
     #[test]
-    fn seuls_les_trous_avec_cible_produisent_une_source() {
+    fn seuls_les_widgets_avec_cible_produisent_une_source() {
         let scene = scene(
             r#"{
                 "widgets": [
                     {"id":"a","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":0,"trou":true},
-                    {"id":"b","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":0,"trou":true},
-                    {"id":"c","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":0}
+                    {"id":"b","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":0},
+                    {"id":"c","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":0,"trou":true}
                 ]
             }"#,
         );
         let mut cibles = HashMap::new();
         cibles.insert("a".to_string(), CibleCapture::Moniteur { index: 0 });
         cibles.insert("b".to_string(), CibleCapture::Fenetre { hwnd: 42 });
-        cibles.insert("c".to_string(), CibleCapture::Moniteur { index: 1 });
 
         let sources = sources_depuis_scene(&scene, &cibles);
         assert_eq!(sources.len(), 2);
@@ -376,7 +621,7 @@ mod tests {
     }
 
     #[test]
-    fn trou_sans_cible_ou_de_taille_nulle_est_ignore() {
+    fn sans_cible_ou_taille_nulle_ne_produit_aucune_source() {
         let scene = scene(
             r#"{
                 "widgets": [
@@ -398,7 +643,7 @@ mod tests {
                 "bgMedia": "medias/fond.png",
                 "widgets": [
                     {"id":"a","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":2,"media":"medias/a.png"},
-                    {"id":"t","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":3,"trou":true,"media":"medias/t.png"},
+                    {"id":"t","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":3,"captureCible":{"kind":"moniteur","name":"\\\\.\\DISPLAY1","index":0},"media":"medias/t.png"},
                     {"id":"c","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":1,"media":"medias/c.png"}
                 ]
             }"#,
@@ -411,6 +656,9 @@ mod tests {
         assert_eq!(medias[1].z, 2);
         assert_eq!(medias[1].chemin, Path::new("C:/data/medias/a.png"));
         assert_eq!(medias[1].rect, (10.0, 20.0, 300.0, 200.0));
+        // Cible + média → capture seule : pas de média dessiné, mais la
+        // source est bien produite.
+        assert_eq!(sources_depuis_scene(&scene, &HashMap::new()).len(), 1);
     }
 
     #[test]
@@ -427,7 +675,6 @@ mod tests {
             r#"{
                 "widgets": [
                     {"id":"a","type":"media","x":0,"y":0,"largeur":640,"hauteur":360,"z":0,
-                     "trou":true,
                      "captureCible":{"kind":"moniteur","name":"\\\\.\\DISPLAY1","index":1}}
                 ]
             }"#,
@@ -445,7 +692,6 @@ mod tests {
             r#"{
                 "widgets": [
                     {"id":"w","type":"media","x":5,"y":6,"largeur":320,"hauteur":180,"z":0,
-                     "trou":true,
                      "captureCible":{"kind":"fenetre","hwnd":42,"title":"Jeu","exe":"jeu.exe"}}
                 ]
             }"#,
@@ -615,6 +861,95 @@ mod tests {
     }
 
     #[test]
+    fn boites_excluent_sans_cadre_capture_et_camera() {
+        let scene = scene(
+            r##"{"widgets":[
+                {"id":"media","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":2},
+                {"id":"libre","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":3,"sansCadre":true},
+                {"id":"cap","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":4,"captureCible":{"kind":"moniteur","name":"\\\\.\\DISPLAY1","index":0}},
+                {"id":"cam","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":5},
+                {"id":"nul","type":"media","x":0,"y":0,"largeur":0,"hauteur":100,"z":6}
+            ]}"##,
+        );
+        let boites = boites_depuis_scene(&scene);
+        assert_eq!(boites.len(), 1, "seul le widget média à voile reste");
+        assert_eq!(boites[0].rect, (10.0, 20.0, 300.0, 200.0));
+        assert_eq!(boites[0].z, 2);
+        assert_eq!(boites[0].style, StyleBoite::Generique);
+        assert!(boites[0].cadre.is_none(), "aucun cadre actif dans cette scène");
+    }
+
+    #[test]
+    fn trou_sans_cible_est_un_widget_ordinaire() {
+        // D8 : `trou` sans cible n'est plus spécial en natif — média et
+        // voile sont dessinés comme pour tout widget, sans source créée.
+        let scene = scene(
+            r#"{"widgets":[
+                {"id":"t","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":1,"trou":true,"media":"medias/t.png"}
+            ]}"#,
+        );
+        assert!(sources_depuis_scene(&scene, &HashMap::new()).is_empty());
+        let medias = medias_depuis_scene(&scene, Path::new("C:/data"));
+        assert_eq!(medias.len(), 1, "trou sans cible : média dessiné");
+        assert_eq!(boites_depuis_scene(&scene).len(), 1, "voile dessinée");
+    }
+
+    #[test]
+    fn voile_de_chat_bulles_sans_cadre_et_voile_clippe_ailleurs() {
+        let scene = scene(
+            r##"{"canvasW":1360,"canvasH":768,
+                "cadreWidget":{"style":"mgstyle","strokeWidth":20,"couleur":"#000000",
+                               "couleurFin":"#8c00ff","actif":true,"bordActif":true},
+                "widgets":[
+                    {"id":"sr","type":"speedrun","x":22,"y":27,"largeur":215,"hauteur":704,"z":2},
+                    {"id":"chat","type":"chat","x":334,"y":669,"largeur":692,"hauteur":88,"z":14,
+                     "chatStyle":"bulles"},
+                    {"id":"iv","type":"input-viewer","x":1124,"y":328,"largeur":213,"hauteur":197,"z":9}
+                ]}"##,
+        );
+        let boites = boites_depuis_scene(&scene);
+        assert_eq!(boites.len(), 3);
+        // Le chat `bulles` n'a pas de cadre → voile rectangulaire + bordure.
+        assert!(boites[1].cadre.is_none(), "chat bulles : bordure, pas de clip");
+        assert_eq!(boites[1].style, StyleBoite::Chat);
+        // Speedrun et input-viewer portent le cadre → voile clippé, pas de bordure.
+        assert_eq!(
+            boites[0].cadre.as_ref().map(|c| c.style),
+            Some(StyleCadre::MgStyle)
+        );
+        assert_eq!(boites[0].style, StyleBoite::Generique);
+        assert!(boites[2].cadre.is_some());
+        assert_eq!(boites[2].style, StyleBoite::InputViewer);
+    }
+
+    #[test]
+    fn input_viewer_lit_mode_disposition_skin_et_couleur() {
+        let scene = scene(
+            r##"{"canvasW":1360,"canvasH":768,
+                "cadreWidget":{"style":"mgstyle","strokeWidth":20,"actif":true,"bordActif":false},
+                "widgets":[
+                    {"id":"iv","type":"input-viewer","x":1124,"y":328,"largeur":213,"hauteur":197,
+                     "z":9,"inputMode":"numpad","inputLayout":"qwerty","inputSkin":"ps",
+                     "inputCouleur":"#ff0000"},
+                    {"id":"iv2","type":"input-viewer","x":0,"y":0,"largeur":100,"hauteur":100,"z":3},
+                    {"id":"m","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":4}
+                ]}"##,
+        );
+        let inputs = input_depuis_scene(&scene);
+        assert_eq!(inputs.len(), 2);
+        assert_eq!(inputs[0].mode, ModeInput::Numpad);
+        assert_eq!(inputs[0].disposition, Disposition::Qwerty);
+        assert_eq!(inputs[0].skin, "ps");
+        assert_eq!(inputs[0].couleur, [0xff, 0x00, 0x00, 255]);
+        assert!(inputs[0].cadre.is_some(), "cadre de scène actif");
+        // Défauts du dashboard : clavier AZERTY, skin xbox, violet.
+        assert_eq!(inputs[1].mode, ModeInput::Clavier);
+        assert_eq!(inputs[1].disposition, Disposition::Azerty);
+        assert_eq!(inputs[1].skin, "xbox");
+        assert_eq!(inputs[1].couleur, [0x8b, 0x5c, 0xf6, 255]);
+    }
+
+    #[test]
     fn chat_depuis_scene_filtre_taille_et_style() {
         let scene = scene(
             r##"{"widgets":[
@@ -651,5 +986,96 @@ mod tests {
         assert_eq!(couleur_hex("#8b5cf680"), Some([0x8b, 0x5c, 0xf6, 0x80]));
         assert_eq!(couleur_hex("8b5cf6"), None);
         assert_eq!(couleur_hex("#zzzzzz"), None);
+    }
+
+    #[test]
+    fn transforms_media_et_fond_depuis_scene() {
+        // Miroir `applyMediaStyle` (widget) / `dessinerContenuFond` +
+        // `renderBg` (fond) : zoom interne vs `zoom_ecran`, fits distincts.
+        let scene = scene(
+            r##"{
+                "canvasW": 1920, "canvasH": 1080,
+                "bgMedia": "medias/fond.png",
+                "bgFit": "centrer", "bgZoom": 1.5, "bgRot": 12.0,
+                "bgOffsetX": 4.0, "bgOffsetY": -2.0, "bgMiroirH": true,
+                "widgets": [
+                    {"id":"m","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":2,
+                     "media":"medias/a.png","mediaFit":"vignette","mediaZoom":1.1,
+                     "mediaRot":30.0,"mediaOffsetX":7.0,"mediaOffsetY":-3.0,
+                     "mediaMiroirV":true},
+                    {"id":"n","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":3,
+                     "media":"medias/b.png"}
+                ]
+            }"##,
+        );
+        let medias = medias_depuis_scene(&scene, Path::new("C:/data"));
+        assert_eq!(medias.len(), 3);
+        let fond = &medias[0];
+        assert_eq!(fond.fit, Fit::Vignette, "centrer du fond = scale-down");
+        assert_eq!(fond.transform.zoom, 1.0);
+        assert_eq!(fond.transform.zoom_ecran, 1.5);
+        assert_eq!(fond.transform.rot, 12.0);
+        assert_eq!(fond.transform.offset_x, 4.0);
+        assert_eq!(fond.transform.offset_y, -2.0);
+        assert!(fond.transform.miroir_h);
+        assert!(!fond.transform.miroir_v);
+        let widget = &medias[1];
+        assert_eq!(widget.fit, Fit::Vignette);
+        assert_eq!(widget.transform.zoom, 1.1);
+        assert_eq!(widget.transform.rot, 30.0);
+        assert_eq!(widget.transform.offset_x, 7.0);
+        assert_eq!(widget.transform.offset_y, -3.0);
+        assert!(widget.transform.miroir_v);
+        assert_eq!(widget.transform.zoom_ecran, 1.0);
+        assert!(!widget.transform.est_neutre());
+        assert_eq!(medias[2].transform, Transform2D::NEUTRE);
+        assert_eq!(medias[2].fit, Fit::Ajuster);
+    }
+
+    #[test]
+    fn persps_depuis_scene_widget_fond_et_tri() {
+        // `applyWidgetStyle` → profondeur 800 ; `renderBg` → 2·canvasW et le
+        // `scale(bgZoom)` reste hors de la projection (`zoom_ecran`).
+        let scene = scene(
+            r#"{
+                "canvasW": 1920, "canvasH": 1080,
+                "bgMedia": "medias/fond.png", "bgRotY": -10.0, "bgZoom": 1.5,
+                "widgets": [
+                    {"id":"p","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":5,
+                     "rotateY":38.25},
+                    {"id":"q","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":1,
+                     "rotateX":15.0,"rotateY":0.0},
+                    {"id":"n","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":2}
+                ]
+            }"#,
+        );
+        let persps = persps_depuis_scene(&scene);
+        assert_eq!(persps.len(), 3);
+        // Tri par z : fond (MIN) → widget z 1 → widget z 5.
+        assert_eq!(persps[0].z, i32::MIN);
+        assert_eq!(persps[0].rect, (0.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(persps[0].rot_y, -10.0);
+        assert_eq!(persps[0].profondeur, 3840.0);
+        assert_eq!(persps[0].zoom_ecran, 1.5);
+        assert_eq!(persps[1].z, 1);
+        assert_eq!(persps[1].rot_x, 15.0);
+        assert_eq!(persps[1].profondeur, 800.0);
+        assert_eq!(persps[1].zoom_ecran, 1.0);
+        assert_eq!(persps[2].z, 5);
+        assert_eq!(persps[2].rot_y, 38.25);
+        assert_eq!(persps[2].rect, (10.0, 20.0, 300.0, 200.0));
+    }
+
+    #[test]
+    fn persps_exclues_fond_obs_et_widget_plat() {
+        let scene = scene(
+            r#"{
+                "canvasW": 1920, "canvasH": 1080,
+                "bgMedia": "medias/fond.png", "bgRotX": 20.0,
+                "bgObsSource": "SOS-Fond-abc",
+                "widgets": []
+            }"#,
+        );
+        assert!(persps_depuis_scene(&scene).is_empty());
     }
 }
