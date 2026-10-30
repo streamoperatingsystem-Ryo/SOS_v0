@@ -8,7 +8,9 @@
   // Le rendu reprend celui de diffusion.html (.module.*) pour un aperçu
   // fidèle ; les valeurs live viennent des stores existants (valeursGoals,
   // goalsTwitch, musiqueEtat) et d'une horloge locale 1 s.
-  // Clic sans déplacement → ouvre la modale Modules sur ce module.
+  // Clic sans déplacement → onClic(id) : carte flottante à gauche du
+  // canvas (Canvas.svelte). « Configurer… » de la carte / du menu clic
+  // droit ouvre la modale Modules sur ce module.
   // Masqué (m.actif false) : carte fantôme atténuée + bouton œil affiché
   // en permanence — réaffichage direct sans la modale (comme l'œil caméra).
   import { onMount } from "svelte";
@@ -31,12 +33,23 @@
   import { afficherGuidesDrag, masquerGuides } from "../stores/guides";
   import { valeursGoals, goalsTwitch } from "../stores/objectifs";
   import { musiqueEtat, initMusique } from "../stores/musique";
-  import { modulesModalOpen } from "../stores/ui";
   import { t, localeTag } from "../stores/langue";
   import { hexValide } from "../cadres/couleurs";
   import BadgeSurvol, { type BoutonSurvol } from "./BadgeSurvol.svelte";
 
-  let { id, m, scale }: { id: ModuleId; m: ModuleHud; scale: number } = $props();
+  // onClic : ouvre la carte flottante du module (Canvas.svelte) — requis,
+  // même convention que `onclose` de CtxMenu.
+  let {
+    id,
+    m,
+    scale,
+    onClic,
+  }: {
+    id: ModuleId;
+    m: ModuleHud;
+    scale: number;
+    onClic: (id: ModuleId) => void;
+  } = $props();
 
   // ===== Accent = extrémité la plus lumineuse du gradient du cadre actif =====
   // Même résolution que bpmResoudreCouleurs (diffusion.html) : le cadre
@@ -169,7 +182,7 @@
     snapTargets = null;
     masquerGuides();
     if (etaitClic) {
-      modulesModalOpen.set(id);
+      onClic(id);
       return;
     }
     await setModule(id, {

@@ -363,6 +363,102 @@ input[type="radio"] {
   flex-shrink: 0;
 }
 
+/* ===== Carte flottante d'un module HUD — variante .carte-module (2026-10-30)
+   Posée SUR la recette partagée .carte-edition (bordure pointillée +
+   glow) : seuls l'ancrage overlay et l'accent changent. Rendue par
+   Canvas.svelte au clic gauche sur une carte ModuleHud — équivalent
+   module de la carte d'édition, en léger : nom, afficher/masquer,
+   X/Y/L/H, « Configurer… » → modale Modules.
+   Accent = --accent-ui (couleur du cadre unifié) : même logique que
+   --mod-accent des modules — la carte suit le thème utilisateur.
+   z 9600 : au-dessus du .canvas scalé (son contenu est confiné au
+   stacking context du transform), sous les menus .ctx-menu (9999) et
+   les modales (10000). */
+.carte-module {
+  position: absolute;
+  left: 1rem;
+  top: 1rem;
+  width: 14rem;
+  z-index: 9600;
+  --accent-carte: var(--accent-ui);
+  --accent-carte-glow: var(--glow-ui);
+}
+/* Tête : filet bas accent + titre uppercase (calque .carte-entete de
+   CarteEdition en version compacte — ses classes sont scopées). */
+.carte-module-tete {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.4rem 0.4rem 0.65rem;
+  border-bottom: 1px solid var(--accent-carte);
+}
+.carte-module-titre {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 0.8rem;
+  font-weight: 600;
+  color: var(--accent-carte);
+}
+.carte-module-fermer {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.125rem;
+  height: 1.125rem;
+  flex-shrink: 0;
+  border: 1px solid color-mix(in srgb, var(--accent-carte) 50%, transparent);
+  border-radius: var(--rayon-petit);
+  background: var(--btn-surface);
+  box-shadow: var(--btn-inset);
+  color: var(--accent-carte);
+  cursor: pointer;
+  font-size: 0.55rem;
+  line-height: 1;
+  transition: background 0.15s ease, box-shadow 0.15s ease, color 0.15s ease;
+}
+.carte-module-fermer:hover {
+  background: var(--accent-carte);
+  color: #fff;
+  border-color: var(--accent-carte);
+  box-shadow: var(--btn-inset-hover);
+}
+.carte-module-corps {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.5rem 0.6rem;
+}
+/* Grille position X/Y/L/H en 2×2 (complément précis du drag/resize,
+   comme le bloc « Position et taille » de la modale Modules — 4
+   colonnes n'entreraient pas en 14 rem). */
+.carte-module-pos {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.4rem;
+}
+.carte-module-pos .field { min-width: 0; }
+/* Inputs nombre : app.css ne couvre que les selects — même recette que
+   .mod-detail de ModulesModal (fond contrôle, accent au focus). */
+.carte-module input[type="number"] {
+  width: 100%;
+  min-width: 0;
+  background: var(--fond-controle);
+  color: var(--texte);
+  border: 1px solid var(--bordure-ui);
+  padding: 0.3rem 0.45rem;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.carte-module input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent-carte);
+}
+
 /* ===== Modales — éléments internes partagés =====
    Source unique pour les classes utilisées à l'intérieur des modales (le
    wrapper Modal.svelte gère la structure externe : overlay + header + ✕).

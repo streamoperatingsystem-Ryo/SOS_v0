@@ -6,9 +6,11 @@
 ## Modules HUD — horloge / musique / objectifs (2026-10-05)
 
 > Couche d'affichage scène-persistée SÉPARÉE des widgets
-> (`Scene.modules`, pas un `type` de widget). Trois modules fixes
-> (clés `MODULE_IDS`), chacun affichable/cachable/configuré par
-> scène, positionné en **px canvas** par drag/resize direct sur le
+> (`Scene.modules`, pas un `type` de widget). Cinq modules (clés
+> `MODULE_IDS` : horloge, musique, objectifs, equaliseur, spots —
+> `spots` n'a PAS de carte : effet plein canvas, aperçu statique
+> seulement), chacun affichable/cachable/configuré par scène, les
+> cartes positionnées en **px canvas** par drag/resize direct sur le
 > canvas dashboard. Rendus au z 9000+ en diffusion (au-dessus de
 > tous les widgets) + cadre optionnel réutilisant le gradient du
 > cadre de scène (jamais le CadreSVG imposé — le module est une
@@ -35,8 +37,15 @@
   `scene_vierge_detecte_contenu` couvre les 3 cas).
 - **`ModuleHud.svelte`** : carte drag/resize (mêmes 8 poignées et
   règles min 80×36 que l'overlay d'interactions — diviseur de
-  `scale` obligatoire, même invariant que les widgets). Clic =
-  `modulesModalOpen.set(id)`. Aperçu statique réel (date/heure du
+  `scale` obligatoire, même invariant que les widgets). Clic gauche
+  sans déplacement = prop `onClic(id)` → carte flottante
+  `.carte-module` au bord gauche de la zone canvas (Canvas.svelte,
+  2026-10-30) : nom + afficher/masquer + X/Y/L/H + « Configurer… »
+  → `modulesModalOpen.set(id)` — la modale reste la surface
+  exhaustive (même rôle que « Configurer… » du clic droit).
+  Mutuellement exclusive avec la carte d'édition widget/fond
+  (`carteEditionCible`) ; fermeture ✕ / Escape / clic fond / clic
+  widget. Aperçu statique réel (date/heure du
   jour, première piste de la file, lignes objectifs avec valeurs
   live `$valeursGoals`/`$goalsTwitch` + suggestion `goalSuggestion`).
   **Badge œil au survol** (`BadgeSurvol.svelte` — recette
@@ -85,7 +94,7 @@
 | `src/lib/components/ModuleHud.svelte` | Carte drag/resize + aperçu statique + badge œil (`BadgeSurvol`) |
 | `src/lib/components/BadgeSurvol.svelte` | Badge de survol partagé widgets/modules (ancre `.wbadge` + `.z-controls`) |
 | `src/lib/components/ModulesModal.svelte` | Master-detail config (modale Modules) |
-| `src/lib/components/Canvas.svelte` | Couche modules après les widgets |
+| `src/lib/components/Canvas.svelte` | Couche modules après les widgets + carte flottante `.carte-module` (clic gauche) |
 | `src/lib/components/Toolbar.svelte` | Lanceur « Modules » (lanceur direct) |
 | `src/lib/stores/ui.ts` | `modulesModalOpen: ModuleId \| null` |
 | `src/App.svelte` | Montage `{#if $modulesModalOpen}` |

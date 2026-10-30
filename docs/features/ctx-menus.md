@@ -38,7 +38,11 @@
 > dashboard — à respecter à chaque ajout de contrôle.
 
 - **A — CarteEdition** (panneau latéral) : réglages d'état persistants,
-  configuration exhaustive, découverte.
+  configuration exhaustive, découverte. **Équivalent module** :
+  `.carte-module` (carte flottante au bord gauche de la zone canvas,
+  Canvas.svelte — clic gauche sur la carte ModuleHud, 2026-10-30) :
+  nom + afficher/masquer + X/Y/L/H + « Configurer… » qui ouvre la
+  modale Modules (la modale reste la surface exhaustive du module).
 - **B — Menu contextuel clic droit** (Canvas.svelte) : inventaire des
   VERBES / actions ponctuelles — miroir élargi de la carte.
 - **C — Badges ambre au survol** (`BadgeSurvol.svelte` + recette

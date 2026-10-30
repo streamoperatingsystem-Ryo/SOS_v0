@@ -9,11 +9,11 @@
     resetMediaEffets, resetMorphsWidget, importMedia, clearWidgetMedia,
     setWidgetTrou, deleteObsTrouSource, transformerEnFlottant,
     transformerEnWidget, mettreWidgetPlan, widgetPleinEcran, setCameraCachee,
-    setModuleActif,
+    setModule, setModuleActif,
   } from "../stores/scene";
   import {
     setCarteEdition, titreFondModalOpen, titreModalOpen, confirmDeleteWidget,
-    cadreModalOpen, modulesModalOpen,
+    cadreModalOpen, modulesModalOpen, carteEditionCible,
   } from "../stores/ui";
   import { registerVideo, unregisterVideo } from "../stores/video";
   import { connexions, type Connexions } from "../stores/chat";
@@ -465,6 +465,48 @@
   function ctxModuleConfigurer(id: ModuleId) { fermerFondMenu(); modulesModalOpen.set(id); }
   async function ctxModuleMasquer(id: ModuleId) { fermerFondMenu(); await setModuleActif(id, false); }
 
+  // ===== Carte flottante MODULE (clic gauche sur une carte ModuleHud) =====
+  // Panneau léger au bord gauche de la zone canvas (overlay absolute dans
+  // .canvas-wrap — hors du .canvas scalé, donc px écran). Recette
+  // .carte-edition + variante .carte-module de app.css : nom du module,
+  // afficher/masquer, position X/Y/L/H et « Configurer… » → modale
+  // Modules (le détail exhaustif reste là-bas — même rôle que le clic
+  // droit « Configurer… »). Mutuellement exclusive avec la carte
+  // d'édition widget/fond (même règle carte↔accordéon) : ouvrir l'une
+  // ferme l'autre — l'$effect ci-dessous couvre tous les chemins de
+  // fermeture (clic fond, clic widget, morph → setCarteEdition).
+  let carteModuleId = $state<ModuleId | null>(null);
+  let carteModule = $derived(carteModuleId ? $sceneStore.modules?.[carteModuleId] : undefined);
+  let carteModuleMasque = $derived(carteModule?.actif !== true);
+
+  function ouvrirCarteModule(id: ModuleId) {
+    carteModuleId = id;
+    selectWidget(null);
+    carteEditionCible.set(null);
+  }
+  function fermerCarteModule() { carteModuleId = null; }
+  // « Configurer… » = action → ferme la carte (la modale prend le relais).
+  function carteModuleConfigurer(id: ModuleId) {
+    fermerCarteModule();
+    modulesModalOpen.set(id);
+  }
+  // Masquer/Afficher = toggle → la carte reste ouverte, le libellé suit
+  // l'état (même sémantique que l'œil du badge de survol).
+  async function carteModuleToggleActif(id: ModuleId) {
+    await setModuleActif(id, carteModule?.actif !== true);
+  }
+  const posNum = (e: Event) => Math.max(0, Math.round(+(e.target as HTMLInputElement).value || 0));
+
+  $effect(() => {
+    if ($carteEditionCible !== null) carteModuleId = null;
+  });
+
+  // Escape ferme la carte module (aucun preventDefault — plusieurs
+  // <svelte:window onkeydown> coexistent : App.svelte, CtxMenu…).
+  function onCarteModuleKey(e: KeyboardEvent) {
+    if (e.key === "Escape") carteModuleId = null;
+  }
+
   // ===== Morphing du fond (rendu canvas WebGL si bgMorphs) =====
   // Même pattern que les widgets : média → offscreen (fit + transforms fond) →
   // warp GL → canvas visible. Fond dashboard = vignette figée → one-shot.
@@ -652,6 +694,8 @@
   });
 </script>
 
+<svelte:window onkeydown={onCarteModuleKey} />
+
 <div class="canvas-wrap" bind:this={containerEl}>
   {#if scale > 0}
     <div
@@ -812,7 +856,7 @@
       {#each MODULE_IDS as id (id)}
         {@const m = $sceneStore.modules?.[id]}
         {#if m && id !== "spots"}
-          <ModuleHud {id} {m} {scale} />
+          <ModuleHud {id} {m} {scale} onClic={ouvrirCarteModule} />
         {/if}
       {/each}
 
@@ -890,6 +934,52 @@
            central (cyan → jaune quand proche du centre). Apparaissent
            pendant le drag/resize d'un widget. -->
       <AlignmentGuides />
+    </div>
+  {/if}
+
+  <!-- Carte flottante d'un module HUD (clic gauche sur sa carte —
+       prop onClic de ModuleHud). Overlay en px écran au bord gauche de
+       la zone canvas : absolute dans .canvas-wrap (position:relative),
+       APRÈS .canvas dans le DOM → au-dessus de tout le contenu canvas,
+       sous les menus .ctx-menu (9999) et les modales (10000). Recette
+       globale .carte-edition + variante .carte-module (app.css) —
+       ne jamais re-copier le bloc dans un composant. Hors de .canvas :
+       ses clics ne déclenchent ni sélection ni menu du canvas. -->
+  {#if carteModuleId && carteModule}
+    <div class="carte-edition carte-module">
+      <div class="carte-module-tete">
+        <span class="carte-module-titre">{$t("modules.nom." + carteModuleId)}</span>
+        <button
+          type="button"
+          class="carte-module-fermer"
+          onclick={fermerCarteModule}
+          title={$t("commun.fermer")}
+          aria-label={$t("commun.fermer")}
+        >✕</button>
+      </div>
+      <div class="carte-module-corps">
+        <button type="button" class="action" onclick={() => void carteModuleToggleActif(carteModuleId!)}>
+          {carteModuleMasque ? $t("commun.afficher") : $t("commun.masquer")}
+        </button>
+        <span class="field-label">{$t("modules.position")}</span>
+        <div class="carte-module-pos">
+          <label class="field"><span class="field-label">X</span>
+            <input type="number" min="0" value={carteModule.x} onchange={(e) => void setModule(carteModuleId!, { x: posNum(e) })} />
+          </label>
+          <label class="field"><span class="field-label">Y</span>
+            <input type="number" min="0" value={carteModule.y} onchange={(e) => void setModule(carteModuleId!, { y: posNum(e) })} />
+          </label>
+          <label class="field"><span class="field-label">{$t("commun.largeur")}</span>
+            <input type="number" min="0" value={carteModule.largeur} onchange={(e) => void setModule(carteModuleId!, { largeur: posNum(e) })} />
+          </label>
+          <label class="field"><span class="field-label">{$t("commun.hauteur")}</span>
+            <input type="number" min="0" value={carteModule.hauteur} onchange={(e) => void setModule(carteModuleId!, { hauteur: posNum(e) })} />
+          </label>
+        </div>
+        <button type="button" class="action primary centre" onclick={() => carteModuleConfigurer(carteModuleId!)}>
+          {$t("commun.configurer")}
+        </button>
+      </div>
     </div>
   {/if}
 </div>

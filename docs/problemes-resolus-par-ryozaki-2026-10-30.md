@@ -64,3 +64,24 @@ Différences assumées documentées : les modules affichent l'œil seul (pas de
 outline au survol (seule affordance de resize, pas de notion de sélection).
 Zéro changement de modèle de données, zéro régression clic droit / édition /
 caméra / musique.
+
+## Modification n°8 — Clic gauche module → carte à gauche
+
+Le clic gauche sur une carte ModuleHud ouvrait directement la modale
+Modules ; il ouvre désormais une carte flottante `.carte-module` au bord
+gauche de la zone canvas (équivalent module de la carte d'édition widget).
+Contenu léger : nom du module, bouton afficher/masquer, champs X/Y/L/H
+(complément précis du drag/resize) et « Configurer… » qui ouvre la modale
+— celle-ci reste la surface de config exhaustive, comme le « Configurer… »
+du menu clic droit.
+
+Technique : `ModuleHud` expose une prop `onClic(id)` (convention `onclose`
+de CtxMenu) appelée par `onUp` quand le pointeur n'a pas bougé ;
+`Canvas.svelte` porte `carteModuleId`, le markup (overlay `absolute` dans
+`.canvas-wrap`, après `.canvas`, z 9600) et les fermetures — ✕, Escape,
+ouverture de la carte d'édition (`carteEditionCible` non null → clic
+fond, clic widget ou morph ferment la carte module, et réciproquement
+l'ouverture pose `carteEditionCible` à null + `selectWidget(null)`).
+Recette `.carte-module` dans app.css posée sur `.carte-edition`
+(pointillés + glow partagés, accent `--accent-ui`). Clic droit,
+drag/resize et badge œil inchangés ; aucune clé i18n ajoutée.
