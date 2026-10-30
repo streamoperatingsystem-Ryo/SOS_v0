@@ -3,8 +3,9 @@
   import { listen, emit, emitTo } from "@tauri-apps/api/event";
   import { loadScene, selectedIdStore, loadedStore, createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, sceneStore, syncCapturesOBS, initCameraHotplug } from "./lib/stores/scene";
   import { loadScenesIndex, loadCurrentScene, exportScene, exportToutZip, importScene, importToutZip } from "./lib/stores/scenes";
-  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, planningModalOpen, statistiquesModalOpen, titreFondModalOpen, speedrunConfigModalOpen, speedrunLayoutModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, confirmOuvrirSceneModalOpen, confirmObsOutputOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, obsWebSocketModalOpen } from "./lib/stores/ui";
+  import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, planningModalOpen, statistiquesModalOpen, titreFondModalOpen, speedrunConfigModalOpen, speedrunLayoutModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, confirmOuvrirSceneModalOpen, confirmObsOutputOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, obsWebSocketModalOpen, sortieNatifModalOpen } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsAutoConnect, rafraichirOutputs, obsBootDeclenche } from "./lib/stores/obs";
+  import { moteurEtat, moteurErreur, basculerMoteur } from "./lib/stores/moteur";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
   import { initTwitchLive } from "./lib/stores/twitchLive";
   import { initPlanning } from "./lib/stores/planning";
@@ -43,6 +44,7 @@
   import EcranAttenteModal from "./lib/components/EcranAttenteModal.svelte";
   import ModulesModal from "./lib/components/ModulesModal.svelte";
   import ObsWebSocketModal from "./lib/components/ObsWebSocketModal.svelte";
+  import SortieNatifModal from "./lib/components/SortieNatifModal.svelte";
   import GuideLivre from "./lib/components/GuideLivre.svelte";
   import Drapeau from "./lib/components/Drapeau.svelte";
   import { chargerPresets } from "./lib/stores/presets";
@@ -92,6 +94,13 @@
   // .tb-obs (icône + stream/record) à place FIXE — ses contrôles doivent
   // rester prévisibles, et l'état .err rouge garde sa visibilité à gauche.
   let obsOn = $derived(obsSt === "connected");
+  // Mode moteur (OBS ↔ natif) : boutons topbar + contour de fenêtre.
+  // L'état vient du registre Rust (chargé par Toolbar.onMount), jamais
+  // d'une supposition locale ; l'erreur de bascule refusée (live actif)
+  // remonte dans le title du groupe.
+  let modeMoteur = $derived($moteurEtat.mode);
+  let natifDispo = $derived($moteurEtat.natif_disponible);
+  let moteurErr = $derived($moteurErreur);
   let nbPlats = $derived(
     (cx.twitch ? 1 : 0) +
       (cx.kick ? 1 : 0) +
@@ -345,6 +354,14 @@
   }
   function onToggleRecordTop() {
     confirmObsOutputOpen.set("record");
+  }
+
+  // Bascule de mode moteur (boutons topbar). Même contrat que la Toolbar :
+  // le backend refuse si un live OBS ou une sortie native tourne — jamais
+  // de coupure implicite. Clic sur le mode déjà actif = no-op.
+  async function onBasculerMode(cible: "obs" | "natif") {
+    if (cible === modeMoteur) return;
+    await basculerMoteur(cible, obsStream || obsRecord);
   }
 
   // Resync des pastilles stream/record au retour de focus : l'utilisateur a
@@ -638,6 +655,8 @@
 
 <main
   class:fond-dash={!!fondDashUrl}
+  class:mode-natif={modeMoteur === "natif"}
+  class:mode-obs={modeMoteur === "obs"}
   style:--fond-dash-img={fondDashUrl ? `url('${fondDashUrl}')` : null}
 >
   <!-- Décor aurora : arcs orbitaux derrière tout le chrome (cf. app.css). -->
@@ -722,6 +741,26 @@
         {#if !cx.tiktok}{@render connIco("tiktok")}{/if}
       </div>
     {/if}
+    <!-- Groupe mode moteur : bascule OBS ↔ Rust visible en permanence.
+         Le bouton actif porte la couleur du mode (vert natif / orange OBS),
+         reprise par le contour de fenêtre (main.mode-*). -->
+    <div class="tb-groupe tb-moteur" title={moteurErr ?? $t("moteur.titre")}>
+      <button
+        class="mode-btn mode-natif-btn"
+        class:actif={modeMoteur === "natif"}
+        aria-pressed={modeMoteur === "natif"}
+        disabled={!natifDispo}
+        title={!natifDispo ? $t("moteur.natifIndisponible") : $t("moteur.natif")}
+        onclick={() => onBasculerMode("natif")}
+      >{$t("moteur.natif")}</button>
+      <button
+        class="mode-btn mode-obs-btn"
+        class:actif={modeMoteur === "obs"}
+        aria-pressed={modeMoteur === "obs"}
+        title={$t("moteur.obs")}
+        onclick={() => onBasculerMode("obs")}
+      >{$t("moteur.obs")}</button>
+    </div>
     <!-- Groupe OBS dédié : icône d'état + sorties (stream/record) soudées —
          place fixe, jamais migrée. -->
     <div class="tb-groupe tb-obs">
@@ -1042,6 +1081,12 @@
   <ObsWebSocketModal />
 {/if}
 
+<!-- Modale « Sortie » du moteur natif (réglages vidéo/audio + stream
+     RTMP/SRT) — lanceur : bloc moteur de la section OBS -->
+{#if $sortieNatifModalOpen}
+  <SortieNatifModal />
+{/if}
+
 <!-- Modale Écran d'attente (BRB) — gère son propre {#if $ecranAttenteModalOpen}
      interne (même pattern que TitreModal). Média rendu diffusion uniquement. -->
 <EcranAttenteModal />
@@ -1082,6 +1127,20 @@
       var(--fond-dash-img);
     background-size: cover;
     background-position: center;
+  }
+  /* Contour de fenêtre = mode moteur actif : vert en natif, orange en OBS.
+     La bordure OS de la fenêtre Tauri n'est pas stylable → anneau inset sur
+     <main> (qui couvre toute la fenêtre) + léger halo intérieur. Couleurs =
+     tokens sémantiques existants (jamais de hex). */
+  main.mode-natif {
+    box-shadow:
+      inset 0 0 0 2px var(--message-ok-color),
+      inset 0 0 22px color-mix(in srgb, var(--message-ok-color) 16%, transparent);
+  }
+  main.mode-obs {
+    box-shadow:
+      inset 0 0 0 2px var(--accent-orange),
+      inset 0 0 22px color-mix(in srgb, var(--accent-orange) 16%, transparent);
   }
   header {
     flex-shrink: 0;
@@ -1175,6 +1234,54 @@
     padding: 0.15rem;
     border: 1px solid var(--bordure-ui);
     border-radius: var(--rayon-petit);
+  }
+  /* Groupe mode moteur : deux boutons soudés dans un même liseré (même
+     structure que .tb-obs). Le bouton actif porte la couleur du mode —
+     vert natif (--message-ok-color) / orange OBS (--accent-orange) — la
+     même que le contour de fenêtre ; l'inactif reste neutre. */
+  .tb-moteur {
+    gap: 0.25rem;
+    padding: 0.15rem;
+    border: 1px solid var(--bordure-ui);
+    border-radius: var(--rayon-petit);
+  }
+  .mode-btn {
+    height: 1.7rem;
+    padding: 0 0.6rem;
+    border: 1px solid transparent;
+    border-radius: calc(var(--rayon-petit) - 1px);
+    background: transparent;
+    box-shadow: none;
+    color: var(--gris);
+    font: inherit;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    cursor: pointer;
+    white-space: nowrap;
+    flex-shrink: 0;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
+  }
+  .mode-btn:hover:not(.actif):not(:disabled) {
+    color: var(--texte);
+    background: var(--btn-surface-hover);
+  }
+  .mode-btn:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+  .mode-btn.mode-natif-btn.actif {
+    color: var(--message-ok-color);
+    border-color: var(--message-ok-color);
+    background: color-mix(in srgb, var(--message-ok-color) 14%, transparent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--message-ok-color) 35%, transparent);
+  }
+  .mode-btn.mode-obs-btn.actif {
+    color: var(--accent-orange);
+    border-color: var(--accent-orange);
+    background: color-mix(in srgb, var(--accent-orange) 14%, transparent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-orange) 35%, transparent);
   }
   /* État de connexion : bouton icône de la même famille que Stream (verre
      + inset + rayon global). Gris au repos — la bordure ne prend la

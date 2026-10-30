@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager};
 use serde::{Deserialize, Serialize};
 
@@ -64,11 +64,103 @@ pub fn sauver_obs_canvas(app: &AppHandle, w: u32, h: u32) -> Result<(), String> 
         .map_err(|e| format!("Écrire obs_canvas.json: {}", e))
 }
 
-// ===== Persistance mode moteur (obs | natif) =====
+// ===== Persistance mode moteur (obs | natif) + réglages de sortie =====
 
-#[derive(Serialize, Deserialize)]
-struct MoteurConfig {
-    mode: String,
+/// Réglages de sortie du moteur natif — bloc `sortie` de moteur.json.
+/// Appliqués au démarrage d'un enregistrement ou d'un stream
+/// (`moteur_sortie_demarrer` / `moteur_stream_demarrer`).
+#[derive(Serialize, Deserialize, Clone, Debug)]
+pub struct SortieNatifCfg {
+    /// Codec vidéo : "h264" | "hevc" | "av1".
+    #[serde(default = "sortie_codec_defaut")]
+    pub codec: String,
+    /// Conteneur du fichier : "mp4" (fragmenté) | "mkv" (matroska).
+    /// N'intervient pas sur un flux réseau (le protocole fixe le format).
+    #[serde(default = "sortie_conteneur_defaut")]
+    pub conteneur: String,
+    /// Hauteur de la résolution de sortie : `None` = canvas (historique).
+    /// La largeur est dérivée du ratio du canvas au démarrage — jamais
+    /// persistée, elle suivrait mal un changement de canvas.
+    #[serde(default)]
+    pub resolution: Option<u32>,
+    /// Débit vidéo en kbps.
+    #[serde(default = "sortie_debit_defaut")]
+    pub debit_kbps: u32,
+    #[serde(default = "sortie_fps_defaut")]
+    pub fps: u32,
+    /// Preset d'encodage : "rapide" | "equilibre" | "qualite".
+    #[serde(default = "sortie_preset_defaut")]
+    pub preset: String,
+    #[serde(default = "vrai")]
+    pub audio_loopback: bool,
+    #[serde(default = "vrai")]
+    pub audio_micro: bool,
+    /// Gains en millièmes (1000 = 1.0, max 4000 — bornes `SortieCfg::valider`).
+    #[serde(default = "sortie_gain_defaut")]
+    pub gain_loopback: u32,
+    #[serde(default = "sortie_gain_defaut")]
+    pub gain_micro: u32,
+}
+
+fn sortie_codec_defaut() -> String {
+    "h264".to_string()
+}
+fn sortie_conteneur_defaut() -> String {
+    "mp4".to_string()
+}
+fn sortie_debit_defaut() -> u32 {
+    6000
+}
+fn sortie_fps_defaut() -> u32 {
+    60
+}
+fn sortie_preset_defaut() -> String {
+    "equilibre".to_string()
+}
+fn vrai() -> bool {
+    true
+}
+fn sortie_gain_defaut() -> u32 {
+    1000
+}
+
+impl Default for SortieNatifCfg {
+    /// Défauts produit : H.264, 6000 kbps, 60 fps, « equilibre », loopback +
+    /// micro à gain unité — les valeurs historiques figées du lot 1.4.
+    fn default() -> Self {
+        Self {
+            codec: sortie_codec_defaut(),
+            conteneur: sortie_conteneur_defaut(),
+            resolution: None,
+            debit_kbps: sortie_debit_defaut(),
+            fps: sortie_fps_defaut(),
+            preset: sortie_preset_defaut(),
+            audio_loopback: true,
+            audio_micro: true,
+            gain_loopback: sortie_gain_defaut(),
+            gain_micro: sortie_gain_defaut(),
+        }
+    }
+}
+
+/// Lit moteur.json en objet générique : les clés inconnues (`encodeur_choisi`,
+/// futures) sont préservées à la réécriture (doc §17 — toute clé inconnue
+/// est ignorée, jamais effacée). Cassé/absent → objet vide (auto-guérison).
+fn lire_moteur_json(path: &Path) -> serde_json::Map<String, serde_json::Value> {
+    fs::read_to_string(path)
+        .ok()
+        .and_then(|c| serde_json::from_str::<serde_json::Value>(&c).ok())
+        .and_then(|v| v.as_object().cloned())
+        .unwrap_or_default()
+}
+
+fn ecrire_moteur_json(
+    path: &Path,
+    obj: &serde_json::Map<String, serde_json::Value>,
+) -> Result<(), String> {
+    let json = serde_json::to_string(&serde_json::Value::Object(obj.clone()))
+        .map_err(|e| format!("Serialize moteur.json: {}", e))?;
+    fs::write(path, json).map_err(|e| format!("Écrire moteur.json: {}", e))
 }
 
 /// Lit le mode moteur persisté (moteur.json). `None` si absent.
@@ -79,21 +171,103 @@ pub fn lire_mode_moteur(app: &AppHandle) -> Result<Option<String>, String> {
         return Ok(None);
     }
     let content = fs::read_to_string(&path).map_err(|e| format!("Lire moteur.json: {}", e))?;
-    let cfg: MoteurConfig =
+    let v: serde_json::Value =
         serde_json::from_str(&content).map_err(|e| format!("Parse moteur.json: {}", e))?;
-    Ok(Some(cfg.mode))
+    Ok(v.get("mode")
+        .and_then(|m| m.as_str())
+        .map(str::to_string))
 }
 
-/// Sauve le mode moteur (écrase si existe).
+/// Sauve le mode moteur. Relit le fichier d'abord : le bloc `sortie` (et
+/// toute clé inconnue) est préservé — l'écriture directe historique
+/// l'écrasait.
 pub fn sauver_mode_moteur(app: &AppHandle, mode: &str) -> Result<(), String> {
     let dir = data_dir(app)?;
     let path = dir.join("moteur.json");
-    let cfg = MoteurConfig {
-        mode: mode.to_string(),
-    };
-    let json =
-        serde_json::to_string(&cfg).map_err(|e| format!("Serialize moteur.json: {}", e))?;
-    fs::write(&path, json).map_err(|e| format!("Écrire moteur.json: {}", e))
+    let mut obj = lire_moteur_json(&path);
+    obj.insert("mode".to_string(), serde_json::json!(mode));
+    ecrire_moteur_json(&path, &obj)
+}
+
+/// Lit les réglages de sortie natifs (bloc `sortie` de moteur.json).
+/// Bloc absent → défauts produit ; bloc présent mais invalide → erreur
+/// honnête (jamais de repli muet sur une config écrite).
+pub fn lire_sortie_moteur(app: &AppHandle) -> Result<SortieNatifCfg, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("moteur.json");
+    let obj = lire_moteur_json(&path);
+    match obj.get("sortie") {
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| format!("Parse moteur.json sortie: {}", e)),
+        None => Ok(SortieNatifCfg::default()),
+    }
+}
+
+/// Sauve les réglages de sortie natifs (bloc `sortie` de moteur.json).
+/// `mode` et les clés inconnues sont préservés.
+pub fn sauver_sortie_moteur(app: &AppHandle, cfg: &SortieNatifCfg) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("moteur.json");
+    let mut obj = lire_moteur_json(&path);
+    let v = serde_json::to_value(cfg).map_err(|e| format!("Serialize sortie cfg: {}", e))?;
+    obj.insert("sortie".to_string(), v);
+    ecrire_moteur_json(&path, &obj)
+}
+
+/// Réglages du projecteur natif — bloc `apercu` de moteur.json. Consommés
+/// au démarrage de la session aperçu (`moteur_apercu`) et injectés dans la
+/// `SortieCfg` d'un enregistrement ou d'un stream (le projecteur sert alors
+/// les frames de la boucle en cours).
+#[derive(Serialize, Deserialize, Clone, Copy, Debug)]
+pub struct ApercuNatifCfg {
+    /// Largeur maximale du flux aperçu, en pixels — `0` = résolution canvas.
+    #[serde(default = "apercu_largeur_defaut")]
+    pub largeur: u32,
+    /// Cadence d'émission des frames réduites (10 | 15 | 30 dans l'UI).
+    #[serde(default = "apercu_fps_defaut")]
+    pub fps: u32,
+}
+
+fn apercu_largeur_defaut() -> u32 {
+    1280
+}
+fn apercu_fps_defaut() -> u32 {
+    30
+}
+
+impl Default for ApercuNatifCfg {
+    /// Défaut produit : 1280 px à 30 fps — miroir de `ApercuCfg::default`
+    /// (sos-moteur-api) ; les deux doivent rester alignés.
+    fn default() -> Self {
+        Self {
+            largeur: apercu_largeur_defaut(),
+            fps: apercu_fps_defaut(),
+        }
+    }
+}
+
+/// Lit les réglages du projecteur (bloc `apercu` de moteur.json). Bloc
+/// absent → défauts produit ; bloc invalide → erreur honnête.
+pub fn lire_apercu_moteur(app: &AppHandle) -> Result<ApercuNatifCfg, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("moteur.json");
+    let obj = lire_moteur_json(&path);
+    match obj.get("apercu") {
+        Some(v) => serde_json::from_value(v.clone())
+            .map_err(|e| format!("Parse moteur.json apercu: {}", e)),
+        None => Ok(ApercuNatifCfg::default()),
+    }
+}
+
+/// Sauve les réglages du projecteur (bloc `apercu` de moteur.json).
+/// `mode`, `sortie` et les clés inconnues sont préservés.
+pub fn sauver_apercu_moteur(app: &AppHandle, cfg: &ApercuNatifCfg) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("moteur.json");
+    let mut obj = lire_moteur_json(&path);
+    let v = serde_json::to_value(cfg).map_err(|e| format!("Serialize apercu cfg: {}", e))?;
+    obj.insert("apercu".to_string(), v);
+    ecrire_moteur_json(&path, &obj)
 }
 
 // ===== Persistance slug Kick =====

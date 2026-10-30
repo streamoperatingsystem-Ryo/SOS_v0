@@ -1,8 +1,8 @@
 <script lang="ts">
   import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, createMusiqueWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview, rafraichirOutputs } from "../stores/obs";
-  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs, sortieNatif, sortieNatifBusy, sortieNatifFichier, rafraichirSortieNatif, demarrerEnregistrementNatif, arreterEnregistrementNatif } from "../stores/moteur";
-  import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, planningModalOpen, statistiquesModalOpen, obsWebSocketModalOpen, confirmObsOutputOpen } from "../stores/ui";
+  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs, sortieNatif, sortieNatifBusy, sortieNatifFichier, sortieCfg, rafraichirSortieNatif, demarrerEnregistrementNatif, arreterEnregistrementNatif, chargerSortieCfg } from "../stores/moteur";
+  import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, planningModalOpen, statistiquesModalOpen, obsWebSocketModalOpen, confirmObsOutputOpen, sortieNatifModalOpen } from "../stores/ui";
   import { jcActif, toggleJustChatting } from "../stores/justChatting";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
   import { connecterKick, deconnecterKick, kickErreur as kickErreurStore, lireSlugSauve } from "../stores/kick";
@@ -121,8 +121,12 @@
 
   /// Dialogue « Enregistrer sous ». Défaut dans `enregistrements/` du dossier
   /// de données de l'app (tout local) ; `null` si l'utilisateur annule.
+  /// Extension et filtre suivent le conteneur persisté (bloc `sortie` de
+  /// moteur.json) — relecture non fatale, les défauts restent mp4.
   async function choisirFichierSortie(): Promise<string | null> {
-    const nom = `StreamOS-${horodatage()}.mp4`;
+    await chargerSortieCfg();
+    const conteneur = $sortieCfg.conteneur === "mkv" ? "mkv" : "mp4";
+    const nom = `StreamOS-${horodatage()}.${conteneur}`;
     let defaut = nom;
     try {
       defaut = `${await appDataDir()}/enregistrements/${nom}`;
@@ -133,7 +137,7 @@
       return await save({
         title: get(t)("moteur.enregistrerTitre"),
         defaultPath: defaut,
-        filters: [{ name: "MP4", extensions: ["mp4"] }],
+        filters: [{ name: conteneur === "mkv" ? "Matroska" : "MP4", extensions: [conteneur] }],
       });
     } catch (e) {
       moteurErreur.set(String(e));
@@ -339,7 +343,15 @@
     // Reprise d'affichage : si une sortie native tourne déjà (jamais au boot,
     // mais l'UI ne doit pas mentir), le suivi 1 s démarre.
     await rafraichirSortieNatif();
+    // Réglages de sortie natifs (moteur.json) : le résumé du bloc moteur les
+    // affiche — charge en avance, non-fatal en interne.
+    await chargerSortieCfg();
   });
+
+  /// Id codec persisté → nom lisible (contrat `Codec::nom` côté Rust).
+  function codecNom(id: string): string {
+    return { h264: "H.264", hevc: "HEVC", av1: "AV1" }[id] ?? id;
+  }
 
   /// Bascule OBS ↔ natif. `liveActif` empêche le backend de couper un live
   /// implicitement (refus explicite affiché dans le bloc moteur).
@@ -582,8 +594,14 @@
             </ul>
           {/if}
           {#if natifMode}
-            <!-- Paramètres figés de la tranche : affichés, non réglables. -->
-            <p class="hint">{$t("moteur.sortieParametres")}</p>
+            <!-- Résumé des réglages de sortie persistés (moteur.json) —
+                 réglables dans la modale « Sortie ». -->
+            <button class="action" onclick={() => sortieNatifModalOpen.set(true)}>
+              {$t("sortieModal.ouvrir")}
+            </button>
+            <p class="hint">
+              {$t("moteur.sortieParametres", { fps: $sortieCfg.fps, codec: codecNom($sortieCfg.codec), debit: $sortieCfg.debit_kbps })}
+            </p>
             {#if $sortieNatif.actif}
               <p class="hint">
                 {$t("moteur.sortieEtat", { kbps: $sortieNatif.kbps, drops: $sortieNatif.frames_perdues })}

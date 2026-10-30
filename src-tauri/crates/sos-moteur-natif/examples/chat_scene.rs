@@ -12,7 +12,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use sos_moteur_api::{Codec, Conteneur, Moteur, SinkCfg, SortieCfg};
+use sos_moteur_api::{ApercuCfg, Codec, Conteneur, Moteur, SinkCfg, SortieCfg};
 use sos_moteur_natif::chat::MessageChat;
 use sos_moteur_natif::moteur::MoteurNatif;
 
@@ -61,7 +61,9 @@ fn main() {
             conteneur: Conteneur::Mp4,
         }],
         canvas: (1360, 768),
+        resolution: None,
         fps: 60,
+        apercu: ApercuCfg::default(),
         codec: Codec::H264,
         debit_kbps: 6000,
         preset: "equilibre".to_string(),

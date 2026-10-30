@@ -471,6 +471,11 @@ pub trait Renderer: Send {
   (`externalBin`, permission `shell:allow-execute` déjà posée).
 - Protocole : bitstream sur **stdin** (`-f h264|hevc|av1 -i pipe:0`), audio
   PCM sur un **named pipe** (pattern `audioNamedPipe`), sortie RTMP/SRT.
+- ⚠️ **Orthographe du pipe** : `CreateNamedPipeW` exige `\\.\pipe\…`
+  (`chemin_pipe_audio`) mais FFmpeg refuse cette forme en `-i` (ENOENT —
+  son protocole `file` n'accepte pas le backslash) ; lui passer
+  `//./pipe/…` (`chemin_pipe_audio_ffmpeg`). `ecrire` tolère
+  `ERROR_PIPE_LISTENING` (client pas encore connecté → bloc sauté).
 - Args minimaux, **jamais de clé de flux dans les logs**.
 - `stderr` parsé pour l'état (connexion, erreurs) ; reconnexion avec backoff.
 - **Aucune frame brute dans le pipe** : uniquement le bitstream.
@@ -650,7 +655,8 @@ Chemin : `%APPDATA%\com.streamos.v0\moteur.json`.
   "preset": "equilibre",
   "fps": 60,
   "canvas": [1920, 1080],
-  "audio": { "loopback": true, "micro": true, "offset_ms": 0 }
+  "audio": { "loopback": true, "micro": true, "offset_ms": 0 },
+  "apercu": { "largeur": 1280, "fps": 30 }
 }
 ```
 
@@ -1850,12 +1856,13 @@ Toolbar.onOuvrirProjecteur (natifMode)
   → tauri.apercuFenetreToggle()
   → moteur::apercu_fenetre_toggle  (fenêtre "apercu-natif",
       streamos-apercu://localhost/ → resources/apercu.html)
-  → page : invoke("moteur_apercu") toutes les 100 ms
+  → page : invoke("moteur_apercu_config") → poll à 1000/fps
+  → page : invoke("moteur_apercu") au rythme du réglage
   → moteur::moteur_apercu        (réponse binaire, PAS de JSON)
       └─ si rien ne tourne : configurer_scene + demarrer_apercu
   → boucle (SinkCfg::Apercu seul, 30 fps, audio None)
-      └─ composition D2D + NV12 → Apercu (BGRA réduit, 10 fps)
-  → page : ImageData BGRA→RGBA → canvas letterboxé
+      └─ composition D2D + NV12 → Apercu (RGBA réduit, cadence réglée)
+  → page : ImageData RGBA direct → canvas letterboxé
 ```
 
 ### 39.2 Session « aperçu seul » (moteur.rs)
@@ -1863,10 +1870,11 @@ Toolbar.onOuvrirProjecteur (natifMode)
 - Champs dédiés `fil_apercu` / `arret_apercu` / `etat_apercu` :
   **invisible pour `en_cours()`/`etat()`/`natif_actif()`** — elle ne bloque
   ni la bascule de mode ni l'état « enregistrement » affiché dans l'UI.
-- `demarrer_apercu(canvas, fps)` : idempotent ; pendant un enregistrement,
-  retour immédiat (l'enregistrement alimente déjà `apercu`). Une erreur
-  terminale persiste dans `etat_apercu` tant que `arreter_apercu` n'a pas
-  acquitté — jamais de respawn en boucle sur la même panne.
+- `demarrer_apercu(canvas, fps, apercu)` : idempotent ; pendant un
+  enregistrement, retour immédiat (l'enregistrement alimente déjà
+  `apercu`). Une erreur terminale persiste dans `etat_apercu` tant que
+  `arreter_apercu` n'a pas acquitté — jamais de respawn en boucle sur la
+  même panne.
 - `encode_requis` dans `boucle` : `sinks = [Apercu]` seul → pas de
   NVENC/MFT, pas de sinks, pas d'audio ; la composition et l'aperçu sont
   inchangés.
@@ -1876,9 +1884,31 @@ Toolbar.onOuvrirProjecteur (natifMode)
   mutation de scène (`snapshot_tx`, veille `demarrer_veille_apercu`) →
   `arreter_apercu` → le poll relance sur la scène fraîche ; bascule OBS →
   `arreter_apercu` ; démarrage d'enregistrement → `arreter_apercu` (accès
-  exclusif captures) puis l'enregistrement sert l'aperçu.
-- Réponse brute `tauri::ipc::Response` `[w u32 LE][h u32 LE][BGRA]` :
-  **aucune route HTTP ajoutée** — les pixels ne sont pas exposés sur
+  exclusif captures) puis l'enregistrement sert l'aperçu ;
+  sauvegarde des réglages aperçu → `arreter_apercu` hors enregistrement
+  (application quasi immédiate).
+
+### 39.3 Réglages de qualité (2026-10-30)
+
+Le projecteur n'est plus figé à 480×270 @ 10 fps :
+
+- **`ApercuCfg { largeur, fps }`** (sos-moteur-api) : champ `SortieCfg.apercu`
+  — consommé par la session « aperçu seul » **et** par la boucle
+  d'enregistrement/stream (le projecteur y sert les frames de la sortie).
+  `largeur` = borne de largeur du flux réduit (`0` = résolution canvas,
+  hauteur au ratio, dimensions paires — `taille_apercu`) ; `fps` = cadence
+  d'émission (`pas = fps_composition.div_ceil(apercu.fps)`, jamais au-delà).
+- **Sortie RGBA8 directe** : le tampon `Apercu` est swappé B↔R pendant la
+  copie staging (le VideoProcessor ne garantit pas R8G8B8A8 en sortie) —
+  `ImageData` le consomme sans conversion, la boucle de swap JS est morte.
+- **Persistance** : bloc `apercu` de `moteur.json` (`ApercuNatifCfg`,
+  défaut **1280 px / 30 fps**), commandes `moteur_apercu_config` /
+  `moteur_apercu_config_sauver` — UI : bloc « Projecteur » de la modale
+  Sortie (480 / 960 / 1280 / canvas × 10 / 15 / 30 fps).
+- **Dedupe côté page** : l'en-tête porte `pts_us` ; la page saute les
+  frames déjà affichées et poll exactement au rythme réglé.
+- Réponse brute `tauri::ipc::Response` `[w u32 LE][h u32 LE][pts_us i64 LE]
+  [RGBA]` : **aucune route HTTP ajoutée** — les pixels ne sont pas exposés sur
   :4321 (contrat vie privée : une page arbitraire ne peut pas lire le
   flux du stream).
 
@@ -2245,3 +2275,124 @@ cargo test -p sos-moteur-natif                          # 140 (+ 3 tests
 # parite_scene af09059c : composition OK (la capture WGC échoue ici — hwnd
 #   périmé de session, sans rapport avec le lot).
 ```
+
+---
+
+## 45. Modale « Sortie » — réglages persistés + stream RTMP/SRT (2026-10-30)
+
+La modale « Sortie » (équivalent du panneau Sortie d'OBS) rend réglables
+les paramètres figés du lot 1.4 (§32.1 « affichés en lecture seule ») et
+expose enfin le flux réseau natif côté UI.
+
+### 45.1 Persistance — bloc `sortie` de `moteur.json`
+
+```json
+{
+  "mode": "natif",
+  "sortie": {
+    "codec": "h264", "debit_kbps": 6000, "fps": 60, "preset": "equilibre",
+    "audio_loopback": true, "audio_micro": true,
+    "gain_loopback": 1000, "gain_micro": 1000
+  }
+}
+```
+
+- Lecture/écriture en **objet JSON générique** (`config.rs`) : les clés
+  inconnues sont préservées à la réécriture, conforme §17. `sauver_mode_moteur`
+  relit le fichier avant d'écrire — l'écriture directe historique écrasait
+  le bloc `sortie`.
+- Bloc absent → défauts produit (= valeurs figées historiques, zéro
+  régression). Bloc invalide → erreur honnête à la lecture par la modale ;
+  non-fatal aux démarrages de sortie (`unwrap_or_default`).
+- Les gains sont en **millièmes** (1000 = 100 %, max 4000 — bornes
+  `SortieCfg::valider`), l'UI affiche des %.
+
+### 45.2 Commandes
+
+- `moteur_sortie_config` / `moteur_sortie_config_sauver` : lecture et
+  persistance des réglages. La sauvegarde **valide avant d'écrire**
+  (`valider_sortie_cfg` : codec `h264|hevc|av1`, fps 1-240, débit
+  1-200000 kbps, preset `rapide|equilibre|qualite`, gains ≤ 4000) — un
+  JSON inapplicable n'atteint jamais le disque.
+- `moteur_sortie_demarrer` (enregistrement) applique désormais les
+  réglages persistés (`appliquer_sortie_cfg` : codec, débit, fps, preset,
+  `AudioCfg`) ; `SessionNatif.fps` reflète le vrai fps au lieu du 60
+  hardcodé.
+- `moteur_stream_demarrer` : les paramètres absents retombent sur la
+  config persistée (au lieu des défauts en dur) ; l'`AudioCfg` suit les
+  réglages (loopback/micro/gains). Les paramètres explicites priment
+  toujours. La config qui a réellement démarré reste persistée dans le
+  keyring (`StreamCfgPersistee`) pour le pré-remplissage — clé et
+  passphrase SRT incluses, jamais en clair dans un fichier.
+
+### 45.3 UI
+
+- Lanceur : bouton « Réglages de sortie » dans le bloc moteur de la
+  section OBS (mode natif) ; le résumé `moteur.sortieParametres`
+  affiche les valeurs réelles (`{fps} fps · {codec} · {debit} kb/s`).
+- `SortieNatifModal.svelte` — trois blocs : **Vidéo** (résolution =
+  canvas de la scène, en lecture seule ce lot — pas de rescale GPU ;
+  FPS 24/30/50/60/120 ; codec ; débit ; preset), **Audio** (toggles
+  loopback/micro + sliders de gain 0-200 %), **Stream** (protocole
+  RTMP/SRT, URL, clé, passphrase/latence SRT, démarrer/arrêter — même
+  session et même arrêt qu'un enregistrement).
+- Persistance au `change` de chaque champ (pas de bouton « Appliquer ») ;
+  erreurs de validation remontées dans la modale.
+- i18n : `sortieModal.*` dans les 8 locales (`fr.json` source de vérité).
+
+### 45.4 Limites (assumées)
+
+- **Résolution de sortie = canvas de la scène** : aucun rescale GPU dans
+  ce lot (la passe `VideoProcessorBlt` peut sortir en NV12 à une autre
+  taille — chantier futur, livré au §46). Le champ est affiché en lecture
+  seule avec un hint explicite.
+- Une seule sortie à la fois (enregistrement OU stream) — règle
+  `preparer_sortie` inchangée.
+
+---
+
+## 46. Résolution de sortie + conteneur MKV (2026-10-30)
+
+La limite §45.4 est levée : la vidéo encodée peut être réduite sous la
+résolution du canvas, et le fichier n'est plus figé en fMP4.
+
+### 46.1 Décisions tranchées
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Forme du réglage | **Hauteurs standards** (720/540/480/360), `null` = canvas | l'utilisateur choisit une qualité, pas une géométrie |
+| Largeur | **Dérivée du ratio du canvas** au démarrage (`resoudre_resolution`, moteur/mod.rs), arrondie au pair supérieur | jamais persistée : elle suivrait mal un changement de canvas |
+| Chemin du rescale | Passe `VideoProcessorBlt` de la conversion NV12 (`ConvertisseurNv12` à dims entrée/sortie séparées) | zéro passe ajoutée, composition inchangée à la taille du canvas |
+| Conteneur | `"mp4"` (fMP4, défaut historique) \| `"mkv"` (matroska) — `FfmpegSink` gérait déjà les deux | fichier seul : le protocole RTMP/SRT fixe le format réseau |
+
+### 46.2 Livré
+
+- `sos-moteur-api` : `SortieCfg.resolution: Option<(u32,u32)>` — `None` =
+  canvas (aucune régression) ; `valider` exige des dims paires non nulles.
+- `color_gpu.rs` : `ConvertisseurNv12::nouveau(ctx, entree, sortie, fps)` —
+  le `Blt` fait l'échelle dans la même passe (rects par défaut, comme
+  `Apercu`).
+- `moteur.rs` : `(ow, oh)` câblé — `VoieRendu` produit le NV12 à la
+  résolution encodée ; encodeurs NVENC/MFT, `Apercu` (source = la texture
+  encodée : le projecteur montre ce qui part), compteurs et gouverneur la
+  voient.
+- `config.rs` : `SortieNatifCfg.conteneur` + `resolution` (hauteur,
+  `None` = canvas), `#[serde(default)]` → rétro-compat.
+- `moteur/mod.rs` : `resoudre_conteneur` / `resoudre_resolution`,
+  `normaliser_chemin` pose l'extension du conteneur, bornes dans
+  `valider_sortie_cfg` (conteneur mp4|mkv, hauteur paire 2-4320).
+  Portée : enregistrement **et** stream (`demarrer_stream_bloquant` lit
+  aussi `resolution`).
+- UI : selects résolution + conteneur dans `SortieNatifModal` ; le
+  dialogue « Enregistrer sous » (`Toolbar`) suit le conteneur persisté
+  (extension + filtre MP4/Matroska). i18n `sortieModal.resCanvas` /
+  `conteneur`, `resolutionHint` réécrit dans les 8 locales.
+
+### 46.3 Limites (assumées)
+
+- Hauteurs uniquement — pas de résolution libre (la borne backend accepte
+  toute hauteur paire 2-4320 pour une config écrite à la main).
+- Une résolution **supérieure** au canvas est acceptée (upscale par le
+  même `Blt`) — choix utilisateur honoré, jamais de clamp muet.
+- `appliquer_scene` à chaud inchangé : la résolution se fixe au démarrage
+  de la sortie, comme le codec et le débit.

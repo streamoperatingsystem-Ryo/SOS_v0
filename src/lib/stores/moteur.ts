@@ -5,7 +5,13 @@
 // moteurs sont branchés depuis le lot 1.4 (natif = capture/composition/
 // encodage sans OBS, audio loopback + micro muxé).
 import { writable, get } from "svelte/store";
-import { tauri } from "../tauri";
+import {
+  tauri,
+  type ApercuNatifCfg,
+  type SortieNatifCfg,
+  type StreamCfgPersistee,
+  type StreamDemarrerCfg,
+} from "../tauri";
 import { obsHost, obsPort, obsPassword } from "./obs";
 
 export type ModeMoteur = "obs" | "natif";
@@ -56,6 +62,92 @@ export const sortieNatifBusy = writable(false);
 
 /// Dernier fichier écrit — conservé après l'arrêt pour l'afficher.
 export const sortieNatifFichier = writable<string | null>(null);
+
+/// Réglages de sortie natifs (moteur.json, bloc `sortie`) — consommés au
+/// démarrage d'un enregistrement ET d'un stream. Défauts produit tant que
+/// `chargerSortieCfg` n'a pas répondu.
+export const sortieCfg = writable<SortieNatifCfg>({
+  codec: "h264",
+  conteneur: "mp4",
+  resolution: null,
+  debit_kbps: 6000,
+  fps: 60,
+  preset: "equilibre",
+  audio_loopback: true,
+  audio_micro: true,
+  gain_loopback: 1000,
+  gain_micro: 1000,
+});
+
+/// Dernière config stream persistée dans le keyring — pré-remplissage du
+/// bloc Stream de la modale (null = jamais streamé).
+export const streamCfgPersistee = writable<StreamCfgPersistee | null>(null);
+
+/// Relit les réglages persistés (moteur.json). Non-fatal : les défauts du
+/// store restent affichés si la lecture échoue.
+export async function chargerSortieCfg(): Promise<void> {
+  try {
+    sortieCfg.set(await tauri.moteurSortieConfig());
+  } catch (e) {
+    moteurErreur.set(String(e));
+  }
+}
+
+/// Persiste les réglages de sortie (moteur.json). Le backend refuse une
+/// config invalide — l'erreur remonte à l'appelant pour l'afficher.
+export async function sauverSortieCfg(cfg: SortieNatifCfg): Promise<void> {
+  await tauri.moteurSortieConfigSauver(cfg);
+  sortieCfg.set(cfg);
+}
+
+/// Réglages du projecteur natif (moteur.json, bloc `apercu`) — qualité et
+/// cadence du flux réduit. Défauts produit tant que `chargerApercuCfg`
+/// n'a pas répondu.
+export const apercuCfg = writable<ApercuNatifCfg>({ largeur: 1280, fps: 30 });
+
+/// Relit les réglages du projecteur (non-fatal : défauts conservés).
+export async function chargerApercuCfg(): Promise<void> {
+  try {
+    apercuCfg.set(await tauri.moteurApercuConfig());
+  } catch (e) {
+    moteurErreur.set(String(e));
+  }
+}
+
+/// Persiste les réglages du projecteur. Le backend relance une session
+/// aperçu en cours — application quasi immédiate hors enregistrement.
+export async function sauverApercuCfg(cfg: ApercuNatifCfg): Promise<void> {
+  await tauri.moteurApercuConfigSauver(cfg);
+  apercuCfg.set(cfg);
+}
+
+/// Relit la config stream du keyring (pré-remplissage). Non-fatal.
+export async function chargerStreamConfig(): Promise<void> {
+  try {
+    streamCfgPersistee.set(await tauri.moteurStreamConfig());
+  } catch {
+    // Coffre vide ou illisible : le formulaire garde ses défauts.
+  }
+}
+
+/// Démarre le flux natif (RTMP/SRT) vers `p.url` — même session et même
+/// arrêt qu'un enregistrement (`arreterEnregistrementNatif`). Retourne la
+/// destination publique, ou false sur erreur (moteurErreur rempli).
+export async function demarrerStreamNatif(p: StreamDemarrerCfg): Promise<boolean> {
+  moteurErreur.set(null);
+  sortieNatifBusy.set(true);
+  try {
+    const cible = await tauri.moteurStreamDemarrer(p);
+    sortieNatifFichier.set(cible);
+    await rafraichirSortieNatif();
+    return true;
+  } catch (e) {
+    moteurErreur.set(String(e));
+    return false;
+  } finally {
+    sortieNatifBusy.set(false);
+  }
+}
 
 let suivi: ReturnType<typeof setInterval> | null = null;
 

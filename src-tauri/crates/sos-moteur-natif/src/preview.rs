@@ -1,7 +1,10 @@
-//! Aperçu basse résolution — canvas NV12 → BGRA réduit, lu par le dashboard.
+//! Aperçu réduit — canvas NV12 → BGRA réduit → RGBA, lu par le projecteur.
 //!
 //! Chemin : video processor (NV12 → BGRA, échelle) → texture staging → Map.
-//! 10 fps suffisent (plan §2.7) ; ~0,5 Mo par frame à 480×270.
+//! Le processeur vidéo ne garantit pas R8G8B8A8 en sortie : le tampon rendu
+//! est swappé B↔R pendant la copie (RGBA8 prêt pour `ImageData`, aucune
+//! conversion côté page). Cadence et résolution sont réglables
+//! (`ApercuCfg`) — défaut 1280 px à 30 fps.
 
 use std::fmt;
 use std::mem::ManuallyDrop;
@@ -170,7 +173,8 @@ impl Apercu {
         })
     }
 
-    /// Convertit la source NV12 en BGRA réduit et rend les pixels (BGRA serré).
+    /// Convertit la source NV12 en BGRA réduit et rend les pixels **RGBA**
+    /// serrés — `putImageData`/`ImageData` les consomment sans conversion.
     pub fn lire(&mut self, source: &ID3D11Texture2D) -> Result<&[u8], ErreurApercu> {
         let desc_entree = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
             FourCC: 0,
@@ -260,12 +264,20 @@ impl Apercu {
         }
         .map_err(|e| ErreurApercu::Gpu(format!("Map staging : {}", e.message())))?;
 
+        // Copie ligne par ligne (pitch du staging ≠ largeur serrée) avec
+        // swap B↔R : BGRA → RGBA. Un u32 par pixel, coût négligeable même à
+        // 1280×720@30 (~110 Mo/s de readback PCIe, trivial).
         let ligne = self.largeur as usize * 4;
         unsafe {
             for y in 0..self.hauteur as usize {
-                let src = (mappee.pData as *const u8).add(y * mappee.RowPitch as usize);
-                let dst = self.tampon.as_mut_ptr().add(y * ligne);
-                std::ptr::copy_nonoverlapping(src, dst, ligne);
+                let src = (mappee.pData as *const u8).add(y * mappee.RowPitch as usize)
+                    as *const u32;
+                let dst = self.tampon.as_mut_ptr().add(y * ligne) as *mut u32;
+                for x in 0..self.largeur as isize {
+                    let v = src.offset(x).read_unaligned();
+                    dst.offset(x)
+                        .write_unaligned((v & 0xFF00_FF00) | ((v & 0xFF) << 16) | ((v >> 16) & 0xFF));
+                }
             }
             self.context.Unmap(&self.staging, 0);
         }

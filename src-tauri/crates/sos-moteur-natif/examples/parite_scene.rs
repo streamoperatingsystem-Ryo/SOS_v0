@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use sos_moteur_api::{Codec, Conteneur, Moteur, SinkCfg, SortieCfg};
+use sos_moteur_api::{ApercuCfg, Codec, Conteneur, Moteur, SinkCfg, SortieCfg};
 use sos_moteur_natif::input::{EtatInput, EtatManette, EtatSouris};
 use sos_moteur_natif::moteur::{CibleCapture, MoteurNatif};
 
@@ -172,7 +172,9 @@ fn main() {
             conteneur: Conteneur::Mp4,
         }],
         canvas: (scene.canvasW, scene.canvasH),
+        resolution: None,
         fps: 60,
+        apercu: ApercuCfg::default(),
         codec: Codec::H264,
         debit_kbps: 6000,
         preset: "equilibre".to_string(),

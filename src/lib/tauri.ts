@@ -1436,6 +1436,61 @@ export interface AudienceSessionDetail {
   timeline: AudienceEvt[];
 }
 
+/// Réglages de sortie du moteur natif — bloc `sortie` de moteur.json.
+/// `gain_*` en millièmes (1000 = 100 %, max 4000 — bornes backend) ;
+/// `conteneur` = "mp4" | "mkv" (fichier seul) ; `resolution` = hauteur
+/// de sortie en px (null = canvas — la largeur est dérivée du ratio
+/// côté backend).
+export interface SortieNatifCfg {
+  codec: string;
+  conteneur: string;
+  resolution: number | null;
+  debit_kbps: number;
+  fps: number;
+  preset: string;
+  audio_loopback: boolean;
+  audio_micro: boolean;
+  gain_loopback: number;
+  gain_micro: number;
+}
+
+/// Réglages du projecteur natif — bloc `apercu` de moteur.json.
+/// `largeur` : largeur max du flux réduit en px (0 = résolution canvas) ;
+/// `fps` : cadence d'émission (10 | 15 | 30 dans l'UI).
+export interface ApercuNatifCfg {
+  largeur: number;
+  fps: number;
+}
+
+/// Paramètres de `moteur_stream_demarrer` : seuls protocole + url sont
+/// requis ; les absents retombent sur la config `sortie` persistée.
+export interface StreamDemarrerCfg {
+  protocole: string;
+  url: string;
+  cle?: string;
+  codec?: string;
+  debit_kbps?: number;
+  fps?: number;
+  preset?: string;
+  srt_passphrase?: string;
+  srt_latency_ms?: number;
+}
+
+/// Config stream persistée dans le keyring (dernier stream démarré) —
+/// pré-remplissage de la modale Sortie. La clé et la passphrase vivent
+/// dans le coffre OS, jamais dans un fichier en clair.
+export interface StreamCfgPersistee {
+  protocole: string;
+  url: string;
+  cle: string | null;
+  codec: string;
+  debit_kbps: number;
+  fps: number;
+  preset: string;
+  srt_passphrase: string | null;
+  srt_latency_ms: number | null;
+}
+
 export const tauri = {
   async getScene(): Promise<Scene> {
     return invoke<Scene>("get_scene");
@@ -1567,6 +1622,55 @@ export const tauri = {
   /// (~1 s). Retourne le chemin finalisé, ou `null` si rien ne tournait.
   async moteurSortieArreter(): Promise<string | null> {
     return await invoke<string | null>("moteur_sortie_arreter");
+  },
+
+  /// Réglages de sortie natifs persistés (moteur.json) — pré-remplissage
+  /// de la modale « Sortie ». Défauts produit si le bloc est absent.
+  async moteurSortieConfig(): Promise<SortieNatifCfg> {
+    return await invoke("moteur_sortie_config");
+  },
+
+  /// Persiste les réglages de sortie natifs (refusés si invalides).
+  async moteurSortieConfigSauver(cfg: SortieNatifCfg): Promise<void> {
+    await invoke("moteur_sortie_config_sauver", { cfg });
+  },
+
+  /// Réglages du projecteur natif persistés (bloc `apercu` de moteur.json)
+  /// — pré-remplissage du bloc « Projecteur » de la modale Sortie.
+  async moteurApercuConfig(): Promise<ApercuNatifCfg> {
+    return await invoke("moteur_apercu_config");
+  },
+
+  /// Persiste les réglages du projecteur (refusés si invalides). Une
+  /// session aperçu en cours est relancée sur les nouveaux réglages.
+  async moteurApercuConfigSauver(cfg: ApercuNatifCfg): Promise<void> {
+    await invoke("moteur_apercu_config_sauver", { cfg });
+  },
+
+  /// Démarre un flux réseau natif (RTMP ou SRT) — même session qu'un
+  /// enregistrement : une seule sortie à la fois, arrêt par
+  /// `moteurSortieArreter`, état par `moteurSortieEtat`. Les champs
+  /// absents retombent sur les réglages `sortie` persistés.
+  /// Retourne la destination affichable « schéma://autorité ».
+  async moteurStreamDemarrer(p: StreamDemarrerCfg): Promise<string> {
+    return await invoke<string>("moteur_stream_demarrer", {
+      protocole: p.protocole,
+      url: p.url,
+      cle: p.cle ?? null,
+      codec: p.codec ?? null,
+      debitKbps: p.debit_kbps ?? null,
+      fps: p.fps ?? null,
+      preset: p.preset ?? null,
+      srtPassphrase: p.srt_passphrase ?? null,
+      srtLatencyMs: p.srt_latency_ms ?? null,
+    });
+  },
+
+  /// Dernière config stream persistée dans le keyring (pré-remplissage) —
+  /// `null` si le coffre est vide. Contient la clé et la passphrase : le
+  /// coffre appartient à l'utilisateur de la machine.
+  async moteurStreamConfig(): Promise<StreamCfgPersistee | null> {
+    return await invoke("moteur_stream_config");
   },
 
   /// Ouvre/ferme le projecteur natif (mode Rust) : fenêtre détachée

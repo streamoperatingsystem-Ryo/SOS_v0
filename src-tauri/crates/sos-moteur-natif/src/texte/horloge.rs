@@ -602,10 +602,11 @@ mod tests {
     use sos_scene::{CadreConfig, ScenesModules};
 
     fn scene_json(modules: Option<ScenesModules>, cadre: Option<CadreConfig>) -> Scene {
-        let mut scene = Scene::default();
-        scene.cadreWidget = cadre;
-        scene.modules = modules;
-        scene
+        Scene {
+            cadreWidget: cadre,
+            modules,
+            ..Default::default()
+        }
     }
 
     fn module(json: &str) -> ModuleHud {

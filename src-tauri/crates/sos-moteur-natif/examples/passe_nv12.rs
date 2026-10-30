@@ -54,7 +54,12 @@ fn main() {
     // Gris moyen : contrôle de la conversion (Y attendu ≈ 126 en BT.709).
     remplir(&contexte, &canvas, largeur, hauteur, [128, 128, 128, 255]);
 
-    let convertisseur = match ConvertisseurNv12::nouveau(&contexte, largeur, hauteur, 60) {
+    let convertisseur = match ConvertisseurNv12::nouveau(
+        &contexte,
+        (largeur, hauteur),
+        (largeur, hauteur),
+        60,
+    ) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("convertisseur : {e}");

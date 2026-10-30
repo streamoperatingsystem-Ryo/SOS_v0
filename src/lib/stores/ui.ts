@@ -93,6 +93,12 @@ export const consoModalOpen = writable(false);
 /// options de connexion (lanceur : section OBS de la Toolbar).
 export const obsWebSocketModalOpen = writable(false);
 
+/// Modale « Sortie » du moteur natif : true = ouverte. Réglages vidéo
+/// (résolution, fps, codec, débit, preset), audio (loopback/micro/gains)
+/// et stream RTMP/SRT — persistés dans moteur.json (bloc `sortie`) et
+/// keyring (config stream). Lanceur : bloc moteur de la section OBS.
+export const sortieNatifModalOpen = writable(false);
+
 /// Position d'un titre — vocabulaire unifié widget + fond. Pour un widget,
 /// le titre est affiché HORS du widget (au-dessus/en dessous/à côté) ; pour
 /// le fond, à l'INTÉRIEUR le long du bord correspondant. Gauche/droite =

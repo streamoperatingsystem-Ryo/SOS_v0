@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use sos_moteur_api::{Codec, Conteneur, Moteur, SinkCfg, SortieCfg};
+use sos_moteur_api::{ApercuCfg, Codec, Conteneur, Moteur, SinkCfg, SortieCfg};
 use sos_moteur_natif::capture::enumeration::enumerer_moniteurs;
 use sos_moteur_natif::moteur::{CibleCapture, MoteurNatif, SourceCfg};
 
@@ -51,7 +51,9 @@ fn main() {
             conteneur: Conteneur::Mp4,
         }],
         canvas: (largeur, hauteur),
+        resolution: None,
         fps,
+        apercu: ApercuCfg::default(),
         codec: Codec::H264,
         debit_kbps: kbps,
         preset: "equilibre".to_string(),

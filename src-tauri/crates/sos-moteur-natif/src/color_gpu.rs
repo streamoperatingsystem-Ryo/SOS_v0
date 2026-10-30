@@ -28,6 +28,11 @@ use crate::encode::ErreurEncodage;
 use crate::gpu::ContexteGpu;
 
 /// Convertisseur BGRA → NV12 attaché à un contexte GPU.
+///
+/// Entrée et sortie ont des dimensions **séparées** : quand elles
+/// diffèrent, `VideoProcessorBlt` fait l'échelle dans la même passe — la
+/// composition reste à la taille du canvas, seule la texture NV12 encodée
+/// est réduite (lot « résolution de sortie »).
 pub struct ConvertisseurNv12 {
     device: ID3D11Device,
     context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
@@ -35,21 +40,26 @@ pub struct ConvertisseurNv12 {
     video_context: ID3D11VideoContext,
     enumerateur: ID3D11VideoProcessorEnumerator,
     processeur: ID3D11VideoProcessor,
+    /// Dimensions de la cible NV12 (résolution encodée).
     largeur: u32,
     hauteur: u32,
 }
 
 impl ConvertisseurNv12 {
-    /// Prépare le video processor pour une taille et un fps donnés.
+    /// Prépare le video processor pour une conversion `entree` → `sortie`.
+    ///
+    /// `entree` = taille de la texture BGRA composée (canvas) ; `sortie` =
+    /// taille de la texture NV12 produite (résolution encodée). Les deux
+    /// sont forcées paires (chroma 4:2:0).
     pub fn nouveau(
         contexte: &ContexteGpu,
-        largeur: u32,
-        hauteur: u32,
+        entree: (u32, u32),
+        sortie: (u32, u32),
         fps: u32,
     ) -> Result<Self, ErreurEncodage> {
-        let largeur = largeur & !1;
-        let hauteur = hauteur & !1;
-        if largeur == 0 || hauteur == 0 || fps == 0 {
+        let (largeur_in, hauteur_in) = (entree.0 & !1, entree.1 & !1);
+        let (largeur, hauteur) = (sortie.0 & !1, sortie.1 & !1);
+        if largeur_in == 0 || hauteur_in == 0 || largeur == 0 || hauteur == 0 || fps == 0 {
             return Err(ErreurEncodage::Conversion(
                 "dimensions ou fps invalides".into(),
             ));
@@ -70,8 +80,8 @@ impl ConvertisseurNv12 {
                 Numerator: fps,
                 Denominator: 1,
             },
-            InputWidth: largeur,
-            InputHeight: hauteur,
+            InputWidth: largeur_in,
+            InputHeight: hauteur_in,
             OutputFrameRate: DXGI_RATIONAL {
                 Numerator: fps,
                 Denominator: 1,
@@ -100,10 +110,12 @@ impl ConvertisseurNv12 {
         })
     }
 
+    /// Largeur de la cible NV12 (résolution encodée).
     pub fn largeur(&self) -> u32 {
         self.largeur
     }
 
+    /// Hauteur de la cible NV12 (résolution encodée).
     pub fn hauteur(&self) -> u32 {
         self.hauteur
     }
@@ -111,7 +123,8 @@ impl ConvertisseurNv12 {
     /// Convertit une texture BGRA en texture NV12 (GPU uniquement).
     ///
     /// La texture NV12 est neuve à chaque appel ; le pool viendra avec le
-    /// compositeur (lot 2.1).
+    /// compositeur (lot 2.1). Quand les dims d'entrée et de sortie
+    /// diffèrent, le `Blt` fait l'échelle dans la même passe.
     pub fn convertir(
         &self,
         bgra: &ID3D11Texture2D,

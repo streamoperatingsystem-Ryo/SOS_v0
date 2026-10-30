@@ -374,9 +374,19 @@ pub fn nom_pipe_audio(n: usize) -> String {
     format!("sos-audio-{}-{n}", std::process::id())
 }
 
-/// Chemin d'ouverture côté client FFmpeg (`-i \\.\pipe\…`).
+/// Chemin **serveur** (`CreateNamedPipeW`) — la forme canonique Win32
+/// `\\.\pipe\…` est exigée par l'API de création.
 pub fn chemin_pipe_audio(nom: &str) -> String {
     format!(r"\\.\pipe\{nom}")
+}
+
+/// Chemin **client** pour l'argument `-i` de FFmpeg : `//./pipe/…` en
+/// slashes. La forme backslash `\\.\pipe\…` est refusée par le protocole
+/// `file` de FFmpeg (ENOENT « No such file or directory » même quand
+/// l'instance existe — vérifié sur le sidecar embarqué) ; la forme slash
+/// est normalisée par la CRT avant `CreateFile` et ouvre le pipe.
+pub fn chemin_pipe_audio_ffmpeg(nom: &str) -> String {
+    format!("//./pipe/{nom}")
 }
 
 #[cfg(test)]

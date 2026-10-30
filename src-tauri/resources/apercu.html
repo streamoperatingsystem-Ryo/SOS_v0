@@ -40,18 +40,21 @@
     <canvas id="ecran"></canvas>
     <div id="statut">En attente du moteur…</div>
     <script>
-      // Projecteur natif : affiche l'aperçu réduit du moteur Rust (~10 fps)
-      // via poll IPC — la commande `moteur_apercu` démarre la session si
-      // rien ne tourne (fenêtre ouverte = demande) et renvoie le dernier
-      // buffer `[w u32 LE][h u32 LE][BGRA]` (vide = pas encore de frame).
+      // Projecteur natif : affiche l'aperçu réduit du moteur Rust via poll
+      // IPC — la commande `moteur_apercu` démarre la session si rien ne
+      // tourne (fenêtre ouverte = demande) et renvoie le dernier buffer
+      // `[w u32 LE][h u32 LE][pts_us i64 LE][RGBA]` (vide = pas encore de
+      // frame). Cadence et résolution : réglages `apercu` de moteur.json,
+      // lus via `moteur_apercu_config` pour aligner le poll.
       var TAURI = window.__TAURI__;
       var ecran = document.getElementById("ecran");
       var ctx = ecran.getContext("2d");
       var statut = document.getElementById("statut");
-      // Canvas source à la taille exacte de la frame aperçu (480 px de
-      // large, ratio du canvas) — dessiné letterboxé dans la fenêtre.
+      // Canvas source à la taille exacte de la frame aperçu — dessiné
+      // letterboxé dans la fenêtre.
       var src = document.createElement("canvas");
       var sctx = src.getContext("2d");
+      var dernierPts = -1;
 
       window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
@@ -81,21 +84,21 @@
       async function tick() {
         try {
           var buf = await TAURI.core.invoke("moteur_apercu");
-          if (!buf || buf.byteLength < 8) {
+          if (!buf || buf.byteLength < 16) {
             statut.textContent = "En attente du moteur…";
             return;
           }
           var dv = new DataView(buf);
           var w = dv.getUint32(0, true);
           var h = dv.getUint32(4, true);
-          if (w === 0 || h === 0 || buf.byteLength !== 8 + w * h * 4) return;
-          var px = new Uint8ClampedArray(buf, 8);
-          // BGRA -> RGBA : l'aperçu moteur est BGRA8, le canvas attend RGBA.
-          for (var i = 0; i < px.length; i += 4) {
-            var b = px[i];
-            px[i] = px[i + 2];
-            px[i + 2] = b;
-          }
+          var pts = dv.getBigInt64(8, true);
+          if (w === 0 || h === 0 || buf.byteLength !== 16 + w * h * 4) return;
+          // Frame déjà affichée (poll plus rapide que l'émission, ou scène
+          // figée) : rien à renvoyer au canvas.
+          if (pts === dernierPts && src.width === w && src.height === h) return;
+          dernierPts = pts;
+          // RGBA8 direct — le moteur fait déjà le swap (ex-BGRA) en Rust.
+          var px = new Uint8ClampedArray(buf, 16);
           if (src.width !== w || src.height !== h) {
             src.width = w;
             src.height = h;
@@ -110,9 +113,21 @@
         }
       }
 
+      // Le poll épouse la cadence d'émission réglée (10/15/30 fps) —
+      // défaut 30 ; la dedupe par pts absorbe les frames répétées.
+      function demarrer(intervalleMs) {
+        ajuster();
+        tick();
+        setInterval(tick, intervalleMs);
+      }
+
       ajuster();
-      tick();
-      setInterval(tick, 100);
+      TAURI.core.invoke("moteur_apercu_config")
+        .then(function (cfg) {
+          var fps = cfg && cfg.fps >= 1 && cfg.fps <= 60 ? cfg.fps : 30;
+          demarrer(Math.ceil(1000 / fps));
+        })
+        .catch(function () { demarrer(100); });
     </script>
   </body>
 </html>

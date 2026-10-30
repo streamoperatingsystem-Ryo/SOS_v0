@@ -288,7 +288,12 @@ fn main() {
             return;
         }
     };
-    let convertisseur = match ConvertisseurNv12::nouveau(&contexte, largeur, hauteur, fps) {
+    let convertisseur = match ConvertisseurNv12::nouveau(
+        &contexte,
+        (largeur, hauteur),
+        (largeur, hauteur),
+        fps,
+    ) {
         Ok(c) => c,
         Err(e) => {
             eprintln!("Video processor impossible : {e}");

@@ -258,12 +258,44 @@ impl Default for AudioCfg {
     }
 }
 
+/// Réglages de l'aperçu réduit (projecteur natif) — indépendants de la
+/// sortie encodée : un enregistrement et la session « aperçu seul »
+/// partagent le même consommateur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ApercuCfg {
+    /// Largeur maximale du flux aperçu, en pixels. `0` = résolution canvas
+    /// (aucune réduction). La hauteur suit le ratio, dimensions paires.
+    pub largeur: u32,
+    /// Cadence d'émission des frames réduites (borne : fps de composition).
+    pub fps: u32,
+}
+
+impl Default for ApercuCfg {
+    /// Défaut produit : 1280 px à 30 fps — net en plein écran sans coût
+    /// mesurable (un `VideoProcessorBlt` ≈ 0,15 ms en 1360×768).
+    fn default() -> Self {
+        Self {
+            largeur: 1280,
+            fps: 30,
+        }
+    }
+}
+
 /// Configuration complète d'un démarrage de sortie.
 #[derive(Clone, PartialEq, Eq)]
 pub struct SortieCfg {
     pub sinks: Vec<SinkCfg>,
     pub canvas: (u32, u32),
+    /// Résolution de sortie (encodage) — `None` = canvas (comportement
+    /// historique, aucune régression). Une valeur différente du canvas =
+    /// rescale GPU dans la passe de conversion NV12 (`VideoProcessorBlt`),
+    /// sans toucher à la composition. Dimensions paires exigées par
+    /// `valider` (chroma 4:2:0).
+    pub resolution: Option<(u32, u32)>,
     pub fps: u32,
+    /// Réglages de l'aperçu réduit — aussi consommé pendant un
+    /// enregistrement (le projecteur sert alors les frames de la boucle).
+    pub apercu: ApercuCfg,
     pub codec: Codec,
     pub debit_kbps: u32,
     pub preset: String,
@@ -284,7 +316,9 @@ impl SortieCfg {
                 conteneur,
             }],
             canvas: (1920, 1080),
+            resolution: None,
             fps: 60,
+            apercu: ApercuCfg::default(),
             codec: Codec::H264,
             debit_kbps: 6000,
             preset: "equilibre".to_string(),
@@ -310,6 +344,13 @@ impl SortieCfg {
         }
         if self.fps == 0 {
             return Err(ErreurMoteur::Configuration("fps nul".to_string()));
+        }
+        if let Some((w, h)) = self.resolution {
+            if w == 0 || h == 0 || w % 2 != 0 || h % 2 != 0 {
+                return Err(ErreurMoteur::Configuration(format!(
+                    "résolution de sortie invalide : {w}×{h} (dimensions paires non nulles exigées)"
+                )));
+            }
         }
         if self.debit_kbps == 0 {
             return Err(ErreurMoteur::Configuration(
@@ -337,7 +378,9 @@ impl fmt::Debug for SortieCfg {
         f.debug_struct("SortieCfg")
             .field("sinks", &self.sinks)
             .field("canvas", &self.canvas)
+            .field("resolution", &self.resolution)
             .field("fps", &self.fps)
+            .field("apercu", &self.apercu)
             .field("codec", &self.codec)
             .field("debit_kbps", &self.debit_kbps)
             .field("preset", &self.preset)
@@ -370,7 +413,8 @@ impl MoteurEtat {
     }
 }
 
-/// Une image d'aperçu basse résolution (BGRA8, `largeur × hauteur × 4`).
+/// Une image d'aperçu réduit (RGBA8, `largeur × hauteur × 4`) — prête pour
+/// `ImageData` sans conversion côté page.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ApercuFrame {
     pub data: Vec<u8>,
@@ -567,7 +611,9 @@ mod tests {
                 },
             ],
             canvas: (1920, 1080),
+            resolution: None,
             fps: 60,
+            apercu: ApercuCfg::default(),
             codec: Codec::H264,
             debit_kbps: 6000,
             preset: "equilibre".to_string(),

@@ -31,8 +31,8 @@ use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap1, ID2D1PathGeometry};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
 use sos_moteur_api::{
-    ApercuFrame, Capacites, Codec, ErreurMoteur, Moteur, MoteurEtat, PaquetEncode, Sink, SinkCfg,
-    SortieCfg, SortieKind,
+    ApercuCfg, ApercuFrame, Capacites, Codec, ErreurMoteur, Moteur, MoteurEtat, PaquetEncode, Sink,
+    SinkCfg, SortieCfg, SortieKind,
 };
 
 use crate::cadres::CadreCfg;
@@ -739,9 +739,14 @@ impl MoteurNatif {
     ///   enregistrement, retour immédiat — `boucle` alimente déjà `apercu`.
     /// - Une erreur terminale (`etat_apercu`) bloque la relance tant que
     ///   `arreter_apercu` n'a pas acquitté.
-    /// - `fps` borne la composition (le projecteur tourne très léger :
-    ///   30 fps de composition, aperçu réduit émis à 10 fps quoi qu'il arrive).
-    pub fn demarrer_apercu(&self, canvas: (u32, u32), fps: u32) -> Result<(), ErreurMoteur> {
+    /// - `fps` borne la composition ; `apercu` règle la cadence d'émission
+    ///   et la largeur du flux réduit (0 = résolution canvas).
+    pub fn demarrer_apercu(
+        &self,
+        canvas: (u32, u32),
+        fps: u32,
+        apercu: ApercuCfg,
+    ) -> Result<(), ErreurMoteur> {
         {
             let mut fil = self.fil_apercu.lock().unwrap_or_else(|e| e.into_inner());
             if let Some(f) = fil.as_ref() {
@@ -785,14 +790,16 @@ impl MoteurNatif {
         *self.arret_apercu.lock().unwrap_or_else(|e| e.into_inner()) =
             Some(Arc::clone(&arret));
         let compteurs = Arc::clone(&self.compteurs);
-        let apercu = Arc::clone(&self.apercu);
+        let apercu_partage = Arc::clone(&self.apercu);
         let encodeur_partage = Arc::clone(&self.encodeur);
         let etat_apercu = Arc::clone(&self.etat_apercu);
         let cfg = SortieCfg {
             // `Apercu` seul : `boucle` ne crée alors ni encodeur ni sink.
             sinks: vec![SinkCfg::Apercu],
             canvas,
+            resolution: None,
             fps,
+            apercu,
             codec: Codec::H264,
             debit_kbps: 6000,
             preset: "equilibre".to_string(),
@@ -807,7 +814,7 @@ impl MoteurNatif {
                     scene,
                     maj_scene,
                     Arc::clone(&compteurs),
-                    apercu,
+                    apercu_partage,
                     arret,
                     encodeur_partage,
                 );
@@ -1681,6 +1688,11 @@ fn boucle(
     } = scene;
     let (cw, ch) = cfg.canvas;
     let fps = cfg.fps;
+    // Résolution de sortie : `None` = canvas (historique). La composition
+    // reste à `(cw, ch)` ; seule la texture NV12 produite — et donc
+    // l'encodeur, les sinks et l'aperçu — est à `(ow, oh)`, le rescale
+    // étant fait dans la passe `VideoProcessorBlt` de la conversion.
+    let (ow, oh) = cfg.resolution.unwrap_or((cw, ch));
 
     let moniteurs = enumerer_moniteurs().map_err(|e| format!("moniteurs : {e}"))?;
     let adaptateur = sources.iter().find_map(|s| match &s.cible {
@@ -1715,6 +1727,7 @@ fn boucle(
         &contexte,
         cw,
         ch,
+        (ow, oh),
         fps,
         ContenuRendu {
             textes: textes_cfg,
@@ -1809,7 +1822,7 @@ fn boucle(
     let mut encodeur: Option<EncodeurActif> = None;
     let mut derniere_erreur = String::new();
     if !sans_nvenc && encode_requis {
-        match EncodeurNvenc::nouveau(&contexte, cfg.codec, cw, ch, fps, cfg.debit_kbps, preset) {
+        match EncodeurNvenc::nouveau(&contexte, cfg.codec, ow, oh, fps, cfg.debit_kbps, preset) {
             Ok(mut nvenc) => match nvenc.enregistrer(&cible_encode) {
                 Ok(()) => {
                     *encodeur_partage
@@ -1830,7 +1843,7 @@ fn boucle(
     // 2) Repli MFT (ou chemin principal si NVENC absent).
     let mut zero_copie = false;
     if encode_requis && encodeur.is_none() {
-        match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte, preset) {
+        match ouvrir_mft(&disponibles, &mut index, &cfg, ow, oh, fps, &contexte, preset) {
             Some((enc, mut info)) => {
                 zero_copie =
                     info.materiel && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
@@ -1937,8 +1950,13 @@ fn boucle(
         return Err("aucune sortie".to_string());
     }
 
-    let (pw, ph) = taille_apercu(cw, ch);
-    let mut apercu = Apercu::nouveau(&contexte, (cw, ch), (pw, ph)).ok();
+    // L'aperçu lit la texture NV12 encodée : sa source est la résolution
+    // de sortie, pas le canvas — le projecteur montre ce qui part.
+    let (pw, ph) = taille_apercu(ow, oh, cfg.apercu.largeur);
+    let mut apercu = Apercu::nouveau(&contexte, (ow, oh), (pw, ph)).ok();
+    // Cadence d'émission : une frame toutes les `pas` ticks au plus —
+    // `div_ceil` garantit de ne jamais dépasser `cfg.apercu.fps`.
+    let pas_apercu = fps.div_ceil(cfg.apercu.fps.max(1)).max(1) as u64;
     let mut horloge = Horloge::nouvelle(fps).map_err(|e| format!("horloge : {e}"))?;
     let mut gouverneur = Gouverneur::nouveau();
 
@@ -1948,7 +1966,7 @@ fn boucle(
     // (« ProcessOutput E_FAIL ») : repli explicite, signalé au diagnostic.
     // `SOS_MOTEUR_MFT_MEMOIRE=1` force la copie.
     let convertisseur = if encode_requis {
-        ConvertisseurNv12::nouveau(&contexte, cw, ch, fps).ok()
+        ConvertisseurNv12::nouveau(&contexte, (cw, ch), (ow, oh), fps).ok()
     } else {
         None
     };
@@ -1956,7 +1974,7 @@ fn boucle(
         compteurs.degrader("encodeur MFT logiciel : copie NV12");
     }
 
-    compteurs.maj_resolution(cw, ch);
+    compteurs.maj_resolution(ow, oh);
 
     // Audio : un thread par source, démarré **juste avant** la boucle pour
     // que l'offset A/V reste borné. Une source indisponible dégrade
@@ -2388,7 +2406,7 @@ fn boucle(
                     // Repli : NVENC ou MFT refuse la frame. On descend dans
                     // l'ordre de détection MFT puis on rejoue la frame —
                     // une seule fois.
-                    match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte, preset)
+                    match ouvrir_mft(&disponibles, &mut index, &cfg, ow, oh, fps, &contexte, preset)
                     {
                         Some((mft, mut info)) => {
                             zero_copie = info.materiel
@@ -2436,8 +2454,7 @@ fn boucle(
         }
 
         if let Some(a) = apercu.as_mut() {
-            let pas = (fps / 10).max(1) as u64;
-            if horloge.ticks() % pas == 0 {
+            if horloge.ticks() % pas_apercu == 0 {
                 if let Ok(tampon) = a.lire(&cible_encode) {
                     let frame = ApercuFrame {
                         data: tampon.to_vec(),
@@ -2462,7 +2479,7 @@ fn boucle(
                 drops: instantane.frames_perdues,
                 file_encode: instantane.file_encode,
                 latence_ms: instantane.latence_ms,
-                resolution: (cw, ch),
+                resolution: (ow, oh),
             };
             let decision = gouverneur.evaluer(&mesures);
             if decision.action != Action::Rien {
@@ -2705,6 +2722,7 @@ impl VoieRendu {
         contexte: &ContexteGpu,
         largeur: u32,
         hauteur: u32,
+        sortie: (u32, u32),
         fps: u32,
         contenu: ContenuRendu,
     ) -> Result<Self, String> {
@@ -2726,8 +2744,9 @@ impl VoieRendu {
         let canvas = contexte
             .creer_texture(&desc)
             .map_err(|e| format!("canvas : {e}"))?;
-        let convertisseur = ConvertisseurNv12::nouveau(contexte, largeur, hauteur, fps)
-            .map_err(|e| e.to_string())?;
+        let convertisseur =
+            ConvertisseurNv12::nouveau(contexte, (largeur, hauteur), sortie, fps)
+                .map_err(|e| e.to_string())?;
         let nv12 = convertisseur.creer_cible().map_err(|e| e.to_string())?;
         let mut dessinateur =
             DessinateurTexte::nouveau(contexte, &canvas).map_err(|e| e.to_string())?;
@@ -3234,8 +3253,8 @@ fn ouvrir_mft(
     disponibles: &[EncodeurDispo],
     index: &mut usize,
     cfg: &SortieCfg,
-    cw: u32,
-    ch: u32,
+    w: u32,
+    h: u32,
     fps: u32,
     contexte: &ContexteGpu,
     preset: Preset,
@@ -3243,7 +3262,7 @@ fn ouvrir_mft(
     while *index < disponibles.len() {
         let dispo = &disponibles[*index];
         *index += 1;
-        if let Ok(encodeur) = ouvrir_encodeur(dispo, cfg, cw, ch, fps, contexte, preset) {
+        if let Ok(encodeur) = ouvrir_encodeur(dispo, cfg, w, h, fps, contexte, preset) {
             return Some((
                 encodeur,
                 EncodeurInfo {
@@ -3277,8 +3296,8 @@ fn encoder_actif(
 fn ouvrir_encodeur(
     dispo: &EncodeurDispo,
     cfg: &SortieCfg,
-    cw: u32,
-    ch: u32,
+    w: u32,
+    h: u32,
     fps: u32,
     contexte: &ContexteGpu,
     preset: Preset,
@@ -3286,8 +3305,8 @@ fn ouvrir_encodeur(
     EncodeurMft::nouveau_avec_preset(
         dispo.activate(),
         cfg.codec,
-        cw,
-        ch,
+        w,
+        h,
         fps,
         cfg.debit_kbps,
         Some(contexte),
@@ -3325,9 +3344,11 @@ fn encoder_frame(
     }
 }
 
-/// Aperçu 480 px de large, ratio conservé, dimensions paires.
-fn taille_apercu(cw: u32, ch: u32) -> (u32, u32) {
-    let largeur = cw.clamp(2, 480) & !1;
+/// Aperçu de `max` px de large au plus (`0` = résolution canvas), ratio
+/// conservé, dimensions paires.
+fn taille_apercu(cw: u32, ch: u32, max: u32) -> (u32, u32) {
+    let borne = if max == 0 { cw } else { max };
+    let largeur = cw.clamp(2, borne) & !1;
     let hauteur = ((ch as u64 * largeur as u64 / cw.max(1) as u64) as u32).max(2) & !1;
     (largeur, hauteur)
 }
@@ -3362,12 +3383,17 @@ mod tests {
 
     #[test]
     fn apercu_pair_et_ratio() {
-        let (w, h) = taille_apercu(1920, 1080);
+        let (w, h) = taille_apercu(1920, 1080, 480);
         assert_eq!((w, h), (480, 270));
-        let (w, h) = taille_apercu(1360, 768);
+        let (w, h) = taille_apercu(1360, 768, 480);
         assert_eq!(w % 2, 0);
         assert_eq!(h % 2, 0);
         assert_eq!((w, h), (480, 270));
+        // Borne haute : 1280 px et résolution canvas (0).
+        assert_eq!(taille_apercu(1920, 1080, 1280), (1280, 720));
+        assert_eq!(taille_apercu(1920, 1080, 0), (1920, 1080));
+        // Un canvas plus petit que la borne garde sa résolution.
+        assert_eq!(taille_apercu(640, 360, 1280), (640, 360));
     }
 
     #[test]
@@ -3412,11 +3438,11 @@ mod tests {
     fn apercu_refuse_canvas_nul() {
         let moteur = MoteurNatif::nouveau();
         assert!(matches!(
-            moteur.demarrer_apercu((0, 1080), 30),
+            moteur.demarrer_apercu((0, 1080), 30, ApercuCfg::default()),
             Err(ErreurMoteur::Configuration(_))
         ));
         assert!(matches!(
-            moteur.demarrer_apercu((1920, 1080), 0),
+            moteur.demarrer_apercu((1920, 1080), 0, ApercuCfg::default()),
             Err(ErreurMoteur::Configuration(_))
         ));
         // Un démarrage refusé ne laisse ni fil ni erreur derrière.

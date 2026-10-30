@@ -2481,7 +2481,7 @@ mod tests {
             index: Some(1),
             phase: Some(PhaseSpeedrun::Running),
         });
-        assert_eq!(e.seg_time().as_deref(), Some("00:00.00"));
+        assert_eq!(e.seg_time(), Some("00:00.00"));
         e.appliquer(MajSpeedrun::Stopped);
         assert_eq!(e.index(), None);
         assert!(!e.actif() && !e.connecte());

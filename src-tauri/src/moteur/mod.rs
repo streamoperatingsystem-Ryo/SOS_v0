@@ -13,7 +13,7 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use sos_moteur_api::{
-    AudioCfg, Capacites, Codec, Conteneur, Moteur, MoteurEtat, SinkCfg, SortieCfg,
+    ApercuCfg, AudioCfg, Capacites, Codec, Conteneur, Moteur, MoteurEtat, SinkCfg, SortieCfg,
 };
 use sos_moteur_natif::chat::MessageChat;
 use sos_moteur_natif::input::{EtatInput, EtatManette, EtatSouris};
@@ -230,16 +230,16 @@ pub fn moteur_sortie_etat(registre: State<'_, RegistreMoteur>) -> EtatSortieNati
     }
 }
 
-/// Normalise le chemin choisi par le dialogue : extension `.mp4` si absente,
-/// dossier parent créé au besoin. Aucun chemin par défaut inventé.
-fn normaliser_chemin(chemin: &str) -> Result<PathBuf, String> {
+/// Normalise le chemin choisi par le dialogue : extension du conteneur si
+/// absente, dossier parent créé au besoin. Aucun chemin par défaut inventé.
+fn normaliser_chemin(chemin: &str, conteneur: Conteneur) -> Result<PathBuf, String> {
     let brut = chemin.trim();
     if brut.is_empty() {
         return Err("chemin vide".to_string());
     }
     let mut chemin = PathBuf::from(brut);
     if chemin.extension().is_none() {
-        chemin.set_extension("mp4");
+        chemin.set_extension(conteneur.extension());
     }
     if let Some(parent) = chemin.parent().filter(|p| !p.as_os_str().is_empty()) {
         std::fs::create_dir_all(parent).map_err(|e| format!("dossier de sortie : {e}"))?;
@@ -251,8 +251,11 @@ fn normaliser_chemin(chemin: &str) -> Result<PathBuf, String> {
 /// du thread UI pour ne jamais geler la fenêtre.
 #[tauri::command]
 pub async fn moteur_sortie_demarrer(app: AppHandle, chemin: String) -> Result<String, String> {
-    let chemin = normaliser_chemin(&chemin)?;
-    tauri::async_runtime::spawn_blocking(move || demarrer_bloquant(&app, &chemin))
+    // Le conteneur persisté fixe l'extension par défaut du dialogue ET le
+    // sink — un identifiant inconnu est refusé avant tout contact GPU.
+    let conteneur = resoudre_conteneur(Some(&sortie_cfg_persistee(&app).conteneur))?;
+    let chemin = normaliser_chemin(&chemin, conteneur)?;
+    tauri::async_runtime::spawn_blocking(move || demarrer_bloquant(&app, &chemin, conteneur))
         .await
         .map_err(|e| format!("tâche de démarrage : {e}"))?
 }
@@ -285,20 +288,160 @@ fn preparer_sortie(app: &AppHandle) -> Result<sos_scene::Scene, String> {
     Ok(scene)
 }
 
-fn demarrer_bloquant(app: &AppHandle, chemin: &Path) -> Result<String, String> {
+/// Réglages de sortie persistés (bloc `sortie` de moteur.json) appliqués à
+/// une `SortieCfg`. Codec/preset inconnus → erreur honnête avant tout
+/// contact GPU (jamais de repli muet sur une config écrite par l'UI).
+fn appliquer_sortie_cfg(
+    cfg: &mut SortieCfg,
+    s: &crate::config::SortieNatifCfg,
+) -> Result<(), String> {
+    cfg.codec = resoudre_codec(Some(&s.codec))?;
+    cfg.debit_kbps = s.debit_kbps;
+    cfg.fps = s.fps;
+    cfg.preset = resoudre_preset(Some(&s.preset));
+    cfg.resolution = resoudre_resolution(s.resolution, cfg.canvas);
+    cfg.audio = Some(AudioCfg {
+        loopback: s.audio_loopback,
+        micro: s.audio_micro,
+        gain_loopback: s.gain_loopback,
+        gain_micro: s.gain_micro,
+    });
+    Ok(())
+}
+
+/// Relit la config sortie persistée — non-fatal : fichier absent ou cassé
+/// → défauts produit (doc §17). Une config *valide mais incohérente* est
+/// refusée plus loin par `appliquer_sortie_cfg` / `SortieCfg::valider`.
+fn sortie_cfg_persistee(app: &AppHandle) -> crate::config::SortieNatifCfg {
+    crate::config::lire_sortie_moteur(app).unwrap_or_default()
+}
+
+/// Relit les réglages du projecteur (bloc `apercu` de moteur.json) —
+/// non-fatal : fichier absent ou cassé → défauts produit. Traduction vers
+/// le type du contrat moteur (les deux structs gardent les mêmes bornes).
+fn apercu_cfg_persistee(app: &AppHandle) -> ApercuCfg {
+    let a = crate::config::lire_apercu_moteur(app).unwrap_or_default();
+    ApercuCfg {
+        largeur: a.largeur,
+        fps: a.fps,
+    }
+}
+
+/// Réglages du projecteur persistés (bloc `apercu` de moteur.json) —
+/// pré-remplissage du bloc « Projecteur » de la modale Sortie.
+#[tauri::command]
+pub fn moteur_apercu_config(app: AppHandle) -> Result<crate::config::ApercuNatifCfg, String> {
+    crate::config::lire_apercu_moteur(&app)
+}
+
+/// Persiste les réglages du projecteur. Refusés si invalides — le disque
+/// ne reçoit que des valeurs applicables. Une session « aperçu seul » en
+/// cours est arrêtée : le poll suivant la relance sur les nouveaux
+/// réglages (application quasi immédiate). Pendant un enregistrement, le
+/// réglage s'applique au prochain démarrage de sortie.
+#[tauri::command]
+pub fn moteur_apercu_config_sauver(
+    app: AppHandle,
+    registre: State<'_, RegistreMoteur>,
+    cfg: crate::config::ApercuNatifCfg,
+) -> Result<(), String> {
+    // Bornes honnêtes : largeur 0 (canvas) ou 240-4096 px, fps 1-60. La
+    // liste d'options de l'UI est un sous-ensemble de ces bornes.
+    if cfg.largeur != 0 && !(240..=4096).contains(&cfg.largeur) {
+        return Err(format!(
+            "largeur aperçu hors bornes : {} (0 = canvas, ou 240-4096)",
+            cfg.largeur
+        ));
+    }
+    if cfg.fps == 0 || cfg.fps > 60 {
+        return Err(format!("fps aperçu hors bornes : {} (1-60)", cfg.fps));
+    }
+    crate::config::sauver_apercu_moteur(&app, &cfg)?;
+    // Hors enregistrement : la session aperçu détient les captures — la
+    // relancer la fait repartir sur les nouveaux réglages. Idempotent si
+    // aucune session ne tourne ; sans effet sur une sortie encodée.
+    if !registre.natif().en_cours() {
+        registre.natif().arreter_apercu();
+    }
+    Ok(())
+}
+
+/// Valide les réglages de sortie envoyés par la modale — mêmes bornes que
+/// `SortieCfg::valider`, appliquées AVANT la persistance (un JSON invalide
+/// ne doit jamais atteindre le disque).
+fn valider_sortie_cfg(s: &crate::config::SortieNatifCfg) -> Result<(), String> {
+    resoudre_codec(Some(&s.codec))?;
+    resoudre_conteneur(Some(&s.conteneur))?;
+    if let Some(h) = s.resolution {
+        if !(2..=4320).contains(&h) || h % 2 != 0 {
+            return Err(format!(
+                "résolution hors bornes : {h} (hauteur paire, 2-4320)"
+            ));
+        }
+    }
+    if s.fps == 0 || s.fps > 240 {
+        return Err(format!("fps hors bornes : {} (1-240)", s.fps));
+    }
+    if s.debit_kbps == 0 || s.debit_kbps > 200_000 {
+        return Err(format!(
+            "débit hors bornes : {} kbps (1-200000)",
+            s.debit_kbps
+        ));
+    }
+    if sos_moteur_natif::encode::Preset::depuis_nom(&s.preset).is_none() {
+        return Err(format!(
+            "preset inconnu : {} (rapide|equilibre|qualite attendu)",
+            s.preset
+        ));
+    }
+    for (nom, gain) in [("loopback", s.gain_loopback), ("micro", s.gain_micro)] {
+        if gain > 4000 {
+            return Err(format!("gain {nom} hors bornes : {gain} millièmes (max 4000)"));
+        }
+    }
+    Ok(())
+}
+
+/// Réglages de sortie natifs persistés (bloc `sortie` de moteur.json) —
+/// pré-remplissage de la modale « Sortie ».
+#[tauri::command]
+pub fn moteur_sortie_config(app: AppHandle) -> Result<crate::config::SortieNatifCfg, String> {
+    crate::config::lire_sortie_moteur(&app)
+}
+
+/// Persiste les réglages de sortie natifs. Refusés si invalides — le
+/// disque ne reçoit que des valeurs applicables telles quelles.
+#[tauri::command]
+pub fn moteur_sortie_config_sauver(
+    app: AppHandle,
+    cfg: crate::config::SortieNatifCfg,
+) -> Result<(), String> {
+    valider_sortie_cfg(&cfg)?;
+    crate::config::sauver_sortie_moteur(&app, &cfg)
+}
+
+fn demarrer_bloquant(
+    app: &AppHandle,
+    chemin: &Path,
+    conteneur: Conteneur,
+) -> Result<String, String> {
     let scene = preparer_sortie(app)?;
     let registre = app
         .try_state::<RegistreMoteur>()
         .ok_or("registre moteur absent")?;
-    let mut cfg = SortieCfg::fichier(chemin, Conteneur::Mp4);
+    let mut cfg = SortieCfg::fichier(chemin, conteneur);
     cfg.canvas = (scene.canvasW, scene.canvasH);
+    cfg.apercu = apercu_cfg_persistee(app);
+    let sortie = sortie_cfg_persistee(app);
+    appliquer_sortie_cfg(&mut cfg, &sortie)?;
+    let fps = cfg.fps;
     registre
         .natif()
         .demarrer_sortie(cfg)
         .map_err(|e| e.to_string())?;
     registre.definir_session(SessionNatif {
         cible: chemin.display().to_string(),
-        fps: 60,
+        fps,
     });
     Ok(chemin.display().to_string())
 }
@@ -374,6 +517,26 @@ fn resoudre_codec(codec: Option<&str>) -> Result<Codec, String> {
         Some(id) => Codec::depuis_id(id)
             .ok_or_else(|| format!("codec inconnu : {id} (h264|hevc|av1 attendu)")),
     }
+}
+
+/// Conteneur demandé par le frontend → enum du contrat. `None`/vide =
+/// défaut MP4 fragmenté ; identifiant inconnu = erreur honnête (jamais
+/// de repli muet sur une config écrite).
+fn resoudre_conteneur(conteneur: Option<&str>) -> Result<Conteneur, String> {
+    match conteneur.map(str::trim).filter(|c| !c.is_empty()) {
+        None | Some("mp4") => Ok(Conteneur::Mp4),
+        Some("mkv") => Ok(Conteneur::Mkv),
+        Some(id) => Err(format!("conteneur inconnu : {id} (mp4|mkv attendu)")),
+    }
+}
+
+/// Hauteur de sortie persistée → dims encodées `(w, h)` : la largeur est
+/// dérivée du ratio du canvas, arrondie au pair supérieur (chroma 4:2:0).
+/// `None` = canvas (comportement historique).
+fn resoudre_resolution(hauteur: Option<u32>, (cw, ch): (u32, u32)) -> Option<(u32, u32)> {
+    let h = hauteur?;
+    let w = ((cw as u64 * h as u64 + ch as u64 / 2) / ch.max(1) as u64) as u32;
+    Some(((w + 1) & !1, h))
 }
 
 /// Preset demandé par le frontend : `None`/vide → `"equilibre"` (défaut
@@ -537,10 +700,16 @@ fn demarrer_stream_bloquant(
     let srt_passphrase = srt_passphrase
         .map(str::trim)
         .filter(|p| !p.is_empty());
-    let codec = resoudre_codec(codec)?;
-    let preset = resoudre_preset(preset);
-    let fps = fps.unwrap_or(60);
-    let debit_kbps = debit_kbps.unwrap_or(6000);
+    // Paramètres absents → réglages persistés de la modale « Sortie »
+    // (moteur.json). Le défaut produit n'est qu'un dernier recours.
+    let sortie = sortie_cfg_persistee(app);
+    let codec = match codec {
+        Some(c) => resoudre_codec(Some(c))?,
+        None => resoudre_codec(Some(&sortie.codec))?,
+    };
+    let preset = resoudre_preset(preset.or(Some(&sortie.preset)));
+    let fps = fps.unwrap_or(sortie.fps);
+    let debit_kbps = debit_kbps.unwrap_or(sortie.debit_kbps);
     // Le schéma exact (rtmp://, rtmps://, srt://) est validé par le moteur
     // avant tout contact GPU — pas de doublon ici.
     let sink = match protocole {
@@ -570,12 +739,19 @@ fn demarrer_stream_bloquant(
     let cfg = SortieCfg {
         sinks: vec![sink],
         canvas: (scene.canvasW, scene.canvasH),
+        resolution: resoudre_resolution(sortie.resolution, (scene.canvasW, scene.canvasH)),
         fps,
+        apercu: apercu_cfg_persistee(app),
         codec,
         debit_kbps,
         preset: preset.clone(),
         cle: cle.clone(),
-        audio: Some(AudioCfg::default()),
+        audio: Some(AudioCfg {
+            loopback: sortie.audio_loopback,
+            micro: sortie.audio_micro,
+            gain_loopback: sortie.gain_loopback,
+            gain_micro: sortie.gain_micro,
+        }),
     };
     registre
         .natif()
@@ -1377,7 +1553,8 @@ pub fn demarrer_veille_apercu(app: AppHandle) {
     });
 }
 
-/// Aperçu natif : dernière frame réduite du moteur (BGRA8, ~10 fps).
+/// Aperçu natif : dernière frame réduite du moteur (RGBA8, cadence et
+/// résolution réglables — bloc `apercu` de moteur.json).
 ///
 /// Effet de bord : si ni enregistrement ni session aperçu ne tournent, la
 /// commande **démarre** la session aperçu (fenêtre du projecteur ouverte =
@@ -1385,9 +1562,10 @@ pub fn demarrer_veille_apercu(app: AppHandle) {
 /// enregistrement actif alimente déjà l'aperçu partagé : les frames sont
 /// servies telles quelles.
 ///
-/// Corps binaire : `[w u32 LE][h u32 LE][pixels BGRA]` — vide tant qu'aucune
-/// frame n'a été produite. Réservé au mode Rust (`moteur_basculer` arrête
-/// la session en quittant le mode natif).
+/// Corps binaire : `[w u32 LE][h u32 LE][pts_us i64 LE][pixels RGBA]` —
+/// vide tant qu'aucune frame n'a été produite. `pts_us` permet à la page
+/// de sauter une frame déjà affichée. Réservé au mode Rust
+/// (`moteur_basculer` arrête la session en quittant le mode natif).
 #[tauri::command]
 pub fn moteur_apercu(
     app: AppHandle,
@@ -1412,16 +1590,21 @@ pub fn moteur_apercu(
             .configurer_scene(&scene, &HashMap::new(), &base)
             .map_err(|e| e.to_string())?;
         natif
-            .demarrer_apercu((scene.canvasW, scene.canvasH), 30)
+            .demarrer_apercu(
+                (scene.canvasW, scene.canvasH),
+                30,
+                apercu_cfg_persistee(&app),
+            )
             .map_err(|e| e.to_string())?;
     }
     let frame = match natif.apercu() {
         Some(f) if f.valide() => f,
         _ => return Ok(tauri::ipc::Response::new(Vec::new())),
     };
-    let mut corps = Vec::with_capacity(8 + frame.data.len());
+    let mut corps = Vec::with_capacity(16 + frame.data.len());
     corps.extend_from_slice(&frame.largeur.to_le_bytes());
     corps.extend_from_slice(&frame.hauteur.to_le_bytes());
+    corps.extend_from_slice(&frame.pts_us.to_le_bytes());
     corps.extend_from_slice(&frame.data);
     Ok(tauri::ipc::Response::new(corps))
 }
@@ -1564,12 +1747,56 @@ mod tests {
     }
 
     #[test]
-    fn chemin_normalise_ajoute_mp4() {
+    fn chemin_normalise_ajoute_l_extension_du_conteneur() {
         let dossier = std::env::temp_dir().join("sos-moteur-chemin");
-        let p = normaliser_chemin(&dossier.join("sortie").display().to_string())
-            .expect("chemin");
+        let p = normaliser_chemin(
+            &dossier.join("sortie").display().to_string(),
+            Conteneur::Mp4,
+        )
+        .expect("chemin");
         assert_eq!(p.extension().and_then(|e| e.to_str()), Some("mp4"));
-        assert!(normaliser_chemin("   ").is_err());
+        let p = normaliser_chemin(
+            &dossier.join("sortie").display().to_string(),
+            Conteneur::Mkv,
+        )
+        .expect("chemin");
+        assert_eq!(p.extension().and_then(|e| e.to_str()), Some("mkv"));
+        // Une extension explicite prime toujours.
+        let p = normaliser_chemin(
+            &dossier.join("sortie.avi").display().to_string(),
+            Conteneur::Mkv,
+        )
+        .expect("chemin");
+        assert_eq!(p.extension().and_then(|e| e.to_str()), Some("avi"));
+        assert!(normaliser_chemin("   ", Conteneur::Mp4).is_err());
+    }
+
+    #[test]
+    fn resoudre_conteneur_defauts_et_erreurs() {
+        assert_eq!(resoudre_conteneur(None).unwrap(), Conteneur::Mp4);
+        assert_eq!(resoudre_conteneur(Some("  ")).unwrap(), Conteneur::Mp4);
+        assert_eq!(resoudre_conteneur(Some("mkv")).unwrap(), Conteneur::Mkv);
+        assert!(resoudre_conteneur(Some("webm")).is_err());
+    }
+
+    #[test]
+    fn resoudre_resolution_derive_la_largeur_du_ratio() {
+        // Canvas absent → rien à dériver.
+        assert_eq!(resoudre_resolution(None, (1920, 1080)), None);
+        // 16:9 : largeurs exactes.
+        assert_eq!(
+            resoudre_resolution(Some(720), (1920, 1080)),
+            Some((1280, 720))
+        );
+        assert_eq!(
+            resoudre_resolution(Some(360), (1920, 1080)),
+            Some((640, 360))
+        );
+        // Ratio non standard (1360×768) : arrondi au pair supérieur.
+        let (w, h) = resoudre_resolution(Some(720), (1360, 768)).unwrap();
+        assert_eq!(h, 720);
+        assert_eq!(w % 2, 0);
+        assert!((w as f64 / h as f64 - 1360.0 / 768.0).abs() < 0.01);
     }
 
     #[test]
@@ -1977,9 +2204,11 @@ mod tests {
 
     #[test]
     fn decoder_snapshot_extrait_la_scene_de_la_frame() {
-        let mut scene = sos_scene::Scene::default();
-        scene.canvasW = 1360;
-        scene.canvasH = 768;
+        let scene = sos_scene::Scene {
+            canvasW: 1360,
+            canvasH: 768,
+            ..Default::default()
+        };
         // Clés triées par serde_json::json! : "scene" < "sceneId" < "type" —
         // même piège que les décodeurs chat/input (starts_with interdit).
         let frame = serde_json::json!({

@@ -14,7 +14,7 @@ use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, HANDLE};
+use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_LISTENING, HANDLE};
 use windows::Win32::Storage::FileSystem::{
     WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_OUTBOUND,
 };
@@ -23,7 +23,9 @@ use windows::Win32::System::Pipes::{
 };
 
 use super::{Conteneur, ErreurSortie, Sink};
-use crate::audio::live::{chemin_pipe_audio, nom_pipe_audio, CANAUX_CIBLE, TAUX_CIBLE};
+use crate::audio::live::{
+    chemin_pipe_audio, chemin_pipe_audio_ffmpeg, nom_pipe_audio, CANAUX_CIBLE, TAUX_CIBLE,
+};
 use crate::encode::ffmpeg::chemin_sidecar;
 use crate::encode::PaquetEncode;
 use sos_moteur_api::{Codec, ErreurMoteur};
@@ -201,15 +203,19 @@ impl FfmpegSink {
         index: usize,
     ) -> Result<(Self, PipeAudio), ErreurSortie> {
         let nom = nom_pipe_audio(index);
-        let chemin = chemin_pipe_audio(&nom);
-        let pipe = PipeAudio::creer(&chemin)?;
-        let sink = Self::lancer(ffmpeg, cible, codec, fps, Some(&chemin))?;
+        // Deux orthographes du même pipe : `\\.\` exigée par
+        // `CreateNamedPipeW`, `//./` acceptée par le protocole `file` de
+        // FFmpeg (le backslash y est refusé — cf. `chemin_pipe_audio_ffmpeg`).
+        let serveur = chemin_pipe_audio(&nom);
+        let client = chemin_pipe_audio_ffmpeg(&nom);
+        let pipe = PipeAudio::creer(&serveur)?;
+        let sink = Self::lancer(ffmpeg, cible, codec, fps, Some(&client))?;
         Ok((sink, pipe))
     }
 
-    /// Construction commune. `pipe_audio` = chemin `\\.\pipe\…` d'une
-    /// instance `PipeAudio` **déjà créée** (sinon le `CreateFile` de FFmpeg
-    /// échouerait — le client exige l'instance en écoute).
+    /// Construction commune. `pipe_audio` = chemin client `//./pipe/…`
+    /// d'une instance `PipeAudio` **déjà créée** (sinon le `CreateFile` de
+    /// FFmpeg échouerait — le client exige l'instance en écoute).
     fn lancer(
         ffmpeg: Option<&Path>,
         cible: &Sortie,
@@ -481,27 +487,35 @@ impl PipeAudio {
         })
     }
 
-    /// Écrit un bloc PCM entier. `WriteFile` échoue vite si le client n'est
-    /// pas encore connecté (`ERROR_PIPE_LISTENING`) : jamais d'attente au
-    /// démarrage ; ensuite il ne bloque que si FFmpeg stagne en lecture —
-    /// même risque que l'écriture sur le stdin vidéo, déjà acceptée.
+    /// Écrit un bloc PCM entier. Tant que FFmpeg n'a pas fait son
+    /// `CreateFile` (les ~ms entre le spawn et l'ouverture de l'entrée 1),
+    /// `WriteFile` reçoit `ERROR_PIPE_LISTENING` : le bloc est sauté —
+    /// trou bref au pire, jamais d'attente ni de casse de la voie live.
+    /// Ensuite il ne bloque que si FFmpeg stagne en lecture — même risque
+    /// que l'écriture sur le stdin vidéo, déjà acceptée.
     /// Pas de `ConnectNamedPipe` : il **bloquerait** tant qu'aucun client
     /// n'est là, et la connexion est faite côté client par FFmpeg.
     pub fn ecrire(&mut self, octets: &[u8]) -> Result<(), ErreurSortie> {
         let mut ecrits = 0usize;
         while ecrits < octets.len() {
             let mut n = 0u32;
-            unsafe {
+            if let Err(e) = unsafe {
                 WriteFile(
                     self.handle,
                     Some(&octets[ecrits..]),
                     Some(&mut n),
                     None,
                 )
+            } {
+                if e.code() == windows::core::HRESULT::from_win32(ERROR_PIPE_LISTENING.0) {
+                    return Ok(());
+                }
+                return Err(ErreurSortie::Processus(format!(
+                    "pipe audio {} : {}",
+                    self.nom,
+                    e.message()
+                )));
             }
-            .map_err(|e| {
-                ErreurSortie::Processus(format!("pipe audio {} : {}", self.nom, e.message()))
-            })?;
             if n == 0 {
                 return Err(ErreurSortie::Processus(format!(
                     "pipe audio {} : rien écrit",
