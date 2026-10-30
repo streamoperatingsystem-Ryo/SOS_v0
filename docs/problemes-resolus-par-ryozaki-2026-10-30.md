@@ -43,3 +43,24 @@ La configuration est conservée.
 Alignement de la branche média du menu contextuel.
 Le widget musique n'est plus proposé dans la branche trou.
 « Importer un média » est cohérent entre le clic droit et la carte d'édition.
+
+## Modification n°7 — Uniformisation des boutons au survol (badges widgets/modules)
+
+Diagnostic : les badges au survol (boutons −/+ sur les widgets, œil sur la
+caméra et les modules) étaient implémentés deux fois — `.wbadge`/`.z-controls`/
+`.z-btn` dans Widget.svelte et une copie renommée `.mod-badge`/`.mod-eye`/
+`.mod-eye-btn` dans ModuleHud.svelte (≈ 90 lignes CSS + la logique `badgePos`
+dupliquées). Comportement visuel déjà quasi identique, mais la duplication
+faisait dériver le code.
+
+Unification : un seul composant `BadgeSurvol.svelte` (ancre `.wbadge` frère de
+`.widget`/`.module`, badge `.z-controls` contre-scalé, placement adaptatif
+haut/bas/droite/gauche/dedans, boutons passés en props) + une recette CSS
+globale `.wbadge`/`.z-controls`/`.z-btn` dans app.css — même pattern que
+CtxMenu + `.ctx-*`. `.cam-vis` est fusionné dans l'état générique `visible`.
+
+Différences assumées documentées : les modules affichent l'œil seul (pas de
+−/+ — pas de z-order module, z fixe) et gardent leurs poignées resize +
+outline au survol (seule affordance de resize, pas de notion de sélection).
+Zéro changement de modèle de données, zéro régression clic droit / édition /
+caméra / musique.

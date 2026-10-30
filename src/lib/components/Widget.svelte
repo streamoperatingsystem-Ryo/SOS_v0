@@ -29,6 +29,7 @@
   import { t, localeTag } from "../stores/langue";
   import WidgetSpeedrun from "./WidgetSpeedrun.svelte";
   import WidgetMusique from "./WidgetMusique.svelte";
+  import BadgeSurvol, { type BoutonSurvol } from "./BadgeSurvol.svelte";
 
   let { w, scale }: { w: Widget; scale: number } = $props();
 
@@ -490,25 +491,34 @@
     !$sceneStore.widgets.some((x) => x.type !== "camera" && x.z > w.z)
   );
 
-  // ===== Placement adaptatif des badges de survol (z-controls + œil cam) =====
-  // Le badge est contre-scalé (taille écran constante) → l'espace requis
-  // en unités canvas = px écran / scale. Ordre : haut → bas → droite →
-  // gauche → dedans (overlay interne — dernier recours, toujours visible).
-  // Le widget peut être à moitié sorti du canvas (clamp ±w/2) : chaque
-  // bord est testé. Réactif : move/resize/zoom recalculent la position.
-  let badgePos = $derived.by(() => {
-    const cw = $sceneStore.canvasW ?? 1920;
-    const ch = $sceneStore.canvasH ?? 1080;
-    const s = scale > 0 ? scale : 1;
-    const nb = isCamera ? 1 : 2; // œil seul (cam) vs −/+ (autres widgets)
-    const ligH = 36 / s;         // ligne : 1 bouton 30px + écart 6px
-    const colH = (nb * 36 + 6) / s; // colonne : N boutons + gaps + écart
-    if (w.y >= ligH) return "haut";
-    if (ch - w.y - w.hauteur >= ligH) return "bas";
-    if (cw - w.x - w.largeur >= ligH && ch - w.y >= colH) return "droite";
-    if (w.x >= ligH && ch - w.y >= colH) return "gauche";
-    return "dedans";
-  });
+  // ===== Contenu du badge de survol (BadgeSurvol — recette app.css) =====
+  // Caméra : œil seul (z=5000 figé — masquer/réafficher en DIFFUSION via
+  // setCameraCachee, épinglé `visible` quand masquée). Autres widgets :
+  // « − » tout en arrière-plan, « + » tout au premier plan
+  // (mettreWidgetPlan, scene.ts) — disabled aux extrémités de la bande
+  // non-caméra calculées ci-dessus.
+  let badgeBoutons: BoutonSurvol[] = $derived(
+    isCamera
+      ? [{
+          icone: cameraCachee ? "🚫" : "👁",
+          titre: $t(cameraCachee ? "widget.cameraAfficher" : "widget.cameraMasquer"),
+          onclick: () => void setCameraCachee(w.id, !cameraCachee),
+        }]
+      : [
+          {
+            icone: "−",
+            titre: $t("carteEdition.arrierePlan"),
+            disabled: estDerriere,
+            onclick: () => void mettreWidgetPlan(w.id, "arriere"),
+          },
+          {
+            icone: "+",
+            titre: $t("carteEdition.premierPlan"),
+            disabled: estDevant,
+            onclick: () => void mettreWidgetPlan(w.id, "avant"),
+          },
+        ]
+  );
 
   // Double-clic sur le widget → ouvre la modale titres, focus sur le champ
   // du bord le plus proche du clic (haut/bas/gauche/droite).
@@ -837,66 +847,23 @@
   {/if}
 </div>
 
-<!-- Badge de survol (−/+ de plan, œil caméra) : FRÈRE de .widget, pas un
-     descendant — enfant du widget il était avalé par son stacking context
-     (z-index:{w.z}) : un voisin à z supérieur ou un module HUD (8000) le
-     recouvrait. L'ancre épouse le rect du widget (z 9400 : au-dessus des
-     widgets ≤5000, des modules 8000 et des aides 9000 ; sous les poignées
-     sel-overlay 9500 qui gardent la priorité). pointer-events:none : la
-     zone ne capture rien sauf les boutons quand le badge est affiché.
-     pointerdown/dblclick stoppés : un clic ne doit ni désélectionner, ni
-     démarrer un drag, ni déposer un morph, ni ouvrir la modale titres.
-     data-widget-id : clic droit sur le badge → menu contextuel widget
-     (closest('[data-widget-id]'), Canvas.svelte). -->
-<div
-  class="wbadge"
-  data-widget-id={w.id}
-  style="left:{w.x}px; top:{w.y}px; width:{w.largeur}px; height:{w.hauteur}px;"
-  onpointerdown={(e) => e.stopPropagation()}
-  ondblclick={(e) => e.stopPropagation()}
-  role="presentation"
->
-  {#if isCamera}
-    <!-- Bouton œil caméra : masque/réaffiche la caméra en DIFFUSION (items
-         OBS désactivés + widget ignoré par diffusion.html — setCameraCachee,
-         scene.ts). Même recette .z-controls (badge contre-scalé, visible au
-         survol) ; affiché en permanence quand la caméra est masquée —
-         état lisible sans chercher le widget. -->
-    <div
-      class="z-controls cam-vis {badgePos}"
-      class:visible={cameraCachee}
-      style="transform: scale({scale > 0 ? 1 / scale : 1});"
-    >
-      <button
-        class="z-btn"
-        title={$t(cameraCachee ? "widget.cameraAfficher" : "widget.cameraMasquer")}
-        aria-label={$t(cameraCachee ? "widget.cameraAfficher" : "widget.cameraMasquer")}
-        onclick={() => void setCameraCachee(w.id, !cameraCachee)}
-      >{cameraCachee ? "🚫" : "👁"}</button>
-    </div>
-  {:else}
-    <!-- Boutons -/+ de plan : « − » tout en arrière-plan, « + » tout au
-         premier plan (mettreWidgetPlan, scene.ts). Contre-scale : taille
-         CONSTANTE à l'écran quel que soit le zoom du canvas. Disabled aux
-         extrémités de la bande non-caméra. -->
-    <div class="z-controls {badgePos}" style="transform: scale({scale > 0 ? 1 / scale : 1});">
-      <button
-        class="z-btn"
-        title={$t("carteEdition.arrierePlan")}
-        aria-label={$t("carteEdition.arrierePlan")}
-        disabled={estDerriere}
-        onclick={() => void mettreWidgetPlan(w.id, "arriere")}
-      >−</button>
-      <button
-        class="z-btn"
-        title={$t("carteEdition.premierPlan")}
-        aria-label={$t("carteEdition.premierPlan")}
-        disabled={estDevant}
-        onclick={() => void mettreWidgetPlan(w.id, "avant")}
-      >+</button>
-    </div>
-  {/if}
-</div>
+<!-- Badge de survol (−/+ de plan, œil caméra) : composant partagé
+     BadgeSurvol — ancre .wbadge + badge .z-controls + boutons .z-btn,
+     recette CSS globale dans app.css (unifié avec les modules HUD).
+     FRÈRE de .widget — ADJACENCE OBLIGATOIRE : le sélecteur
+     .widget:hover + .wbadge exige le badge juste après .widget dans le
+     DOM. widgetId → data-widget-id pour le clic droit (closest,
+     Canvas.svelte). visible épingle l'œil quand la caméra est masquée. -->
+<BadgeSurvol
+  x={w.x}
+  y={w.y}
+  largeur={w.largeur}
+  hauteur={w.hauteur}
+  {scale}
+  boutons={badgeBoutons}
+  visible={cameraCachee}
+  widgetId={w.id}
+/>
 
 <style>
   .widget {
@@ -1196,120 +1163,9 @@
   }
   .widget:hover .titre-zone { opacity: 1; }
 
-  /* ===== Badges de survol (−/+ de plan, œil caméra) ===== */
-  /* Ancre frère de .widget plaquée sur son rect : le badge n'est plus dans
-     le stacking context du widget → jamais recouvert par un voisin à z
-     supérieur ni par un module HUD (8000). z 9400 : au-dessus de tout le
-     canvas sauf sel-overlay (9500, poignées resize prioritaires).
-     pointer-events:none : la zone invisible ne mange aucun clic. */
-  .wbadge {
-    position: absolute;
-    pointer-events: none;
-    z-index: 9400;
-  }
-  /* Badge flottant contre-scalé inline (transform 1/scale) : tout ce qui
-     suit est en px ÉCRAN constants, pas en px canvas. Ambre
-     --message-user-action-color (sémantique « action », famille des
-     titre-zones) — voyant sans casser le thème. pointer-events:none au
-     repos ; masqué pendant le drag/resize. */
-  .z-controls {
-    position: absolute;
-    display: flex;
-    gap: 6px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
-    z-index: 30;
-  }
-  /* Placement adaptatif (badgePos) : chaque variante pose le badge sur le
-     bord du widget qui a de la place, avec le transform-origin du coin
-     collé (le contre-scale inline agrandit depuis ce coin — le badge
-     reste attaché au widget quelle que soit l'échelle) et l'écart du
-     côté concerné. droite/gauche = colonne verticale (1 bouton de large
-     suffit là où une ligne n'entrerait pas). */
-  .z-controls.haut {
-    bottom: 100%;
-    right: 0;
-    transform-origin: bottom right;
-    padding-bottom: 6px;
-  }
-  .z-controls.bas {
-    top: 100%;
-    right: 0;
-    transform-origin: top right;
-    padding-top: 6px;
-  }
-  .z-controls.droite {
-    left: 100%;
-    top: 0;
-    transform-origin: top left;
-    padding-left: 6px;
-    flex-direction: column;
-  }
-  .z-controls.gauche {
-    right: 100%;
-    top: 0;
-    transform-origin: top right;
-    padding-right: 6px;
-    flex-direction: column;
-  }
-  .z-controls.dedans {
-    top: 0;
-    right: 0;
-    transform-origin: top right;
-    padding: 4px;
-  }
-  /* Affichage : survol du widget (.widget:hover + frère adjacent .wbadge)
-     OU du badge lui-même — il déborde du rect du widget, le :hover de
-     .widget seul le masquerait en le quittant (.wbadge:hover tient via le
-     bouton/la zone, pointer-events:auto déjà posé). Masqué pendant le
-     drag : même spécificité que la règle :hover → ordre source décide. */
-  .widget:hover + .wbadge .z-controls,
-  .wbadge:hover .z-controls {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .widget.dragging + .wbadge .z-controls {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .z-btn {
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 19px;
-    font-weight: 700;
-    line-height: 1;
-    color: var(--message-user-action-color);
-    background: color-mix(in srgb, var(--message-user-action-color) 22%, var(--fond-panneau));
-    border: 2px solid var(--message-user-action-color);
-    border-radius: 50%;
-    box-shadow: 0 0 8px color-mix(in srgb, var(--message-user-action-color) 45%, transparent);
-    cursor: pointer;
-    transition:
-      background 0.12s ease,
-      color 0.12s ease,
-      box-shadow 0.12s ease;
-  }
-  .z-btn:hover:not(:disabled) {
-    color: var(--fond);
-    background: var(--message-user-action-color);
-    box-shadow: 0 0 14px color-mix(in srgb, var(--message-user-action-color) 70%, transparent);
-  }
-  .z-btn:disabled {
-    opacity: 0.35;
-    cursor: default;
-  }
-  /* Bouton œil caméra : affiché en permanence quand la caméra est masquée
-     (l'état doit rester lisible sans survol). .widget.dragging + .wbadge
-     .z-controls (spécificité supérieure) le masque quand même au drag. */
-  .cam-vis.visible {
-    opacity: 1;
-    pointer-events: auto;
-  }
+  /* Badges de survol (−/+ de plan, œil caméra) : recette GLOBALE
+     .wbadge/.z-controls/.z-btn dans app.css — partagée avec les modules
+     HUD via BadgeSurvol.svelte (ne jamais re-copier le bloc ici). */
   /* Placeholder caméra masquée : atténué — le flux n'est plus en diffusion
      (le widget reste éditable : position, forme, device). */
   .camera-actif.cachee {

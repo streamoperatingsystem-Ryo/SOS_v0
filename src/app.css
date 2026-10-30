@@ -1011,3 +1011,133 @@ select.ctx-select option:checked {
 select.ctx-select option::before {
   color: var(--accent-ui);
 }
+/* ===== Badge de survol des cartes canvas — recette .wbadge/.z-controls/.z-btn (2026-10-30) =====
+   Boutons ambre au survol des widgets (−/+ de plan, œil caméra) et des
+   modules HUD (œil masquer/réafficher). Rendue par le composant unique
+   BadgeSurvol.svelte — unifie les 2 copies dupliquées (.z-* de
+   Widget.svelte ↔ .mod-* de ModuleHud.svelte) : ne jamais re-copier ce
+   bloc dans un composant.
+
+   .wbadge = ancre absolue FRÈRE de .widget/.module, plaquée sur le rect
+   de la carte (left/top/w/h inline), pointer-events:none : la zone
+   invisible ne mange aucun clic — seuls les boutons affichés en
+   capturent. Hors du stacking context de la carte → jamais recouverte
+   par un voisin à z supérieur. z-index 9400 : au-dessus des widgets
+   (≤5000), des modules (8000) et des aides (9000) ; sous .sel-overlay
+   (9500, poignées resize prioritaires).
+
+   .z-controls = badge flottant contre-scalé en inline (transform
+   scale(1/scale)) → tout ce qui suit est en px ÉCRAN constants, pas en
+   px canvas. Variantes badgePos (.haut/.bas/.droite/.gauche/.dedans) :
+   transform-origin du coin collé (le contre-scale agrandit depuis ce
+   coin — le badge reste attaché à la carte à toute échelle) + écart du
+   côté concerné ; droite/gauche = colonne verticale (1 bouton de large
+   suffit là où une ligne n'entrerait pas) ; dedans = overlay interne,
+   dernier recours toujours visible.
+
+   Affichage : survol de la carte (.widget:hover/.module:hover + frère
+   adjacent .wbadge) OU du badge lui-même (.wbadge:hover — il déborde du
+   rect, le :hover de la carte seule le masquerait en le quittant ;
+   pointer-events:auto déjà posé). Masqué pendant l'action
+   (.widget.dragging/.module.actif + .wbadge — même spécificité que la
+   règle :hover → l'ordre source décide).
+   ⚠️ ADJACENCE OBLIGATOIRE : .wbadge doit suivre immédiatement
+   .widget/.module dans le DOM (sélecteur +) — voir BadgeSurvol.svelte.
+
+   .z-controls.visible = badge épinglé en permanence : un badge qui
+   signale un état actif reste lisible sans survol (caméra ou module
+   masqué — règle « 3 surfaces », docs/features/ctx-menus.md).
+   Boutons .z-btn : ronds ambre 30 px --message-user-action-color
+   (sémantique « action », famille des titre-zone) — voyant sans casser
+   le thème ; :disabled grise (extrémités de la bande z). */
+.wbadge {
+  position: absolute;
+  pointer-events: none;
+  z-index: 9400;
+}
+.z-controls {
+  position: absolute;
+  display: flex;
+  gap: 6px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease;
+  z-index: 30;
+}
+.z-controls.haut {
+  bottom: 100%;
+  right: 0;
+  transform-origin: bottom right;
+  padding-bottom: 6px;
+}
+.z-controls.bas {
+  top: 100%;
+  right: 0;
+  transform-origin: top right;
+  padding-top: 6px;
+}
+.z-controls.droite {
+  left: 100%;
+  top: 0;
+  transform-origin: top left;
+  padding-left: 6px;
+  flex-direction: column;
+}
+.z-controls.gauche {
+  right: 100%;
+  top: 0;
+  transform-origin: top right;
+  padding-right: 6px;
+  flex-direction: column;
+}
+.z-controls.dedans {
+  top: 0;
+  right: 0;
+  transform-origin: top right;
+  padding: 4px;
+}
+.widget:hover + .wbadge .z-controls,
+.module:hover + .wbadge .z-controls,
+.wbadge:hover .z-controls {
+  opacity: 1;
+  pointer-events: auto;
+}
+.widget.dragging + .wbadge .z-controls,
+.module.actif + .wbadge .z-controls {
+  opacity: 0;
+  pointer-events: none;
+}
+.z-controls.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+.z-btn {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 19px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--message-user-action-color);
+  background: color-mix(in srgb, var(--message-user-action-color) 22%, var(--fond-panneau));
+  border: 2px solid var(--message-user-action-color);
+  border-radius: 50%;
+  box-shadow: 0 0 8px color-mix(in srgb, var(--message-user-action-color) 45%, transparent);
+  cursor: pointer;
+  transition:
+    background 0.12s ease,
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+.z-btn:hover:not(:disabled) {
+  color: var(--fond);
+  background: var(--message-user-action-color);
+  box-shadow: 0 0 14px color-mix(in srgb, var(--message-user-action-color) 70%, transparent);
+}
+.z-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

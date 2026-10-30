@@ -41,9 +41,11 @@
   configuration exhaustive, découverte.
 - **B — Menu contextuel clic droit** (Canvas.svelte) : inventaire des
   VERBES / actions ponctuelles — miroir élargi de la carte.
-- **C — Badges ambre au survol** (`.wbadge` / `.z-controls`,
-  Widget.svelte) : ACCÉLÉRATEURS — 1 à 3 boutons max, actions
-  haute-fréquence liées à l'état visuel du widget (plan −/+, œil caméra).
+- **C — Badges ambre au survol** (`BadgeSurvol.svelte` + recette
+  `.wbadge` / `.z-controls` / `.z-btn` dans app.css — partagée widgets
+  ET modules HUD depuis 2026-10-30) : ACCÉLÉRATEURS — 1 à 3 boutons
+  max, actions haute-fréquence liées à l'état visuel de la carte
+  (plan −/+, œil caméra/module).
 
 Règles :
 
@@ -51,8 +53,9 @@ Règles :
    badge peut être inatteignable (widget recouvert par un module HUD
    z 8000, widget hors écran) : A/B restent le chemin garanti.
 2. Un badge qui signale un état actif reste **visible en permanence**
-   (pattern `.cam-vis.visible`, Widget.svelte).
-3. Le clic droit doit viser juste partout où le widget est représenté :
+   (prop `visible` de BadgeSurvol → `.z-controls.visible` ; ex
+   `.cam-vis.visible`).
+3. Le clic droit doit viser juste partout où la carte est représentée :
    `data-widget-id` est porté par `.widget`, `.wbadge` (badge de survol)
-   et `.sel-overlay` (poignées) — `closest("[data-widget-id]")` dans
-   `onCanvasContextMenu`.
+   et `.sel-overlay` (poignées) ; `data-module-id` par `.module` et
+   `.wbadge` — `closest("[data-*-id]")` dans `onCanvasContextMenu`.

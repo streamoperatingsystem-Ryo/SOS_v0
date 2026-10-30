@@ -34,6 +34,7 @@
   import { modulesModalOpen } from "../stores/ui";
   import { t, localeTag } from "../stores/langue";
   import { hexValide } from "../cadres/couleurs";
+  import BadgeSurvol, { type BoutonSurvol } from "./BadgeSurvol.svelte";
 
   let { id, m, scale }: { id: ModuleId; m: ModuleHud; scale: number } = $props();
 
@@ -180,24 +181,19 @@
   }
 
   // ===== État masqué + badge œil (masquer / réafficher) =====
-  // Même recette que l'œil caméra (Widget.svelte .wbadge/.z-controls) :
-  // ancre FRÈRE plaquée sur le rect (hors du stacking context de la carte,
-  // jamais recouverte par un voisin à z supérieur) + badge contre-scalé à
-  // taille écran constante, placement adaptatif haut → bas → droite →
-  // gauche → dedans (1 bouton, nb = 1 comme la caméra).
+  // Œil seul : les modules n'ont pas de z-order (z fixe 8000 dashboard /
+  // 9000 diffusion) → pas de −/+. Composant partagé BadgeSurvol (recette
+  // .wbadge/.z-controls/.z-btn dans app.css — unifié avec les widgets) ;
+  // `visible` épingle l'œil quand le module est masqué — réaffichage
+  // direct sans la modale (même sémantique que l'œil caméra).
   let masque = $derived(m.actif !== true);
-  let badgePos = $derived.by(() => {
-    const cw = $sceneStore.canvasW ?? 1920;
-    const ch = $sceneStore.canvasH ?? 1080;
-    const s = scale > 0 ? scale : 1;
-    const ligH = 36 / s;             // ligne : 1 bouton 30 px + écart 6 px
-    const colH = (36 + 6) / s;       // colonne : 1 bouton + écart
-    if (ly >= ligH) return "haut";
-    if (ch - ly - lh >= ligH) return "bas";
-    if (cw - lx - lw >= ligH && ch - ly >= colH) return "droite";
-    if (lx >= ligH && ch - ly >= colH) return "gauche";
-    return "dedans";
-  });
+  let badgeBoutons: BoutonSurvol[] = $derived([
+    {
+      icone: masque ? "🚫" : "👁",
+      titre: $t(masque ? "commun.afficher" : "commun.masquer"),
+      onclick: () => void setModuleActif(id, !masque),
+    },
+  ]);
 
   // ===== Style commun (miroir appliquerStyleModule — diffusion.html) =====
   let fsDefaut = $derived.by(() => {
@@ -337,33 +333,23 @@
   {/each}
 </div>
 
-<!-- Badge œil (masquer / réafficher) : FRÈRE de .module — même recette
-     que .wbadge des widgets (ancre plaquée sur le rect, pointer-events:
-     none, z 9400 ; œil visible au survol de la carte OU du badge, en
-     permanence quand le module est masqué — .mod-eye.visible). pointerdown/
-     dblclick stoppés : un clic ne démarre ni drag ni ouverture de modale.
-     data-module-id : clic droit sur le badge → menu contextuel module. -->
-<div
-  class="mod-badge"
-  data-module-id={id}
-  style="left:{lx}px; top:{ly}px; width:{lw}px; height:{lh}px;"
-  onpointerdown={(e) => e.stopPropagation()}
-  ondblclick={(e) => e.stopPropagation()}
-  role="presentation"
->
-  <div
-    class="mod-eye {badgePos}"
-    class:visible={masque}
-    style="transform: scale({scale > 0 ? 1 / scale : 1});"
-  >
-    <button
-      class="mod-eye-btn"
-      title={$t(masque ? "commun.afficher" : "commun.masquer")}
-      aria-label={$t(masque ? "commun.afficher" : "commun.masquer")}
-      onclick={() => void setModuleActif(id, !masque)}
-    >{masque ? "🚫" : "👁"}</button>
-  </div>
-</div>
+<!-- Badge œil (masquer / réafficher) : composant partagé BadgeSurvol —
+     ancre .wbadge + badge .z-controls + bouton .z-btn, recette CSS
+     globale dans app.css (unifié avec les widgets). FRÈRE de .module —
+     ADJACENCE OBLIGATOIRE : .module:hover + .wbadge exige le badge juste
+     après .module dans le DOM. moduleId → data-module-id pour le clic
+     droit (closest, Canvas.svelte). visible épingle l'œil quand le
+     module est masqué — réaffichage direct sans la modale. -->
+<BadgeSurvol
+  x={lx}
+  y={ly}
+  largeur={lw}
+  hauteur={lh}
+  {scale}
+  boutons={badgeBoutons}
+  visible={masque}
+  moduleId={id}
+/>
 
 <style>
   /* Miroir des règles .module.* de diffusion.html (aperçu fidèle). La couche
@@ -510,94 +496,9 @@
      mais reste éditable (position, options conservées ; œil permanent —
      même sémantique que .camera-actif.cachee, Widget.svelte). */
   .module.masque { opacity: 0.35; }
-  /* ===== Badge œil — même géométrie que .wbadge/.z-controls/.z-btn
-     (Widget.svelte), renommée : les styles scoped ne se partagent pas. */
-  .mod-badge {
-    position: absolute;
-    pointer-events: none;
-    z-index: 9400;
-  }
-  .mod-eye {
-    position: absolute;
-    display: flex;
-    gap: 6px;
-    opacity: 0;
-    pointer-events: none;
-    transition: opacity 0.15s ease;
-    z-index: 30;
-  }
-  .mod-eye.haut {
-    bottom: 100%;
-    right: 0;
-    transform-origin: bottom right;
-    padding-bottom: 6px;
-  }
-  .mod-eye.bas {
-    top: 100%;
-    right: 0;
-    transform-origin: top right;
-    padding-top: 6px;
-  }
-  .mod-eye.droite {
-    left: 100%;
-    top: 0;
-    transform-origin: top left;
-    padding-left: 6px;
-    flex-direction: column;
-  }
-  .mod-eye.gauche {
-    right: 100%;
-    top: 0;
-    transform-origin: top right;
-    padding-right: 6px;
-    flex-direction: column;
-  }
-  .mod-eye.dedans {
-    top: 0;
-    right: 0;
-    transform-origin: top right;
-    padding: 4px;
-  }
-  /* Affichage au survol de la carte OU du badge (il déborde du rect) ;
-     masqué pendant le drag/resize (.module.actif, spécificité supérieure
-     à .visible — même mécanique que .widget.dragging). */
-  .module:hover + .mod-badge .mod-eye,
-  .mod-badge:hover .mod-eye {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .module.actif + .mod-badge .mod-eye {
-    opacity: 0;
-    pointer-events: none;
-  }
-  .mod-eye.visible {
-    opacity: 1;
-    pointer-events: auto;
-  }
-  .mod-eye-btn {
-    width: 30px;
-    height: 30px;
-    padding: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 19px;
-    font-weight: 700;
-    line-height: 1;
-    color: var(--message-user-action-color);
-    background: color-mix(in srgb, var(--message-user-action-color) 22%, var(--fond-panneau));
-    border: 2px solid var(--message-user-action-color);
-    border-radius: 50%;
-    box-shadow: 0 0 8px color-mix(in srgb, var(--message-user-action-color) 45%, transparent);
-    cursor: pointer;
-    transition:
-      background 0.12s ease,
-      color 0.12s ease,
-      box-shadow 0.12s ease;
-  }
-  .mod-eye-btn:hover {
-    color: var(--fond);
-    background: var(--message-user-action-color);
-    box-shadow: 0 0 14px color-mix(in srgb, var(--message-user-action-color) 70%, transparent);
-  }
+  /* Badge œil (masquer / réafficher) : recette GLOBALE
+     .wbadge/.z-controls/.z-btn dans app.css — partagée avec les widgets
+     via BadgeSurvol.svelte (ne jamais re-copier le bloc ici). L'affichage
+     au survol (.module:hover + .wbadge) et le masquage pendant
+     l'action (.module.actif + .wbadge) sont dans la même recette. */
 </style>

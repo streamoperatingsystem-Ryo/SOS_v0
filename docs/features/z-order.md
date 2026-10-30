@@ -25,34 +25,42 @@
   ⚠️ Effet de bord voulu : un widget `trou` masque « fond + widgets
   dessous » → remonter/descendre un trou change ce qui est visible à
   travers lui.
-- **Badges de survol** (`Widget.svelte`, ancre `.wbadge` FRÈRE de
-  `.widget` + bloc `.z-controls`) : badge flottant contre-scalé
+- **Badges de survol** (composant **`BadgeSurvol.svelte`**, recette CSS
+  `.wbadge`/`.z-controls`/`.z-btn` dans `app.css` — mutualisée widgets +
+  modules HUD depuis 2026-10-30, avant : copie renommée `.mod-*` dans
+  ModuleHud.svelte) : ancre `.wbadge` FRÈRE de `.widget`/`.module` +
+  bloc `.z-controls`, badge flottant contre-scalé
   (`transform: scale(1/scale)` inline → taille écran constante quel que
   soit le zoom canvas), ronds ambre `--message-user-action-color`,
   dashboard uniquement, jamais en diffusion. **2026-10-26 : le badge est
   sorti du widget** — enfant de `.widget`, il était avalé par son
   stacking context (`z-index:{w.z}`) → recouvert par tout voisin à z
   supérieur et par les modules HUD (8000). `.wbadge` = ancre absolue
-  plaquée sur le rect du widget, `pointer-events:none` (la zone invisible
+  plaquée sur le rect de la carte, `pointer-events:none` (la zone invisible
   ne mange aucun clic), z-index **9400** : au-dessus des widgets ≤5000,
   des modules 8000 et des aides 9000 ; **sous** `.sel-overlay` 9500 (les
-  poignées resize gardent la priorité). Visibilité CSS pure :
-  `.widget:hover + .wbadge` + `.wbadge:hover` (le badge déborde du rect —
-  le survoler seul le garde affiché) ; masqué pendant `.dragging` ;
+  poignées resize gardent la priorité). Visibilité CSS pure (app.css) :
+  `.widget:hover + .wbadge` / `.module:hover + .wbadge` +
+  `.wbadge:hover` (le badge déborde du rect — le survoler seul le garde
+  affiché) ; masqué pendant `.dragging`/`.actif` ;
   `stopPropagation` pointerdown/dblclick (pas de drag/sélection/modale
-  titres/morph) ; `data-widget-id` pour le menu contextuel
-  (`closest("[data-widget-id]")`, Canvas.svelte — porté aussi par
-  `.sel-overlay`). **Placement adaptatif (`badgePos`)** : le bord du
-  badge est choisi selon la place disponible en unités canvas (px écran /
-  scale, nb de boutons, widget à moitié hors canvas) — haut → bas →
-  droite → gauche → dedans (overlay interne, dernier recours) — variantes
-  `.haut`/`.bas`/`.droite`/`.gauche`/`.dedans`, `transform-origin` du
-  coin collé + `flex-direction:column` sur les côtés.
-- **Boutons −/+** : 2 boutons sur tout widget non-caméra, `disabled` aux
-  extrémités de la bande non-caméra (un widget à égalité de z peut encore
-  bouger). Caméra : pas de −/+ (z=5000 figé) — même recette `.z-controls`
-  pour l'œil seul (`cam-vis`, cameraCachee — détails
-  `docs/features/camera-details.md`).
+  titres/morph) ; `data-widget-id`/`data-module-id` pour le menu
+  contextuel (`closest("[data-*-id]")`, Canvas.svelte — le premier est
+  porté aussi par `.sel-overlay`). ⚠️ Adjacence obligatoire : `.wbadge`
+  doit suivre immédiatement `.widget`/`.module` dans le DOM
+  (sélecteur `+`). **Placement adaptatif (`badgePos`, interne au
+  composant)** : le bord du badge est choisi selon la place disponible en
+  unités canvas (px écran / scale, nb de boutons, carte à moitié hors
+  canvas) — haut → bas → droite → gauche → dedans (overlay interne,
+  dernier recours) — variantes `.haut`/`.bas`/`.droite`/`.gauche`/`.dedans`,
+  `transform-origin` du coin collé + `flex-direction:column` sur les
+  côtés. État épinglé : prop `visible` → `.z-controls.visible`.
+- **Boutons −/+** : 2 boutons sur tout widget non-caméra (prop `boutons`
+  de BadgeSurvol), `disabled` aux extrémités de la bande non-caméra (un
+  widget à égalité de z peut encore bouger). Caméra : pas de −/+ (z=5000
+  figé) — œil seul épinglé via `visible` quand `cameraCachee` (détails
+  `docs/features/camera-details.md`). Modules : œil seul aussi — pas de
+  z-order module.
 - **Poignées de resize** (`SelectionOverlay.svelte`, monté dans
   `Canvas.svelte` après la boucle des widgets, prop `widgetSelectionne`)
   : overlay transparent plaqué sur le rect du widget sélectionné,

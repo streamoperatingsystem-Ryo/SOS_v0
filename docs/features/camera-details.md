@@ -207,10 +207,11 @@ chevauchant le rect caméra clippés via clipPath SVG evenodd (#sos-cam-clip).
   non-fatal (OBS offline → auto-guérison). `createCameraWidget`/
   `setCameraDevice`/`setCameraFondVert`/`syncObsJC` passent le flag.
 - **Dashboard** : l'œil existe sur les 3 surfaces d'édition (règle
-  « 3 surfaces », `docs/features/ctx-menus.md`) — badge `.z-controls.cam-vis`
-  dans `.wbadge` (ancre FRÈRE de `.widget`, z 9400 — jamais recouverte
+  « 3 surfaces », `docs/features/ctx-menus.md`) — badge `BadgeSurvol`
+  (ancre `.wbadge` FRÈRE de `.widget`, z 9400 — jamais recouverte
   par un voisin ou un module HUD ; visible au survol, PERMANENTE quand
-  masquée — état lisible), entrée « Masquer/Réafficher la caméra » du
+  masquée via prop `visible` → `.z-controls.visible` — état lisible),
+  entrée « Masquer/Réafficher la caméra » du
   menu contextuel widget (Canvas.svelte, `wgType === "camera"`) et
   toggle « Caméra en diffusion » de la carte caméra (CarteEdition,
   section Visibilité). Placeholder `.camera-actif.cachee` atténué. i18n :
@@ -225,7 +226,7 @@ chevauchant le rect caméra clippés via clipPath SVG evenodd (#sos-cam-clip).
 - `src/lib/tauri.ts` — wrappers `cameraSync` (+ `fondVert`/`visible`) / `cameraHide` / `cameraMaskSync` / `cameraFondVertSync` (+ `visible`) ; type Widget : champs `cameraForme`/`cameraBord`/`cameraFondVert`/`cameraCachee`.
 - `src/lib/stores/scene.ts` — `createCameraWidget` (obsSource="SOS-Caméra" + cameraSync non-fatal), `setCameraDevice` (cameraSync avec device + syncCameraMask forcé), `setCameraForme`/`setCameraBord`/`setCameraFondVert`/`setCameraCachee` (toggle œil), `commitScene` (items incluent la caméra, fit "remplir" + syncCameraMask), `deleteWidget` (cameraHide avant remove), `pointsMasqueCamera` (branchement `cameraForme` prioritaire)/`syncCameraMask`/`syncCapturesOBS`.
 - `src-tauri/resources/diffusion.html` — **PAS de getUserMedia** : le widget caméra est rendu comme un trou (élément transparent + `applyCadreWidget`), trou dans `peindreFond`/`peindreTrous`. Masque 2026-09-29 : **aucune modif** (découpe au niveau de la source OBS). Forme dédiée 2026-10-22 : `pathCercle`/`pathCercleScene` (miroir vanilla de points.ts), branchement `cameraForme` dans `peindreTrous` (cercle inscrit → trou non rect) + `#sos-cam-clip` (soustraction cercle) + `appliquerFormeCamera`/`svgAnneauCamera` (clip-path + anneau, en tête d'`applyCadreWidget`). Caméra masquée 2026-10-26 : gates `cameraCachee` (trou `peindreFond`, div `renderScene`, `camWdg` du clip).
-- `src/lib/components/Widget.svelte` — aperçu dashboard : `cameraFormeActive` → clip-path cercle sur `.widget-3d` + anneau SVG (miroir de `svgAnneauCamera`), bloc CadreSVG exclu ; bouton œil `.z-controls.cam-vis` dans `.wbadge` (frère de `.widget`) + placeholder `.camera-actif.cachee` atténué.
+- `src/lib/components/Widget.svelte` — aperçu dashboard : `cameraFormeActive` → clip-path cercle sur `.widget-3d` + anneau SVG (miroir de `svgAnneauCamera`), bloc CadreSVG exclu ; bouton œil via `BadgeSurvol` (`visible={cameraCachee}`, frère de `.widget`) + placeholder `.camera-actif.cachee` atténué.
 - `src/lib/stores/justChatting.ts` — `syncObsJC` : masque aux dims JC avec le même branchement `cameraForme` ; `sceneDerivee` copie les champs (spread) ; `cameraCachee` propagé à `cameraSync` (visible).
 - `src/lib/components/Canvas.svelte` — menu contextuel widget : entrée œil « Masquer/Réafficher la caméra » (`wgType === "camera"`, `setCameraCachee`) ; hit-test `closest("[data-widget-id]")` (widget + `.wbadge` + `.sel-overlay`).
 - `src/lib/components/CarteEdition.svelte` — carte caméra : section « Forme » (Cadre de la scène / Cercle / Carré) + toggle « Bordure » + section « Visibilité » (toggle `cameraCachee`) + section « Fond virtuel » (toggle fond vert + hint plugin + erreur).

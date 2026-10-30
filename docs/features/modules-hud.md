@@ -39,6 +39,17 @@
   `modulesModalOpen.set(id)`. Aperçu statique réel (date/heure du
   jour, première piste de la file, lignes objectifs avec valeurs
   live `$valeursGoals`/`$goalsTwitch` + suggestion `goalSuggestion`).
+  **Badge œil au survol** (`BadgeSurvol.svelte` — recette
+  `.wbadge`/`.z-controls`/`.z-btn` partagée avec les widgets dans
+  app.css, 2026-10-30) : masquer / réafficher via `setModuleActif`,
+  épinglé (prop `visible`) quand le module est masqué — même
+  sémantique que l'œil caméra ; masqué pendant drag/resize
+  (`.module.actif`). **Différences assumées vs widgets** : œil SEUL
+  (pas de −/+ — pas de z-order module, z fixe) et poignées resize +
+  outline `--mod-accent` visibles au survol (pas de notion de
+  sélection pour les modules — c'est leur seule affordance de
+  resize ; les widgets n'affichent les poignées que sélectionnés,
+  via `SelectionOverlay`).
 - **`ModulesModal.svelte`** : master-detail 3 modules (badge
   ON/OFF). Champs X/Y/L/H = complément précis du drag/resize.
   Bloc objectifs : éditeur de lignes libres (label, plateforme,
@@ -71,7 +82,8 @@
 | `src-tauri/src/scenes.rs` | `scene_vierge` compte les modules + test |
 | `src/lib/tauri.ts` | `ModuleHud`/`LigneObjectif`/`ModuleId`/`MODULE_IDS`/`ScenesModules` + `Scene.modules` |
 | `src/lib/stores/scene.ts` | `moduleDefaut`/`moduleCourant`/`setModule` + setters lignes |
-| `src/lib/components/ModuleHud.svelte` | Carte drag/resize + aperçu statique |
+| `src/lib/components/ModuleHud.svelte` | Carte drag/resize + aperçu statique + badge œil (`BadgeSurvol`) |
+| `src/lib/components/BadgeSurvol.svelte` | Badge de survol partagé widgets/modules (ancre `.wbadge` + `.z-controls`) |
 | `src/lib/components/ModulesModal.svelte` | Master-detail config (modale Modules) |
 | `src/lib/components/Canvas.svelte` | Couche modules après les widgets |
 | `src/lib/components/Toolbar.svelte` | Lanceur « Modules » (lanceur direct) |
