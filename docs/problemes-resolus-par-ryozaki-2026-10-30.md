@@ -32,3 +32,8 @@ Correction de commentaires obsolètes (nombre de modules, liste des types avec m
 
 Menu contextuel dédié pour les modules (Configurer / Masquer).
 Le clic droit sur un module n'ouvre plus le menu du fond.
+
+## Modification n°5 — Bouton œil modules
+
+Ajout d'un bouton œil au survol des modules sur le dashboard pour masquer / réafficher sans passer par la modale.
+La configuration est conservée.

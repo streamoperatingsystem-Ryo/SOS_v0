@@ -799,10 +799,12 @@
 
       <!-- Modules HUD (scene.modules — horloge / musique / objectifs) :
            couche séparée des widgets, au-dessus d'eux (z 9000 en diffusion),
-           drag/resize propres, config via la modale Modules. -->
+           drag/resize propres, config via la modale Modules. Carte rendue
+           dès que le module existe dans la scène (m) : actif:false =
+           fantôme atténué + œil permanent (réaffichage sans modale). -->
       {#each MODULE_IDS as id (id)}
         {@const m = $sceneStore.modules?.[id]}
-        {#if m?.actif && id !== "spots"}
+        {#if m && id !== "spots"}
           <ModuleHud {id} {m} {scale} />
         {/if}
       {/each}

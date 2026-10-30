@@ -61,7 +61,8 @@
     "retirerMedia": "Retirer le média",
     "retirerSon": "Retirer le son",
     "configurer": "Configurer…",
-    "masquer": "Masquer"
+    "masquer": "Masquer",
+    "afficher": "Afficher"
   },
   "presets": {
     "creationRefusee": "Création depuis preset refusée : {erreur}",

@@ -9,6 +9,8 @@
   // fidèle ; les valeurs live viennent des stores existants (valeursGoals,
   // goalsTwitch, musiqueEtat) et d'une horloge locale 1 s.
   // Clic sans déplacement → ouvre la modale Modules sur ce module.
+  // Masqué (m.actif false) : carte fantôme atténuée + bouton œil affiché
+  // en permanence — réaffichage direct sans la modale (comme l'œil caméra).
   import { onMount } from "svelte";
   import { get } from "svelte/store";
   import {
@@ -21,6 +23,7 @@
   import {
     sceneStore,
     setModule,
+    setModuleActif,
     buildSnapTargetsModule,
     computeSnap,
     type SnapTarget,
@@ -176,6 +179,26 @@
     });
   }
 
+  // ===== État masqué + badge œil (masquer / réafficher) =====
+  // Même recette que l'œil caméra (Widget.svelte .wbadge/.z-controls) :
+  // ancre FRÈRE plaquée sur le rect (hors du stacking context de la carte,
+  // jamais recouverte par un voisin à z supérieur) + badge contre-scalé à
+  // taille écran constante, placement adaptatif haut → bas → droite →
+  // gauche → dedans (1 bouton, nb = 1 comme la caméra).
+  let masque = $derived(m.actif !== true);
+  let badgePos = $derived.by(() => {
+    const cw = $sceneStore.canvasW ?? 1920;
+    const ch = $sceneStore.canvasH ?? 1080;
+    const s = scale > 0 ? scale : 1;
+    const ligH = 36 / s;             // ligne : 1 bouton 30 px + écart 6 px
+    const colH = (36 + 6) / s;       // colonne : 1 bouton + écart
+    if (ly >= ligH) return "haut";
+    if (ch - ly - lh >= ligH) return "bas";
+    if (cw - lx - lw >= ligH && ch - ly >= colH) return "droite";
+    if (lx >= ligH && ch - ly >= colH) return "gauche";
+    return "dedans";
+  });
+
   // ===== Style commun (miroir appliquerStyleModule — diffusion.html) =====
   let fsDefaut = $derived.by(() => {
     if (id === "horloge") return lh * 0.42;
@@ -247,6 +270,7 @@
   class="module {id}"
   data-module-id={id}
   class:actif={dragging || resizing}
+  class:masque={masque}
   style="left:{lx}px; top:{ly}px; width:{lw}px; height:{lh}px; --mod-fs:{fs}px; --mod-font:{font}; --mod-opacite:{opacite}; --mod-accent:{accent};"
   onpointerdown={onDown}
   onpointermove={onMove}
@@ -311,6 +335,34 @@
   {#each ["nw", "n", "ne", "e", "se", "s", "sw", "w"] as h (h)}
     <div class="poignee {h}" onpointerdown={(e) => onHandleDown(e, h)} role="presentation"></div>
   {/each}
+</div>
+
+<!-- Badge œil (masquer / réafficher) : FRÈRE de .module — même recette
+     que .wbadge des widgets (ancre plaquée sur le rect, pointer-events:
+     none, z 9400 ; œil visible au survol de la carte OU du badge, en
+     permanence quand le module est masqué — .mod-eye.visible). pointerdown/
+     dblclick stoppés : un clic ne démarre ni drag ni ouverture de modale.
+     data-module-id : clic droit sur le badge → menu contextuel module. -->
+<div
+  class="mod-badge"
+  data-module-id={id}
+  style="left:{lx}px; top:{ly}px; width:{lw}px; height:{lh}px;"
+  onpointerdown={(e) => e.stopPropagation()}
+  ondblclick={(e) => e.stopPropagation()}
+  role="presentation"
+>
+  <div
+    class="mod-eye {badgePos}"
+    class:visible={masque}
+    style="transform: scale({scale > 0 ? 1 / scale : 1});"
+  >
+    <button
+      class="mod-eye-btn"
+      title={$t(masque ? "commun.afficher" : "commun.masquer")}
+      aria-label={$t(masque ? "commun.afficher" : "commun.masquer")}
+      onclick={() => void setModuleActif(id, !masque)}
+    >{masque ? "🚫" : "👁"}</button>
+  </div>
 </div>
 
 <style>
@@ -454,4 +506,98 @@
   .poignee.s { left: calc(50% - 5px); bottom: -5px; cursor: ns-resize; }
   .poignee.sw { left: -5px; bottom: -5px; cursor: nesw-resize; }
   .poignee.w { left: -5px; top: calc(50% - 5px); cursor: ew-resize; }
+  /* Carte masquée : fantôme atténué — le module n'est plus en diffusion
+     mais reste éditable (position, options conservées ; œil permanent —
+     même sémantique que .camera-actif.cachee, Widget.svelte). */
+  .module.masque { opacity: 0.35; }
+  /* ===== Badge œil — même géométrie que .wbadge/.z-controls/.z-btn
+     (Widget.svelte), renommée : les styles scoped ne se partagent pas. */
+  .mod-badge {
+    position: absolute;
+    pointer-events: none;
+    z-index: 9400;
+  }
+  .mod-eye {
+    position: absolute;
+    display: flex;
+    gap: 6px;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.15s ease;
+    z-index: 30;
+  }
+  .mod-eye.haut {
+    bottom: 100%;
+    right: 0;
+    transform-origin: bottom right;
+    padding-bottom: 6px;
+  }
+  .mod-eye.bas {
+    top: 100%;
+    right: 0;
+    transform-origin: top right;
+    padding-top: 6px;
+  }
+  .mod-eye.droite {
+    left: 100%;
+    top: 0;
+    transform-origin: top left;
+    padding-left: 6px;
+    flex-direction: column;
+  }
+  .mod-eye.gauche {
+    right: 100%;
+    top: 0;
+    transform-origin: top right;
+    padding-right: 6px;
+    flex-direction: column;
+  }
+  .mod-eye.dedans {
+    top: 0;
+    right: 0;
+    transform-origin: top right;
+    padding: 4px;
+  }
+  /* Affichage au survol de la carte OU du badge (il déborde du rect) ;
+     masqué pendant le drag/resize (.module.actif, spécificité supérieure
+     à .visible — même mécanique que .widget.dragging). */
+  .module:hover + .mod-badge .mod-eye,
+  .mod-badge:hover .mod-eye {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .module.actif + .mod-badge .mod-eye {
+    opacity: 0;
+    pointer-events: none;
+  }
+  .mod-eye.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+  .mod-eye-btn {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 19px;
+    font-weight: 700;
+    line-height: 1;
+    color: var(--message-user-action-color);
+    background: color-mix(in srgb, var(--message-user-action-color) 22%, var(--fond-panneau));
+    border: 2px solid var(--message-user-action-color);
+    border-radius: 50%;
+    box-shadow: 0 0 8px color-mix(in srgb, var(--message-user-action-color) 45%, transparent);
+    cursor: pointer;
+    transition:
+      background 0.12s ease,
+      color 0.12s ease,
+      box-shadow 0.12s ease;
+  }
+  .mod-eye-btn:hover {
+    color: var(--fond);
+    background: var(--message-user-action-color);
+    box-shadow: 0 0 14px color-mix(in srgb, var(--message-user-action-color) 70%, transparent);
+  }
 </style>
