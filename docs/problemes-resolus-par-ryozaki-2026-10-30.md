@@ -27,3 +27,8 @@ angles haut-gauche et bas-gauche. Technique : pseudo-élément `::after`
 
 Renommage « Créer un widget » → « Créer un widget média » pour lever l'ambiguïté.
 Correction de commentaires obsolètes (nombre de modules, liste des types avec média de fond).
+
+## Modification n°4 — Phase 1 widgets/modules
+
+Menu contextuel dédié pour les modules (Configurer / Masquer).
+Le clic droit sur un module n'ouvre plus le menu du fond.

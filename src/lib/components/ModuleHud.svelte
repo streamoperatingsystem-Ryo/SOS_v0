@@ -245,6 +245,7 @@
 <div
   bind:this={outerEl}
   class="module {id}"
+  data-module-id={id}
   class:actif={dragging || resizing}
   style="left:{lx}px; top:{ly}px; width:{lw}px; height:{lh}px; --mod-fs:{fs}px; --mod-font:{font}; --mod-opacite:{opacite}; --mod-accent:{accent};"
   onpointerdown={onDown}

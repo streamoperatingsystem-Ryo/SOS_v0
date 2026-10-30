@@ -9,10 +9,11 @@
     resetMediaEffets, resetMorphsWidget, importMedia, clearWidgetMedia,
     setWidgetTrou, deleteObsTrouSource, transformerEnFlottant,
     transformerEnWidget, mettreWidgetPlan, widgetPleinEcran, setCameraCachee,
+    setModuleActif,
   } from "../stores/scene";
   import {
     setCarteEdition, titreFondModalOpen, titreModalOpen, confirmDeleteWidget,
-    cadreModalOpen,
+    cadreModalOpen, modulesModalOpen,
   } from "../stores/ui";
   import { registerVideo, unregisterVideo } from "../stores/video";
   import { connexions, type Connexions } from "../stores/chat";
@@ -21,7 +22,7 @@
   import WidgetComp from "./Widget.svelte";
   import SelectionOverlay from "./SelectionOverlay.svelte";
   import ModuleHud from "./ModuleHud.svelte";
-  import { MODULE_IDS } from "../tauri";
+  import { MODULE_IDS, type ModuleId } from "../tauri";
   import AlignmentGuides from "./AlignmentGuides.svelte";
   import CadreSVG from "./CadreSVG.svelte";
   import ObsSourceDialog from "./ObsSourceDialog.svelte";
@@ -322,16 +323,18 @@
   // ===== Menus contextuels (clic droit sur le canvas) =====
   // Wrapper CtxMenu (recette .ctx-menu de app.css) : fixed à la position
   // souris, fermeture clic extérieur + Escape et clamping viewport gérés
-  // par le composant. Deux menus mutuellement exclusifs pilotés par
-  // ctxWidgetId : null = menu FOND, sinon menu du widget identifié
-  // (data-widget-id posé sur .widget — contextmenu bouillonne jusqu'à
-  // .canvas). confirmDeleteFond = confirmation inline Oui/Non avant
+  // par le composant. Trois menus mutuellement exclusifs : ctxModuleId
+  // posé = menu MODULE (data-module-id sur les cartes ModuleHud), sinon
+  // ctxWidgetId posé = menu WIDGET (data-widget-id sur .widget/.wbadge/
+  // .sel-overlay), sinon menu FOND — contextmenu bouillonne jusqu'à
+  // .canvas. confirmDeleteFond = confirmation inline Oui/Non avant
   // clearFond.
   let fondMenuOpen = $state(false);
   let fondMenuX = $state(0);
   let fondMenuY = $state(0);
   let confirmDeleteFond = $state(false);
   let ctxWidgetId = $state<string | null>(null);
+  let ctxModuleId = $state<ModuleId | null>(null);
   // Modale capture app/jeu en fond (ObsSourceDialog mode "fond", montée ici
   // comme dans CarteEdition — la carte possède son propre état local).
   let obsFondDialogOpen = $state(false);
@@ -340,11 +343,18 @@
 
   function onCanvasContextMenu(e: MouseEvent) {
     e.preventDefault();
+    // Clic droit sur un module HUD (data-module-id sur la carte — les
+    // poignées en sont enfants) : menu MODULE dédié, le menu du fond ne
+    // s'ouvre pas sur un module. Testé en premier : modules et widgets
+    // sont des couches sœurs, la cible ne porte jamais les deux attributs.
+    const mEl = (e.target as HTMLElement).closest("[data-module-id]");
+    const mId = mEl instanceof HTMLElement ? mEl.dataset.moduleId : undefined;
+    ctxModuleId = MODULE_IDS.includes(mId as ModuleId) ? (mId as ModuleId) : null;
     // Clic droit sur un widget (ou ses annexes : badge de survol .wbadge,
     // poignées .sel-overlay — toutes portent data-widget-id) : menu
     // WIDGET — le widget est sélectionné pour que les actions qui visent
     // selectedId (importMedia, carte, touche Suppr) tombent juste.
-    const wEl = (e.target as HTMLElement).closest("[data-widget-id]");
+    const wEl = ctxModuleId ? null : (e.target as HTMLElement).closest("[data-widget-id]");
     const wId = wEl instanceof HTMLElement ? (wEl.dataset.widgetId ?? null) : null;
     if (wEl && !wId) return;
     if (wId) selectWidget(wId);
@@ -359,6 +369,7 @@
     fondMenuOpen = false;
     confirmDeleteFond = false;
     ctxWidgetId = null;
+    ctxModuleId = null;
   }
 
   // Toggles : gardent le menu ouvert (essai rapide des réglages).
@@ -438,6 +449,14 @@
   // Supprimer = la modale ConfirmDeleteWidgetModal existante (vraie
   // confirmation, pas le Oui/Non inline — pattern carte/App.touche Suppr).
   function ctxWgSupprimer() { fermerFondMenu(); confirmDeleteWidget.set(true); }
+
+  // ===== Menu contextuel MODULE (clic droit sur une carte ModuleHud) =====
+  // Deux verbes : Configurer… ouvre la modale Modules sur ce module (même
+  // cible que le clic gauche) ; Masquer = actif:false via setModuleActif —
+  // position et options conservées, le module se réaffiche depuis la
+  // modale. Actions → ferment le menu (pattern établi).
+  function ctxModuleConfigurer(id: ModuleId) { fermerFondMenu(); modulesModalOpen.set(id); }
+  async function ctxModuleMasquer(id: ModuleId) { fermerFondMenu(); await setModuleActif(id, false); }
 
   // ===== Morphing du fond (rendu canvas WebGL si bgMorphs) =====
   // Même pattern que les widgets : média → offscreen (fit + transforms fond) →
@@ -866,9 +885,9 @@
   {/if}
 </div>
 
-{#if fondMenuOpen && ctxWidgetId === null}
+{#if fondMenuOpen && ctxWidgetId === null && ctxModuleId === null}
   <!-- Menu contextuel du fond de l'application (clic droit canvas hors
-       widget). Contenu miroir de la carte fond (CarteEdition, cible "fond") :
+       widget et hors module). Contenu miroir de la carte fond (CarteEdition, cible "fond") :
        3 branches bgObsSource / !hasFond / média. "Morphing" hardcodé comme
        dans CarteEdition. Les toggles (fit/miroir/lecture/morphing) gardent
        le menu ouvert ; les actions le ferment. -->
@@ -1006,6 +1025,18 @@
     {/if}
     <div class="ctx-sep" role="separator"></div>
     <button class="ctx-item danger" role="menuitem" onclick={ctxWgSupprimer}>{$t("carteEdition.supprimerWidget")}</button>
+  </CtxMenu>
+{/if}
+
+{#if fondMenuOpen && ctxModuleId}
+  <!-- Menu contextuel d'un module HUD (clic droit sur sa carte —
+       data-module-id). Configurer… = modale Modules sur ce module (même
+       cible que le clic gauche) ; Masquer = actif:false, le module reste
+       dans la scène et se réaffiche depuis la modale. -->
+  <CtxMenu x={fondMenuX} y={fondMenuY} onclose={fermerFondMenu}>
+    <span class="ctx-label">{$t("modules.nom." + ctxModuleId)}</span>
+    <button class="ctx-item" role="menuitem" onclick={() => ctxModuleConfigurer(ctxModuleId!)}>{$t("commun.configurer")}</button>
+    <button class="ctx-item" role="menuitem" onclick={() => ctxModuleMasquer(ctxModuleId!)}>{$t("commun.masquer")}</button>
   </CtxMenu>
 {/if}
 

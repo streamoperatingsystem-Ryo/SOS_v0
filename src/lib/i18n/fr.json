@@ -59,7 +59,9 @@
     "hauteur": "Hauteur",
     "importerSon": "Importer un son",
     "retirerMedia": "Retirer le média",
-    "retirerSon": "Retirer le son"
+    "retirerSon": "Retirer le son",
+    "configurer": "Configurer…",
+    "masquer": "Masquer"
   },
   "presets": {
     "creationRefusee": "Création depuis preset refusée : {erreur}",

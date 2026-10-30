@@ -59,6 +59,8 @@
     "importerSon": "効果音をインポート",
     "retirerMedia": "メディアを取り外す",
     "retirerSon": "効果音を取り外す",
+    "configurer": "設定…",
+    "masquer": "非表示にする",
     "hauteur": "高さ"
   },
   "presets": {

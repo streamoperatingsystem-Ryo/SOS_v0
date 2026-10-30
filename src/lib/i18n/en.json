@@ -59,6 +59,8 @@
     "importerSon": "Import a sound",
     "retirerMedia": "Remove the media",
     "retirerSon": "Remove the sound",
+    "configurer": "Configure…",
+    "masquer": "Hide",
     "hauteur": "Height"
   },
   "presets": {
