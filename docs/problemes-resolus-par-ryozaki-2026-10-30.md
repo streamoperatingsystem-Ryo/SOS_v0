@@ -22,3 +22,8 @@ Le liseré pointillé autour de la fenêtre surchargeait le panneau latéral
 gauche. On a retiré le milieu du flanc gauche tout en conservant les
 angles haut-gauche et bas-gauche. Technique : pseudo-élément `::after`
 + `clip-path`.
+
+## Modification n°3 — Phase 0 widgets/modules
+
+Renommage « Créer un widget » → « Créer un widget média » pour lever l'ambiguïté.
+Correction de commentaires obsolètes (nombre de modules, liste des types avec média de fond).

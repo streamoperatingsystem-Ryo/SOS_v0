@@ -1016,7 +1016,7 @@ pub struct SceneResume {
     /// Types de widgets dédupliqués (ordre alphabétique).
     pub types: Vec<String>,
     pub nbTrous: usize,
-    /// Modules HUD configurés : "horloge" | "musique" | "objectifs" | "equaliseur".
+    /// Modules HUD configurés : "horloge" | "musique" | "objectifs" | "equaliseur" | "spots".
     pub modules: Vec<String>,
     /// Un fond est affiché : média, carrousel d'images ou source OBS liée.
     pub aFond: bool,

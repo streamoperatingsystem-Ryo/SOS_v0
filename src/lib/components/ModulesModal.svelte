@@ -1,7 +1,7 @@
 <script lang="ts">
   // Modale « Modules » — configuration des modules HUD de la scène
-  // (horloge / musique en cours / objectifs du stream). Master-detail
-  // (liste 3 modules à gauche, options à droite) comme les onglets de la
+  // (horloge / musique en cours / objectifs du stream / équaliseur / spots).
+  // Master-detail (liste 5 modules à gauche, options à droite) comme les onglets de la
   // modale Interactions. La position/taille se règle AUSSI au drag/resize
   // directement sur le canvas (ModuleHud.svelte) — les champs X/Y/L/H de
   // ce panneau sont le complément précis.
@@ -115,7 +115,7 @@
 
 <Modal title={$t("modules.titre")} onClose={onFermer} maxWidth="54rem" crochet="var(--crochet-bleu)">
   <div class="mod-layout">
-    <!-- Colonne gauche : les 4 modules (icône + nom + badge ON/OFF). -->
+    <!-- Colonne gauche : les 5 modules (icône + nom + badge ON/OFF). -->
     <div class="mod-liste">
       {#each MODULE_IDS as id (id)}
         {@const mm = $sceneStore.modules?.[id]}

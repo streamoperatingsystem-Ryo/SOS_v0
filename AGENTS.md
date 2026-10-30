@@ -395,11 +395,12 @@ propres, l'anneau éventuel (`cameraBord`) dérive du cadre de scène.
    négatives ou > largeur/hauteur). Leçon MGStyle (2026-09-15) : un crosshair
    au centre du widget = cible par-dessus la vidéo → contresens fonctionnel.
 
-## Média de fond sur les widgets à contenu (chat / input-viewer / speedrun) — 2026-09-15
+## Média de fond sur les widgets à contenu (chat / input-viewer / speedrun / goal / musique) — 2026-09-15
 
-> Les widgets `chat`, `input-viewer` et `speedrun` acceptent désormais un média
-> (image/vidéo) en **arrière-plan**, avec le contenu (messages chat, keycaps,
-> timer+splits) affiché **par-dessus** — comme un widget média, avec les mêmes
+> Les widgets à contenu — `chat`, `input-viewer`, `speedrun`, `goal` et
+> `musique` — acceptent un média (image/vidéo) en **arrière-plan**, avec le
+> contenu (messages chat, keycaps, timer+splits, compteur d'objectif,
+> mini-lecteur) affiché **par-dessus** — comme un widget média, avec les mêmes
 > contrôles (Affichage/fit, zoom, rotation, offsets, PlayerBar vidéo).
 > **Zéro changement Rust** : les champs `media`/`kind`/`mediaFit`/`mediaZoom`/
 > `mediaRot`/`mediaOffsetX/Y`/`mediaPaused`/`mediaTime` existent déjà sur TOUS
@@ -432,10 +433,10 @@ propres, l'anneau éventuel (`cameraBord`) dérive du cadre de scène.
 
 | Fichier | Rôle |
 |---|---|
-| `src-tauri/resources/diffusion.html` | `syncMediaFond(entry, w)` : (re)crée le média de fond si `mediaKey` change ou l'entry n'en a plus, `insertBefore(firstChild)`, applique `applyMediaStyle` + `applyMediaState` à chaque snapshot ; appelé dans UPDATE+CREATE des branches chat / input-viewer / speedrun |
+| `src-tauri/resources/diffusion.html` | `syncMediaFond(entry, w)` : (re)crée le média de fond si `mediaKey` change ou l'entry n'en a plus, `insertBefore(firstChild)`, applique `applyMediaStyle` + `applyMediaState` à chaque snapshot ; appelé dans UPDATE+CREATE des branches chat / input-viewer / speedrun / goal / musique |
 | `src/lib/stores/scene.ts` | `clearWidgetMedia(id)` : retire `media`/`kind` + commit (pattern `clearFond` — le fichier dans medias/ n'est PAS supprimé) |
-| `src/lib/components/Widget.svelte` | Snippet `{#snippet mediaFond()}` rendu dans les branches isChat/isInputViewer/isSpeedrun (img figée ou vidéo vignette via `videoEl` — les $effect src/registerVideo/mediaTime existants pilotent l'élément) |
-| `src/lib/components/Toolbar.svelte` | Snippet `{#snippet controlesMedia()}` (Affichage + zoom/rot/offsets + Reset + Retirer le média + PlayerBar) rendu dans les branches chat / input-viewer / média (le speedrun passe par la branche média) |
+| `src/lib/components/Widget.svelte` | Snippet `{#snippet mediaFond()}` rendu dans les branches isChat/isInputViewer/isSpeedrun/isGoal/isMusique (img figée ou vidéo vignette via `videoEl` — les $effect src/registerVideo/mediaTime existants pilotent l'élément) |
+| `src/lib/components/CarteEdition.svelte` | Contrôles média dans les onglets de la carte widget : Contenu (« Importer/Remplacer/Supprimer un média » — offert à TOUS les widgets non-caméra, le média devient alors un fond sous le contenu), Transformation/Effets (fit, zoom, rotation, offsets, filtres) + PlayerBar vidéo |
 
 ### Pièges
 
@@ -447,16 +448,18 @@ propres, l'anneau éventuel (`cameraBord`) dérive du cadre de scène.
    resetter `ivEntry.mediaEl = null; ivEntry.mediaKey = ""` juste après
    (comme pour l'overlay cadre SVG), puis `syncMediaFond` recrée.
 3. **Le bouton Morphing est limité aux widgets type "media"** (`isMediaWidget`
-   dans Toolbar) — les morphs ne sont PAS rendus sur les widgets à contenu
+   dans CarteEdition) — les morphs ne sont PAS rendus sur les widgets à contenu
    (les branches chat/input-viewer/speedrun de `renderScene` précèdent la
    branche morph).
 4. **Dashboard = config, pas un player** (règle d'or) : le média de fond y est
    une vignette figée (vidéo : `preload="metadata"`, pause, frame `mediaTime`)
    ; la lecture réelle est pilotée par la PlayerBar via snapshot WS (:4321).
-5. **Pas de composant séparé pour les contrôles média** : Svelte 5 snippet
-   (`controlesMedia`) dans Toolbar — les classes CSS (`.fit-group`, `.fit-btn`,
-   `.media-ctrl`, …) sont scopées à Toolbar.svelte et ne s'appliqueraient pas
-   à un composant enfant sans duplication.
+5. **Pas de composant séparé pour les contrôles média** : ils vivent en ligne
+   dans `CarteEdition.svelte` (onglets Contenu/Transformation/Effets) — les
+   classes CSS (`.fit-group`, `.fit-btn`, `.media-ctrl`, …) sont scopées au
+   composant et ne s'appliqueraient pas à un composant enfant sans duplication.
+   (L'ancien snippet `controlesMedia` de Toolbar n'existe plus — migration
+   vers la carte d'édition contextuelle.)
 
 ## Index — docs/features/
 
