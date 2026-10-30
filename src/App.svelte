@@ -1108,6 +1108,8 @@
     display: flex;
     flex-direction: column;
     height: 100%;
+    /* relative : ancre du liseré pointillé ::after (modes moteur). */
+    position: relative;
     /* Garde-fou anti scroll horizontal : le clip vit sur main (pas sur
        header) pour ne pas rogner les dropdowns du header (Langue,
        Vos scènes) qui débordent verticalement de la barre. */
@@ -1130,18 +1132,38 @@
   }
   /* Contour de fenêtre = mode moteur actif : orange en natif, bleu en OBS.
      La bordure OS de la fenêtre Tauri n'est pas stylable → liseré pointillé
-     en retrait sur <main> (outline décalée — style des cartes de la
-     sidebar, sans impact layout). Couleurs = rôles --moteur-* (glace.css). */
+     en retrait via un pseudo-élément (une outline ne permet pas de retirer
+     un côté). Le clip-path découpe le milieu du flanc gauche — la sidebar
+     porte déjà sa charge visuelle — en conservant les angles (montants de
+     16 px en haut et en bas). Couleurs = rôles --moteur-* (glace.css). */
   main.mode-natif {
     --moteur-couleur: var(--moteur-natif);
   }
   main.mode-obs {
     --moteur-couleur: var(--moteur-obs);
   }
-  main.mode-natif,
-  main.mode-obs {
-    outline: 2px dashed var(--moteur-couleur);
-    outline-offset: -4px;
+  main.mode-natif::after,
+  main.mode-obs::after {
+    content: "";
+    position: absolute;
+    inset: 4px;
+    border: 2px dashed var(--moteur-couleur);
+    pointer-events: none;
+    /* Au-dessus des couches internes du canvas (≤1), loin sous les
+       overlays (menus 9999, modales 10000). */
+    z-index: 5;
+    /* Notch de 4 px de profond entre 16 px du haut et 16 px du bas :
+       haut/droite/bas entiers, seuls les angles gauches subsistent. */
+    clip-path: polygon(
+      0 0,
+      100% 0,
+      100% 100%,
+      0 100%,
+      0 calc(100% - 16px),
+      4px calc(100% - 16px),
+      4px 16px,
+      0 16px
+    );
   }
   header {
     flex-shrink: 0;

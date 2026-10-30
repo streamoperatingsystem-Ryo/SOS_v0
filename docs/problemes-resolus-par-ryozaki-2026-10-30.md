@@ -15,3 +15,10 @@ dans la mauvaise source (palette de l'app / couleurs en dur) au lieu de
 matcher les bordures que le DWM dessinait déjà sur les trois autres
 côtés. Une fois la bonne source identifiée — registre DWM puis couleur
 système — la solution tenait en ~20 lignes Rust et une ligne CSS.
+
+## Modification n°2 — Liseré pointillé sans le côté gauche
+
+Le liseré pointillé autour de la fenêtre surchargeait le panneau latéral
+gauche. On a retiré le milieu du flanc gauche tout en conservant les
+angles haut-gauche et bas-gauche. Technique : pseudo-élément `::after`
++ `clip-path`.

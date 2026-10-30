@@ -106,10 +106,10 @@
   --plat-diffusion: var(--t-vert);
   /* ===== Modes du moteur de diffusion — identité visuelle =====
      Vert et rouge restent réservés aux signaux d'activation / arrêt :
-     Rust = orange, OBS = bleu vif (jamais en conflit). Consommés par les
-     boutons mode de la topbar + le contour de fenêtre (App.svelte). */
+     Rust = orange, OBS = bleu foncé (jamais en conflit). Consommés par
+     les boutons mode de la topbar + le contour de fenêtre (App.svelte). */
   --moteur-natif: var(--t-orange);
-  --moteur-obs: var(--t-bleu-500);
+  --moteur-obs: var(--t-bleu-700);
   /* ===== Guide du streamer — rôles « artwork » du livre feuilletable =====
      Palette parchemin/cuir/dorure consommée par GuideLivre.svelte
      (overlay dashboard uniquement). Même logique que les palettes cadres :
