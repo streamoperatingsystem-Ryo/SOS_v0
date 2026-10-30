@@ -61,15 +61,35 @@ use windows::Win32::System::Com::{CoInitializeEx, COINIT_MULTITHREADED};
 use crate::cadres::{CadreCfg, ErreurCadre};
 use crate::gpu::{ContexteGpu, DescTexture, Format};
 
+mod alertes;
 mod chat;
+mod goal;
+mod horloge;
 mod input;
 pub mod media;
+mod musique;
 mod persp;
+mod speedrun;
+mod viewers;
 
+use alertes::BlocAlerte;
+pub use alertes::{EtatAlertes, MajAlerte, Z_ALERTES};
 use chat::BlocChat;
 pub use chat::{geometrie_chat, ChatGeometrie};
+use goal::{BlocsGoal, LogosGoal};
+pub use goal::{Communaute, EtatGoals, GoalCfg, GoalTwitch, MajGoal};
+use horloge::BlocsHorloge;
+pub use horloge::{accent_module, opacite_module, taille_module, HorlogeCfg, Z_MODULES};
 pub use media::{TraceMedia, TraceMorphe, TracePixel};
+use musique::BlocsMusique;
+pub use musique::{EtatMusique, MajMusique, ModeMusique, MusiqueCfg, Piste};
 use persp::PlanPersp;
+use speedrun::BlocsSpeedrun;
+pub use speedrun::{
+    EtatSpeedrun, MajSpeedrun, MethodeTemps, ModeDelta, ModeTemps, PhaseSpeedrun,
+    PrecisionTemps, SegmentLss, SpeedrunCfg,
+};
+use viewers::BlocsViewers;
 
 /// Écart aux bords, en px canvas — valeur de `diffusion.html` (`.bg-titre`).
 pub const MARGE_TITRE: f32 = 8.0;
@@ -403,6 +423,33 @@ pub struct DessinateurTexte {
     >,
     /// Blocs de chat mis en page, clé = (version du buffer, filtre, métriques).
     blocs: HashMap<u64, BlocChat>,
+    /// Blocs de la barre viewers en tête des widgets chat, clé = (filtre,
+    /// taille) — le contenu est suivi par `EtatGoals::version`.
+    blocs_viewers: BlocsViewers,
+    /// Lignes mises en page des modules horloge, clé = options de mise en
+    /// page (`cle_bloc`) — le texte change au tick seconde, formats et
+    /// layouts vivent dans le bloc.
+    blocs_horloge: BlocsHorloge,
+    /// Lignes mises en page des widgets goal, clé = (id, hauteur,
+    /// plateforme) — le contenu vit dans `EtatGoals`, poussé par l'app.
+    blocs_goal: BlocsGoal,
+    /// Glyphes vectoriels des logos plateforme (Twitch/Kick, en viewBox) —
+    /// créés à la demande, le scale est posé au dessin.
+    logos_goal: LogosGoal,
+    /// Lignes mises en page des widgets speedrun, clé = (id, métriques) —
+    /// l'état vit dans `EtatSpeedrun`, poussé par l'app (frames
+    /// `speedrun-etat`, ~15 Hz en run : les slots inchangés ne sont pas
+    /// re-mis en page).
+    blocs_speedrun: BlocsSpeedrun,
+    /// Lignes mises en page + état lissé EQ des widgets musique, clé =
+    /// (id, hauteur, mode) — le contenu vit dans `EtatMusique`, poussé par
+    /// l'app (events Tauri `musique:update`).
+    blocs_musique: BlocsMusique,
+    /// Cache de la carte alerte en cours (une seule, contrat domaine) —
+    /// re-mesurée à chaque play / repositionnement (clé `cle_alerte`), le
+    /// contenu vit dans `EtatAlertes`, poussé par l'app (frames
+    /// `alerte-*` / `position-overlay-config` du canal `chat_tx`).
+    bloc_alerte: Option<BlocAlerte>,
     /// Formats de libellés input-viewer, clé = (taille en dixièmes, gras).
     formats_input: HashMap<(u32, bool), IDWriteTextFormat>,
     /// Plans à perspective : offscreen intermédiaire + effet de projection,
@@ -508,6 +555,13 @@ impl DessinateurTexte {
             cache: HashMap::new(),
             bitmaps: HashMap::new(),
             blocs: HashMap::new(),
+            blocs_viewers: HashMap::new(),
+            blocs_horloge: HashMap::new(),
+            blocs_goal: HashMap::new(),
+            logos_goal: HashMap::new(),
+            blocs_speedrun: HashMap::new(),
+            blocs_musique: HashMap::new(),
+            bloc_alerte: None,
             formats_input: HashMap::new(),
             persps: Vec::new(),
             effets: HashMap::new(),

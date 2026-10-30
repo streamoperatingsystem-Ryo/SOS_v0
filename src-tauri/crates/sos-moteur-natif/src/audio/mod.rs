@@ -5,6 +5,8 @@
 //! périphérique (f32 48 kHz stéréo en pratique) ; PCM 16 bits accepté aussi.
 
 pub mod capture;
+/// Chemin temps réel : anneaux bornés + mixage dans la boucle (live.rs).
+pub mod live;
 pub mod piste;
 
 use std::fmt;

@@ -43,6 +43,14 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     # Audio WASAPI (loopback + micro) — liaisons directes, aucune crate tierce.
     "Win32_Media_Audio",
+    # Pipe nommé de l'entrée audio live du sidecar FFmpeg (output/ffmpeg.rs
+    # `PipeAudio`) : CreateNamedPipeW + WriteFile — transport kernel local,
+    # aucune socket (contrat vie privée).
+    "Win32_System_Pipes",
+    "Win32_Storage_FileSystem",
+    # WriteFile (I/O du pipe) + gate de CreateNamedPipeW (SECURITY_ATTRIBUTES).
+    "Win32_System_IO",
+    "Win32_Security",
     # Encodage / décodage Media Foundation (MFT) + libération CoTaskMem.
     "Win32_Media_MediaFoundation",
     # Décodage d'images (PNG/JPG/BMP) via WIC — médias et fonds de scène.

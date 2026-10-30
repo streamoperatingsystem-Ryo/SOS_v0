@@ -46,7 +46,7 @@ use windows::Win32::Media::MediaFoundation::{
 };
 
 use super::detect;
-use super::{Codec, ErreurEncodage, PaquetEncode};
+use super::{Codec, ErreurEncodage, PaquetEncode, Preset};
 use crate::gpu::ContexteGpu;
 
 /// Délai maximal d'attente d'un événement MFT (garde-fou anti-blocage).
@@ -87,10 +87,11 @@ impl EncodeurMft {
         fps: u32,
         debit_kbps: u32,
     ) -> Result<Self, ErreurEncodage> {
-        Self::nouveau_avec(activate, codec, largeur, hauteur, fps, debit_kbps, None)
+        Self::nouveau_avec_preset(activate, codec, largeur, hauteur, fps, debit_kbps, None, Preset::DEFAUT)
     }
 
     /// Variante zéro-copie : réutilise le contexte GPU de la capture.
+    /// Signature historique conservée (exemples du crate) — preset au défaut.
     pub fn nouveau_avec(
         activate: &IMFActivate,
         codec: Codec,
@@ -99,6 +100,32 @@ impl EncodeurMft {
         fps: u32,
         debit_kbps: u32,
         contexte: Option<&ContexteGpu>,
+    ) -> Result<Self, ErreurEncodage> {
+        Self::nouveau_avec_preset(
+            activate,
+            codec,
+            largeur,
+            hauteur,
+            fps,
+            debit_kbps,
+            contexte,
+            Preset::DEFAUT,
+        )
+    }
+
+    /// Variante complète : contexte GPU réutilisé **et** preset d'encodage
+    /// (seul `Preset::qualite_mft` se traduit chez MFT — `AVEncCommonQuality`
+    /// est best-effort, certains pilotes l'ignorent).
+    #[allow(clippy::too_many_arguments)]
+    pub fn nouveau_avec_preset(
+        activate: &IMFActivate,
+        codec: Codec,
+        largeur: u32,
+        hauteur: u32,
+        fps: u32,
+        debit_kbps: u32,
+        contexte: Option<&ContexteGpu>,
+        preset: Preset,
     ) -> Result<Self, ErreurEncodage> {
         detect::initialiser();
 
@@ -229,7 +256,7 @@ impl EncodeurMft {
         // Pas de B-frames : faible latence et DTS monotone sur un flux
         // élémentaire remuxé par le sidecar (constaté 2026-10-28).
         let _ = unsafe { attrs.SetUINT32(&CODECAPI_AVEncMPVDefaultBPictureCount, 0) };
-        let _ = unsafe { attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, 70) };
+        let _ = unsafe { attrs.SetUINT32(&CODECAPI_AVEncCommonQuality, preset.qualite_mft()) };
         let _ = unsafe { attrs.SetUINT32(&MF_LOW_LATENCY, 1) };
 
         let info_sortie = unsafe { transform.GetOutputStreamInfo(0) }

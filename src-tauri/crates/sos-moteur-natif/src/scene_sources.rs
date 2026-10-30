@@ -17,14 +17,18 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use sos_scene::{CadreConfig, CaptureCible, Scene, Widget};
+use sos_scene::{CadreConfig, CaptureCible, ModuleHud, Scene, Widget};
 
 use crate::cadres::{couleur_hex, CadreCfg, StyleCadre};
 use crate::chat::{ChatCfg, FILTRE_UNIFIE};
 use crate::input::{Disposition, InputCfg, MappingManette, ModeInput};
 use crate::media::{CarrouselCfg, EffetsCfg, Fit, LectureCfg, MediaCfg, PerspCfg, Transform2D};
 use crate::moteur::{CibleCapture, FormeCamera, SourceCfg};
-use crate::texte::{CibleTitre, PositionTitre, StyleBoite, StyleTexte, TexteCfg, POLICE_DEFAUT};
+use crate::texte::{
+    accent_module, opacite_module, taille_module, CibleTitre, GoalCfg, HorlogeCfg, MethodeTemps,
+    ModeDelta, ModeMusique, ModeTemps, MusiqueCfg, PositionTitre, PrecisionTemps, SpeedrunCfg,
+    StyleBoite, StyleTexte, TexteCfg, POLICE_DEFAUT, Z_MODULES,
+};
 
 /// Traduit la cible persistée dans la scène en cible du moteur.
 ///
@@ -363,6 +367,13 @@ fn cadre_cfg(cadre: &CadreConfig, rect: (f64, f64, f64, f64), z: i32) -> Option<
     })
 }
 
+/// `cadreMsgScale` : strokeWidth ramené à l'échelle « bulle » — ratio 40 %
+/// arrondi, borné à [1, 8] px (le stroke scène calibré ≥160px rendrait le
+/// cadre disproportionné sur une bulle ~45px ou un goal ~280×90).
+fn cadre_msg_scale(stroke_width: f64) -> f64 {
+    (stroke_width * 0.4).round().clamp(1.0, 8.0)
+}
+
 /// Cadre qui s'applique à CE widget, ou `None`.
 ///
 /// Miroir de `applyCadreWidget` + les exceptions du dépôt :
@@ -370,7 +381,10 @@ fn cadre_cfg(cadre: &CadreConfig, rect: (f64, f64, f64, f64), z: i32) -> Option<
 /// - caméra : sa découpe est portée par `forme_camera` (contrat 9), jamais
 ///   par le cadre de scène — et l'anneau `cameraBord` est hors lot ;
 /// - chat `bulles` : `diffusion.html` masque le cadre du widget et décore
-///   chaque bulle (hors tranche) → aucun cadre de widget.
+///   chaque bulle (hors tranche) → aucun cadre de widget ;
+/// - goal : cadre à l'échelle « bulle » (`cadreGoal` = `cadreMsgScale` sur
+///   le cadre de scène) — même traitement partagé par voile, contenu et
+///   trait (un seul `CadreCfg`, index `voie.geometries` commun).
 pub fn cadre_de_widget(scene: &Scene, w: &Widget) -> Option<CadreCfg> {
     let cadre = cadre_actif(scene)?;
     if w.sansCadre || w.widget_type == "camera" {
@@ -382,7 +396,24 @@ pub fn cadre_de_widget(scene: &Scene, w: &Widget) -> Option<CadreCfg> {
     if w.largeur <= 0.0 || w.hauteur <= 0.0 {
         return None;
     }
+    if w.widget_type == "goal" {
+        let mut cadre = cadre.clone();
+        cadre.strokeWidth = cadre_msg_scale(cadre.strokeWidth);
+        return cadre_cfg(&cadre, (w.x, w.y, w.largeur, w.hauteur), w.z);
+    }
     cadre_cfg(cadre, (w.x, w.y, w.largeur, w.hauteur), w.z)
+}
+
+/// Cadre de scène **opt-in** d'un module HUD (`m.cadre`) — miroir
+/// `appliquerCadreOverlay` (diffusion.html) : voile et contenu clippés au
+/// polygone, le trait étant tracé par le calque cadre au z des modules
+/// (`Z_MODULES`), comme l'overlay `cadre-overlay` du DOM.
+fn cadre_de_module(scene: &Scene, m: &ModuleHud) -> Option<CadreCfg> {
+    if m.cadre != Some(true) || m.largeur <= 0.0 || m.hauteur <= 0.0 {
+        return None;
+    }
+    let cadre = cadre_actif(scene)?;
+    cadre_cfg(cadre, (m.x, m.y, m.largeur, m.hauteur), Z_MODULES)
 }
 
 /// Boîte d'un widget à voile (`.widget`) : rect de contenu, ordre z, cadre.
@@ -467,7 +498,218 @@ pub fn input_depuis_scene(scene: &Scene) -> Vec<InputCfg> {
         .collect()
 }
 
-/// Cadres de la scène : bord du canvas (si `bordActif`) puis un par widget.
+/// Widgets `type: "goal"` de la scène — compteur live + cible + barre +
+/// célébration (branche `goal` de `renderScene`).
+///
+/// Aucune valeur ici : les compteurs arrivent par `EtatGoals` (frames
+/// `communaute`/`viewers`/`goal-twitch`/`goal-atteint`), comme `FileChat`
+/// pour les messages — le rendu se met à jour sans reconfigurer. `accent` =
+/// `gradientCadre` (`--sr-grad-from/to`) ; le cadre est à l'échelle « bulle »
+/// (`cadreGoal`, via `cadre_de_widget`).
+pub fn goals_depuis_scene(scene: &Scene) -> Vec<GoalCfg> {
+    let accent = degrade_defaut(scene);
+    scene
+        .widgets
+        .iter()
+        .filter(|w| w.widget_type == "goal" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .map(|w| GoalCfg {
+            id: w.id.clone(),
+            rect: (w.x, w.y, w.largeur, w.hauteur),
+            z: w.z,
+            plateforme: w
+                .goalPlateforme
+                .clone()
+                .unwrap_or_else(|| "twitch".to_string()),
+            metrique: w
+                .goalMetrique
+                .clone()
+                .unwrap_or_else(|| "followers".to_string()),
+            cible: w.goalCible.unwrap_or(0),
+            goal_id: w.goalId.clone(),
+            accent,
+            cadre: cadre_de_widget(scene, w),
+        })
+        .collect()
+}
+
+/// `srEstLigne` : `"ligne"`/`"colonne"` forcent ; `"auto"`/absent → splits
+/// en ligne sous `4 × srTaillePolice` de hauteur (façon LiveSplit).
+fn speedrun_est_ligne(w: &Widget, taille: f32) -> bool {
+    match w.srLayout.as_deref() {
+        Some("ligne") => true,
+        Some("colonne") => false,
+        _ => w.hauteur < (taille * 4.0) as f64,
+    }
+}
+
+/// `contrasteOmbre` (diffusion.html) : luminance > 0,5 → ombre noire,
+/// sinon blanche — fait ressortir le timer sur tout fond.
+fn contraste_ombre(c: [u8; 4]) -> [u8; 4] {
+    let lum = 0.2126 * c[0] as f32 / 255.0
+        + 0.7152 * c[1] as f32 / 255.0
+        + 0.0722 * c[2] as f32 / 255.0;
+    if lum > 0.5 {
+        [0, 0, 0, 255]
+    } else {
+        [255, 255, 255, 255]
+    }
+}
+
+/// Couleur `sr*` de la modale layout : hex valide sinon `defaut`
+/// (miroir des `|| var(...)` de `srAppliquerOpts`).
+fn couleur_sr(hex: Option<&String>, defaut: [u8; 4]) -> [u8; 4] {
+    hex.and_then(|h| couleur_hex(h)).unwrap_or(defaut)
+}
+
+/// Widgets `type: "speedrun"` de la scène — splitter ASL (branche
+/// `speedrun` de `renderScene`).
+///
+/// Aucune valeur live ici : l'état arrive par `EtatSpeedrun` (frames
+/// `speedrun-etat` du canal `chat_tx`), comme `EtatGoals` — le rendu se
+/// met à jour sans reconfigurer. `accent` = `gradientCadre`
+/// (`--sr-grad-from/to`) ; `ombre` = `contrasteOmbre` de l'accent ; les
+/// `srCouleur*` de la modale SpeedrunLayout surchargent les couleurs
+/// sémantiques (`couleur_sr`). Les options `sr*` reprennent les défauts
+/// de `srLireOpts` (diffusion.html). Le cadre est celui de la scène
+/// (`cadre_de_widget` — pas d'échelle « bulle », contrairement au goal).
+pub fn speedruns_depuis_scene(scene: &Scene) -> Vec<SpeedrunCfg> {
+    let accent = degrade_defaut(scene);
+    let ombre = contraste_ombre(accent.0);
+    scene
+        .widgets
+        .iter()
+        .filter(|w| w.widget_type == "speedrun" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .map(|w| {
+            let taille = w.srTaillePolice.unwrap_or(16) as f32;
+            SpeedrunCfg {
+                id: w.id.clone(),
+                rect: (w.x, w.y, w.largeur, w.hauteur),
+                z: w.z,
+                police: w.srPolice.clone().unwrap_or_else(|| "Rajdhani".to_string()),
+                taille,
+                ligne: speedrun_est_ligne(w, taille),
+                accent,
+                ombre,
+                couleur_timer: couleur_sr(w.srCouleurTimer.as_ref(), accent.0),
+                couleur_ahead: couleur_sr(w.srCouleurAhead.as_ref(), [0x22, 0xc5, 0x5e, 255]),
+                couleur_behind: couleur_sr(w.srCouleurBehind.as_ref(), [0xc0, 0x39, 0x2b, 255]),
+                couleur_actif: couleur_sr(w.srCouleurActif.as_ref(), accent.0),
+                voir_titre: w.srVoirTitre != Some(false),
+                voir_cat: w.srVoirCategorie != Some(false),
+                voir_statut: w.srVoirStatut != Some(false),
+                voir_timer: w.srVoirTimer != Some(false),
+                voir_phase: w.srVoirPhase != Some(false),
+                voir_compteur: w.srVoirCompteur != Some(false),
+                voir_barre: w.srVoirBarre != Some(false),
+                mode_temps: if w.srModeTemps.as_deref() == Some("segment") {
+                    ModeTemps::Segment
+                } else {
+                    ModeTemps::Cumul
+                },
+                mode_delta: match w.srModeDelta.as_deref() {
+                    Some("segment") => ModeDelta::Segment,
+                    Some("off") => ModeDelta::Off,
+                    _ => ModeDelta::Cumul,
+                },
+                delta_prec: match w.srDeltaPrecision.as_deref() {
+                    Some("centieme") => PrecisionTemps::Centieme,
+                    Some("seconde") => PrecisionTemps::Seconde,
+                    _ => PrecisionTemps::Dixieme,
+                },
+                delta_drop: w.srDeltaDrop != Some(false),
+                timer_prec: match w.srTimerPrecision.as_deref() {
+                    Some("dixieme") => PrecisionTemps::Dixieme,
+                    Some("seconde") => PrecisionTemps::Seconde,
+                    _ => PrecisionTemps::Centieme,
+                },
+                timer_methode: match w.srTimerMethode.as_deref() {
+                    Some("real") => MethodeTemps::Real,
+                    Some("game") => MethodeTemps::Game,
+                    _ => MethodeTemps::Auto,
+                },
+                // `o.segBordure === false ? 0 : (o.segBordEp || 1)` px.
+                seg_bord_ep: if w.srSegBordure == Some(false) {
+                    0.0
+                } else {
+                    w.srSegBordureEpaisseur.unwrap_or(1) as f32
+                },
+                // `o.segBordRayon >= 0 ? px : var(--rayon-petit)` (5 px).
+                seg_bord_rayon: w
+                    .srSegBordureRayon
+                    .map(|r| r as f32)
+                    .unwrap_or(5.0),
+                nb_lignes: w.srNbLignes.unwrap_or(0),
+                scroll_auto: w.srScrollAuto != Some(false),
+                hauteur_ligne: w.srHauteurLigne.unwrap_or(0) as f32,
+                cadre: cadre_de_widget(scene, w),
+            }
+        })
+        .collect()
+}
+
+/// Widgets `type: "musique"` de la scène — lecteur Winamp (barre titre,
+/// LCD défilant, égaliseur 16 bandes, progression ; branche `musique` de
+/// `renderScene`).
+///
+/// Aucune valeur live ici : l'état arrive par `EtatMusique` (events Tauri
+/// `musique:update` — `en_cours` + `progression` de `MusiqueState::etat`),
+/// comme `EtatSpeedrun` — le rendu se met à jour sans reconfigurer.
+/// `musiqueMode === "eq"` → [`ModeMusique::Eq`] (spectre seul dans tout le
+/// widget), sinon lecteur complet. Le cadre est celui de la scène
+/// (`cadre_de_widget` — pas d'échelle « bulle », comme le speedrun).
+pub fn musiques_depuis_scene(scene: &Scene) -> Vec<MusiqueCfg> {
+    scene
+        .widgets
+        .iter()
+        .filter(|w| w.widget_type == "musique" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .map(|w| MusiqueCfg {
+            id: w.id.clone(),
+            rect: (w.x, w.y, w.largeur, w.hauteur),
+            z: w.z,
+            mode: if w.musiqueMode.as_deref() == Some("eq") {
+                ModeMusique::Eq
+            } else {
+                ModeMusique::Player
+            },
+            cadre: cadre_de_widget(scene, w),
+        })
+        .collect()
+}
+
+/// Module horloge de la scène (`scene.modules.horloge` — singleton actif).
+///
+/// Miroir de `renderModuleHorloge` + `appliquerStyleModule` (diffusion.html) :
+/// `m.actif` gate, rect non nul ; les options reprennent les défauts du DOM
+/// (`afficherDate !== false`, `secondes === true`, `format12h === true`,
+/// `--mod-opacite` 0,45, `--mod-accent` = extrémité lumineuse du cadre de
+/// scène). z = `Z_MODULES` (9000, `#modules-root`). Le cadre est l'opt-in
+/// `m.cadre` ([`cadre_de_module`]) — son trait est porté par
+/// [`cadres_depuis_scene`].
+pub fn horloges_depuis_scene(scene: &Scene) -> Vec<HorlogeCfg> {
+    let Some(m) = scene
+        .modules
+        .as_ref()
+        .and_then(|modules| modules.horloge.as_ref())
+        .filter(|m| m.actif && m.largeur > 0.0 && m.hauteur > 0.0)
+    else {
+        return Vec::new();
+    };
+    vec![HorlogeCfg {
+        rect: (m.x, m.y, m.largeur, m.hauteur),
+        z: Z_MODULES,
+        police: m.police.clone(),
+        taille: taille_module(m),
+        date: m.afficherDate.unwrap_or(true),
+        secondes: m.secondes.unwrap_or(false),
+        format12h: m.format12h.unwrap_or(false),
+        opacite: opacite_module(m),
+        accent: accent_module(scene),
+        cadre: cadre_de_module(scene, m),
+    }]
+}
+
+/// Cadres de la scène : bord du canvas (si `bordActif`), un par widget,
+/// puis le cadre opt-in du module horloge (`m.cadre`, z `Z_MODULES`).
 ///
 /// Le bord porte `z = i32::MAX` : il est dessiné **après** tous les calques,
 /// comme `#cadre-app-overlay` (`z-index: 100`). Un style non porté ne produit
@@ -484,6 +726,14 @@ pub fn cadres_depuis_scene(scene: &Scene) -> Vec<CadreCfg> {
         }
     }
     cadres.extend(scene.widgets.iter().filter_map(|w| cadre_de_widget(scene, w)));
+    // Le **même** `CadreCfg` que le clip du module (`HorlogeCfg.cadre`) :
+    // clip et trait partagent un index dans `voie.geometries` (recherche
+    // par valeur, `PartialEq`) — jamais de divergence entre les deux.
+    cadres.extend(
+        horloges_depuis_scene(scene)
+            .into_iter()
+            .filter_map(|h| h.cadre),
+    );
     cadres
 }
 
@@ -1165,5 +1415,90 @@ mod tests {
             }"#,
         );
         assert!(persps_depuis_scene(&scene).is_empty());
+    }
+
+    #[test]
+    fn horloge_depuis_scene_gates_et_defauts() {
+        // Module absent, inactif ou à rect nul : rien.
+        let absent = scene(r#"{"widgets":[]}"#);
+        assert!(horloges_depuis_scene(&absent).is_empty());
+        let inactif = scene(
+            r#"{"widgets":[],"modules":{"horloge":{"actif":false,"x":0,"y":0,"largeur":10,"hauteur":10}}}"#,
+        );
+        assert!(horloges_depuis_scene(&inactif).is_empty());
+        let nul = scene(
+            r#"{"widgets":[],"modules":{"horloge":{"actif":true,"x":0,"y":0,"largeur":0,"hauteur":10}}}"#,
+        );
+        assert!(horloges_depuis_scene(&nul).is_empty());
+
+        // Actif : défauts du DOM (date visible, 24 h, opacité 0,45,
+        // repli gris sans cadre de scène, jamais de cadre).
+        let scene = scene(
+            r#"{"widgets":[],"modules":{"horloge":{"actif":true,"x":100,"y":50,"largeur":300,"hauteur":60}}}"#,
+        );
+        let horloges = horloges_depuis_scene(&scene);
+        assert_eq!(horloges.len(), 1);
+        let h = &horloges[0];
+        assert_eq!(h.rect, (100.0, 50.0, 300.0, 60.0));
+        assert_eq!(h.z, Z_MODULES);
+        assert_eq!(h.taille, 25.0, "0,42 × hauteur, arrondi");
+        assert!(h.date);
+        assert!(!h.secondes && !h.format12h);
+        assert_eq!(h.opacite, 0.45);
+        assert_eq!(h.accent, [0xe0, 0xe0, 0xe0, 255]);
+        assert!(h.cadre.is_none());
+    }
+
+    #[test]
+    fn horloge_options_persistees_accent_et_cadre_opt_in() {
+        let scene = scene(
+            r##"{"cadreWidget":{"style":"mgstyle","strokeWidth":20,"couleur":"#000000",
+                                "couleurFin":"#8b5cf6","actif":true,"bordActif":false},
+                 "widgets":[],
+                 "modules":{"horloge":{"actif":true,"x":10,"y":20,"largeur":300,"hauteur":60,
+                            "police":"Rajdhani","taille":30,"opacite":0.8,"cadre":true,
+                            "afficherDate":false,"secondes":true,"format12h":true}}}"##,
+        );
+        let horloges = horloges_depuis_scene(&scene);
+        assert_eq!(horloges.len(), 1);
+        let h = &horloges[0];
+        assert_eq!(h.police.as_deref(), Some("Rajdhani"));
+        assert_eq!(h.taille, 30.0);
+        assert_eq!(h.opacite, 0.8);
+        assert!(!h.date);
+        assert!(h.secondes && h.format12h);
+        assert_eq!(h.accent, [0x8b, 0x5c, 0xf6, 255], "extrémité lumineuse");
+        let cadre = h.cadre.as_ref().expect("cadre opt-in");
+        assert_eq!(cadre.rect, (10.0, 20.0, 300.0, 60.0));
+        assert_eq!(cadre.z, Z_MODULES);
+        // Le trait du cadre du module vit dans `cadres_depuis_scene` : le
+        // même CadreCfg que le clip → index partagé dans `voie.geometries`.
+        let cadres = cadres_depuis_scene(&scene);
+        assert_eq!(cadres.len(), 1, "bordActif false → module seul");
+        assert_eq!(cadres[0], *cadre);
+    }
+
+    #[test]
+    fn horloge_cadre_absent_sans_opt_in_ou_inactif() {
+        // `m.cadre` absent → le cadre de scène ne s'applique pas au module.
+        let sans_optin = scene(
+            r##"{"cadreWidget":{"style":"mgstyle","strokeWidth":20,"actif":true,"bordActif":false},
+                 "widgets":[],
+                 "modules":{"horloge":{"actif":true,"x":0,"y":0,"largeur":300,"hauteur":60}}}"##,
+        );
+        assert!(cadres_depuis_scene(&sans_optin).is_empty());
+        // Module inactif → ni rendu ni cadre.
+        let inactif = scene(
+            r##"{"cadreWidget":{"style":"mgstyle","strokeWidth":20,"actif":true,"bordActif":false},
+                 "widgets":[],
+                 "modules":{"horloge":{"actif":false,"x":0,"y":0,"largeur":300,"hauteur":60,"cadre":true}}}"##,
+        );
+        assert!(cadres_depuis_scene(&inactif).is_empty());
+        // Sans cadre de scène actif, l'opt-in ne produit rien.
+        let sans_cadre_scene = scene(
+            r##"{"widgets":[],
+                 "modules":{"horloge":{"actif":true,"x":0,"y":0,"largeur":300,"hauteur":60,"cadre":true}}}"##,
+        );
+        assert!(cadres_depuis_scene(&sans_cadre_scene).is_empty());
     }
 }

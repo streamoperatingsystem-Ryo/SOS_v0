@@ -13,16 +13,29 @@ pub mod ffi;
 use std::ffi::c_void;
 use std::ptr::null_mut;
 
-use windows::core::Interface;
+use windows::core::{Interface, GUID};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
-use crate::encode::{Codec, ErreurEncodage, PaquetEncode};
+use crate::encode::{Codec, ErreurEncodage, PaquetEncode, Preset};
 use crate::gpu::ContexteGpu;
 
-use ffi::{struct_version, Image, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P4};
+use ffi::{
+    struct_version, Image, InitializeParams, Sdk, GUID_CODEC_H264, GUID_PRESET_P2,
+    GUID_PRESET_P4, GUID_PRESET_P7,
+};
 
 /// Image P (non-clé). L'IDR est `ffi::PIC_TYPE_IDR`.
 const PIC_TYPE_P: u32 = 0x02;
+
+/// GUID du preset NVENC associé (P1-P7 dans nvEncodeAPI.h — P2/P4/P7
+/// retenus, P1/P6 laissés en marge, cf. `Preset` dans `encode/mod.rs`).
+fn guid_preset(preset: Preset) -> GUID {
+    match preset {
+        Preset::Rapide => GUID_PRESET_P2,
+        Preset::Equilibre => GUID_PRESET_P4,
+        Preset::Qualite => GUID_PRESET_P7,
+    }
+}
 
 /// Encodeur NVENC prêt à consommer une texture NV12 persistante.
 pub struct EncodeurNvenc {
@@ -51,6 +64,7 @@ impl EncodeurNvenc {
         hauteur: u32,
         fps: u32,
         kbps: u32,
+        preset: Preset,
     ) -> Result<Self, ErreurEncodage> {
         if codec != Codec::H264 {
             return Err(ErreurEncodage::NonSupporte);
@@ -88,12 +102,13 @@ impl EncodeurNvenc {
             ));
         }
 
+        let preset_guid = guid_preset(preset);
         let mut preset = e
             .sdk
             .config_preset(
                 encoder,
                 GUID_CODEC_H264,
-                GUID_PRESET_P4,
+                preset_guid,
                 ffi::TUNING_ULTRA_LOW_LATENCY,
             )
             .map_err(ErreurEncodage::Nvenc)?;
@@ -110,7 +125,7 @@ impl EncodeurNvenc {
         let mut params: InitializeParams = unsafe { std::mem::zeroed() };
         params.version = struct_version(e.sdk.api_version, ffi::VER_INITIALIZE) | (1u32 << 31);
         params.encode_guid = GUID_CODEC_H264;
-        params.preset_guid = GUID_PRESET_P4;
+        params.preset_guid = preset_guid;
         params.encode_width = largeur;
         params.encode_height = hauteur;
         params.dar_width = largeur;
@@ -221,7 +236,7 @@ mod tests {
             Err(_) => return, // pas de GPU dans l'environnement de test
         };
         assert!(matches!(
-            EncodeurNvenc::nouveau(&contexte, Codec::Hevc, 1280, 720, 60, 6000),
+            EncodeurNvenc::nouveau(&contexte, Codec::Hevc, 1280, 720, 60, 6000, Preset::DEFAUT),
             Err(ErreurEncodage::NonSupporte)
         ));
     }
@@ -233,8 +248,17 @@ mod tests {
             Err(_) => return,
         };
         assert!(matches!(
-            EncodeurNvenc::nouveau(&contexte, Codec::H264, 0, 720, 60, 6000),
+            EncodeurNvenc::nouveau(&contexte, Codec::H264, 0, 720, 60, 6000, Preset::DEFAUT),
             Err(ErreurEncodage::Conversion(_))
         ));
+    }
+
+    #[test]
+    fn guid_preset_mappe_les_guids_reels() {
+        // Verrouille le mapping documenté : P2/P4/P7 (nvEncodeAPI.h).
+        assert_eq!(guid_preset(Preset::Rapide), GUID_PRESET_P2);
+        assert_eq!(guid_preset(Preset::Equilibre), GUID_PRESET_P4);
+        assert_eq!(guid_preset(Preset::DEFAUT), GUID_PRESET_P4);
+        assert_eq!(guid_preset(Preset::Qualite), GUID_PRESET_P7);
     }
 }

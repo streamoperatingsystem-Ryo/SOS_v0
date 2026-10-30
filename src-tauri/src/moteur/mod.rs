@@ -12,19 +12,27 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 use serde::Serialize;
-use sos_moteur_api::{Capacites, Conteneur, Moteur, MoteurEtat, SortieCfg};
+use sos_moteur_api::{
+    AudioCfg, Capacites, Codec, Conteneur, Moteur, MoteurEtat, SinkCfg, SortieCfg,
+};
 use sos_moteur_natif::chat::MessageChat;
 use sos_moteur_natif::input::{EtatInput, EtatManette, EtatSouris};
 use sos_moteur_natif::moteur::MoteurNatif;
-use tauri::{AppHandle, Manager, State};
+use sos_moteur_natif::texte::{
+    Communaute, GoalTwitch, MajAlerte, MajGoal, MajMusique, MajSpeedrun, PhaseSpeedrun, Piste,
+    SegmentLss,
+};
+use tauri::{AppHandle, Listener, Manager, State};
 
 use mode::{verifier_bascule, Mode};
 use obs::MoteurObs;
 
-/// Session d'enregistrement native en cours (chemin + fps figé).
+/// Session de sortie native en cours (destination affichée + fps figé).
 #[derive(Debug, Clone)]
 pub struct SessionNatif {
-    pub chemin: PathBuf,
+    /// Destination affichable : chemin du fichier (enregistrement) ou
+    /// « schéma://autorité » d'un flux — jamais de clé de stream.
+    pub cible: String,
     pub fps: u32,
 }
 
@@ -81,7 +89,7 @@ impl RegistreMoteur {
         *self.session.lock().unwrap_or_else(|e| e.into_inner()) = Some(session);
     }
 
-    /// Teardown : joint le fil moteur, libère NVENC, finalise le fichier.
+    /// Teardown : joint le fil moteur, libère NVENC, finalise la sortie.
     /// Idempotent — appelé à l'arrêt de l'app (`RunEvent::Exit`).
     pub fn arreter_natif(&self) {
         self.natif.arreter();
@@ -179,10 +187,13 @@ pub fn moteur_diag(registre: State<'_, RegistreMoteur>) -> DiagMoteur {
     }
 }
 
-/// État de la sortie native — ce que l'UI affiche pendant l'enregistrement.
+/// État de la sortie native — ce que l'UI affiche pendant la sortie
+/// (enregistrement fichier ou flux réseau).
 #[derive(Serialize, Clone)]
 pub struct EtatSortieNatif {
     pub actif: bool,
+    /// Destination affichable : chemin du fichier ou « schéma://autorité »
+    /// d'un flux (la clé de stream n'y figure jamais).
     pub chemin: Option<String>,
     pub kbps: u32,
     pub frames_perdues: u64,
@@ -204,10 +215,10 @@ pub fn moteur_sortie_etat(registre: State<'_, RegistreMoteur>) -> EtatSortieNati
     let instantane = registre.natif().instantane();
     EtatSortieNatif {
         actif,
-        // Le chemin n'est annoncé que tant que le fil tourne : après une
-        // erreur terminale, aucun fichier exploitable n'a été écrit.
+        // La destination n'est annoncée que tant que le fil tourne : après
+        // une erreur terminale, aucun fichier exploitable n'a été écrit.
         chemin: if actif {
-            registre.session().map(|s| s.chemin.display().to_string())
+            registre.session().map(|s| s.cible.clone())
         } else {
             None
         },
@@ -246,7 +257,10 @@ pub async fn moteur_sortie_demarrer(app: AppHandle, chemin: String) -> Result<St
         .map_err(|e| format!("tâche de démarrage : {e}"))?
 }
 
-fn demarrer_bloquant(app: &AppHandle, chemin: &Path) -> Result<String, String> {
+/// Préambule commun aux sorties natives (fichier ou flux) : mode Rust
+/// exigé, une seule sortie à la fois, scène courante poussée au moteur.
+/// Rend la scène clonée — son canvas alimente `SortieCfg`.
+fn preparer_sortie(app: &AppHandle) -> Result<sos_scene::Scene, String> {
     let registre = app
         .try_state::<RegistreMoteur>()
         .ok_or("registre moteur absent")?;
@@ -254,7 +268,7 @@ fn demarrer_bloquant(app: &AppHandle, chemin: &Path) -> Result<String, String> {
         return Err("la sortie native exige le mode Rust".to_string());
     }
     if registre.natif_actif() {
-        return Err("un enregistrement natif est déjà en cours".to_string());
+        return Err("une sortie native est déjà en cours".to_string());
     }
     let scene = app
         .try_state::<crate::scenes::ScenesState>()
@@ -268,16 +282,22 @@ fn demarrer_bloquant(app: &AppHandle, chemin: &Path) -> Result<String, String> {
         .natif()
         .configurer_scene(&scene, &HashMap::new(), &base)
         .map_err(|e| e.to_string())?;
+    Ok(scene)
+}
 
-    let canvas = (scene.canvasW, scene.canvasH);
+fn demarrer_bloquant(app: &AppHandle, chemin: &Path) -> Result<String, String> {
+    let scene = preparer_sortie(app)?;
+    let registre = app
+        .try_state::<RegistreMoteur>()
+        .ok_or("registre moteur absent")?;
     let mut cfg = SortieCfg::fichier(chemin, Conteneur::Mp4);
-    cfg.canvas = canvas;
+    cfg.canvas = (scene.canvasW, scene.canvasH);
     registre
         .natif()
         .demarrer_sortie(cfg)
         .map_err(|e| e.to_string())?;
     registre.definir_session(SessionNatif {
-        chemin: chemin.to_path_buf(),
+        cible: chemin.display().to_string(),
         fps: 60,
     });
     Ok(chemin.display().to_string())
@@ -292,12 +312,309 @@ pub async fn moteur_sortie_arreter(app: AppHandle) -> Result<Option<String>, Str
         let registre = app
             .try_state::<RegistreMoteur>()
             .ok_or("registre moteur absent")?;
-        let chemin = registre.session().map(|s| s.chemin.display().to_string());
+        let chemin = registre.session().map(|s| s.cible.clone());
         registre.arreter_natif();
         Ok::<Option<String>, String>(chemin)
     })
     .await
     .map_err(|e| format!("tâche d'arrêt : {e}"))?
+}
+
+/// Démarre un flux réseau natif (RTMP ou SRT) — même moteur et même session
+/// qu'un enregistrement : une seule sortie à la fois, arrêt par
+/// `moteur_sortie_arreter`, état par `moteur_sortie_etat`. Bloquant (GPU +
+/// encodeur) : exécuté hors du thread UI.
+///
+/// `cle` = clé de stream : jamais journalisée (masquée dans le `Debug` de
+/// `SortieCfg`, dans les erreurs du sink et dans le stderr du sidecar
+/// FFmpeg). La destination renvoyée est « schéma://autorité » seulement.
+///
+/// Paramètres optionnels (défauts produit : H.264, 6000 kbps, 60 fps) :
+/// `codec` = id stable (`h264|hevc|av1`), `srt_passphrase`/`srt_latency_ms`
+/// réservés au protocole `srt`. La config qui a réellement démarré est
+/// persistée dans le coffre keyring (`moteur_stream_config` /
+/// `moteur_stream_oublier`).
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn moteur_stream_demarrer(
+    app: AppHandle,
+    protocole: String,
+    url: String,
+    cle: Option<String>,
+    codec: Option<String>,
+    debit_kbps: Option<u32>,
+    fps: Option<u32>,
+    preset: Option<String>,
+    srt_passphrase: Option<String>,
+    srt_latency_ms: Option<u32>,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        demarrer_stream_bloquant(
+            &app,
+            &protocole,
+            &url,
+            cle.as_deref(),
+            codec.as_deref(),
+            debit_kbps,
+            fps,
+            preset.as_deref(),
+            srt_passphrase.as_deref(),
+            srt_latency_ms,
+        )
+    })
+    .await
+    .map_err(|e| format!("tâche de démarrage : {e}"))?
+}
+
+/// Codec demandé par le frontend → enum du contrat. `None`/vide = défaut
+/// H.264 ; identifiant inconnu = erreur honnête (jamais de repli muet).
+fn resoudre_codec(codec: Option<&str>) -> Result<Codec, String> {
+    match codec.map(str::trim).filter(|c| !c.is_empty()) {
+        None => Ok(Codec::H264),
+        Some(id) => Codec::depuis_id(id)
+            .ok_or_else(|| format!("codec inconnu : {id} (h264|hevc|av1 attendu)")),
+    }
+}
+
+/// Preset demandé par le frontend : `None`/vide → `"equilibre"` (défaut
+/// produit). Champ transporté par `SortieCfg` — l'encodeur applique
+/// aujourd'hui son propre réglage interne (NVENC P4) ; le preset choisi
+/// est conservé dans la config persistée pour les lots qui le brancheront.
+fn resoudre_preset(preset: Option<&str>) -> String {
+    preset
+        .map(str::trim)
+        .filter(|p| !p.is_empty())
+        .unwrap_or("equilibre")
+        .to_string()
+}
+
+/// URL SRT finale : `passphrase`/`latency` deviennent des paramètres de
+/// query — FFmpeg les lit nativement (`srt://hôte:port?passphrase=…&
+/// latency=…`), sans changement du contrat `SinkCfg::Srt`. Un paramètre
+/// déjà présent dans l'URL n'est pas dupliqué (l'utilisateur prime). La
+/// valeur est refusée si elle casserait la query (`&`, `?`, `#`, espace) —
+/// jamais d'URL corrompue silencieuse. L'URL produite embarque le secret :
+/// couverte par le masquage `Debug` de `SinkCfg::Srt` et par
+/// `destination_publique` (schéma + autorité seulement).
+fn srt_url_avec_params(
+    url: &str,
+    passphrase: Option<&str>,
+    latency_ms: Option<u32>,
+) -> Result<String, String> {
+    let mut sortie = url.to_string();
+    let mut ajouter = |nom: &str, valeur: String| -> Result<(), String> {
+        if valeur
+            .chars()
+            .any(|c| matches!(c, '&' | '?' | '#') || c.is_whitespace())
+        {
+            return Err(format!("paramètre SRT {nom} invalide (caractères réservés)"));
+        }
+        if sortie.contains(&format!("{nom}=")) {
+            return Ok(());
+        }
+        let sep = if sortie.contains('?') { '&' } else { '?' };
+        sortie = format!("{sortie}{sep}{nom}={valeur}");
+        Ok(())
+    };
+    if let Some(p) = passphrase {
+        ajouter("passphrase", p.to_string())?;
+    }
+    if let Some(ms) = latency_ms {
+        ajouter("latency", ms.to_string())?;
+    }
+    Ok(sortie)
+}
+
+const KEYRING_STREAM_SERVICE: &str = "streamos-v0-stream";
+const KEYRING_STREAM_ACCOUNT: &str = "default";
+
+/// Config stream persistée dans le coffre keyring — même modèle que
+/// `twitch_auth`/`youtube_auth` (JSON sérialisé, compte "default"). La clé
+/// de flux et la passphrase SRT vivent dans le coffre OS, jamais dans un
+/// fichier en clair (contrat vie privée) ; `Debug` est absent par prudence.
+#[derive(Clone, serde::Serialize, serde::Deserialize, Default)]
+pub struct StreamCfgPersistee {
+    #[serde(default)]
+    pub protocole: String,
+    #[serde(default)]
+    pub url: String,
+    #[serde(default)]
+    pub cle: Option<String>,
+    #[serde(default)]
+    pub codec: String,
+    #[serde(default)]
+    pub debit_kbps: u32,
+    #[serde(default)]
+    pub fps: u32,
+    /// Blobs écrits avant l'exposition du preset → `"equilibre"` (défaut
+    /// produit, jamais de chaîne vide qui mentirait à l'UI).
+    #[serde(default = "preset_defaut")]
+    pub preset: String,
+    #[serde(default)]
+    pub srt_passphrase: Option<String>,
+    #[serde(default)]
+    pub srt_latency_ms: Option<u32>,
+}
+
+/// Persiste la config stream dans le coffre (JSON). Les messages d'erreur
+/// ne portent jamais la valeur — ni clé ni passphrase ne peuvent fuiter
+/// dans un log.
+fn sauver_stream_cfg(cfg: &StreamCfgPersistee) -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_STREAM_SERVICE, KEYRING_STREAM_ACCOUNT)
+        .map_err(|e| format!("Keyring entry: {e}"))?;
+    let json = serde_json::to_string(cfg).map_err(|e| format!("Serialize stream cfg: {e}"))?;
+    entry
+        .set_password(&json)
+        .map_err(|e| format!("Keyring set: {e}"))
+}
+
+/// Lit la config stream persistée. `None` si le coffre est vide.
+fn lire_stream_cfg() -> Result<Option<StreamCfgPersistee>, String> {
+    let entry = keyring::Entry::new(KEYRING_STREAM_SERVICE, KEYRING_STREAM_ACCOUNT)
+        .map_err(|e| format!("Keyring entry: {e}"))?;
+    match entry.get_password() {
+        Ok(json) => serde_json::from_str(&json)
+            .map(Some)
+            .map_err(|e| format!("Deserialize stream cfg: {e}")),
+        Err(keyring::Error::NoEntry) => Ok(None),
+        Err(e) => Err(format!("Keyring get: {e}")),
+    }
+}
+
+fn preset_defaut() -> String {
+    "equilibre".to_string()
+}
+
+/// Efface la config stream du coffre. Idempotent — coffre déjà vide = Ok.
+fn effacer_stream_cfg() -> Result<(), String> {
+    let entry = keyring::Entry::new(KEYRING_STREAM_SERVICE, KEYRING_STREAM_ACCOUNT)
+        .map_err(|e| format!("Keyring entry: {e}"))?;
+    match entry.delete_credential() {
+        Ok(()) => Ok(()),
+        Err(keyring::Error::NoEntry) => Ok(()),
+        Err(e) => Err(format!("Keyring delete: {e}")),
+    }
+}
+
+/// « Oublier » : efface la config stream persistée (URL, clé, passphrase —
+/// tout le secret). Best-effort : un coffre déjà vide est un succès, pas
+/// une erreur.
+#[tauri::command]
+pub fn moteur_stream_oublier() -> Result<(), String> {
+    effacer_stream_cfg()
+}
+
+/// Dernière config stream persistée (pré-remplissage du formulaire UI).
+/// Renvoyée telle quelle — clé et passphrase comprises : le coffre
+/// appartient à l'utilisateur de la machine, comme les tokens
+/// Twitch/YouTube ; rien ne sort réseau.
+#[tauri::command]
+pub fn moteur_stream_config() -> Result<Option<StreamCfgPersistee>, String> {
+    lire_stream_cfg()
+}
+
+#[allow(clippy::too_many_arguments)]
+fn demarrer_stream_bloquant(
+    app: &AppHandle,
+    protocole: &str,
+    url: &str,
+    cle: Option<&str>,
+    codec: Option<&str>,
+    debit_kbps: Option<u32>,
+    fps: Option<u32>,
+    preset: Option<&str>,
+    srt_passphrase: Option<&str>,
+    srt_latency_ms: Option<u32>,
+) -> Result<String, String> {
+    let url = url.trim();
+    if url.is_empty() {
+        return Err("URL de flux vide".to_string());
+    }
+    let cle = cle
+        .map(str::trim)
+        .filter(|c| !c.is_empty())
+        .map(str::to_string);
+    let srt_passphrase = srt_passphrase
+        .map(str::trim)
+        .filter(|p| !p.is_empty());
+    let codec = resoudre_codec(codec)?;
+    let preset = resoudre_preset(preset);
+    let fps = fps.unwrap_or(60);
+    let debit_kbps = debit_kbps.unwrap_or(6000);
+    // Le schéma exact (rtmp://, rtmps://, srt://) est validé par le moteur
+    // avant tout contact GPU — pas de doublon ici.
+    let sink = match protocole {
+        "rtmp" => {
+            // Paramètres SRT sur un flux RTMP : erreur honnête — un
+            // paramètre ignoré silencieusement mentirait à l'utilisateur.
+            if srt_passphrase.is_some() || srt_latency_ms.is_some() {
+                return Err(
+                    "srt_passphrase / srt_latency_ms exigent le protocole srt".to_string(),
+                );
+            }
+            SinkCfg::Rtmp {
+                url: url.to_string(),
+            }
+        }
+        "srt" => SinkCfg::Srt {
+            url: srt_url_avec_params(url, srt_passphrase, srt_latency_ms)?,
+        },
+        autre => {
+            return Err(format!("protocole inconnu : {autre} (rtmp|srt attendu)"));
+        }
+    };
+    let scene = preparer_sortie(app)?;
+    let registre = app
+        .try_state::<RegistreMoteur>()
+        .ok_or("registre moteur absent")?;
+    let cfg = SortieCfg {
+        sinks: vec![sink],
+        canvas: (scene.canvasW, scene.canvasH),
+        fps,
+        codec,
+        debit_kbps,
+        preset: preset.clone(),
+        cle: cle.clone(),
+        audio: Some(AudioCfg::default()),
+    };
+    registre
+        .natif()
+        .demarrer_sortie(cfg)
+        .map_err(|e| e.to_string())?;
+    // Seule une config qui a réellement démarré est persistée ; un refus
+    // du coffre ne fait jamais échouer un stream déjà parti.
+    let persistee = StreamCfgPersistee {
+        protocole: protocole.to_string(),
+        url: url.to_string(),
+        cle,
+        codec: codec.id().to_string(),
+        debit_kbps,
+        fps,
+        preset,
+        srt_passphrase: srt_passphrase.map(str::to_string),
+        srt_latency_ms,
+    };
+    if let Err(e) = sauver_stream_cfg(&persistee) {
+        log::warn!("config stream non persistée (keyring) : {e}");
+    }
+    let cible = destination_publique(url);
+    registre.definir_session(SessionNatif {
+        cible: cible.clone(),
+        fps,
+    });
+    Ok(cible)
+}
+
+/// Destination affichable d'un flux : « schéma://autorité » seulement —
+/// le chemin d'une URL RTMP peut embarquer la clé (URL complète collée
+/// par l'utilisateur) et la query le `streamid` SRT. Ni l'un ni l'autre
+/// ne doit être affiché ni journalisé.
+fn destination_publique(url: &str) -> String {
+    let Some(pos) = url.find("://") else {
+        return "<flux>".to_string();
+    };
+    let autorite = url[pos + 3..].split(['/', '?']).next().unwrap_or_default();
+    format!("{}://{}", &url[..pos], autorite)
 }
 
 /// Bascule de mode. Refusée proprement si une sortie OBS **ou** native est
@@ -464,6 +781,469 @@ fn decoder_frame_input(frame: &str) -> Option<EtatInput> {
     })
 }
 
+/// Extrait une mutation goal d'une frame `chat_tx` — `communaute`,
+/// `viewers`, `goal-twitch`, `goal-atteint` (viewers.rs, déjà dédupliquées).
+///
+/// Même piège de tri des clés que [`decoder_frame_chat`] : test par
+/// sous-chaîne, puis validation du champ `type` après désérialisation. Le
+/// crate moteur n'a pas serde : la désérialisation vit ici, dans le pont.
+///
+/// `count: null` (viewers hors-ligne) et les champs communauté absents
+/// restent `None` — jamais de valeur fabriquée (« N/A » côté rendu).
+fn decoder_frame_goal(frame: &str) -> Option<MajGoal> {
+    let interesse = frame.contains("\"type\":\"communaute\"")
+        || frame.contains("\"type\":\"viewers\"")
+        || frame.contains("\"type\":\"goal-twitch\"")
+        || frame.contains("\"type\":\"goal-atteint\"");
+    if !interesse {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameGoal {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        plateforme: Option<String>,
+        // communaute
+        #[serde(default)]
+        followers: Option<u64>,
+        #[serde(default)]
+        subs: Option<u64>,
+        #[serde(default)]
+        sub_points: Option<u64>,
+        #[serde(default)]
+        abonnes: Option<u64>,
+        // viewers
+        #[serde(default)]
+        count: Option<u64>,
+        // goal-twitch
+        #[serde(default)]
+        id: Option<String>,
+        #[serde(default)]
+        goal_type: Option<String>,
+        #[serde(default)]
+        description: Option<String>,
+        #[serde(default)]
+        actuel: Option<u64>,
+        #[serde(default)]
+        cible: Option<u64>,
+        #[serde(default)]
+        termine: Option<bool>,
+        // goal-atteint
+        #[serde(default)]
+        widget_id: Option<String>,
+    }
+    let frame: FrameGoal = serde_json::from_str(frame).ok()?;
+    match frame.type_frame.as_str() {
+        "communaute" => Some(MajGoal::Communaute {
+            plateforme: frame.plateforme?,
+            compteurs: Communaute {
+                followers: frame.followers,
+                subs: frame.subs,
+                sub_points: frame.sub_points,
+                abonnes: frame.abonnes,
+            },
+        }),
+        "viewers" => Some(MajGoal::Viewers {
+            plateforme: frame.plateforme?,
+            count: frame.count,
+        }),
+        "goal-twitch" => Some(MajGoal::Twitch(GoalTwitch {
+            id: frame.id?,
+            goal_type: frame.goal_type.unwrap_or_default(),
+            description: frame.description.unwrap_or_default(),
+            actuel: frame.actuel.unwrap_or(0),
+            cible: frame.cible.unwrap_or(0),
+            termine: frame.termine.unwrap_or(false),
+        })),
+        "goal-atteint" => Some(MajGoal::Atteint {
+            widget_id: frame.widget_id?,
+        }),
+        _ => None,
+    }
+}
+
+/// Extrait un event speedrun d'une frame `chat_tx` — `speedrun-etat`
+/// (speedrun/commands.rs : le moteur ASL publie `{"type":"speedrun-etat",
+/// "etat":<SpeedrunEvent>}`).
+///
+/// Même motif que [`decoder_frame_goal`] : test par sous-chaîne, validation
+/// du champ `type` après désérialisation — le crate moteur n'a pas serde,
+/// la désérialisation vit ici. `etat` est l'enum `SpeedrunEvent` taguée
+/// `type` (asl_engine.rs) + l'event `lss` construit à la main par
+/// `emit_ws_lss_json`. Les events sans effet visuel du splitter (`error`,
+/// `settings-list`, `loaded`, `saved`) tombent en `Autre` → `None`, comme
+/// le `default:` du switch DOM.
+///
+/// `segmentTime` de l'event `time` garde sa sémantique tri-état du DOM
+/// (`!== undefined`) : absent → `None` (inchangé), `null` → `Some(None)`
+/// (effacé), chaîne → `Some(Some(…))`.
+fn decoder_frame_speedrun(frame: &str) -> Option<MajSpeedrun> {
+    if !frame.contains("\"type\":\"speedrun-etat\"") {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct SegmentBrut {
+        nom: String,
+        #[serde(rename = "pbRealTime", default)]
+        pb_real_time: Option<f64>,
+        #[serde(rename = "pbGameTime", default)]
+        pb_game_time: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    #[serde(tag = "type")]
+    enum EtatBrut {
+        #[serde(rename = "started")]
+        Started {
+            #[serde(default)]
+            index: Option<i32>,
+        },
+        #[serde(rename = "split")]
+        Split {
+            #[serde(default)]
+            time: Option<String>,
+            #[serde(default)]
+            cumul: Option<String>,
+            #[serde(default)]
+            index: Option<i32>,
+        },
+        #[serde(rename = "splitSkipped")]
+        SplitSkipped {
+            #[serde(default)]
+            index: Option<i32>,
+        },
+        #[serde(rename = "splitUndone")]
+        SplitUndone {
+            #[serde(default)]
+            index: Option<i32>,
+        },
+        #[serde(rename = "reset")]
+        Reset,
+        #[serde(rename = "ended")]
+        Ended {
+            #[serde(default)]
+            time: Option<String>,
+            #[serde(default)]
+            cumul: Option<String>,
+            #[serde(default)]
+            index: Option<i32>,
+        },
+        #[serde(rename = "goto")]
+        Goto {
+            #[serde(default)]
+            index: Option<i32>,
+            #[serde(default)]
+            phase: Option<String>,
+        },
+        #[serde(rename = "etat")]
+        Etat {
+            #[serde(default)]
+            phase: Option<String>,
+            #[serde(default)]
+            index: Option<i32>,
+            #[serde(rename = "splitTimes", default)]
+            split_times: Vec<Option<String>>,
+            #[serde(rename = "splitCumuls", default)]
+            split_cumuls: Vec<Option<String>>,
+            #[serde(rename = "realTime", default)]
+            real_time: Option<String>,
+            #[serde(rename = "gameTime", default)]
+            game_time: Option<String>,
+            #[serde(rename = "segmentTime", default)]
+            segment_time: Option<String>,
+        },
+        #[serde(rename = "gameTime")]
+        GameTime {
+            #[serde(default)]
+            time: Option<String>,
+        },
+        #[serde(rename = "time")]
+        Time {
+            #[serde(rename = "realTime", default)]
+            real_time: Option<String>,
+            #[serde(rename = "gameTime", default)]
+            game_time: Option<String>,
+            #[serde(rename = "segmentTime", default)]
+            segment_time: ChampOptionnel<String>,
+        },
+        #[serde(rename = "paused")]
+        Paused,
+        #[serde(rename = "resumed")]
+        Resumed,
+        #[serde(rename = "stopped")]
+        Stopped,
+        #[serde(rename = "connected")]
+        Connected {
+            #[serde(default)]
+            process: Option<String>,
+        },
+        #[serde(rename = "disconnected")]
+        Disconnected,
+        #[serde(rename = "lss")]
+        Lss {
+            #[serde(rename = "nomJeu", default)]
+            nom_jeu: String,
+            #[serde(rename = "nomCategorie", default)]
+            nom_categorie: String,
+            #[serde(default)]
+            segments: Vec<SegmentBrut>,
+        },
+        /// `error`, `settings-list`, `loaded`, `saved` et toute nouveauté :
+        /// sans effet visuel sur le widget — ignorées comme le `default:`
+        /// du DOM.
+        #[serde(other)]
+        Autre,
+    }
+    /// Tri-état JSON (`undefined`/`null`/valeur) : serde mappe `null` comme
+    /// l'absence dans `Option<Option<T>>` — ce type décode le champ *quand
+    /// il est présent* : `Absent` = non fourni (inchangé), `Present(v)` =
+    /// fourni, `v = None` quand `null` (effacé). Sémantique `!== undefined`
+    /// du DOM.
+    #[derive(Default)]
+    enum ChampOptionnel<T> {
+        #[default]
+        Absent,
+        Present(Option<T>),
+    }
+    impl<'de, T: serde::Deserialize<'de>> serde::Deserialize<'de> for ChampOptionnel<T> {
+        fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+            Option::<T>::deserialize(d).map(Self::Present)
+        }
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameSpeedrun {
+        #[serde(rename = "type")]
+        type_frame: String,
+        etat: EtatBrut,
+    }
+    let frame: FrameSpeedrun = serde_json::from_str(frame).ok()?;
+    if frame.type_frame != "speedrun-etat" {
+        return None;
+    }
+    Some(match frame.etat {
+        EtatBrut::Started { index } => MajSpeedrun::Started { index },
+        EtatBrut::Split { time, cumul, index } => {
+            MajSpeedrun::Split { time, cumul, index }
+        }
+        EtatBrut::SplitSkipped { index } => MajSpeedrun::SplitSkipped { index },
+        EtatBrut::SplitUndone { index } => MajSpeedrun::SplitUndone { index },
+        EtatBrut::Reset => MajSpeedrun::Reset,
+        EtatBrut::Ended { time, cumul, index } => {
+            MajSpeedrun::Ended { time, cumul, index }
+        }
+        EtatBrut::Goto { index, phase } => MajSpeedrun::Goto {
+            index,
+            phase: phase.map(|p| PhaseSpeedrun::depuis_nom(&p)),
+        },
+        EtatBrut::Etat {
+            phase,
+            index,
+            split_times,
+            split_cumuls,
+            real_time,
+            game_time,
+            segment_time,
+        } => MajSpeedrun::Etat {
+            phase: PhaseSpeedrun::depuis_nom(phase.as_deref().unwrap_or("")),
+            index,
+            split_times,
+            split_cumuls,
+            real_time,
+            game_time,
+            segment_time,
+        },
+        EtatBrut::GameTime { time } => MajSpeedrun::GameTime { time: time? },
+        EtatBrut::Time {
+            real_time,
+            game_time,
+            segment_time,
+        } => MajSpeedrun::Time {
+            real_time,
+            game_time,
+            // `!== undefined` du DOM : champ présent → assigné (null →
+            // efface le chrono de segment), absent → inchangé.
+            segment_time: match segment_time {
+                ChampOptionnel::Absent => None,
+                ChampOptionnel::Present(v) => Some(v),
+            },
+        },
+        EtatBrut::Paused => MajSpeedrun::Paused,
+        EtatBrut::Resumed => MajSpeedrun::Resumed,
+        EtatBrut::Stopped => MajSpeedrun::Stopped,
+        EtatBrut::Connected { process } => MajSpeedrun::Connected {
+            processus: process,
+        },
+        EtatBrut::Disconnected => MajSpeedrun::Disconnected,
+        EtatBrut::Lss {
+            nom_jeu,
+            nom_categorie,
+            segments,
+        } => MajSpeedrun::Lss {
+            nom_jeu,
+            nom_categorie,
+            segments: segments
+                .into_iter()
+                .map(|s| SegmentLss {
+                    nom: s.nom,
+                    pb_real_time: s.pb_real_time,
+                    pb_game_time: s.pb_game_time,
+                })
+                .collect(),
+        },
+        EtatBrut::Autre => return None,
+    })
+}
+
+/// Extrait une mutation de l'overlay alerte d'une frame `chat_tx` —
+/// `alerte-play` / `alerte-stop` / `alerte-config` (squelette
+/// `config.overlay`) / `position-overlay-config` (squelette unifié à la
+/// racine de `config`, partagé avec le clip de bienvenue — comme
+/// `applyAlerteOverlayConfig` du DOM).
+///
+/// Même motif que [`decoder_frame_goal`] : test par sous-chaîne, puis
+/// validation du champ `type` après désérialisation. `media_kind:"video"`
+/// n'est pas porté par le moteur → le média n'est transmis que pour une
+/// image (limite assumée, `texte/alertes.rs`) ; `son` n'est jamais
+/// transmis. Le crate moteur n'a pas serde : la désérialisation vit ici.
+fn decoder_frame_alerte(frame: &str) -> Option<MajAlerte> {
+    let interesse = frame.contains("\"type\":\"alerte-play\"")
+        || frame.contains("\"type\":\"alerte-stop\"")
+        || frame.contains("\"type\":\"alerte-config\"")
+        || frame.contains("\"type\":\"position-overlay-config\"");
+    if !interesse {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct AlerteBrute {
+        #[serde(default)]
+        texte: Option<String>,
+        #[serde(default)]
+        taille_px: Option<f32>,
+        #[serde(default)]
+        duree_ms: Option<u64>,
+        #[serde(default)]
+        media: Option<String>,
+        #[serde(default)]
+        media_kind: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct SqueletteBrut {
+        x: f64,
+        y: f64,
+        largeur: f64,
+        hauteur: f64,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ConfigBrute {
+        // `position-overlay-config` : squelette à la racine de `config`.
+        #[serde(default)]
+        x: Option<f64>,
+        #[serde(default)]
+        y: Option<f64>,
+        #[serde(default)]
+        largeur: Option<f64>,
+        #[serde(default)]
+        hauteur: Option<f64>,
+        // `alerte-config` : squelette dans `config.overlay`.
+        #[serde(default)]
+        overlay: Option<SqueletteBrut>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameAlerte {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        alerte: Option<AlerteBrute>,
+        #[serde(default)]
+        config: Option<ConfigBrute>,
+    }
+    let frame: FrameAlerte = serde_json::from_str(frame).ok()?;
+    match frame.type_frame.as_str() {
+        "alerte-play" => {
+            let a = frame.alerte?;
+            Some(MajAlerte::Play {
+                // Mêmes replis que `playAlerte` sans `alerte-config` :
+                // texte vide, taille 48 px, durée 5000 ms.
+                texte: a.texte.unwrap_or_default(),
+                taille_px: a.taille_px.unwrap_or(48.0),
+                duree_ms: a.duree_ms.unwrap_or(5000),
+                // Vidéo non portée par ce lot : carte texte seule — le
+                // DOM jouerait le `<video>`, le moteur n'a pas de lecteur.
+                media: match a.media_kind.as_deref() {
+                    Some("video") => None,
+                    _ => a.media,
+                },
+            })
+        }
+        "alerte-stop" => Some(MajAlerte::Stop),
+        "alerte-config" => frame
+            .config
+            .and_then(|c| c.overlay)
+            .map(|s| MajAlerte::Position {
+                x: s.x,
+                y: s.y,
+                largeur: s.largeur,
+                hauteur: s.hauteur,
+            }),
+        "position-overlay-config" => frame.config.and_then(|c| {
+            Some(MajAlerte::Position {
+                x: c.x?,
+                y: c.y?,
+                largeur: c.largeur?,
+                hauteur: c.hauteur?,
+            })
+        }),
+        _ => None,
+    }
+}
+
+/// Extrait un snapshot musique du payload de l'event Tauri `musique:update`
+/// (`MusiqueState::emit_update` → `etat()` : `en_cours` + `progression`
+/// figée à l'emit — le lecteur natif l'avance en local, comme le DOM).
+///
+/// Contrairement aux décodeurs `chat_tx`, le payload n'a **pas** de champ
+/// `type` : le nom de l'event Tauri le porte déjà — pas de filtre par
+/// sous-chaîne. `en_cours: null` = lecteur à l'arrêt ; `progression: null`
+/// (aucune piste) → position 0, non-pause, durée inconnue, comme l'état
+/// initial du DOM. Le crate moteur n'a pas serde : la désérialisation vit
+/// ici, dans le pont.
+fn decoder_payload_musique(payload: &str) -> Option<MajMusique> {
+    #[derive(serde::Deserialize, Default)]
+    struct ProgressionBrute {
+        #[serde(default)]
+        position_ms: u64,
+        #[serde(default)]
+        pausee: bool,
+        #[serde(default)]
+        duree_s: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct PisteBrute {
+        id: String,
+        titre: String,
+        demandeur: String,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct EtatMusiqueBrut {
+        #[serde(default)]
+        en_cours: Option<PisteBrute>,
+        #[serde(default)]
+        progression: Option<ProgressionBrute>,
+    }
+    let etat: EtatMusiqueBrut = serde_json::from_str(payload).ok()?;
+    let progression = etat.progression.unwrap_or_default();
+    Some(MajMusique {
+        en_cours: etat.en_cours.map(|p| Piste {
+            id: p.id,
+            titre: p.titre,
+            demandeur: p.demandeur,
+        }),
+        position_ms: progression.position_ms,
+        pausee: progression.pausee,
+        duree_s: progression.duree_s,
+    })
+}
+
 /// Extrait la scène d'une frame `snapshot` (`{"scene":…,"sceneId":…,"type":…}`).
 ///
 /// Même piège de tri des clés que [`decoder_frame_chat`] : test par
@@ -515,6 +1295,17 @@ pub fn demarrer_ecoute_chat(app: AppHandle) {
         return;
     };
     let mut rx = state.chat_tx.subscribe();
+    // L'état live musique ne transite PAS par chat_tx : `emit_update` émet
+    // l'event Tauri `musique:update` (dashboard). Le backend s'y abonne
+    // comme les webviews — même recette que `telemetrie/collecte.rs`.
+    let app_mu = app.clone();
+    app.listen_any("musique:update", move |event| {
+        if let Some(maj) = decoder_payload_musique(event.payload()) {
+            if let Some(registre) = app_mu.try_state::<RegistreMoteur>() {
+                registre.natif().pousser_musique(maj);
+            }
+        }
+    });
     tauri::async_runtime::spawn(async move {
         loop {
             match rx.recv().await {
@@ -526,6 +1317,18 @@ pub fn demarrer_ecoute_chat(app: AppHandle) {
                     } else if let Some(touches) = decoder_frame_input(&frame) {
                         if let Some(registre) = app.try_state::<RegistreMoteur>() {
                             registre.natif().pousser_input(touches);
+                        }
+                    } else if let Some(maj) = decoder_frame_goal(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_goal(maj);
+                        }
+                    } else if let Some(maj) = decoder_frame_speedrun(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_speedrun(maj);
+                        }
+                    } else if let Some(maj) = decoder_frame_alerte(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_alerte(maj);
                         }
                     }
                 }
@@ -770,6 +1573,86 @@ mod tests {
     }
 
     #[test]
+    fn destination_publique_ne_publie_jamais_la_cle() {
+        // Le chemin RTMP ou la query SRT peuvent embarquer la clé : seuls
+        // le schéma et l'autorité sont affichables/journalisables.
+        assert_eq!(
+            destination_publique("rtmp://live.example/app/cle-secrete"),
+            "rtmp://live.example"
+        );
+        assert_eq!(
+            destination_publique("rtmps://live.example/app"),
+            "rtmps://live.example"
+        );
+        assert_eq!(
+            destination_publique("srt://live.example:9000?streamid=cle-secrete"),
+            "srt://live.example:9000"
+        );
+        assert_eq!(destination_publique("pas-une-url"), "<flux>");
+    }
+
+    #[test]
+    fn resoudre_codec_defauts_et_erreurs() {
+        // Absent ou vide → défaut produit H.264 ; id stable accepté ;
+        // inconnu → erreur honnête, jamais de repli muet.
+        assert_eq!(resoudre_codec(None).unwrap(), Codec::H264);
+        assert_eq!(resoudre_codec(Some("  ")).unwrap(), Codec::H264);
+        assert_eq!(resoudre_codec(Some("hevc")).unwrap(), Codec::Hevc);
+        assert_eq!(resoudre_codec(Some("av1")).unwrap(), Codec::Av1);
+        assert!(resoudre_codec(Some("vp9")).is_err());
+    }
+
+    #[test]
+    fn resoudre_preset_defaut_et_valeur() {
+        // Absent ou vide → défaut produit ; valeur fournie conservée telle
+        // quelle (champ transporté, pas de liste blanche figée).
+        assert_eq!(resoudre_preset(None), "equilibre");
+        assert_eq!(resoudre_preset(Some("  ")), "equilibre");
+        assert_eq!(resoudre_preset(Some("qualite")), "qualite");
+        assert_eq!(resoudre_preset(Some(" performance ")), "performance");
+    }
+
+    #[test]
+    fn srt_url_avec_params_assemble_et_ne_duplique_pas() {
+        assert_eq!(
+            srt_url_avec_params("srt://h:9000", Some("pass"), Some(200)).unwrap(),
+            "srt://h:9000?passphrase=pass&latency=200"
+        );
+        assert_eq!(
+            srt_url_avec_params("srt://h:9000?streamid=k", Some("pass"), None).unwrap(),
+            "srt://h:9000?streamid=k&passphrase=pass"
+        );
+        // Déjà présent dans l'URL → l'utilisateur prime, pas de doublon.
+        assert_eq!(
+            srt_url_avec_params("srt://h:9000?latency=100", None, Some(200)).unwrap(),
+            "srt://h:9000?latency=100"
+        );
+        assert_eq!(
+            srt_url_avec_params("srt://h:9000?passphrase=x", Some("y"), None).unwrap(),
+            "srt://h:9000?passphrase=x"
+        );
+        // Caractères réservés refusés proprement — jamais de query cassée.
+        assert!(srt_url_avec_params("srt://h:9000", Some("a&b"), None).is_err());
+        assert!(srt_url_avec_params("srt://h:9000", Some("a b"), None).is_err());
+        // Aucun paramètre → URL inchangée.
+        assert_eq!(
+            srt_url_avec_params("srt://h:9000", None, None).unwrap(),
+            "srt://h:9000"
+        );
+    }
+
+    #[test]
+    fn stream_cfg_persistee_serde_tolere_les_champs_absents() {
+        // Blob minimal d'une ancienne version : tout champ manquant a un
+        // défaut — une config persistée ne casse jamais à la lecture.
+        let cfg: StreamCfgPersistee =
+            serde_json::from_str(r#"{"url":"srt://h:9000","protocole":"srt"}"#).unwrap();
+        assert_eq!(cfg.url, "srt://h:9000");
+        assert_eq!(cfg.preset, "equilibre");
+        assert!(cfg.cle.is_none() && cfg.srt_passphrase.is_none());
+    }
+
+    #[test]
     fn arret_idempotent_sans_session() {
         let registre = RegistreMoteur::nouveau(Mode::Natif);
         registre.arreter_natif();
@@ -794,6 +1677,302 @@ mod tests {
         assert!(decoder_frame_chat(r#"{"type":"eq-spectrum","data":[1,2,3]}"#).is_none());
         assert!(decoder_frame_chat("pas du json").is_none());
         assert!(decoder_frame_chat(r#"{"type":"chat"}"#).is_none());
+    }
+
+    #[test]
+    fn decoder_goal_accepte_les_quatre_frames_serde_json() {
+        // `serde_json::json!` trie les clés — les frames réelles ne
+        // commencent pas par "type" ; le décodeur matche par sous-chaîne.
+        let frame = serde_json::json!({
+            "type": "communaute", "plateforme": "twitch",
+            "followers": 42, "subs": 7,
+        })
+        .to_string();
+        let Some(MajGoal::Communaute {
+            plateforme,
+            compteurs,
+        }) = decoder_frame_goal(&frame)
+        else {
+            panic!("frame communaute non reconnue : {frame}");
+        };
+        assert_eq!(plateforme, "twitch");
+        assert_eq!(compteurs.followers, Some(42));
+        assert_eq!(compteurs.subs, Some(7));
+        assert_eq!(compteurs.sub_points, None, "champ absent = non mesuré");
+
+        let frame =
+            serde_json::json!({"type": "viewers", "plateforme": "kick", "count": 12}).to_string();
+        assert!(matches!(
+            decoder_frame_goal(&frame),
+            Some(MajGoal::Viewers {
+                count: Some(12), ..
+            })
+        ));
+        // count:null = hors-ligne → None (jamais Some(0) inventé).
+        let frame =
+            serde_json::json!({"type": "viewers", "plateforme": "kick", "count": null}).to_string();
+        assert!(matches!(
+            decoder_frame_goal(&frame),
+            Some(MajGoal::Viewers { count: None, .. })
+        ));
+
+        let frame = serde_json::json!({
+            "type": "goal-twitch", "id": "g1", "goal_type": "follower",
+            "description": "", "actuel": 10, "cible": 50,
+            "atteint": false, "termine": false,
+        })
+        .to_string();
+        let Some(MajGoal::Twitch(g)) = decoder_frame_goal(&frame) else {
+            panic!("frame goal-twitch non reconnue : {frame}");
+        };
+        assert_eq!(g.id, "g1");
+        assert_eq!((g.actuel, g.cible), (10, 50));
+        assert!(!g.termine);
+
+        let frame =
+            serde_json::json!({"type": "goal-atteint", "widget_id": "w1", "count": 500}).to_string();
+        assert!(matches!(
+            decoder_frame_goal(&frame),
+            Some(MajGoal::Atteint { widget_id }) if widget_id == "w1"
+        ));
+    }
+
+    #[test]
+    fn decoder_goal_ignore_les_autres_frames() {
+        assert!(decoder_frame_goal(r#"{"type":"chat","message":{}}"#).is_none());
+        assert!(decoder_frame_goal(r#"{"type":"eq-spectrum","data":[]}"#).is_none());
+        assert!(decoder_frame_goal("pas du json").is_none());
+        // Type intéressant mais clé obligatoire absente → None.
+        assert!(decoder_frame_goal(r#"{"type":"viewers","count":5}"#).is_none());
+        assert!(decoder_frame_goal(r#"{"type":"goal-atteint"}"#).is_none());
+        assert!(decoder_frame_goal(r#"{"type":"goal-twitch","actuel":1}"#).is_none());
+    }
+
+    #[test]
+    fn decoder_speedrun_accepte_lss_started_split_et_ended() {
+        // `lss` : event construit à la main par `emit_ws_lss_json` (camelCase).
+        let frame = serde_json::json!({
+            "type": "speedrun-etat",
+            "etat": {
+                "type": "lss",
+                "nomJeu": "MGS",
+                "nomCategorie": "Any%",
+                "segments": [
+                    {"nom": "Dock", "pbRealTime": 83.45, "pbGameTime": null},
+                    {"nom": "Heliport", "pbRealTime": 225.0}
+                ],
+            },
+        })
+        .to_string();
+        let Some(MajSpeedrun::Lss {
+            nom_jeu,
+            nom_categorie,
+            segments,
+        }) = decoder_frame_speedrun(&frame)
+        else {
+            panic!("frame lss non reconnue : {frame}");
+        };
+        assert_eq!((nom_jeu.as_str(), nom_categorie.as_str()), ("MGS", "Any%"));
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].pb_real_time, Some(83.45));
+        assert_eq!(segments[0].pb_game_time, None);
+        assert_eq!(segments[1].nom, "Heliport");
+
+        let frame = serde_json::json!({
+            "type": "speedrun-etat", "etat": {"type": "started", "index": 0}
+        })
+        .to_string();
+        assert!(matches!(
+            decoder_frame_speedrun(&frame),
+            Some(MajSpeedrun::Started { index: Some(0) })
+        ));
+
+        let frame = serde_json::json!({
+            "type": "speedrun-etat",
+            "etat": {"type": "split", "time": "01:20.00", "cumul": "01:20.00", "index": 1},
+        })
+        .to_string();
+        assert!(matches!(
+            decoder_frame_speedrun(&frame),
+            Some(MajSpeedrun::Split { index: Some(1), time: Some(_), cumul: Some(_) })
+        ));
+
+        let frame = serde_json::json!({
+            "type": "speedrun-etat",
+            "etat": {"type": "ended", "time": "10:00.00", "cumul": "10:00.00", "index": 3},
+        })
+        .to_string();
+        assert!(matches!(
+            decoder_frame_speedrun(&frame),
+            Some(MajSpeedrun::Ended { index: Some(3), .. })
+        ));
+    }
+
+    #[test]
+    fn decoder_speedrun_time_distingue_null_et_absent() {
+        // `segmentTime: null` → Some(None) (le DOM assigne la valeur présente,
+        // null compris) ; absent → None (inchangé, `!== undefined`).
+        let frame = serde_json::json!({
+            "type": "speedrun-etat",
+            "etat": {"type": "time", "realTime": "01:10.50", "gameTime": null, "segmentTime": null},
+        })
+        .to_string();
+        let Some(MajSpeedrun::Time {
+            real_time,
+            game_time,
+            segment_time,
+        }) = decoder_frame_speedrun(&frame)
+        else {
+            panic!("frame time non reconnue : {frame}");
+        };
+        assert_eq!(real_time.as_deref(), Some("01:10.50"));
+        assert_eq!(game_time, None);
+        assert_eq!(segment_time, Some(None), "segmentTime null = effacer");
+
+        let frame = serde_json::json!({
+            "type": "speedrun-etat",
+            "etat": {"type": "time", "realTime": "01:11.00", "gameTime": "01:09.00"},
+        })
+        .to_string();
+        assert!(matches!(
+            decoder_frame_speedrun(&frame),
+            Some(MajSpeedrun::Time { segment_time: None, .. })
+        ));
+    }
+
+    #[test]
+    fn decoder_speedrun_etat_goto_et_connexion() {
+        // `etat` : resync complet (phase, index, splits, chronos).
+        let frame = serde_json::json!({
+            "type": "speedrun-etat",
+            "etat": {
+                "type": "etat", "phase": "Running", "index": 1,
+                "splitTimes": ["01:20.00", null], "splitCumuls": ["01:20.00", null],
+                "realTime": "02:00.00", "gameTime": "01:58.00", "segmentTime": "00:40.00",
+            },
+        })
+        .to_string();
+        let Some(MajSpeedrun::Etat {
+            phase,
+            index,
+            split_times,
+            split_cumuls,
+            segment_time,
+            ..
+        }) = decoder_frame_speedrun(&frame)
+        else {
+            panic!("frame etat non reconnue : {frame}");
+        };
+        assert_eq!(phase, PhaseSpeedrun::Running);
+        assert_eq!(index, Some(1));
+        assert_eq!(split_times.len(), 2);
+        assert_eq!(split_cumuls[0].as_deref(), Some("01:20.00"));
+        assert_eq!(segment_time.as_deref(), Some("00:40.00"));
+
+        // `goto` : le nom de phase est traduit en enum.
+        let frame = serde_json::json!({
+            "type": "speedrun-etat",
+            "etat": {"type": "goto", "index": 2, "phase": "Paused"},
+        })
+        .to_string();
+        assert!(matches!(
+            decoder_frame_speedrun(&frame),
+            Some(MajSpeedrun::Goto {
+                index: Some(2),
+                phase: Some(PhaseSpeedrun::Paused),
+            })
+        ));
+
+        let frame = serde_json::json!({
+            "type": "speedrun-etat",
+            "etat": {"type": "connected", "process": "mgs.exe", "pid": 1234},
+        })
+        .to_string();
+        assert!(matches!(
+            decoder_frame_speedrun(&frame),
+            Some(MajSpeedrun::Connected {
+                processus: Some(ref p)
+            }) if p == "mgs.exe"
+        ));
+    }
+
+    #[test]
+    fn decoder_speedrun_ignore_les_autres_frames_et_events_muets() {
+        assert!(decoder_frame_speedrun(r#"{"type":"chat","message":{}}"#).is_none());
+        assert!(decoder_frame_speedrun("pas du json").is_none());
+        assert!(decoder_frame_speedrun(r#"{"type":"speedrun-etat"}"#).is_none());
+        // Events sans effet visuel sur le widget (`default:` du DOM).
+        for etat in [
+            serde_json::json!({"type": "error", "message": "oops"}),
+            serde_json::json!({"type": "settings-list", "settings": []}),
+            serde_json::json!({"type": "loaded"}),
+            serde_json::json!({"type": "saved", "chemin": "run.lss"}),
+        ] {
+            let frame = serde_json::json!({
+                "type": "speedrun-etat", "etat": etat,
+            })
+            .to_string();
+            assert!(
+                decoder_frame_speedrun(&frame).is_none(),
+                "event sans effet visuel accepté : {frame}"
+            );
+        }
+        // Events de contrôle : poussés au moteur (phase, index, splits).
+        for etat in [
+            serde_json::json!({"type": "reset"}),
+            serde_json::json!({"type": "stopped"}),
+            serde_json::json!({"type": "paused"}),
+            serde_json::json!({"type": "resumed"}),
+            serde_json::json!({"type": "disconnected"}),
+            serde_json::json!({"type": "splitSkipped", "index": 2}),
+            serde_json::json!({"type": "splitUndone", "index": 1}),
+            serde_json::json!({"type": "gameTime", "time": "01:00.00"}),
+        ] {
+            let frame = serde_json::json!({
+                "type": "speedrun-etat", "etat": etat,
+            })
+            .to_string();
+            assert!(
+                decoder_frame_speedrun(&frame).is_some(),
+                "event de contrôle ignoré : {frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn decoder_musique_accepte_le_payload_etat() {
+        // Payload de `musique:update` = `MusiqueState::etat()` sérialisé
+        // (pas de champ `type` — le nom de l'event le porte déjà).
+        let payload = serde_json::json!({
+            "config": {},
+            "en_cours": {
+                "id": "p1", "titre": "Morceau",
+                "src": "medias/musique/m.mp3",
+                "demandeur": "viewer", "plateforme": "twitch",
+            },
+            "file": [],
+            "bibliotheque": [],
+            "progression": {"position_ms": 5000, "pausee": false, "duree_s": 200.0},
+            "cooldowns_actifs": [],
+        })
+        .to_string();
+        let maj = decoder_payload_musique(&payload).expect("payload décodé");
+        let piste = maj.en_cours.expect("piste en cours");
+        assert_eq!(
+            (piste.id.as_str(), piste.titre.as_str(), piste.demandeur.as_str()),
+            ("p1", "Morceau", "viewer")
+        );
+        assert_eq!(maj.position_ms, 5000);
+        assert!(!maj.pausee);
+        assert_eq!(maj.duree_s, Some(200.0));
+
+        // Lecteur à l'arrêt : `en_cours`/`progression` null → état initial.
+        let payload = serde_json::json!({"en_cours": null, "progression": null}).to_string();
+        let maj = decoder_payload_musique(&payload).expect("payload arrêt décodé");
+        assert!(maj.en_cours.is_none());
+        assert_eq!(maj.position_ms, 0);
+        assert!(maj.duree_s.is_none());
+        assert!(decoder_payload_musique("pas du json").is_none());
     }
 
     #[test]

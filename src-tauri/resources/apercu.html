@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aperçu — StreamOS</title>
+    <style>
+      /* Fond en dur — NE PAS dépendre de theme-sos.css (non chargé ici). */
+      * { margin: 0; padding: 0; box-sizing: border-box; }
+      html, body {
+        width: 100%;
+        height: 100%;
+        background: #000;
+        overflow: hidden;
+        -webkit-user-select: none;
+        user-select: none;
+      }
+      canvas {
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        display: block;
+      }
+      #statut {
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        color: #8a8a8f;
+        font: 13px system-ui, "Segoe UI", sans-serif;
+        text-align: center;
+        padding: 1rem;
+        pointer-events: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="ecran"></canvas>
+    <div id="statut">En attente du moteur…</div>
+    <script>
+      // Projecteur natif : affiche l'aperçu réduit du moteur Rust (~10 fps)
+      // via poll IPC — la commande `moteur_apercu` démarre la session si
+      // rien ne tourne (fenêtre ouverte = demande) et renvoie le dernier
+      // buffer `[w u32 LE][h u32 LE][BGRA]` (vide = pas encore de frame).
+      var TAURI = window.__TAURI__;
+      var ecran = document.getElementById("ecran");
+      var ctx = ecran.getContext("2d");
+      var statut = document.getElementById("statut");
+      // Canvas source à la taille exacte de la frame aperçu (480 px de
+      // large, ratio du canvas) — dessiné letterboxé dans la fenêtre.
+      var src = document.createElement("canvas");
+      var sctx = src.getContext("2d");
+
+      window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
+
+      // Letterbox : l'aperçu est dessiné au ratio du canvas moteur, centré,
+      // sur fond noir — la fenêtre est librement redimensionnable.
+      function dessiner() {
+        ctx.fillStyle = "#000";
+        ctx.fillRect(0, 0, ecran.width, ecran.height);
+        if (src.width === 0 || src.height === 0) return;
+        var s = Math.min(ecran.width / src.width, ecran.height / src.height);
+        var w = Math.round(src.width * s);
+        var h = Math.round(src.height * s);
+        ctx.drawImage(src, (ecran.width - w) / 2, (ecran.height - h) / 2, w, h);
+      }
+
+      function ajuster() {
+        var w = ecran.clientWidth;
+        var h = ecran.clientHeight;
+        if (w > 0 && h > 0 && (ecran.width !== w || ecran.height !== h)) {
+          ecran.width = w;
+          ecran.height = h;
+          dessiner();
+        }
+      }
+      window.addEventListener("resize", ajuster);
+
+      async function tick() {
+        try {
+          var buf = await TAURI.core.invoke("moteur_apercu");
+          if (!buf || buf.byteLength < 8) {
+            statut.textContent = "En attente du moteur…";
+            return;
+          }
+          var dv = new DataView(buf);
+          var w = dv.getUint32(0, true);
+          var h = dv.getUint32(4, true);
+          if (w === 0 || h === 0 || buf.byteLength !== 8 + w * h * 4) return;
+          var px = new Uint8ClampedArray(buf, 8);
+          // BGRA -> RGBA : l'aperçu moteur est BGRA8, le canvas attend RGBA.
+          for (var i = 0; i < px.length; i += 4) {
+            var b = px[i];
+            px[i] = px[i + 2];
+            px[i + 2] = b;
+          }
+          if (src.width !== w || src.height !== h) {
+            src.width = w;
+            src.height = h;
+          }
+          sctx.putImageData(new ImageData(px, w, h), 0, 0);
+          dessiner();
+          statut.textContent = "";
+        } catch (e) {
+          // Erreur de commande (moteur en panne, mode OBS…) : affichée,
+          // le poll continue — une reprise du moteur la fait disparaître.
+          statut.textContent = String(e);
+        }
+      }
+
+      ajuster();
+      tick();
+      setInterval(tick, 100);
+    </script>
+  </body>
+</html>

@@ -12,7 +12,8 @@
 //! `appliquer_scene` (trait — différentiel, file bornée drop-oldest).
 //!
 //! Limites assumées :
-//! - sorties fichier seulement (MP4 fragmenté / MKV) ; RTMP/SRT plus tard ;
+//! - sorties fichier (MP4 fragmenté / MKV) et live RTMP/SRT via le sidecar
+//!   FFmpeg (`-f flv` / `-f mpegts`) — sans reconnexion ni backoff à ce lot ;
 //! - caméra Media Foundation (`capture/camera.rs`) : ni fond vert ni
 //!   anneau `cameraBord` à ce lot ;
 //! - le gouverneur **constate** et trace sa décision, il ne reconfigure pas
@@ -46,15 +47,18 @@ use crate::compteurs::{CompteursMoteur, Instantane};
 use crate::encode::detect;
 use crate::encode::mft::EncodeurMft;
 use crate::encode::nvenc::EncodeurNvenc;
-use crate::encode::{detect::EncodeurDispo, ErreurEncodage};
+use crate::encode::{detect::EncodeurDispo, ErreurEncodage, Preset};
 use crate::gouverneur::{Action, Gouverneur, Mesures};
 use crate::gpu::{ContexteGpu, DescTexture, Format};
 use crate::input::{EtatInput, FileInput, InputCfg};
 use crate::media::{CarrouselCfg, MediaCfg, MediaChargee, PerspCfg};
-use crate::output::ffmpeg::FfmpegSink;
+use crate::output::ffmpeg::{FfmpegSink, FormatReseau};
 use crate::preview::Apercu;
 use crate::scene_sources::BoiteCfg;
-use crate::texte::{DessinateurTexte, TexteCfg};
+use crate::texte::{
+    DessinateurTexte, EtatAlertes, EtatGoals, EtatMusique, EtatSpeedrun, GoalCfg, HorlogeCfg,
+    MajAlerte, MajGoal, MajMusique, MajSpeedrun, MusiqueCfg, SpeedrunCfg, TexteCfg, Z_ALERTES,
+};
 
 /// Ce que le moteur capture.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -142,6 +146,37 @@ pub struct MoteurNatif {
     chats: Mutex<Vec<ChatCfg>>,
     /// Widgets input-viewer (mode, disposition, skin, couleur).
     inputs: Mutex<Vec<InputCfg>>,
+    /// Modules horloge de la scène (`scene.modules.horloge` actif).
+    horloges: Mutex<Vec<HorlogeCfg>>,
+    /// Widgets `type: "goal"` de la scène (compteur + cible + barre).
+    goals: Mutex<Vec<GoalCfg>>,
+    /// État vivant des compteurs goal : l'app le pousse pendant
+    /// l'enregistrement (frames `communaute`/`viewers`/`goal-twitch`/
+    /// `goal-atteint`), comme le chat.
+    goals_etat: Arc<Mutex<EtatGoals>>,
+    /// Widgets `type: "speedrun"` de la scène (splitter ASL).
+    speedruns: Mutex<Vec<SpeedrunCfg>>,
+    /// État vivant du splitter : l'app le pousse pendant l'enregistrement
+    /// (frames `speedrun-etat` du canal `chat_tx` — tick ~15 Hz en run).
+    /// Un seul état partagé : le DOM applique chaque event à tous les
+    /// widgets speedrun (équivalent des `pendingLss`/`pendingEtat`).
+    speedruns_etat: Arc<Mutex<EtatSpeedrun>>,
+    /// Widgets `type: "musique"` de la scène (lecteur Winamp).
+    musiques: Mutex<Vec<MusiqueCfg>>,
+    /// État vivant du lecteur : l'app le pousse pendant l'enregistrement
+    /// (events Tauri `musique:update` — snapshots `MusiqueState::etat`,
+    /// position figée à l'emit). Un seul état partagé : le DOM applique
+    /// l'état courant à tous les widgets musique, comme le speedrun.
+    musiques_etat: Arc<Mutex<EtatMusique>>,
+    /// État vivant de l'overlay alerte : l'app le pousse pendant
+    /// l'enregistrement (frames `alerte-play` / `alerte-stop` /
+    /// `alerte-config` / `position-overlay-config` du canal `chat_tx`) —
+    /// transitoire, jamais porté par la scène.
+    alertes_etat: Arc<Mutex<EtatAlertes>>,
+    /// Gabarit du cadre de scène pour la carte alerte
+    /// (`appliquerCadreOverlay` : le style du `cadreWidget` actif est
+    /// appliqué à la taille de la carte — rect nul, mesuré au rendu).
+    cadre_overlay_alerte: Mutex<Option<CadreCfg>>,
     /// État vivant des touches : l'app le pousse pendant l'enregistrement.
     input: Arc<Mutex<FileInput>>,
     /// Boîtes à voile (`.widget`) : fond + bordure, hors `sansCadre`,
@@ -196,6 +231,15 @@ impl MoteurNatif {
             cadres: Mutex::new(Vec::new()),
             chats: Mutex::new(Vec::new()),
             inputs: Mutex::new(Vec::new()),
+            horloges: Mutex::new(Vec::new()),
+            goals: Mutex::new(Vec::new()),
+            goals_etat: Arc::new(Mutex::new(EtatGoals::nouveau())),
+            speedruns: Mutex::new(Vec::new()),
+            speedruns_etat: Arc::new(Mutex::new(EtatSpeedrun::nouveau())),
+            musiques: Mutex::new(Vec::new()),
+            musiques_etat: Arc::new(Mutex::new(EtatMusique::nouveau())),
+            alertes_etat: Arc::new(Mutex::new(EtatAlertes::nouveau())),
+            cadre_overlay_alerte: Mutex::new(None),
             input: Arc::new(Mutex::new(FileInput::nouveau())),
             boites: Mutex::new(Vec::new()),
             chat: Arc::new(Mutex::new(FileChat::nouveau())),
@@ -344,6 +388,162 @@ impl MoteurNatif {
             .clone()
     }
 
+    /// Remplace les modules horloge (rect, options, cadre opt-in).
+    pub fn configurer_horloges(&self, horloges: Vec<HorlogeCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.horloges.lock().unwrap_or_else(|e| e.into_inner()) = horloges;
+        Ok(())
+    }
+
+    /// Modules horloge configurés (diagnostic / tests).
+    pub fn horloges(&self) -> Vec<HorlogeCfg> {
+        self.horloges
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Remplace les widgets goal (rect, plateforme/métrique/cible ou goalId).
+    pub fn configurer_goals(&self, goals: Vec<GoalCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.goals.lock().unwrap_or_else(|e| e.into_inner()) = goals;
+        Ok(())
+    }
+
+    /// Widgets goal configurés (diagnostic / tests).
+    pub fn goals(&self) -> Vec<GoalCfg> {
+        self.goals
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Pousse une mutation goal (frames `communaute`, `viewers`,
+    /// `goal-twitch`, `goal-atteint` du canal `chat_tx`).
+    ///
+    /// **Jamais refusé pendant un enregistrement**, comme le chat : c'est le
+    /// canal par lequel les compteurs arrivent après le démarrage.
+    pub fn pousser_goal(&self, maj: MajGoal) {
+        self.goals_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj);
+    }
+
+    /// Version de l'état goal (diagnostic / tests).
+    pub fn goals_version(&self) -> u64 {
+        self.goals_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Remplace les widgets speedrun (rect, options `sr*`, cadre).
+    pub fn configurer_speedruns(&self, speedruns: Vec<SpeedrunCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.speedruns.lock().unwrap_or_else(|e| e.into_inner()) = speedruns;
+        Ok(())
+    }
+
+    /// Widgets speedrun configurés (diagnostic / tests).
+    pub fn speedruns(&self) -> Vec<SpeedrunCfg> {
+        self.speedruns
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Pousse un event speedrun (frame `speedrun-etat` du canal `chat_tx` —
+    /// tick du timer, split, LSS…).
+    ///
+    /// **Jamais refusé pendant un enregistrement**, comme `pousser_goal` :
+    /// c'est le canal par lequel l'état du splitter arrive après le
+    /// démarrage.
+    pub fn pousser_speedrun(&self, maj: MajSpeedrun) {
+        self.speedruns_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj);
+    }
+
+    /// Version de l'état speedrun (diagnostic / tests).
+    pub fn speedruns_version(&self) -> u64 {
+        self.speedruns_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Remplace les widgets musique (rect, `musiqueMode`, cadre).
+    pub fn configurer_musiques(&self, musiques: Vec<MusiqueCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.musiques.lock().unwrap_or_else(|e| e.into_inner()) = musiques;
+        Ok(())
+    }
+
+    /// Widgets musique configurés (diagnostic / tests).
+    pub fn musiques(&self) -> Vec<MusiqueCfg> {
+        self.musiques
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Pousse un snapshot musique (event Tauri `musique:update` — état
+    /// complet de `MusiqueState::etat` : piste en cours + progression
+    /// figée à l'emit).
+    ///
+    /// **Jamais refusé pendant un enregistrement**, comme `pousser_goal` :
+    /// c'est le canal par lequel l'état du lecteur arrive après le
+    /// démarrage.
+    pub fn pousser_musique(&self, maj: MajMusique) {
+        self.musiques_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj);
+    }
+
+    /// Version de l'état musique (diagnostic / tests).
+    pub fn musiques_version(&self) -> u64 {
+        self.musiques_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Pousse une mutation de l'overlay alerte (frames `alerte-play`,
+    /// `alerte-stop`, `alerte-config` et `position-overlay-config` du
+    /// canal `chat_tx` — le squelette de position est partagé avec le
+    /// clip de bienvenue, comme `applyAlerteOverlayConfig` du DOM).
+    ///
+    /// **Jamais refusé pendant un enregistrement**, comme `pousser_goal` :
+    /// c'est le canal par lequel les alertes arrivent après le démarrage.
+    /// `base` (dossier des données — `medias/` y est relatif) est relue à
+    /// chaque push : posée par `configurer_scene` / `configurer_base`.
+    pub fn pousser_alerte(&self, maj: MajAlerte) {
+        let base = self.base.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        self.alertes_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj, &base);
+    }
+
+    /// Version de l'état alerte (diagnostic / tests).
+    pub fn alertes_version(&self) -> u64 {
+        self.alertes_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
     /// Pousse l'état du périphérique (frame `input-viewer-etat`, 30 Hz).
     ///
     /// **Jamais refusé pendant un enregistrement**, comme le chat : c'est le
@@ -442,7 +642,12 @@ impl MoteurNatif {
             chats: crate::scene_sources::chat_depuis_scene(scene),
             boites: crate::scene_sources::boites_depuis_scene(scene),
             inputs: crate::scene_sources::input_depuis_scene(scene),
+            horloges: crate::scene_sources::horloges_depuis_scene(scene),
+            goals: crate::scene_sources::goals_depuis_scene(scene),
+            speedruns: crate::scene_sources::speedruns_depuis_scene(scene),
+            musiques: crate::scene_sources::musiques_depuis_scene(scene),
             persps: crate::scene_sources::persps_depuis_scene(scene),
+            cadre_overlay_alerte: cadre_overlay_alerte(scene),
         }
     }
 
@@ -456,7 +661,15 @@ impl MoteurNatif {
         *self.chats.lock().unwrap_or_else(|e| e.into_inner()) = lot.chats.clone();
         *self.boites.lock().unwrap_or_else(|e| e.into_inner()) = lot.boites.clone();
         *self.inputs.lock().unwrap_or_else(|e| e.into_inner()) = lot.inputs.clone();
+        *self.horloges.lock().unwrap_or_else(|e| e.into_inner()) = lot.horloges.clone();
+        *self.goals.lock().unwrap_or_else(|e| e.into_inner()) = lot.goals.clone();
+        *self.speedruns.lock().unwrap_or_else(|e| e.into_inner()) = lot.speedruns.clone();
+        *self.musiques.lock().unwrap_or_else(|e| e.into_inner()) = lot.musiques.clone();
         *self.persps.lock().unwrap_or_else(|e| e.into_inner()) = lot.persps.clone();
+        *self
+            .cadre_overlay_alerte
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = lot.cadre_overlay_alerte.clone();
     }
 
     /// Photographie des compteurs (diagnostic, lot 2.9).
@@ -496,6 +709,10 @@ impl MoteurNatif {
             chats: self.chats(),
             boites: self.boites(),
             inputs: self.inputs(),
+            horloges: self.horloges(),
+            goals: self.goals(),
+            speedruns: self.speedruns(),
+            musiques: self.musiques(),
             persps: self
                 .persps
                 .lock()
@@ -504,6 +721,15 @@ impl MoteurNatif {
             canvas: *self.canvas.lock().unwrap_or_else(|e| e.into_inner()),
             chat: Arc::clone(&self.chat),
             input: Arc::clone(&self.input),
+            goals_etat: Arc::clone(&self.goals_etat),
+            speedruns_etat: Arc::clone(&self.speedruns_etat),
+            musiques_etat: Arc::clone(&self.musiques_etat),
+            alertes_etat: Arc::clone(&self.alertes_etat),
+            cadre_overlay_alerte: self
+                .cadre_overlay_alerte
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
         }
     }
 
@@ -646,7 +872,9 @@ impl Moteur for MoteurNatif {
             roi_encode: false,
             multi_format: false,
             hdr: false,
-            srt: false,
+            // SRT via le sidecar FFmpeg (libsrt dans le binaire embarqué,
+            // vérifié : protocole `srt` + muxeur `mpegts` présents).
+            srt: true,
             ndi: false,
         }
     }
@@ -700,20 +928,32 @@ impl Moteur for MoteurNatif {
         for sink in &cfg.sinks {
             match sink {
                 SinkCfg::Fichier { .. } | SinkCfg::Apercu => {}
-                SinkCfg::Rtmp { .. } | SinkCfg::Srt { .. } => {
-                    return Err(ErreurMoteur::Indisponible(
-                        "RTMP/SRT : lot ultérieur (muxeur portant les PTS)".to_string(),
-                    ));
+                // Validé ici, avant tout contact GPU : une URL au schéma
+                // inattendu est une erreur de configuration, pas une panne
+                // réseau (ffmpeg la refuserait au premier paquet écrit).
+                SinkCfg::Rtmp { url } => {
+                    if !(url.starts_with("rtmp://") || url.starts_with("rtmps://")) {
+                        return Err(ErreurMoteur::Configuration(
+                            "URL RTMP attendue (rtmp://… ou rtmps://…)".to_string(),
+                        ));
+                    }
+                }
+                SinkCfg::Srt { url } => {
+                    if !url.starts_with("srt://") {
+                        return Err(ErreurMoteur::Configuration(
+                            "URL SRT attendue (srt://hôte:port)".to_string(),
+                        ));
+                    }
                 }
             }
         }
         if !cfg
             .sinks
             .iter()
-            .any(|s| matches!(s, SinkCfg::Fichier { .. }))
+            .any(|s| !matches!(s, SinkCfg::Apercu))
         {
             return Err(ErreurMoteur::Configuration(
-                "aucune sortie fichier demandée".to_string(),
+                "aucune sortie demandée".to_string(),
             ));
         }
 
@@ -728,9 +968,14 @@ impl Moteur for MoteurNatif {
             && scene.textes.is_empty()
             && scene.chats.is_empty()
             && scene.inputs.is_empty()
+            && scene.horloges.is_empty()
+            && scene.goals.is_empty()
+            && scene.speedruns.is_empty()
+            && scene.musiques.is_empty()
         {
             return Err(ErreurMoteur::Configuration(
-                "aucune source, média, texte, chat ni input-viewer configuré".to_string(),
+                "aucune source, média, texte, chat, input-viewer, goal, horloge, speedrun ni musique configuré"
+                    .to_string(),
             ));
         }
         for source in &scene.sources {
@@ -823,7 +1068,13 @@ struct LotScene {
     chats: Vec<ChatCfg>,
     boites: Vec<BoiteCfg>,
     inputs: Vec<InputCfg>,
+    horloges: Vec<HorlogeCfg>,
+    goals: Vec<GoalCfg>,
+    speedruns: Vec<SpeedrunCfg>,
+    musiques: Vec<MusiqueCfg>,
     persps: Vec<PerspCfg>,
+    /// Gabarit du cadre de la carte alerte (style de la scène, rect nul).
+    cadre_overlay_alerte: Option<CadreCfg>,
 }
 
 /// Contenu figé d'une session d'enregistrement (captures, médias, textes,
@@ -836,6 +1087,14 @@ struct SceneChargee {
     chats: Vec<ChatCfg>,
     boites: Vec<BoiteCfg>,
     inputs: Vec<InputCfg>,
+    /// Modules horloge de la scène (config + options, z `Z_MODULES`).
+    horloges: Vec<HorlogeCfg>,
+    /// Widgets goal de la scène (z du widget, cadre à l'échelle bulle).
+    goals: Vec<GoalCfg>,
+    /// Widgets speedrun de la scène (z du widget, cadre de scène).
+    speedruns: Vec<SpeedrunCfg>,
+    /// Widgets musique de la scène (z du widget, cadre de scène).
+    musiques: Vec<MusiqueCfg>,
     /// Plans à perspective (offscreen + effet par plan).
     persps: Vec<PerspCfg>,
     /// Canvas de la scène d'origine — comparé au canvas de la session à
@@ -845,6 +1104,17 @@ struct SceneChargee {
     chat: Arc<Mutex<FileChat>>,
     /// État vivant des touches : l'app y pousse pendant la session.
     input: Arc<Mutex<FileInput>>,
+    /// État vivant des compteurs goal : l'app y pousse pendant la session.
+    goals_etat: Arc<Mutex<EtatGoals>>,
+    /// État vivant du splitter ASL : l'app y pousse pendant la session.
+    speedruns_etat: Arc<Mutex<EtatSpeedrun>>,
+    /// État vivant du lecteur musique : l'app y pousse pendant la session.
+    musiques_etat: Arc<Mutex<EtatMusique>>,
+    /// État vivant de l'overlay alerte : l'app y pousse pendant la
+    /// session — transitoire, jamais par la scène.
+    alertes_etat: Arc<Mutex<EtatAlertes>>,
+    /// Gabarit du cadre de la carte alerte (style de la scène, rect nul).
+    cadre_overlay_alerte: Option<CadreCfg>,
 }
 
 /// Session de capture d'une source : WGC (moniteur/fenêtre) ou Media
@@ -949,8 +1219,13 @@ impl SceneVivante {
             chats,
             boites,
             inputs,
+            horloges,
+            goals,
+            speedruns,
+            musiques,
             persps,
             canvas: canvas_scene,
+            cadre_overlay_alerte,
             ..
         } = nouvelle;
         // Le canvas est figé à la création de la session (textures, NV12) :
@@ -971,7 +1246,12 @@ impl SceneVivante {
                 chats,
                 boites,
                 inputs,
+                horloges,
+                goals,
+                speedruns,
+                musiques,
                 persps,
+                cadre_overlay_alerte,
             },
         ) {
             compteurs.degrader(format!("application scène : {e}"));
@@ -1273,11 +1553,62 @@ fn construire_plan(vivante: &SceneVivante, voie: &VoieRendu) -> Vec<(i32, GenreC
     for (i, cfg_input) in voie.inputs.iter().enumerate() {
         plan.push((cfg_input.z, GenreCalque::Input, i));
     }
+    for (i, cfg_horloge) in voie.horloges.iter().enumerate() {
+        plan.push((cfg_horloge.z, GenreCalque::Horloge, i));
+    }
+    for (i, cfg_goal) in voie.goals.iter().enumerate() {
+        plan.push((cfg_goal.z, GenreCalque::Goal, i));
+    }
+    for (i, cfg_sr) in voie.speedruns.iter().enumerate() {
+        plan.push((cfg_sr.z, GenreCalque::Speedrun, i));
+    }
+    for (i, cfg_mu) in voie.musiques.iter().enumerate() {
+        plan.push((cfg_mu.z, GenreCalque::Musique, i));
+    }
     for (i, cadre) in voie.cadres.iter().enumerate() {
         plan.push((cadre.z, GenreCalque::Cadre, i));
     }
+    // Overlay alerte (`.alerte-root`, z 9997) : une seule carte
+    // transitoire, peinte à son z entre les calques de scène et le bord.
+    plan.push((Z_ALERTES, GenreCalque::Alerte, 0));
     plan.sort_by_key(|(z, genre, _)| (*z, *genre));
     plan
+}
+
+/// Gabarit du cadre de la carte alerte — miroir `appliquerCadreOverlay`
+/// (diffusion.html) : la carte prend le style du `cadreWidget` actif à SA
+/// propre taille (le `rect` est posé par le bloc de rendu, mesuré sur la
+/// carte). `None` = cadre inactif ou style non porté (les 2 styles du
+/// lot — le signal `degrader` est déjà émis par `lot_scene`, comme pour
+/// les widgets).
+fn cadre_overlay_alerte(scene: &sos_scene::Scene) -> Option<CadreCfg> {
+    let cadre = scene
+        .cadreWidget
+        .as_ref()
+        .filter(|c| c.actif && c.strokeWidth > 0.0)?;
+    let couleur = couleur_cadre_alerte(&cadre.couleur, [255, 255, 255, 255]);
+    let couleur_fin = couleur_cadre_alerte(&cadre.couleurFin, couleur);
+    Some(CadreCfg {
+        // Rect nul : `appliquerCadreOverlay` régénère le SVG sur la carte
+        // mesurée — le bloc pose sa propre boîte.
+        rect: (0.0, 0.0, 0.0, 0.0),
+        style: crate::cadres::StyleCadre::depuis_nom(&cadre.style)?,
+        stroke_width: cadre.strokeWidth,
+        couleur,
+        couleur_fin,
+        gradient_angle: cadre.gradientAngle,
+        z: Z_ALERTES,
+    })
+}
+
+/// Couleur de cadre validée comme `genererSVG` : `#rrggbb` exact, sinon
+/// repli — même règle que `scene_sources::couleur_cadre` (privé là-bas).
+fn couleur_cadre_alerte(hex: &str, defaut: [u8; 4]) -> [u8; 4] {
+    if hex.len() == 7 && hex.starts_with('#') {
+        crate::cadres::couleur_hex(hex).unwrap_or(defaut)
+    } else {
+        defaut
+    }
 }
 
 /// Identité de contenu d'un carrousel : les chemins des slides (les
@@ -1287,6 +1618,30 @@ fn memes_slides(a: &Option<CarrouselCfg>, b: &Option<CarrouselCfg>) -> bool {
         (None, None) => true,
         (Some(a), Some(b)) => a.slides == b.slides,
         _ => false,
+    }
+}
+
+/// Registre des anneaux **médias** du mixeur live : les `nb_fixes` entrées
+/// de tête (sources WASAPI) sont conservées, le reste est reconstruit sur
+/// les médias courants — une vidéo ajoutée ou remplacée à chaud rejoint le
+/// mix sans redémarrage (`appliquer_scene`), une vidéo retirée en sort.
+///
+/// Gain média : 1000 ‰ fixe — les scènes n'ont pas de champ de volume
+/// (les vidéos sont muettes dans le DOM, `vid.muted = true`).
+fn rafraichir_entrees_media(
+    mixeur: &mut crate::audio::live::MixeurLocal,
+    medias: &[MediaChargee],
+    nb_fixes: usize,
+) {
+    let entrees = mixeur.entrees();
+    entrees.truncate(nb_fixes);
+    for media in medias {
+        if let Some(anneau) = media.anneau_audio() {
+            entrees.push(crate::audio::live::EntreeMix {
+                anneau,
+                gain_milliemes: 1000,
+            });
+        }
     }
 }
 
@@ -1310,10 +1665,19 @@ fn boucle(
         chats,
         boites,
         inputs,
+        horloges,
+        goals,
+        speedruns,
+        musiques,
         persps,
         canvas: _,
         chat,
         input,
+        goals_etat,
+        speedruns_etat,
+        musiques_etat,
+        alertes_etat,
+        cadre_overlay_alerte,
     } = scene;
     let (cw, ch) = cfg.canvas;
     let fps = cfg.fps;
@@ -1358,7 +1722,12 @@ fn boucle(
             chats,
             boites,
             inputs,
+            horloges,
+            goals,
+            speedruns,
+            musiques,
             persps,
+            cadre_overlay_alerte,
         },
     )
     .map_err(|e| format!("rendu : {e}"))?;
@@ -1428,10 +1797,19 @@ fn boucle(
     //    force le chemin MFT (diagnostic / comparaison).
     let sans_nvenc =
         forcer_logiciel || std::env::var_os("SOS_MOTEUR_SANS_NVENC").is_some();
+    // Preset d'encodage : absent/vide → défaut produit ; nom inconnu →
+    // dégradation signalée puis défaut (jamais de repli muet).
+    let preset = match cfg.preset.trim() {
+        "" => Preset::DEFAUT,
+        autre => Preset::depuis_nom(autre).unwrap_or_else(|| {
+            compteurs.degrader(format!("preset inconnu «{autre}» → equilibre"));
+            Preset::DEFAUT
+        }),
+    };
     let mut encodeur: Option<EncodeurActif> = None;
     let mut derniere_erreur = String::new();
     if !sans_nvenc && encode_requis {
-        match EncodeurNvenc::nouveau(&contexte, cfg.codec, cw, ch, fps, cfg.debit_kbps) {
+        match EncodeurNvenc::nouveau(&contexte, cfg.codec, cw, ch, fps, cfg.debit_kbps, preset) {
             Ok(mut nvenc) => match nvenc.enregistrer(&cible_encode) {
                 Ok(()) => {
                     *encodeur_partage
@@ -1452,7 +1830,7 @@ fn boucle(
     // 2) Repli MFT (ou chemin principal si NVENC absent).
     let mut zero_copie = false;
     if encode_requis && encodeur.is_none() {
-        match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte) {
+        match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte, preset) {
             Some((enc, mut info)) => {
                 zero_copie =
                     info.materiel && std::env::var_os("SOS_MOTEUR_MFT_MEMOIRE").is_none();
@@ -1478,26 +1856,85 @@ fn boucle(
         ));
     }
 
+    // Audio demandé : `actif()` = au moins une source cochée. Il pilote
+    // **deux** voies — live (pipe nommé → AAC dans le conteneur, en direct)
+    // ou post-mux (PCM fichier + `muxer_audio` à l'arrêt, historique).
+    let audio_demande = cfg.audio.filter(|a| a.actif());
+
     let mut sinks: Vec<Box<dyn Sink>> = Vec::new();
-    // Chemins des sorties fichier : le muxage audio se fait **après** la
-    // fermeture du conteneur, sur le fichier finalisé.
+    // Chemins des sorties **fichier** : le post-mux (repli/réparation) se
+    // fait après fermeture du conteneur, sur le fichier finalisé. Les sinks
+    // réseau n'y figurent pas — il n'y a rien à remuxer hors ligne.
     let mut chemins_sortie: Vec<std::path::PathBuf> = Vec::new();
-    for sink in &cfg.sinks {
+    // Extrémités serveur des pipes audio live (fichier et réseau).
+    let mut pipes_audio: Vec<crate::output::ffmpeg::PipeAudio> = Vec::new();
+    for (index, sink) in cfg.sinks.iter().enumerate() {
         match sink {
             SinkCfg::Fichier { chemin, conteneur } => {
-                let s = FfmpegSink::nouveau(None, chemin, *conteneur, fps)
+                // Voie live tentée quand l'audio est demandé ; échec → sink
+                // classique + post-mux à l'arrêt (zéro régression).
+                if audio_demande.is_some() {
+                    match FfmpegSink::nouveau_avec_audio_codec(
+                        None, chemin, *conteneur, cfg.codec, fps, index,
+                    ) {
+                        Ok((s, pipe)) => {
+                            sinks.push(Box::new(s));
+                            pipes_audio.push(pipe);
+                            chemins_sortie.push(chemin.clone());
+                            continue;
+                        }
+                        Err(e) => compteurs.degrader(format!(
+                            "audio live {} : {e} — repli post-mux",
+                            chemin.display()
+                        )),
+                    }
+                }
+                let s = FfmpegSink::nouveau_codec(None, chemin, *conteneur, cfg.codec, fps)
                     .map_err(|e| format!("sortie {} : {e}", chemin.display()))?;
                 sinks.push(Box::new(s));
                 chemins_sortie.push(chemin.clone());
             }
             SinkCfg::Apercu => {}
-            SinkCfg::Rtmp { .. } | SinkCfg::Srt { .. } => {
-                return Err("sortie réseau non supportée par ce lot".to_string());
+            SinkCfg::Rtmp { url } => {
+                sink_reseau(
+                    &mut sinks,
+                    &mut pipes_audio,
+                    ReseauCfg {
+                        url: &url_rtmp(url, cfg.cle.as_deref()),
+                        cle: cfg.cle.as_deref(),
+                        format: FormatReseau::Flv,
+                        codec: cfg.codec,
+                        fps,
+                        index,
+                        audio: audio_demande.is_some(),
+                    },
+                    &compteurs,
+                )?;
+            }
+            SinkCfg::Srt { url } => {
+                sink_reseau(
+                    &mut sinks,
+                    &mut pipes_audio,
+                    ReseauCfg {
+                        url: &url_srt(url, cfg.cle.as_deref()),
+                        cle: cfg.cle.as_deref(),
+                        format: FormatReseau::Mpegts,
+                        codec: cfg.codec,
+                        fps,
+                        index,
+                        audio: audio_demande.is_some(),
+                    },
+                    &compteurs,
+                )?;
             }
         }
     }
+    // Chemin live réellement actif : au moins un sink a son pipe.
+    let audio_live = !pipes_audio.is_empty();
+    // `true` quand un `WriteFile` a cassé en cours — le post-mux réparera.
+    let mut audio_live_casse = false;
     if sinks.is_empty() && encode_requis {
-        return Err("aucune sortie fichier".to_string());
+        return Err("aucune sortie".to_string());
     }
 
     let (pw, ph) = taille_apercu(cw, ch);
@@ -1524,36 +1961,89 @@ fn boucle(
     // Audio : un thread par source, démarré **juste avant** la boucle pour
     // que l'offset A/V reste borné. Une source indisponible dégrade
     // l'enregistrement (muet sur cette source), elle ne l'annule jamais.
+    //
+    // Deux voies selon le sink réussi :
+    // - **live** (`audio_live`) : `SourceLive` pousse dans un anneau (mixage
+    //   temps réel par `MixeurLocal`, dans cette boucle) **et** écrit le PCM
+    //   fichier — le post-mux reste la réparation si le pipe casse ;
+    // - **post-mux** (repli) : `CapturePiste` historique, `muxer_audio` à
+    //   l'arrêt — rien ne change par rapport à avant ce lot.
     let mut captures_audio: Vec<crate::audio::piste::CapturePiste> = Vec::new();
-    if let Some(audio) = cfg.audio.filter(|a| a.actif()) {
-        if audio.loopback {
-            match crate::audio::piste::demarrer(
-                crate::audio::Sens::Sortie,
-                audio.gain_loopback,
-                "loop",
-            ) {
-                Ok(mut capture) => {
-                    // Aligne le son sur la première frame : on attend le
-                    // premier paquet réel (buffer WASAPI de 200 ms).
-                    let _ = capture.attendre_demarrage(Duration::from_millis(400));
-                    captures_audio.push(capture);
+    let mut sources_live: Vec<crate::audio::live::SourceLive> = Vec::new();
+    let mut mixeur = crate::audio::live::MixeurLocal::nouveau();
+    if let Some(audio) = audio_demande {
+        if audio_live {
+            for (sens, actif, gain, nom) in [
+                (
+                    crate::audio::Sens::Sortie,
+                    audio.loopback,
+                    audio.gain_loopback,
+                    "loop",
+                ),
+                (
+                    crate::audio::Sens::Entree,
+                    audio.micro,
+                    audio.gain_micro,
+                    "mic",
+                ),
+            ] {
+                if !actif {
+                    continue;
                 }
-                Err(e) => compteurs.degrader(format!("audio loopback indisponible : {e}")),
+                match crate::audio::live::SourceLive::demarrer(sens, gain, nom) {
+                    Ok(mut source) => {
+                        // Aligne le son sur la première frame : on attend le
+                        // premier paquet réel (buffer WASAPI de 200 ms).
+                        let _ = source.attendre_demarrage(Duration::from_millis(400));
+                        mixeur.entrees().push(crate::audio::live::EntreeMix {
+                            anneau: source.anneau(),
+                            gain_milliemes: gain,
+                        });
+                        sources_live.push(source);
+                    }
+                    Err(e) => compteurs.degrader(format!("audio {nom} indisponible : {e}")),
+                }
+            }
+        } else if !chemins_sortie.is_empty() {
+            // Repli post-mux : n'a de sens qu'avec au moins une sortie
+            // fichier à réécrire à l'arrêt — sur une sortie 100 % réseau,
+            // capturer du PCM jetable serait pur gâchis.
+            for (sens, actif, gain, nom) in [
+                (
+                    crate::audio::Sens::Sortie,
+                    audio.loopback,
+                    audio.gain_loopback,
+                    "loop",
+                ),
+                (
+                    crate::audio::Sens::Entree,
+                    audio.micro,
+                    audio.gain_micro,
+                    "mic",
+                ),
+            ] {
+                if !actif {
+                    continue;
+                }
+                match crate::audio::piste::demarrer(sens, gain, nom) {
+                    Ok(mut capture) => {
+                        let _ = capture.attendre_demarrage(Duration::from_millis(400));
+                        captures_audio.push(capture);
+                    }
+                    Err(e) => compteurs.degrader(format!("audio {nom} indisponible : {e}")),
+                }
             }
         }
-        if audio.micro {
-            match crate::audio::piste::demarrer(
-                crate::audio::Sens::Entree,
-                audio.gain_micro,
-                "mic",
-            ) {
-                Ok(mut capture) => {
-                    let _ = capture.attendre_demarrage(Duration::from_millis(400));
-                    captures_audio.push(capture);
-                }
-                Err(e) => compteurs.degrader(format!("audio micro indisponible : {e}")),
-            }
-        }
+    }
+    // Entrées « fixes » = les sources WASAPI ; les anneaux des médias sont
+    // empilés après et reconstruits à chaque `appliquer_scene` — une vidéo
+    // ajoutée à chaud rejoint le mix (contrat « appliquer à chaud »).
+    let nb_entrees_fixes = mixeur.entrees().len();
+    if audio_live {
+        rafraichir_entrees_media(&mut mixeur, &vivante.medias, nb_entrees_fixes);
+        // Zéro du flux : purge le pré-roll WASAPI (le buffer de 200 ms rempli
+        // pendant l'alignement n'est pas de l'audio « t = 0 »).
+        mixeur.demarrer();
     }
 
     let debut = Instant::now();
@@ -1582,6 +2072,11 @@ fn boucle(
                 &compteurs,
                 (cw, ch),
             );
+            // Une vidéo ajoutée/remplacée à chaud rejoint le mix audio —
+            // ses échantillons arrivent au prochain `avancer_audio`.
+            if audio_live {
+                rafraichir_entrees_media(&mut mixeur, &vivante.medias, nb_entrees_fixes);
+            }
         }
         let SceneVivante {
             captures,
@@ -1600,6 +2095,32 @@ fn boucle(
             media
                 .avancer(pts_us)
                 .map_err(|e| format!("média vidéo : {e}"))?;
+            // Son de la vidéo : alimente l'anneau (drain non fatal — une
+            // piste audio cassée dégrade le mix, jamais la vidéo).
+            if audio_live {
+                if let Err(e) = media.avancer_audio(pts_us) {
+                    compteurs.degrader(format!("audio média : {e}"));
+                }
+            }
+        }
+        // Mixage live : les frames 48 kHz dues depuis le zéro du flux sont
+        // poussées dans chaque pipe (interleaving A/V dans le conteneur).
+        // Un pipe cassé est retiré — `muxer_audio` réparera à l'arrêt.
+        if audio_live {
+            let pcm = mixeur.produire();
+            if !pcm.is_empty() {
+                let mut i = 0;
+                while i < pipes_audio.len() {
+                    match pipes_audio[i].ecrire(pcm) {
+                        Ok(()) => i += 1,
+                        Err(e) => {
+                            compteurs.degrader(format!("pipe audio : {e}"));
+                            audio_live_casse = true;
+                            pipes_audio.remove(i);
+                        }
+                    }
+                }
+            }
         }
         for capture in captures.iter_mut() {
             // Copie WGC ou `UpdateSubresource` caméra — sur ce thread dans
@@ -1630,7 +2151,16 @@ fn boucle(
                 GenreCalque::Media => voie.groupe_de(medias[*index].rect, *z),
                 GenreCalque::Capture => voie.groupe_de(captures[*index].cfg.rect, *z),
                 GenreCalque::Cadre => voie.groupe_de(voie.cadres[*index].rect, *z),
-                GenreCalque::Chat | GenreCalque::Input => None,
+                // HUD et contenus directs : jamais dans un plan à
+                // perspective (`#modules-root` et `.alerte-root` sont hors
+                // `.widget`).
+                GenreCalque::Chat
+                | GenreCalque::Input
+                | GenreCalque::Horloge
+                | GenreCalque::Goal
+                | GenreCalque::Speedrun
+                | GenreCalque::Musique
+                | GenreCalque::Alerte => None,
             };
             voie.cible_pour(gid);
             match genre {
@@ -1784,13 +2314,51 @@ fn boucle(
                 }
                 GenreCalque::Chat => {
                     let file = chat.lock().unwrap_or_else(|e| e.into_inner());
-                    voie.dessiner_chat(*index, &file)
+                    // Barre viewers : même canal live que les goals (frames
+                    // `viewers`). Ordre de verrouillage chat → goals_etat :
+                    // les pousseurs (`pousser_chat`/`pousser_goal`) sont des
+                    // verrous simples, aucun chemin inverse — pas de cycle.
+                    let etat = goals_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_chat(*index, &file, &etat)
                         .map_err(|e| format!("chat : {e}"))?;
                 }
                 GenreCalque::Input => {
                     let file = input.lock().unwrap_or_else(|e| e.into_inner());
                     voie.dessiner_input(*index, &file, index_cadre_input[*index])
                         .map_err(|e| format!("input viewer : {e}"))?;
+                }
+                GenreCalque::Horloge => voie
+                    .dessiner_horloge(*index)
+                    .map_err(|e| format!("horloge : {e}"))?,
+                GenreCalque::Goal => {
+                    let etat = goals_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_goal(*index, &etat)
+                        .map_err(|e| format!("goal : {e}"))?;
+                }
+                GenreCalque::Speedrun => {
+                    // Verrou court : l'état vit hors de la scène (frames
+                    // `speedrun-etat` ~15 Hz en run), jamais de
+                    // reconfiguration pour un tick.
+                    let etat = speedruns_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_speedrun(*index, &etat)
+                        .map_err(|e| format!("speedrun : {e}"))?;
+                }
+                GenreCalque::Musique => {
+                    // Verrou court : l'état vit hors de la scène (events
+                    // `musique:update`), jamais de reconfiguration pour un
+                    // snapshot du lecteur.
+                    let etat = musiques_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_musique(*index, &etat)
+                        .map_err(|e| format!("musique : {e}"))?;
+                }
+                GenreCalque::Alerte => {
+                    // Verrou court : l'état vit hors de la scène (frames
+                    // `alerte-*` du canal `chat_tx`), jamais de
+                    // reconfiguration pour un play. Aucune alerte en cours
+                    // = no-op.
+                    let etat = alertes_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_alerte(&etat, ch)
+                        .map_err(|e| format!("alerte : {e}"))?;
                 }
                 GenreCalque::Bordure => voie
                     .dessiner_bordure_boite(*index)
@@ -1820,7 +2388,7 @@ fn boucle(
                     // Repli : NVENC ou MFT refuse la frame. On descend dans
                     // l'ordre de détection MFT puis on rejoue la frame —
                     // une seule fois.
-                    match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte)
+                    match ouvrir_mft(&disponibles, &mut index, &cfg, cw, ch, fps, &contexte, preset)
                     {
                         Some((mft, mut info)) => {
                             zero_copie = info.materiel
@@ -1922,20 +2490,40 @@ fn boucle(
             }
         }
     }
+    // Audio live : dernières frames dues puis **EOF** des pipes — ffmpeg
+    // termine la piste AAC au dernier échantillon. Fermé AVANT `fermer()`
+    // pour que le conteneur se finalise avec un audio complet.
+    if audio_live {
+        let pcm = mixeur.produire();
+        for pipe in &mut pipes_audio {
+            let _ = pipe.ecrire(pcm);
+        }
+        drop(pipes_audio);
+    }
     for sink in sinks.iter_mut() {
         let _ = sink.fermer();
     }
 
-    // Audio : arrêt des captures, puis muxage dans chaque fichier finalisé.
+    // Audio : arrêt des captures, puis muxage dans chaque fichier finalisé
+    // (post-mux historique, ou **réparation** si le live a cassé en cours —
+    // `muxer_audio` remappe `0:v` + les PCM sur le fichier existant).
     // Le PCM temporaire est supprimé dans tous les cas.
     let mut pistes: Vec<crate::audio::piste::Piste> = Vec::new();
+    for source in sources_live {
+        match source.arreter() {
+            Ok(piste) => pistes.push(piste),
+            Err(e) => compteurs.degrader(format!("audio : {e}")),
+        }
+    }
     for capture in captures_audio {
         match capture.arreter() {
             Ok(piste) => pistes.push(piste),
             Err(e) => compteurs.degrader(format!("audio : {e}")),
         }
     }
-    if erreur_sortie.is_none() {
+    // Live sain → le fichier porte déjà son AAC, rien à remuxer.
+    let post_mux_requis = !audio_live || audio_live_casse;
+    if erreur_sortie.is_none() && post_mux_requis {
         for piste in &pistes {
             log::info!(
                 "audio {} : {:.2} s, {} Hz, {} canaux, gain {}‰",
@@ -1968,6 +2556,78 @@ enum EncodeurActif {
     Mft(EncodeurMft),
 }
 
+/// URL finale d'un sink RTMP : la clé de flux (`SortieCfg.cle`) est accolée
+/// au chemin de l'application (`rtmp://hôte/app/<clé>` — convention
+/// Twitch/YouTube). `cle` vide ou absente = l'URL est prise telle quelle.
+fn url_rtmp(url: &str, cle: Option<&str>) -> String {
+    match cle.filter(|c| !c.is_empty()) {
+        Some(c) => format!("{}/{}", url.trim_end_matches('/'), c),
+        None => url.to_string(),
+    }
+}
+
+/// URL finale d'un sink SRT : la clé devient le paramètre `streamid`
+/// (convention YouTube SRT / serveurs orientés streamid). `cle` vide ou
+/// absente = l'URL est prise telle quelle.
+fn url_srt(url: &str, cle: Option<&str>) -> String {
+    match cle.filter(|c| !c.is_empty()) {
+        Some(c) => {
+            let sep = if url.contains('?') { '&' } else { '?' };
+            format!("{url}{sep}streamid={c}")
+        }
+        None => url.to_string(),
+    }
+}
+
+/// Paramètres d'un sink réseau (RTMP/FLV ou SRT/MPEG-TS).
+struct ReseauCfg<'a> {
+    /// URL complète — n'entre jamais dans un message d'erreur (le sink la
+    /// masque lui-même : elle embarque la clé de flux).
+    url: &'a str,
+    /// Clé de flux seule — masquée en plus de l'URL (ffmpeg peut citer une
+    /// forme tronquée où la clé resterait lisible).
+    cle: Option<&'a str>,
+    format: FormatReseau,
+    codec: Codec,
+    fps: u32,
+    /// Index du sink dans `SortieCfg.sinks` — nomme le pipe audio.
+    index: usize,
+    /// `true` = tentative audio live (pipe nommé) avant repli vidéo seule.
+    audio: bool,
+}
+
+/// Crée un sink réseau et son pipe audio si la sortie en demande — la voie
+/// live est tentée d'abord ; son échec dégrade vers un flux **vidéo seule**
+/// (le post-mux ne peut pas réparer un flux réseau : il n'y a pas de
+/// fichier à réécrire à l'arrêt).
+fn sink_reseau(
+    sinks: &mut Vec<Box<dyn Sink>>,
+    pipes_audio: &mut Vec<crate::output::ffmpeg::PipeAudio>,
+    cfg: ReseauCfg<'_>,
+    compteurs: &CompteursMoteur,
+) -> Result<(), String> {
+    if cfg.audio {
+        match FfmpegSink::nouveau_reseau_avec_audio(
+            None, cfg.url, cfg.cle, cfg.format, cfg.codec, cfg.fps, cfg.index,
+        ) {
+            Ok((s, pipe)) => {
+                sinks.push(Box::new(s));
+                pipes_audio.push(pipe);
+                return Ok(());
+            }
+            Err(e) => compteurs.degrader(format!(
+                "audio live réseau : {e} — repli vidéo seule"
+            )),
+        }
+    }
+    let s = FfmpegSink::nouveau_reseau(
+        None, cfg.url, cfg.cle, cfg.format, cfg.codec, cfg.fps,
+    )
+    .map_err(|e| format!("sortie réseau : {e}"))?;
+    sinks.push(Box::new(s));
+    Ok(())
+}
+
 /// Voie de rendu : canvas BGRA composé par Direct2D, puis conversion NV12.
 ///
 /// **Toute** la scène passe par ce canvas (2026-10-28) : médias, captures,
@@ -1985,14 +2645,37 @@ struct VoieRendu {
     chats: Vec<ChatCfg>,
     boites: Vec<BoiteCfg>,
     inputs: Vec<InputCfg>,
+    /// Modules horloge (z `Z_MODULES`, `#modules-root`).
+    horloges: Vec<HorlogeCfg>,
+    /// Widgets goal (z du widget, cadre à l'échelle bulle).
+    goals: Vec<GoalCfg>,
+    /// Widgets speedrun (z du widget, cadre de scène).
+    speedruns: Vec<SpeedrunCfg>,
+    /// Widgets musique (z du widget, cadre de scène).
+    musiques: Vec<MusiqueCfg>,
     /// Polygone de chaque cadre, **coordonnées canvas** — un seul polygone
     /// pour le trait et la découpe des médias.
     geometries: Vec<ID2D1PathGeometry>,
     /// Index du polygone de chaque boîte (`None` = pas de cadre → bordure).
     index_cadre_boite: Vec<Option<usize>>,
+    /// Index du polygone du cadre opt-in de chaque module horloge
+    /// (`None` = `m.cadre` absent → aucune découpe).
+    index_cadre_horloge: Vec<Option<usize>>,
+    /// Index du polygone du cadre à l'échelle bulle de chaque widget goal
+    /// (`None` = pas de cadre → contenu rogné au rect seul).
+    index_cadre_goal: Vec<Option<usize>>,
+    /// Index du polygone du cadre de scène de chaque widget speedrun
+    /// (`None` = pas de cadre → contenu rogné au rect seul).
+    index_cadre_speedrun: Vec<Option<usize>>,
+    /// Index du polygone du cadre de scène de chaque widget musique
+    /// (`None` = pas de cadre → contenu rogné au rect seul).
+    index_cadre_musique: Vec<Option<usize>>,
     /// Config des plans à perspective actifs — référence du diff de
     /// `mettre_a_jour` (`dessinateur.persps` garde les offscreens, privés).
     persps_cfg: Vec<PerspCfg>,
+    /// Gabarit du cadre de la carte alerte (style de la scène, rect nul —
+    /// mesuré à la taille de la carte par le bloc de rendu).
+    cadre_overlay_alerte: Option<CadreCfg>,
 }
 
 /// Contenu dessiné par la voie de rendu (figé au démarrage de la sortie,
@@ -2003,8 +2686,18 @@ struct ContenuRendu {
     chats: Vec<ChatCfg>,
     boites: Vec<BoiteCfg>,
     inputs: Vec<InputCfg>,
+    /// Modules horloge (z `Z_MODULES`, `#modules-root`).
+    horloges: Vec<HorlogeCfg>,
+    /// Widgets goal (z du widget, cadre à l'échelle bulle).
+    goals: Vec<GoalCfg>,
+    /// Widgets speedrun (z du widget, cadre de scène).
+    speedruns: Vec<SpeedrunCfg>,
+    /// Widgets musique (z du widget, cadre de scène).
+    musiques: Vec<MusiqueCfg>,
     /// Plans à perspective — rasterisés en offscreen puis projetés.
     persps: Vec<PerspCfg>,
+    /// Gabarit du cadre de la carte alerte (style de la scène, rect nul).
+    cadre_overlay_alerte: Option<CadreCfg>,
 }
 
 impl VoieRendu {
@@ -2021,7 +2714,12 @@ impl VoieRendu {
             chats,
             boites,
             inputs,
+            horloges,
+            goals,
+            speedruns,
+            musiques,
             persps,
+            cadre_overlay_alerte,
         } = contenu;
         let desc = DescTexture::new(Format::Bgra8, largeur, hauteur)
             .map_err(|e| format!("canvas : {e}"))?;
@@ -2053,6 +2751,38 @@ impl VoieRendu {
                     .and_then(|cadre| cadres.iter().position(|c| c == cadre))
             })
             .collect();
+        let index_cadre_horloge = horloges
+            .iter()
+            .map(|h| {
+                h.cadre
+                    .as_ref()
+                    .and_then(|cadre| cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        let index_cadre_goal = goals
+            .iter()
+            .map(|g| {
+                g.cadre
+                    .as_ref()
+                    .and_then(|cadre| cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        let index_cadre_speedrun = speedruns
+            .iter()
+            .map(|s| {
+                s.cadre
+                    .as_ref()
+                    .and_then(|cadre| cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        let index_cadre_musique = musiques
+            .iter()
+            .map(|m| {
+                m.cadre
+                    .as_ref()
+                    .and_then(|cadre| cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
         Ok(Self {
             canvas,
             nv12,
@@ -2063,9 +2793,18 @@ impl VoieRendu {
             chats,
             boites,
             inputs,
+            horloges,
+            goals,
+            speedruns,
+            musiques,
             geometries,
             index_cadre_boite,
+            index_cadre_horloge,
+            index_cadre_goal,
+            index_cadre_speedrun,
+            index_cadre_musique,
             persps_cfg: persps,
+            cadre_overlay_alerte,
         })
     }
 
@@ -2086,7 +2825,12 @@ impl VoieRendu {
             chats,
             boites,
             inputs,
+            horloges,
+            goals,
+            speedruns,
+            musiques,
             persps,
+            cadre_overlay_alerte,
         } = contenu;
         if persps != self.persps_cfg {
             self.dessinateur
@@ -2115,10 +2859,47 @@ impl VoieRendu {
                     .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
             })
             .collect();
+        self.index_cadre_horloge = horloges
+            .iter()
+            .map(|h| {
+                h.cadre
+                    .as_ref()
+                    .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        self.index_cadre_goal = goals
+            .iter()
+            .map(|g| {
+                g.cadre
+                    .as_ref()
+                    .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        self.index_cadre_speedrun = speedruns
+            .iter()
+            .map(|s| {
+                s.cadre
+                    .as_ref()
+                    .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        self.index_cadre_musique = musiques
+            .iter()
+            .map(|m| {
+                m.cadre
+                    .as_ref()
+                    .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
         self.textes = textes;
         self.chats = chats;
         self.boites = boites;
         self.inputs = inputs;
+        self.horloges = horloges;
+        self.goals = goals;
+        self.speedruns = speedruns;
+        self.musiques = musiques;
+        self.cadre_overlay_alerte = cadre_overlay_alerte;
         Ok(())
     }
 
@@ -2141,15 +2922,73 @@ impl VoieRendu {
             .map_err(|e| e.to_string())
     }
 
-    fn dessiner_chat(&mut self, index: usize, file: &FileChat) -> Result<(), String> {
+    /// Widget chat — `etat` alimente la barre viewers en tête
+    /// (`.chat-viewers`), comme le widget goal.
+    fn dessiner_chat(
+        &mut self,
+        index: usize,
+        file: &FileChat,
+        etat: &EtatGoals,
+    ) -> Result<(), String> {
         self.dessinateur
-            .dessiner_chat(std::slice::from_ref(&self.chats[index]), file)
+            .dessiner_chat(std::slice::from_ref(&self.chats[index]), file, etat)
             .map_err(|e| e.to_string())
     }
 
     fn dessiner_cadre(&mut self, index: usize) -> Result<(), String> {
         self.dessinateur
             .dessiner_cadre(&self.cadres[index], &self.geometries[index])
+            .map_err(|e| e.to_string())
+    }
+
+    /// Module horloge (`#modules-root`, z `Z_MODULES`) — voile + contenu,
+    /// clippés au polygone de son cadre opt-in (`m.cadre`) ; le trait est
+    /// tracé par le calque cadre au même z.
+    fn dessiner_horloge(&mut self, index: usize) -> Result<(), String> {
+        let clip = self.index_cadre_horloge[index].map(|i| &self.geometries[i]);
+        self.dessinateur
+            .dessiner_horloge(&self.horloges[index], clip)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Widget goal — contenu (entête + chiffres + barre + célébration)
+    /// clippé au polygone de son cadre à l'échelle bulle ; le voile et le
+    /// trait sont les calques Boite/Cadre au même z.
+    fn dessiner_goal(&mut self, index: usize, etat: &EtatGoals) -> Result<(), String> {
+        let clip = self.index_cadre_goal[index].map(|i| &self.geometries[i]);
+        self.dessinateur
+            .dessiner_goal(&self.goals[index], etat, clip)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Widget speedrun — splitter ASL (en-tête + timer + phase + barre +
+    /// lignes de splits) clippé au polygone de son cadre de scène ; le
+    /// voile et le trait sont les calques Boite/Cadre au même z.
+    fn dessiner_speedrun(&mut self, index: usize, etat: &EtatSpeedrun) -> Result<(), String> {
+        let clip = self.index_cadre_speedrun[index].map(|i| &self.geometries[i]);
+        self.dessinateur
+            .dessiner_speedrun(&self.speedruns[index], etat, clip)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Widget musique — lecteur Winamp (barre titre, LCD défilant, EQ,
+    /// progression) clippé au polygone de son cadre de scène ; le voile et
+    /// le trait sont les calques Boite/Cadre au même z.
+    fn dessiner_musique(&mut self, index: usize, etat: &EtatMusique) -> Result<(), String> {
+        let clip = self.index_cadre_musique[index].map(|i| &self.geometries[i]);
+        self.dessinateur
+            .dessiner_musique(&self.musiques[index], etat, clip)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Overlay alerte (`.alerte-root`, z `Z_ALERTES`) — carte transitoire
+    /// alimentée par `chat_tx`, jamais par la scène ; le gabarit du cadre
+    /// de scène est appliqué à la taille de la carte
+    /// (`appliquerCadreOverlay`). `canvas_h` sert au `max-height:60vh` du
+    /// média. Aucune alerte en cours = no-op.
+    fn dessiner_alerte(&mut self, etat: &EtatAlertes, canvas_h: u32) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_alerte(etat, self.cadre_overlay_alerte.as_ref(), canvas_h)
             .map_err(|e| e.to_string())
     }
 
@@ -2371,7 +3210,8 @@ struct PixelCouche<'a> {
 ///
 /// L'ordre de déclaration **est** l'ordre à `z` égal : le voile passe sous le
 /// contenu, la bordure au-dessus, puis le cadre (miroir de `.widget` puis
-/// `.cadre-overlay`, `z-index: 5`).
+/// `.cadre-overlay`, `z-index: 5`). Le module horloge est un contenu : il
+/// passe avant sa décoration éventuelle (le calque `Cadre` de `m.cadre`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum GenreCalque {
     Boite,
@@ -2379,11 +3219,17 @@ enum GenreCalque {
     Capture,
     Chat,
     Input,
+    Horloge,
+    Goal,
+    Speedrun,
+    Musique,
+    Alerte,
     Bordure,
     Cadre,
 }
 
 /// Ouvre le prochain MFT disponible, en avançant `index` (repli monotone).
+#[allow(clippy::too_many_arguments)]
 fn ouvrir_mft(
     disponibles: &[EncodeurDispo],
     index: &mut usize,
@@ -2392,11 +3238,12 @@ fn ouvrir_mft(
     ch: u32,
     fps: u32,
     contexte: &ContexteGpu,
+    preset: Preset,
 ) -> Option<(EncodeurMft, EncodeurInfo)> {
     while *index < disponibles.len() {
         let dispo = &disponibles[*index];
         *index += 1;
-        if let Ok(encodeur) = ouvrir_encodeur(dispo, cfg, cw, ch, fps, contexte) {
+        if let Ok(encodeur) = ouvrir_encodeur(dispo, cfg, cw, ch, fps, contexte, preset) {
             return Some((
                 encodeur,
                 EncodeurInfo {
@@ -2434,8 +3281,9 @@ fn ouvrir_encodeur(
     ch: u32,
     fps: u32,
     contexte: &ContexteGpu,
+    preset: Preset,
 ) -> Result<EncodeurMft, ErreurEncodage> {
-    EncodeurMft::nouveau_avec(
+    EncodeurMft::nouveau_avec_preset(
         dispo.activate(),
         cfg.codec,
         cw,
@@ -2443,6 +3291,7 @@ fn ouvrir_encodeur(
         fps,
         cfg.debit_kbps,
         Some(contexte),
+        preset,
     )
 }
 
@@ -2585,17 +3434,75 @@ mod tests {
     }
 
     #[test]
-    fn rtmp_refuse_avant_toute_capture() {
+    fn rtmp_srt_acceptes_mais_schema_valide() {
+        // Sink réseau accepté : avec une URL valide, le refus vient de la
+        // scène vide (aucune source) — preuve que la validation des sinks
+        // est passée (le rejet `Indisponible` aurait primé avant ce lot).
         let moteur = MoteurNatif::nouveau();
-        moteur.configurer_sources(vec![source()]).expect("sources");
         let mut cfg = cfg_fichier();
-        cfg.sinks.push(SinkCfg::Rtmp {
+        cfg.sinks = vec![SinkCfg::Rtmp {
             url: "rtmp://live.example/app".to_string(),
-        });
+        }];
+        match moteur.demarrer_sortie(cfg) {
+            Err(ErreurMoteur::Configuration(m)) => assert!(m.contains("aucune source"), "{m}"),
+            autre => panic!("attendu Configuration(aucune source), reçu {autre:?}"),
+        }
+
+        let moteur = MoteurNatif::nouveau();
+        let mut cfg = cfg_fichier();
+        cfg.sinks = vec![SinkCfg::Srt {
+            url: "srt://live.example:9000".to_string(),
+        }];
+        match moteur.demarrer_sortie(cfg) {
+            Err(ErreurMoteur::Configuration(m)) => assert!(m.contains("aucune source"), "{m}"),
+            autre => panic!("attendu Configuration(aucune source), reçu {autre:?}"),
+        }
+
+        // Schémas inattendus : refusés avant tout contact GPU.
+        let moteur = MoteurNatif::nouveau();
+        let mut cfg = cfg_fichier();
+        cfg.sinks = vec![SinkCfg::Rtmp {
+            url: "http://live.example/app".to_string(),
+        }];
         assert!(matches!(
             moteur.demarrer_sortie(cfg),
-            Err(ErreurMoteur::Indisponible(_))
+            Err(ErreurMoteur::Configuration(_))
         ));
+        let moteur = MoteurNatif::nouveau();
+        let mut cfg = cfg_fichier();
+        cfg.sinks = vec![SinkCfg::Srt {
+            url: "udp://live.example:9000".to_string(),
+        }];
+        assert!(matches!(
+            moteur.demarrer_sortie(cfg),
+            Err(ErreurMoteur::Configuration(_))
+        ));
+    }
+
+    #[test]
+    fn urls_live_assemblees_avec_la_cle() {
+        // RTMP : la clé s'accolée au chemin de l'application.
+        assert_eq!(
+            url_rtmp("rtmp://live/app", Some("cle-de-flux")),
+            "rtmp://live/app/cle-de-flux"
+        );
+        assert_eq!(
+            url_rtmp("rtmp://live/app/", Some("k")),
+            "rtmp://live/app/k"
+        );
+        assert_eq!(url_rtmp("rtmp://live/app", None), "rtmp://live/app");
+        assert_eq!(url_rtmp("rtmp://live/app", Some("")), "rtmp://live/app");
+
+        // SRT : la clé devient `streamid`, quel que soit le query existant.
+        assert_eq!(
+            url_srt("srt://h:9000", Some("cle-de-flux")),
+            "srt://h:9000?streamid=cle-de-flux"
+        );
+        assert_eq!(
+            url_srt("srt://h:9000?latency=200", Some("k")),
+            "srt://h:9000?latency=200&streamid=k"
+        );
+        assert_eq!(url_srt("srt://h:9000", None), "srt://h:9000");
     }
 
     #[test]
@@ -2617,8 +3524,8 @@ mod tests {
     fn capacites_du_lot() {
         let c = MoteurNatif::nouveau().capacites();
         assert!(c.capture_ecran && c.capture_fenetre);
-        assert!(c.camera);
-        assert!(!c.fond_vert && !c.srt);
+        assert!(c.camera && c.srt);
+        assert!(!c.fond_vert);
     }
 
     #[test]
@@ -2724,6 +3631,35 @@ mod tests {
         moteur.appliquer_scene(&scene);
         assert_eq!(moteur.chats().len(), 1);
         moteur.arreter();
+    }
+
+    #[test]
+    fn configurer_scene_et_appliquer_remplissent_les_horloges() {
+        let scene: sos_scene::Scene = serde_json::from_str(
+            r##"{"canvasW":1360,"canvasH":768,
+                 "cadreWidget":{"style":"mgstyle","strokeWidth":20,"actif":true,"bordActif":false},
+                 "widgets":[],
+                 "modules":{"horloge":{"actif":true,"x":10,"y":20,"largeur":300,"hauteur":60,
+                            "cadre":true,"secondes":true}}}"##,
+        )
+        .expect("scène");
+        let moteur = MoteurNatif::nouveau();
+        moteur
+            .configurer_scene(&scene, &std::collections::HashMap::new(), std::path::Path::new("."))
+            .expect("scène acceptée");
+        assert_eq!(moteur.horloges().len(), 1);
+        assert_eq!(moteur.horloges()[0].z, crate::texte::Z_MODULES);
+        assert!(moteur.horloges()[0].secondes);
+        // Le cadre opt-in du module est porté par `cadres` (trait + clip).
+        assert_eq!(moteur.cadres().len(), 1);
+        assert_eq!(moteur.cadres()[0].z, crate::texte::Z_MODULES);
+        // Application à chaud : retrait du module → vecs vidés.
+        let scene_sans: sos_scene::Scene =
+            serde_json::from_str(r#"{"canvasW":1360,"canvasH":768,"widgets":[]}"#)
+                .expect("scène");
+        moteur.appliquer_scene(&scene_sans);
+        assert!(moteur.horloges().is_empty());
+        assert!(moteur.cadres().is_empty());
     }
 
     #[test]

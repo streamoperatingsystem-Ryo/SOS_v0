@@ -22,7 +22,7 @@ use windows::Win32::Graphics::DirectWrite::{
 
 use crate::chat::{ChatCfg, FileChat};
 
-use super::{couleur_d2d, DessinateurTexte, ErreurTexte};
+use super::{couleur_d2d, DessinateurTexte, ErreurTexte, EtatGoals};
 
 /// Un message mis en page : layout DirectWrite + hauteur rendue.
 struct MessageRendu {
@@ -56,9 +56,17 @@ impl DessinateurTexte {
     /// Chaque widget a son bloc mis en page (cache par version du buffer) :
     /// un nouveau message ne reconfigure **rien**, il invalide le bloc.
     /// Le plus récent est en bas, on pousse vers le haut ; ce qui dépasse est
-    /// rogné au rect du widget (défilement automatique, pas de scroll manuel).
-    pub fn dessiner_chat(&mut self, cfgs: &[ChatCfg], file: &FileChat) -> Result<(), ErreurTexte> {
-        if cfgs.is_empty() || file.version() == 0 {
+    /// rogné au corps du widget (défilement automatique, pas de scroll manuel).
+    /// La barre viewers (`.chat-viewers`) est dessinée en tête, sous le clip
+    /// du widget : chrome indépendant des messages, elle vit même quand le
+    /// buffer est vide — d'où l'absence de garde sur `file.version()`.
+    pub fn dessiner_chat(
+        &mut self,
+        cfgs: &[ChatCfg],
+        file: &FileChat,
+        etat: &EtatGoals,
+    ) -> Result<(), ErreurTexte> {
+        if cfgs.is_empty() {
             return Ok(());
         }
         let blanc = unsafe { self.cible_rt.CreateSolidColorBrush(&couleur_d2d([255, 255, 255, 255]), None) }
@@ -85,9 +93,6 @@ impl DessinateurTexte {
             if perime {
                 self.construire_bloc(cfg, file, &g, cle)?;
             }
-            let Some(bloc) = self.blocs.get(&cle) else {
-                continue;
-            };
             let (x, y, w, h) = cfg.rect;
             let (x, y, w, h) = (x as f32, y as f32, w as f32, h as f32);
             let clip = D2D_RECT_F {
@@ -99,6 +104,31 @@ impl DessinateurTexte {
             unsafe {
                 self.cible_rt
                     .PushAxisAlignedClip(&clip, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
+            };
+
+            // `.chat-viewers` en tête, sous le clip du widget — `bar_h` = 0
+            // sans plateforme live ni en bulles (`:empty` → display:none) :
+            // le corps garde alors tout le rect, zéro régression de layout.
+            // Appel avant l'emprunt de `blocs` : la méthode prend `&mut self`.
+            let bar_h = match self.barre_viewers_chat(cfg, etat) {
+                Ok(h) => h,
+                Err(e) => {
+                    unsafe { self.cible_rt.PopAxisAlignedClip() };
+                    return Err(e);
+                }
+            };
+            let Some(bloc) = self.blocs.get(&cle) else {
+                unsafe { self.cible_rt.PopAxisAlignedClip() };
+                continue;
+            };
+            // `.chat-body flex:1` : les messages sont rognés sous la barre.
+            let corps = D2D_RECT_F {
+                top: y + bar_h,
+                ..clip
+            };
+            unsafe {
+                self.cible_rt
+                    .PushAxisAlignedClip(&corps, D2D1_ANTIALIAS_MODE_PER_PRIMITIVE)
             };
 
             let mut curseur = y + h - g.pad_bas - bloc.total;
@@ -131,6 +161,7 @@ impl DessinateurTexte {
                 };
                 curseur += message.hauteur + g.gap;
             }
+            unsafe { self.cible_rt.PopAxisAlignedClip() };
             unsafe { self.cible_rt.PopAxisAlignedClip() };
         }
         Ok(())

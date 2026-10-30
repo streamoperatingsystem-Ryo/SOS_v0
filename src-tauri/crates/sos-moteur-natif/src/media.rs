@@ -7,6 +7,7 @@
 use std::ffi::c_void;
 use std::fmt;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use windows::Foundation::Numerics::Matrix3x2;
 use windows::core::{HSTRING, Interface};
@@ -18,8 +19,10 @@ use windows::Win32::Graphics::Imaging::{
 };
 use windows::Win32::Media::MediaFoundation::{
     IMFSourceReader, IMFSample, MFCreateAttributes, MFCreateMediaType, MFCreateSourceReaderFromURL,
-    MFMediaType_Video, MFVideoFormat_RGB32, MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE,
-    MF_SOURCE_READERF_ENDOFSTREAM, MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING,
+    MFAudioFormat_Float, MFMediaType_Audio, MFMediaType_Video, MFVideoFormat_RGB32,
+    MF_MT_AUDIO_BITS_PER_SAMPLE, MF_MT_AUDIO_NUM_CHANNELS, MF_MT_AUDIO_SAMPLES_PER_SECOND,
+    MF_MT_FRAME_SIZE, MF_MT_MAJOR_TYPE, MF_MT_SUBTYPE, MF_SOURCE_READERF_ENDOFSTREAM,
+    MF_SOURCE_READER_ENABLE_ADVANCED_VIDEO_PROCESSING, MF_SOURCE_READER_FIRST_AUDIO_STREAM,
     MF_SOURCE_READER_FIRST_VIDEO_STREAM,
 };
 use windows::core::{GUID, PROPVARIANT};
@@ -27,8 +30,17 @@ use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 
+use crate::audio::live::{AnneauAudio, CANAUX_CIBLE, TAUX_CIBLE};
 use crate::cadres::CadreCfg;
 use crate::gpu::{ContexteGpu, DescTexture, Format};
+
+/// Avance de lecture du flux audio sur l'horloge moteur : le drain pousse
+/// les échantillons dus **plus** cette marge, pour que l'anneau reste
+/// alimenté entre deux frames (le mixeur consomme en temps réel).
+const MARGE_AUDIO_US: i64 = 250_000;
+/// Échantillons audio lus au plus par appel d'[`MediaChargee::avancer_audio`]
+/// (~320 ms en paquets de 10 ms) : borne le coût d'un rattrapage.
+const LIMITE_AUDIO_PAR_APPEL: u32 = 32;
 
 /// Erreurs de média. Aucune variante ne doit faire paniquer l'appelant.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -475,11 +487,30 @@ fn ease_in_out(t: f32) -> f32 {
     bez(u, 0.0, 1.0)
 }
 
+/// Flux audio d'une vidéo, décodé vers un anneau partagé (`audio::live`).
+///
+/// Le Source Reader délivre l'audio **déjà resamplé** en `f32` 48 kHz
+/// stéréo (le resampler MF est inséré à l'ouverture) : l'anneau n'a qu'à
+/// le stocker — le mixeur lit à sa cadence, en drop-oldest si le moteur
+/// prend du retard.
+struct AudioMedia {
+    /// Sortie vers le mixage live (48 kHz stéréo).
+    anneau: Arc<Mutex<AnneauAudio>>,
+    /// Échantillon lu mais **pas encore du** (PTS > horizon), conservé —
+    /// le Source Reader ne sait pas remettre un échantillon.
+    en_attente: Option<(IMFSample, i64)>,
+    /// Fin du flux audio atteinte : plus rien à lire (vidéo sans boucle).
+    fin: bool,
+}
+
 struct VideoLecteur {
     reader: IMFSourceReader,
     context: windows::Win32::Graphics::Direct3D11::ID3D11DeviceContext,
     /// Taille de la frame vidéo (source `ReadSample`, fixe).
     taille: (u32, u32),
+    /// Son de la vidéo — `None` si le fichier n'a pas de piste audio ou
+    /// refuse la conversion f32 48 kHz stéréo.
+    audio: Option<AudioMedia>,
     /// Frame lue mais **pas encore due** (PTS postérieur au temps écoulé).
     /// Le Source Reader ne sait pas remettre un échantillon : on le garde.
     en_attente: Option<(IMFSample, i64)>,
@@ -507,6 +538,17 @@ impl VideoLecteur {
         unsafe { self.reader.SetCurrentPosition(&GUID::zeroed(), &prop) }
         .map_err(|e| ErreurMedia::Decodage(format!("seek : {}", e.message())))?;
         self.en_attente = None;
+        // Le seek touche **les deux** flux du reader : l'audio lu depuis
+        // l'ancienne position ne doit pas sortir après le recalage.
+        if let Some(audio) = self.audio.as_mut() {
+            audio.en_attente = None;
+            audio.fin = false;
+            audio
+                .anneau
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .purger();
+        }
         self.position_us = -1;
         self.decalage_us = temps_us - position_us;
         Ok(())
@@ -546,6 +588,98 @@ impl VideoLecteur {
 impl MediaChargee {
     pub fn est_video(&self) -> bool {
         self.video.is_some()
+    }
+
+    /// Anneau du flux audio de la vidéo (48 kHz stéréo, `audio::live`) —
+    /// `None` pour une image, un carrousel ou une vidéo sans piste sonore.
+    /// Le mixeur y puise ; l'alimentation est faite par [`avancer_audio`].
+    pub fn anneau_audio(&self) -> Option<Arc<Mutex<AnneauAudio>>> {
+        self.video
+            .as_ref()
+            .and_then(|v| v.audio.as_ref())
+            .map(|a| Arc::clone(&a.anneau))
+    }
+
+    /// Avance le flux **audio** de la vidéo : pousse dans l'anneau tous les
+    /// échantillons dus jusqu'à `temps_us − decalage + MARGE_AUDIO_US`
+    /// (même horloge que [`avancer`] — `SetCurrentPosition` recale les deux
+    /// flux ensemble, l'anneau est purgé au seek).
+    ///
+    /// Appelé par la boucle uniquement quand le chemin audio live est actif
+    /// : sans appelant, aucun `ReadSample` audio n'est fait — coût nul.
+    /// Une vidéo `paused` est muette (parité DOM `v.pause()`), une vidéo en
+    /// fin de flux sans boucle contribue silence.
+    pub fn avancer_audio(&mut self, temps_us: i64) -> Result<(), ErreurMedia> {
+        let Some(video) = self.video.as_mut() else {
+            return Ok(());
+        };
+        if video.paused {
+            return Ok(());
+        }
+        let horizon = temps_us - video.decalage_us + MARGE_AUDIO_US;
+        let Some(audio) = video.audio.as_mut() else {
+            return Ok(());
+        };
+        let mut lus = 0u32;
+        while lus < LIMITE_AUDIO_PAR_APPEL && !audio.fin {
+            let (sample, pts_us) = match audio.en_attente.take() {
+                Some(attente) => attente,
+                None => {
+                    let mut flags = 0u32;
+                    let mut sample: Option<IMFSample> = None;
+                    unsafe {
+                        video.reader.ReadSample(
+                            MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                            0,
+                            None,
+                            Some(&mut flags),
+                            None,
+                            Some(&mut sample),
+                        )
+                    }
+                    .map_err(|e| {
+                        ErreurMedia::Decodage(format!("ReadSample audio : {}", e.message()))
+                    })?;
+                    if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                        audio.fin = true;
+                        return Ok(());
+                    }
+                    let Some(sample) = sample else {
+                        return Ok(());
+                    };
+                    let pts_us = unsafe { sample.GetSampleTime() }.unwrap_or(0) / 10;
+                    (sample, pts_us)
+                }
+            };
+            // Échantillon futur : conservé jusqu'à son échéance.
+            if pts_us > horizon {
+                audio.en_attente = Some((sample, pts_us));
+                return Ok(());
+            }
+            let buffer = unsafe { sample.ConvertToContiguousBuffer() }
+                .map_err(|e| ErreurMedia::Decodage(format!("buffer audio : {}", e.message())))?;
+            let mut ptr: *mut u8 = std::ptr::null_mut();
+            let mut longueur = 0u32;
+            unsafe { buffer.Lock(&mut ptr, None, Some(&mut longueur)) }
+                .map_err(|e| ErreurMedia::Decodage(format!("Lock audio : {}", e.message())))?;
+            // f32 entrelacé ; l'alignement du Lock n'est pas garanti →
+            // lecture octet par octet, jamais de cast de pointeur.
+            let echantillons: Vec<f32> = unsafe {
+                std::slice::from_raw_parts(ptr, longueur as usize)
+            }
+            .chunks_exact(4)
+            .map(|o| f32::from_le_bytes([o[0], o[1], o[2], o[3]]))
+            .collect();
+            unsafe { buffer.Unlock() }
+                .map_err(|e| ErreurMedia::Decodage(format!("Unlock audio : {}", e.message())))?;
+            audio
+                .anneau
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .pousser(&echantillons);
+            lus += 1;
+        }
+        Ok(())
     }
 
     /// Taille de la slide `index` (carrousel) — ou du média hors carrousel.
@@ -926,6 +1060,10 @@ fn charger_video(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee,
             .SetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32, None, &type_sortie)
             .map_err(|e| ErreurMedia::Decodage(format!("type RGB32 : {}", e.message())))?;
 
+        // Flux audio : conversion f32 48 kHz stéréo demandée au reader
+        // (resampler MF inséré). Échec = vidéo muette, jamais fatale.
+        let audio = configurer_audio_video(&reader);
+
         let courant = reader
             .GetCurrentMediaType(MF_SOURCE_READER_FIRST_VIDEO_STREAM.0 as u32)
             .map_err(|e| ErreurMedia::Decodage(format!("type courant : {}", e.message())))?;
@@ -957,6 +1095,7 @@ fn charger_video(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee,
                 reader,
                 context: contexte.context().clone(),
                 taille: (largeur, hauteur),
+                audio,
                 en_attente: None,
                 paused: cfg.lecture.paused,
                 boucle: cfg
@@ -970,6 +1109,47 @@ fn charger_video(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee,
         media.avancer(0)?;
         Ok(media)
     }
+}
+
+/// Demande au Source Reader de sortir l'audio en **f32 48 kHz stéréo**
+/// (le format du mix live — le resampler MF est inséré automatiquement).
+///
+/// `None` = vidéo sans piste audio ou conversion refusée : le média reste
+/// muet, comme avant ce lot — jamais d'échec de chargement pour du son.
+fn configurer_audio_video(reader: &IMFSourceReader) -> Option<AudioMedia> {
+    let type_sortie = unsafe { MFCreateMediaType() }.ok()?;
+    unsafe {
+        type_sortie
+            .SetGUID(&MF_MT_MAJOR_TYPE, &MFMediaType_Audio)
+            .ok()?;
+        type_sortie
+            .SetGUID(&MF_MT_SUBTYPE, &MFAudioFormat_Float)
+            .ok()?;
+        type_sortie
+            .SetUINT32(&MF_MT_AUDIO_NUM_CHANNELS, CANAUX_CIBLE as u32)
+            .ok()?;
+        type_sortie
+            .SetUINT32(&MF_MT_AUDIO_SAMPLES_PER_SECOND, TAUX_CIBLE)
+            .ok()?;
+        type_sortie
+            .SetUINT32(&MF_MT_AUDIO_BITS_PER_SAMPLE, 32)
+            .ok()?;
+        reader
+            .SetCurrentMediaType(
+                MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                None,
+                &type_sortie,
+            )
+            .ok()?;
+    }
+    Some(AudioMedia {
+        anneau: Arc::new(Mutex::new(AnneauAudio::avec_format(
+            TAUX_CIBLE,
+            CANAUX_CIBLE,
+        ))),
+        en_attente: None,
+        fin: false,
+    })
 }
 
 fn creer_texture_video(
@@ -993,7 +1173,7 @@ fn creer_texture_video(
 /// `32bppPBGRA` (piège §30.6). La conversion est faite par WIC lui-même, une
 /// seule fois au chargement. L'alpha est ensuite inspecté : un PNG `rgb24` ou
 /// un JPG rendent `false` et restent dessinés en `ALPHA_MODE_IGNORE`.
-fn decoder_pbgra(chemin: &Path) -> Result<(u32, u32, Vec<u8>, bool), ErreurMedia> {
+pub(crate) fn decoder_pbgra(chemin: &Path) -> Result<(u32, u32, Vec<u8>, bool), ErreurMedia> {
     // WIC exige COM sur le fil appelant. Le fil moteur est à nous : MTA.
     // S_FALSE (déjà initialisé) et RPC_E_CHANGED_MODE (déjà STA) sont
     // tolérés — WIC fonctionne dans les deux cas.

@@ -76,11 +76,26 @@ pub const GUID_CODEC_H264: GUID = GUID {
     data3: 0x4ca4,
     data4: [0xaa, 0x85, 0x1e, 0x50, 0xf3, 0x21, 0xf6, 0xbf],
 };
+/// Presets NVENC P1-P7 (nvEncodeAPI.h) — du plus rapide au plus qualitatif.
+/// Seuls P2/P4/P7 sont branchés par `Preset` : P1/P6 restent en marge
+/// documentée (voir `Preset` dans `encode/mod.rs`).
+pub const GUID_PRESET_P2: GUID = GUID {
+    data1: 0xf581_cfb8,
+    data2: 0x88d6,
+    data3: 0x4381,
+    data4: [0x93, 0xf0, 0xdf, 0x13, 0xf9, 0xc2, 0x7d, 0xab],
+};
 pub const GUID_PRESET_P4: GUID = GUID {
     data1: 0x90a7_b826,
     data2: 0xdf06,
     data3: 0x4862,
     data4: [0xb9, 0xd2, 0xcd, 0x6d, 0x73, 0xa0, 0x86, 0x81],
+};
+pub const GUID_PRESET_P7: GUID = GUID {
+    data1: 0x8484_8c12,
+    data2: 0x6f71,
+    data3: 0x4c13,
+    data4: [0x93, 0x1b, 0x53, 0xe2, 0x83, 0xf5, 0x79, 0x74],
 };
 
 // --- Structures ------------------------------------------------------------
