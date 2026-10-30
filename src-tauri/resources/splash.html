@@ -37,6 +37,11 @@
         background-position: center;
         -webkit-user-select: none;
         user-select: none;
+        /* La bordure DWM (bords gauche/droite/bas des fenêtres sans
+           décorations) ne couvre jamais le haut — le liseré manquant est
+           peint ici dans sa couleur EXACTE, injectée par Rust : accent du
+           registre DWM si ColorPrevalence, couleur système sinon. */
+        border-top: 1px solid __BORDER__;
       }
       .carte {
         display: flex;

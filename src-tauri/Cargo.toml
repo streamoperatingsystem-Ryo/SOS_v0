@@ -71,6 +71,8 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     "Win32_System_Threading",
     "Win32_System_LibraryLoader",
+    # Splash — couleur exacte du liseré DWM (AccentColor / ColorPrevalence HKCU)
+    "Win32_System_Registry",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Input_XboxController",
     # Speedrun splitter — scan mémoire processus jeu (ReadProcessMemory, etc.)

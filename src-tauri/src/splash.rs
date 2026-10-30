@@ -130,7 +130,8 @@ pub fn repondre(app: &AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
 fn servir_html(app: &AppHandle) -> tauri::http::Response<Vec<u8>> {
     let html = SPLASH_HTML
         .replace("__USER__", &pseudo_html())
-        .replace("__GREETING__", salutation(app));
+        .replace("__GREETING__", salutation(app))
+        .replace("__BORDER__", &couleur_bordure());
     tauri::http::Response::builder()
         .header("Content-Type", "text/html; charset=utf-8")
         .body(html.into_bytes())
@@ -248,4 +249,63 @@ fn salutation(app: &AppHandle) -> &'static str {
         "ja" => "ようこそ",
         _ => "Bienvenue",
     }
+}
+
+/// Couleur CSS du liseré haut du splash — reproduit EXACTEMENT la bordure
+/// que le DWM dessine sur les 3 autres côtés des fenêtres sans
+/// décorations (le haut n'est jamais couvert par Windows).
+/// Accent reporté sur les bordures (ColorPrevalence=1) → AccentColor du
+/// registre ; sinon → couleur système « bordure de fenêtre active » ;
+/// ultime repli gris neutre si tout est illisible.
+fn couleur_bordure() -> String {
+    #[cfg(windows)]
+    {
+        if lire_dword_dwm("ColorPrevalence") == Some(1) {
+            if let Some(abgr) = lire_dword_dwm("AccentColor") {
+                return couleur_hex(abgr);
+            }
+        }
+        use windows::Win32::Graphics::Gdi::{GetSysColor, COLOR_ACTIVEBORDER};
+        let c = unsafe { GetSysColor(COLOR_ACTIVEBORDER) };
+        if c != 0 {
+            return couleur_hex(c);
+        }
+    }
+    "#767676".to_string()
+}
+
+/// Lit un DWORD dans HKCU\Software\Microsoft\Windows\DWM (None si
+/// valeur absente ou lecture refusée — non bloquant par design).
+#[cfg(windows)]
+fn lire_dword_dwm(nom: &str) -> Option<u32> {
+    use windows::core::{HSTRING, PCWSTR};
+    use windows::Win32::System::Registry::{
+        RegGetValueW, HKEY_CURRENT_USER, RRF_RT_REG_DWORD,
+    };
+    let sous_cle = HSTRING::from("Software\\Microsoft\\Windows\\DWM");
+    let valeur = HSTRING::from(nom);
+    let mut data: u32 = 0;
+    let mut size = std::mem::size_of::<u32>() as u32;
+    let r = unsafe {
+        RegGetValueW(
+            HKEY_CURRENT_USER,
+            PCWSTR(sous_cle.as_ptr()),
+            PCWSTR(valeur.as_ptr()),
+            RRF_RT_REG_DWORD,
+            None,
+            Some(&mut data as *mut u32 as *mut _),
+            Some(&mut size),
+        )
+    };
+    if r.is_ok() {
+        Some(data)
+    } else {
+        None
+    }
+}
+
+/// DWORD 0x--BBGGRR (registre AccentColor / COLORREF GetSysColor) →
+/// hexadécimal CSS "#rrggbb".
+fn couleur_hex(c: u32) -> String {
+    format!("#{:02x}{:02x}{:02x}", c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF)
 }

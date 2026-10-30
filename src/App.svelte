@@ -742,7 +742,7 @@
       </div>
     {/if}
     <!-- Groupe mode moteur : bascule OBS ↔ Rust visible en permanence.
-         Le bouton actif porte la couleur du mode (vert natif / orange OBS),
+         Le bouton actif porte la couleur du mode (orange natif / bleu OBS),
          reprise par le contour de fenêtre (main.mode-*). -->
     <div class="tb-groupe tb-moteur" title={moteurErr ?? $t("moteur.titre")}>
       <button
@@ -1128,19 +1128,20 @@
     background-size: cover;
     background-position: center;
   }
-  /* Contour de fenêtre = mode moteur actif : vert en natif, orange en OBS.
-     La bordure OS de la fenêtre Tauri n'est pas stylable → anneau inset sur
-     <main> (qui couvre toute la fenêtre) + léger halo intérieur. Couleurs =
-     tokens sémantiques existants (jamais de hex). */
+  /* Contour de fenêtre = mode moteur actif : orange en natif, bleu en OBS.
+     La bordure OS de la fenêtre Tauri n'est pas stylable → liseré pointillé
+     en retrait sur <main> (outline décalée — style des cartes de la
+     sidebar, sans impact layout). Couleurs = rôles --moteur-* (glace.css). */
   main.mode-natif {
-    box-shadow:
-      inset 0 0 0 2px var(--message-ok-color),
-      inset 0 0 22px color-mix(in srgb, var(--message-ok-color) 16%, transparent);
+    --moteur-couleur: var(--moteur-natif);
   }
   main.mode-obs {
-    box-shadow:
-      inset 0 0 0 2px var(--accent-orange),
-      inset 0 0 22px color-mix(in srgb, var(--accent-orange) 16%, transparent);
+    --moteur-couleur: var(--moteur-obs);
+  }
+  main.mode-natif,
+  main.mode-obs {
+    outline: 2px dashed var(--moteur-couleur);
+    outline-offset: -4px;
   }
   header {
     flex-shrink: 0;
@@ -1237,7 +1238,7 @@
   }
   /* Groupe mode moteur : deux boutons soudés dans un même liseré (même
      structure que .tb-obs). Le bouton actif porte la couleur du mode —
-     vert natif (--message-ok-color) / orange OBS (--accent-orange) — la
+     orange natif (--moteur-natif) / bleu OBS (--moteur-obs) — la
      même que le contour de fenêtre ; l'inactif reste neutre. */
   .tb-moteur {
     gap: 0.25rem;
@@ -1272,16 +1273,16 @@
     cursor: default;
   }
   .mode-btn.mode-natif-btn.actif {
-    color: var(--message-ok-color);
-    border-color: var(--message-ok-color);
-    background: color-mix(in srgb, var(--message-ok-color) 14%, transparent);
-    box-shadow: 0 0 8px color-mix(in srgb, var(--message-ok-color) 35%, transparent);
+    color: var(--moteur-natif);
+    border-color: var(--moteur-natif);
+    background: color-mix(in srgb, var(--moteur-natif) 14%, transparent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--moteur-natif) 35%, transparent);
   }
   .mode-btn.mode-obs-btn.actif {
-    color: var(--accent-orange);
-    border-color: var(--accent-orange);
-    background: color-mix(in srgb, var(--accent-orange) 14%, transparent);
-    box-shadow: 0 0 8px color-mix(in srgb, var(--accent-orange) 35%, transparent);
+    color: var(--moteur-obs);
+    border-color: var(--moteur-obs);
+    background: color-mix(in srgb, var(--moteur-obs) 14%, transparent);
+    box-shadow: 0 0 8px color-mix(in srgb, var(--moteur-obs) 35%, transparent);
   }
   /* État de connexion : bouton icône de la même famille que Stream (verre
      + inset + rayon global). Gris au repos — la bordure ne prend la
