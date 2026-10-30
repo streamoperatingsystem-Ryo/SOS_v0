@@ -37,3 +37,9 @@ Le clic droit sur un module n'ouvre plus le menu du fond.
 
 Ajout d'un bouton œil au survol des modules sur le dashboard pour masquer / réafficher sans passer par la modale.
 La configuration est conservée.
+
+## Modification n°6 — Phase 2 widgets/modules
+
+Alignement de la branche média du menu contextuel.
+Le widget musique n'est plus proposé dans la branche trou.
+« Importer un média » est cohérent entre le clic droit et la carte d'édition.

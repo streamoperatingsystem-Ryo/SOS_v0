@@ -390,8 +390,12 @@
   // ===== Menu contextuel WIDGET (clic droit sur un widget) =====
   // Contenu miroir de la carte widget (CarteEdition, cible "widget") — mêmes
   // conditions : branche média (trou/flottant) = types hors chat/input-viewer/
-  // speedrun/goal/camera ; morphable = type media + média image (le toggle
-  // active le mode morphing global, le clic suivant dépose le morph).
+  // speedrun/goal/musique/camera — musique exclue : trou=true court-circuite
+  // le player en diffusion (la branche trou précède la branche musique) et
+  // CarteEdition ne propose pas le trou pour musique ; « Importer un média »
+  // reste offert à TOUS les types non-caméra (garde identique à
+  // !isCameraWidget de la carte). morphable = type media + média image (le
+  // toggle active le mode morphing global, le clic suivant dépose le morph).
   let ctxWidget = $derived(ctxWidgetId ? $sceneStore.widgets.find((x) => x.id === ctxWidgetId) : undefined);
   let wgType = $derived(ctxWidget?.type ?? "media");
   let wgMedia = $derived(ctxWidget?.media ?? "");
@@ -411,7 +415,10 @@
   let wgMiroirV = $derived(ctxWidget?.mediaMiroirV === true);
   let wgPaused = $derived(ctxWidget?.mediaPaused ?? true);
   let wgHasMorphs = $derived((ctxWidget?.morphs?.length ?? 0) > 0);
-  let wgIsBrancheMedia = $derived(!["chat", "input-viewer", "speedrun", "goal", "camera"].includes(wgType));
+  // Branche média : musique exclue — un widget musique troué perd son
+  // player (trou prioritaire en diffusion) sans chemin de retour dans la
+  // carte d'édition.
+  let wgIsBrancheMedia = $derived(!["chat", "input-viewer", "speedrun", "goal", "musique", "camera"].includes(wgType));
   let wgMorphable = $derived(wgType === "media" && wgHasMedia && !wgIsVideo);
 
   // Toggles : gardent le menu ouvert. Actions : ferment le menu.
