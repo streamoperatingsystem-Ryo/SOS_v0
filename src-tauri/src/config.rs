@@ -91,15 +91,6 @@ pub struct SortieNatifCfg {
     /// Preset d'encodage : "rapide" | "equilibre" | "qualite".
     #[serde(default = "sortie_preset_defaut")]
     pub preset: String,
-    #[serde(default = "vrai")]
-    pub audio_loopback: bool,
-    #[serde(default = "vrai")]
-    pub audio_micro: bool,
-    /// Gains en millièmes (1000 = 1.0, max 4000 — bornes `SortieCfg::valider`).
-    #[serde(default = "sortie_gain_defaut")]
-    pub gain_loopback: u32,
-    #[serde(default = "sortie_gain_defaut")]
-    pub gain_micro: u32,
 }
 
 fn sortie_codec_defaut() -> String {
@@ -117,16 +108,12 @@ fn sortie_fps_defaut() -> u32 {
 fn sortie_preset_defaut() -> String {
     "equilibre".to_string()
 }
-fn vrai() -> bool {
-    true
-}
 fn sortie_gain_defaut() -> u32 {
     1000
 }
 
 impl Default for SortieNatifCfg {
-    /// Défauts produit : H.264, 6000 kbps, 60 fps, « equilibre », loopback +
-    /// micro à gain unité — les valeurs historiques figées du lot 1.4.
+    /// Défauts produit : H.264, 6000 kbps, 60 fps, « equilibre ».
     fn default() -> Self {
         Self {
             codec: sortie_codec_defaut(),
@@ -135,10 +122,6 @@ impl Default for SortieNatifCfg {
             debit_kbps: sortie_debit_defaut(),
             fps: sortie_fps_defaut(),
             preset: sortie_preset_defaut(),
-            audio_loopback: true,
-            audio_micro: true,
-            gain_loopback: sortie_gain_defaut(),
-            gain_micro: sortie_gain_defaut(),
         }
     }
 }
@@ -211,6 +194,137 @@ pub fn sauver_sortie_moteur(app: &AppHandle, cfg: &SortieNatifCfg) -> Result<(),
     let mut obj = lire_moteur_json(&path);
     let v = serde_json::to_value(cfg).map_err(|e| format!("Serialize sortie cfg: {}", e))?;
     obj.insert("sortie".to_string(), v);
+    ecrire_moteur_json(&path, &obj)
+}
+
+// ===== Mixeur audio — bloc `audio` de moteur.json =====
+
+/// Une source audio persistée.
+///
+/// `id` est la clé stable du diff à chaud et des niveaux : elle ne change
+/// jamais (un périphérique ou un nom peut changer, pas l'id).
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct SourceAudioPersistee {
+    /// Identifiant stable, unique (ex. `"desktop"`, `"micro-2"`).
+    pub id: String,
+    /// `"desktop"` (loopback d'une sortie) | `"micro"` (entrée).
+    pub genre: String,
+    /// ID `IMMDevice` ; absent/null = périphérique par défaut du système.
+    #[serde(default)]
+    pub peripherique: Option<String>,
+    /// Gain en millièmes (1000 = unité, 0 = silence).
+    #[serde(default = "sortie_gain_defaut")]
+    pub gain: u32,
+    /// Coupure utilisateur — le gain est conservé pour la restauration.
+    #[serde(default)]
+    pub mute: bool,
+}
+
+/// Mixeur audio persisté — N sources, ordre du mixage.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AudioMoteurCfg {
+    #[serde(default = "sources_audio_defaut")]
+    pub sources: Vec<SourceAudioPersistee>,
+}
+
+fn source_desktop_defaut() -> SourceAudioPersistee {
+    SourceAudioPersistee {
+        id: "desktop".to_string(),
+        genre: "desktop".to_string(),
+        peripherique: None,
+        gain: sortie_gain_defaut(),
+        mute: false,
+    }
+}
+
+fn source_micro_defaut() -> SourceAudioPersistee {
+    SourceAudioPersistee {
+        id: "micro".to_string(),
+        genre: "micro".to_string(),
+        peripherique: None,
+        gain: sortie_gain_defaut(),
+        mute: false,
+    }
+}
+
+fn sources_audio_defaut() -> Vec<SourceAudioPersistee> {
+    vec![source_desktop_defaut(), source_micro_defaut()]
+}
+
+impl Default for AudioMoteurCfg {
+    /// Défaut produit : son du PC + micro, périphériques par défaut.
+    fn default() -> Self {
+        Self {
+            sources: sources_audio_defaut(),
+        }
+    }
+}
+
+/// Lit le mixeur audio (bloc `audio` de moteur.json).
+///
+/// Bloc absent → **migration** depuis l'ancien bloc `sortie`
+/// (`audio_loopback` / `audio_micro` / gains) puis écriture du bloc `audio`
+/// (une seule fois) : la modale Sortie peut ensuite réécrire son bloc sans
+/// perdre les réglages audio.
+pub fn lire_audio_moteur(app: &AppHandle) -> Result<AudioMoteurCfg, String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("moteur.json");
+    let obj = lire_moteur_json(&path);
+    if let Some(v) = obj.get("audio") {
+        return serde_json::from_value(v.clone())
+            .map_err(|e| format!("Parse moteur.json audio: {}", e));
+    }
+
+    // Migration legacy : absents = activés (défauts historiques).
+    let legacy = obj.get("sortie");
+    let drapeau = |cle: &str| {
+        legacy
+            .and_then(|s| s.get(cle))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true)
+    };
+    let gain = |cle: &str| {
+        legacy
+            .and_then(|s| s.get(cle))
+            .and_then(|v| v.as_u64())
+            .unwrap_or(1000)
+            .min(4000) as u32
+    };
+    let mut sources = Vec::new();
+    if drapeau("audio_loopback") {
+        sources.push(SourceAudioPersistee {
+            gain: gain("gain_loopback"),
+            ..source_desktop_defaut()
+        });
+    }
+    if drapeau("audio_micro") {
+        sources.push(SourceAudioPersistee {
+            gain: gain("gain_micro"),
+            ..source_micro_defaut()
+        });
+    }
+    let cfg = AudioMoteurCfg { sources };
+
+    // Persiste la migration. Non fatal : un disque en lecture seule rend
+    // juste la migration rejouable au prochain lancement.
+    if let Ok(v) = serde_json::to_value(&cfg) {
+        let mut obj = obj;
+        obj.insert("audio".to_string(), v);
+        if let Err(e) = ecrire_moteur_json(&path, &obj) {
+            log::warn!("migration audio non persistée : {e}");
+        }
+    }
+    Ok(cfg)
+}
+
+/// Sauve le mixeur audio (bloc `audio` de moteur.json). `mode`, `sortie`,
+/// `apercu` et les clés inconnues sont préservés.
+pub fn sauver_audio_moteur(app: &AppHandle, cfg: &AudioMoteurCfg) -> Result<(), String> {
+    let dir = data_dir(app)?;
+    let path = dir.join("moteur.json");
+    let mut obj = lire_moteur_json(&path);
+    let v = serde_json::to_value(cfg).map_err(|e| format!("Serialize audio cfg: {}", e))?;
+    obj.insert("audio".to_string(), v);
     ecrire_moteur_json(&path, &obj)
 }
 

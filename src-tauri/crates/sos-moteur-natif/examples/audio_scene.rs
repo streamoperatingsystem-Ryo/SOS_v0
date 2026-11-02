@@ -12,7 +12,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use sos_moteur_api::{ApercuCfg, AudioCfg, Codec, Conteneur, Moteur, SinkCfg, SortieCfg};
+use sos_moteur_api::{
+    ApercuCfg, AudioCfg, Codec, Conteneur, Moteur, SinkCfg, SortieCfg, SourceAudioCfg,
+};
 use sos_moteur_natif::moteur::MoteurNatif;
 
 /// Journal minimal : le crate trace via `log`, les harnais n'installent pas
@@ -38,16 +40,24 @@ fn main() {
         .next()
         .unwrap_or_else(|| "audio-scene.mp4".to_string());
     let secondes: u64 = args.next().and_then(|v| v.parse().ok()).unwrap_or(3);
-    let sources = args.next().unwrap_or_else(|| "deux".to_string());
+    let mode = args.next().unwrap_or_else(|| "deux".to_string());
     let gain_loopback: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(1000);
     let gain_micro: u32 = args.next().and_then(|v| v.parse().ok()).unwrap_or(1000);
 
-    let audio = AudioCfg {
-        loopback: sources != "mic",
-        micro: sources != "loop",
-        gain_loopback,
-        gain_micro,
-    };
+    let mut sources = Vec::new();
+    if mode != "mic" {
+        sources.push(SourceAudioCfg {
+            gain: gain_loopback,
+            ..SourceAudioCfg::desktop()
+        });
+    }
+    if mode != "loop" {
+        sources.push(SourceAudioCfg {
+            gain: gain_micro,
+            ..SourceAudioCfg::micro()
+        });
+    }
+    let audio = AudioCfg { sources };
 
     // Scène minimale avec un titre : le MP4 doit aussi rester lisible à l'œil.
     let scene_json = r##"{
@@ -88,7 +98,7 @@ fn main() {
         debit_kbps: 6000,
         preset: "equilibre".to_string(),
         cle: None,
-        audio: Some(audio),
+        audio: Some(audio.clone()),
     };
     println!("audio demandé : {audio:?}");
     if let Err(e) = moteur.demarrer_sortie(cfg) {

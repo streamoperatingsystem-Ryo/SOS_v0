@@ -49,6 +49,10 @@ windows = { version = "0.58", features = [
     "Win32_UI_WindowsAndMessaging",
     # Audio WASAPI (loopback + micro) — liaisons directes, aucune crate tierce.
     "Win32_Media_Audio",
+    # Nom convivial des périphériques audio (`PKEY_Device_FriendlyName`) et
+    # propriétés `IMMDevice` : énumération du mixeur (sources N).
+    "Win32_Devices_FunctionDiscovery",
+    "Win32_UI_Shell_PropertiesSystem",
     # Pipe nommé de l'entrée audio live du sidecar FFmpeg (output/ffmpeg.rs
     # `PipeAudio`) : CreateNamedPipeW + WriteFile — transport kernel local,
     # aucune socket (contrat vie privée).

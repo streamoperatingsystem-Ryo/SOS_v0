@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, createMusiqueWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview, rafraichirOutputs } from "../stores/obs";
-  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs, sortieNatif, sortieNatifBusy, sortieNatifFichier, sortieNatifFlux, sortieNatifFichierActif, sortieEstFlux, sortieCfg, rafraichirSortieNatif, toggleEnregistrementNatif, toggleStreamNatif, chargerSortieCfg } from "../stores/moteur";
+  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs, sortieNatif, sortieNatifBusy, sortieNatifFichier, sortieNatifFlux, sortieNatifFichierActif, sortieEstFlux, sortieCfg, rafraichirSortieNatif, toggleEnregistrementNatif, toggleStreamNatif, chargerSortieCfg, chargerAudioCfg } from "../stores/moteur";
   import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, planningModalOpen, statistiquesModalOpen, obsWebSocketModalOpen, confirmObsOutputOpen, sortieNatifModalOpen } from "../stores/ui";
   import { jcActif, toggleJustChatting } from "../stores/justChatting";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
@@ -31,6 +31,7 @@
   import icoErgo from "../../assets/ico/Ergonomie.png";
   import icoDiagnostic from "../../assets/ico/Diagnostic.png";
   import icoGuide from "../../assets/ico/Guide du streamer.png";
+  import MixeurAudio from "./MixeurAudio.svelte";
 
   let status = $derived($obsStatus);
   let error = $derived($obsError);
@@ -313,6 +314,9 @@
     // Réglages de sortie natifs (moteur.json) : le résumé du bloc moteur les
     // affiche — charge en avance, non-fatal en interne.
     await chargerSortieCfg();
+    // Mixeur audio : charge aussi la migration legacy (`sortie.audio_*` →
+    // bloc `audio`) avant qu'une sauvegarde de la modale Sortie ne l'écrase.
+    await chargerAudioCfg();
   });
 
   /// Id codec persisté → nom lisible (contrat `Codec::nom` côté Rust).
@@ -628,6 +632,27 @@
       </div>
     {/if}
   </div>
+
+  <!-- Section Audio : mixeur natif (périphériques, gains, mute, vu-mètres).
+       Visible en mode Rust uniquement — en mode OBS, l'audio se règle dans
+       OBS (le mixeur natif ne capterait rien). -->
+  {#if natifMode}
+    <div class="section sec-audio" class:carte-edition={open === "audio"}>
+      <button
+        class="header"
+        class:ouvert={open === "audio"}
+        onclick={() => toggleSection("audio")}
+      >
+        <span>{$t("audio.section")}</span>
+        <span class="chevron">›</span>
+      </button>
+      {#if open === "audio"}
+        <div class="content">
+          <MixeurAudio />
+        </div>
+      {/if}
+    </div>
+  {/if}
 
   <!-- Section Plateformes : carte vert foncé portée par la .section quand
        elle est ouverte — même mécanisme que les autres sections-cartes. -->
@@ -1066,6 +1091,7 @@
      l'en-tête au repos — rôles --crochet-*, glace.css). */
   .sec-widgets      { --accent-carte: var(--carte-bleue);    --accent-crochet: var(--crochet-bleu); }
   .sec-connexions   { --accent-carte: var(--carte-verte);    --accent-crochet: var(--crochet-vert); }
+  .sec-audio        { --accent-crochet: var(--crochet-cyan); }
   .sec-interactions { --accent-crochet: var(--crochet-rose); }
   .sec-attente      { --accent-crochet: var(--crochet-cyan); }
   .sec-jc           { --accent-crochet: var(--crochet-orange); }

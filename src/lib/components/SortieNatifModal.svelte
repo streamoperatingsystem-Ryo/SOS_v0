@@ -30,7 +30,7 @@
     demarrerStreamNatif,
     arreterEnregistrementNatif,
   } from "../stores/moteur";
-  import { sortieNatifModalOpen } from "../stores/ui";
+  import { sortieNatifModalOpen, openSectionExplicit } from "../stores/ui";
   import { sceneStore } from "../stores/scene";
 
   function onFermer() {
@@ -44,10 +44,6 @@
   let debit = $state(6000);
   let fps = $state(60);
   let preset = $state("equilibre");
-  let loopback = $state(true);
-  let micro = $state(true);
-  let gainLb = $state(100); // %
-  let gainMic = $state(100); // %
 
   // Projecteur natif (aperçu réduit) — défaut léger : 480 px à 10 fps.
   let projLargeur = $state(480);
@@ -89,10 +85,6 @@
     debit = s.debit_kbps;
     fps = FPS_CHOIX.includes(s.fps) ? s.fps : 60;
     preset = PRESETS.includes(s.preset) ? s.preset : "equilibre";
-    loopback = s.audio_loopback;
-    micro = s.audio_micro;
-    gainLb = Math.round(s.gain_loopback / 10);
-    gainMic = Math.round(s.gain_micro / 10);
     await chargerApercuCfg();
     const a = $apercuCfg;
     projLargeur = PROJ_LARGEURS.includes(a.largeur) ? a.largeur : 480;
@@ -117,11 +109,13 @@
       debit_kbps: Math.max(0, Math.round(debit)),
       fps,
       preset,
-      audio_loopback: loopback,
-      audio_micro: micro,
-      gain_loopback: Math.round(gainLb * 10),
-      gain_micro: Math.round(gainMic * 10),
     };
+  }
+
+  /// Le mixeur audio vit dans sa propre section (dock, pas une modale).
+  function ouvrirAudio(): void {
+    sortieNatifModalOpen.set(false);
+    openSectionExplicit("audio");
   }
 
   /// Persiste à chaque changement (pattern des autres modales : pas de
@@ -228,29 +222,16 @@
       {/if}
     </div>
 
-    <!-- Audio : loopback + micro, gains en % (millièmes côté backend). -->
+    <!-- Audio : réglé dans la section dédiée (périphériques + vu-mètres),
+         accessible sans rouvrir cette modale. -->
     <div class="modal-bloc">
       <div class="modal-bloc-titre">{$t("sortieModal.blocAudio")}</div>
-      <label class="modal-toggle">
-        <input type="checkbox" bind:checked={loopback} onchange={sauver} />
-        <span>{$t("sortieModal.loopback")}</span>
-      </label>
-      {#if loopback}
-        <div class="gain-ligne">
-          <span class="field-label">{$t("sortieModal.gain")} — {gainLb} %</span>
-          <input class="modal-range" type="range" min="0" max="200" step="5" bind:value={gainLb} onchange={sauver} />
-        </div>
-      {/if}
-      <label class="modal-toggle">
-        <input type="checkbox" bind:checked={micro} onchange={sauver} />
-        <span>{$t("sortieModal.micro")}</span>
-      </label>
-      {#if micro}
-        <div class="gain-ligne">
-          <span class="field-label">{$t("sortieModal.gain")} — {gainMic} %</span>
-          <input class="modal-range" type="range" min="0" max="200" step="5" bind:value={gainMic} onchange={sauver} />
-        </div>
-      {/if}
+      <p class="hint">{$t("sortieModal.audioAilleurs")}</p>
+      <div class="modal-actions">
+        <button class="action" onclick={ouvrirAudio}>
+          {$t("sortieModal.ouvrirAudio")}
+        </button>
+      </div>
     </div>
 
     <!-- Projecteur : qualité et cadence de l'aperçu réduit (moteur.json). -->
@@ -353,11 +334,5 @@
   }
   .champ-large {
     grid-column: span 2;
-  }
-  .gain-ligne {
-    display: flex;
-    flex-direction: column;
-    gap: 0.2rem;
-    padding-left: 1.2rem;
   }
 </style>

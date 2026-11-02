@@ -20,7 +20,7 @@
 //!   encore le rendu/l'encodeur à chaud.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -31,9 +31,11 @@ use windows::Win32::Graphics::Direct2D::{ID2D1Bitmap1, ID2D1PathGeometry};
 use windows::Win32::Graphics::Direct3D11::ID3D11Texture2D;
 
 use sos_moteur_api::{
-    ApercuCfg, ApercuFrame, Capacites, Codec, ErreurMoteur, Moteur, MoteurEtat, PaquetEncode, Sink,
-    SinkCfg, SortieCfg, SortieKind,
+    ApercuCfg, ApercuFrame, AudioCfg, Capacites, Codec, ErreurMoteur, GenreAudio, Moteur,
+    MoteurEtat, PaquetEncode, Sink, SinkCfg, SortieCfg, SortieKind, SourceAudioCfg,
 };
+
+use crate::audio::{NiveauAudio, NiveauxPartages, Sens};
 
 use crate::cadres::CadreCfg;
 use crate::capture::camera::CaptureCamera;
@@ -133,6 +135,57 @@ pub struct EncodeurInfo {
     pub nom: String,
     pub materiel: bool,
     pub zero_copie: bool,
+}
+
+/// État d'une source audio pour le mixeur de l'app (périphérique réel,
+/// repli éventuel, erreur, niveau mesuré).
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceAudioEtat {
+    pub id: String,
+    pub genre: GenreAudio,
+    /// Nom du périphérique réellement ouvert (`None` = pas encore ouvert).
+    pub appareil: Option<String>,
+    /// `true` = l'ID demandé n'existait plus, le défaut a été utilisé.
+    pub repli: bool,
+    /// Erreur d'ouverture/capture — la source est muette mais la sortie vit.
+    pub erreur: Option<String>,
+    pub gain: u32,
+    pub mute: bool,
+    /// Niveaux **pré-fader** (mesurés dans le thread de capture).
+    pub niveau: NiveauAudio,
+}
+
+/// Photographie du mixeur audio (lue à la demande par l'UI, jamais pollée
+/// par le moteur).
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioEtat {
+    /// Une sortie encodée tourne **et** au moins une source est déclarée.
+    pub actif: bool,
+    pub sources: Vec<SourceAudioEtat>,
+    /// Bus programme (post-gain, post-mute).
+    pub master: NiveauAudio,
+}
+
+/// Source publiée à l'app : les compteurs de niveau sont partagés (atomics),
+/// aucun verrou dans le chemin chaud.
+struct SourceAudioPartagee {
+    id: String,
+    genre: GenreAudio,
+    appareil: Option<String>,
+    repli: bool,
+    erreur: Option<String>,
+    gain: u32,
+    mute: bool,
+    niveaux: Arc<NiveauxPartages>,
+}
+
+/// État audio partagé entre la boucle (écrivain, **sur changement**) et l'app
+/// (lecteur, à la demande).
+#[derive(Default)]
+struct AudioEtatPartage {
+    actif: bool,
+    sources: Vec<SourceAudioPartagee>,
+    master: Option<Arc<NiveauxPartages>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -267,6 +320,13 @@ pub struct MoteurNatif {
     /// consommée (drop-oldest, contrat §3.1). Consommée par `boucle` en
     /// début de frame, jamais bloquante côté appelant.
     scene_maj: Arc<Mutex<Option<SceneChargee>>>,
+    /// Configuration audio voulue (live). La boucle la relit quand
+    /// `audio_version` change — aucun verrou par frame.
+    audio_cfg: Arc<Mutex<AudioCfg>>,
+    audio_version: Arc<AtomicU64>,
+    /// État audio publié au mixeur de l'app (périphériques ouverts, erreurs,
+    /// compteurs de niveau partagés).
+    audio_etat: Arc<Mutex<AudioEtatPartage>>,
 }
 
 impl Default for MoteurNatif {
@@ -330,6 +390,9 @@ impl MoteurNatif {
             base: Mutex::new(PathBuf::new()),
             canvas: Mutex::new((0, 0)),
             scene_maj: Arc::new(Mutex::new(None)),
+            audio_cfg: Arc::new(Mutex::new(AudioCfg::default())),
+            audio_version: Arc::new(AtomicU64::new(0)),
+            audio_etat: Arc::new(Mutex::new(AudioEtatPartage::default())),
         }
     }
 
@@ -1225,6 +1288,12 @@ impl MoteurNatif {
             cle: None,
             audio: None,
         };
+        // Session aperçu : aucune source audio ouverte, état local jetable.
+        let audio_cfg = Arc::new(Mutex::new(AudioCfg {
+            sources: Vec::new(),
+        }));
+        let audio_version = Arc::new(AtomicU64::new(0));
+        let audio_etat = Arc::new(Mutex::new(AudioEtatPartage::default()));
         let fil = std::thread::Builder::new()
             .name("sos-moteur-apercu".to_string())
             .spawn(move || {
@@ -1236,6 +1305,9 @@ impl MoteurNatif {
                     apercu_partage,
                     arret,
                     encodeur_partage,
+                    audio_cfg,
+                    audio_version,
+                    audio_etat,
                 );
                 if let Err(m) = resultat {
                     *etat_apercu.lock().unwrap_or_else(|p| p.into_inner()) = Some(m);
@@ -1279,6 +1351,64 @@ impl MoteurNatif {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .clone()
+    }
+
+    /// Met à jour la configuration audio **à chaud** : la boucle applique le
+    /// diff au début de la frame suivante — gain/mute immédiats, ajout /
+    /// retrait / changement de périphérique = redémarrage de la seule source
+    /// concernée (les autres ne sont pas touchées).
+    pub fn maj_audio(&self, cfg: AudioCfg) -> Result<(), ErreurMoteur> {
+        cfg.valider()?;
+        *self.audio_cfg.lock().unwrap_or_else(|e| e.into_inner()) = cfg;
+        self.audio_version.fetch_add(1, Ordering::Relaxed);
+        Ok(())
+    }
+
+    /// Photographie du mixeur : périphériques réellement ouverts, replis,
+    /// erreurs et niveaux mesurés. `actif = false` hors session.
+    pub fn etat_audio(&self) -> AudioEtat {
+        let actif = self.en_cours();
+        let partage = self.audio_etat.lock().unwrap_or_else(|e| e.into_inner());
+        if !actif || !partage.actif {
+            return AudioEtat {
+                actif: false,
+                sources: Vec::new(),
+                master: NiveauAudio::SILENCE,
+            };
+        }
+        AudioEtat {
+            actif: true,
+            sources: partage
+                .sources
+                .iter()
+                .map(|s| SourceAudioEtat {
+                    id: s.id.clone(),
+                    genre: s.genre,
+                    appareil: s.appareil.clone(),
+                    repli: s.repli,
+                    erreur: s.erreur.clone(),
+                    gain: s.gain,
+                    mute: s.mute,
+                    niveau: s.niveaux.lire(),
+                })
+                .collect(),
+            master: partage
+                .master
+                .as_ref()
+                .map(|master| master.lire())
+                .unwrap_or(NiveauAudio::SILENCE),
+        }
+    }
+
+    /// Efface les latches d'écrêtage (toutes sources + bus programme).
+    pub fn reset_ecretage(&self) {
+        let partage = self.audio_etat.lock().unwrap_or_else(|e| e.into_inner());
+        for source in &partage.sources {
+            source.niveaux.ecretage_reset();
+        }
+        if let Some(master) = &partage.master {
+            master.ecretage_reset();
+        }
     }
 }
 
@@ -1414,10 +1544,25 @@ impl Moteur for MoteurNatif {
         *self.etat.lock().unwrap_or_else(|e| e.into_inner()) = EtatInterne::Actif;
         *self.arret.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::clone(&arret));
 
+        // Audio : la config de session devient la config courante (la boucle
+        // la relit par version) ; l'état partagé repart vierge.
+        let audio_session = cfg
+            .audio
+            .clone()
+            .unwrap_or(AudioCfg {
+                sources: Vec::new(),
+            });
+        *self.audio_cfg.lock().unwrap_or_else(|e| e.into_inner()) = audio_session;
+        self.audio_version.fetch_add(1, Ordering::Relaxed);
+        *self.audio_etat.lock().unwrap_or_else(|e| e.into_inner()) = AudioEtatPartage::default();
+
         let etat = Arc::clone(&self.etat);
         let compteurs = Arc::clone(&self.compteurs);
         let apercu = Arc::clone(&self.apercu);
         let encodeur_partage = Arc::clone(&self.encodeur);
+        let audio_cfg = Arc::clone(&self.audio_cfg);
+        let audio_version = Arc::clone(&self.audio_version);
+        let audio_etat = Arc::clone(&self.audio_etat);
         let fil = std::thread::Builder::new()
             .name("sos-moteur-natif".to_string())
             .spawn(move || {
@@ -1429,6 +1574,9 @@ impl Moteur for MoteurNatif {
                     apercu,
                     arret,
                     encodeur_partage,
+                    audio_cfg,
+                    audio_version,
+                    audio_etat,
                 );
                 let mut e = etat.lock().unwrap_or_else(|p| p.into_inner());
                 *e = match resultat {
@@ -2180,6 +2328,293 @@ fn memes_slides(a: &Option<CarrouselCfg>, b: &Option<CarrouselCfg>) -> bool {
     }
 }
 
+/// Une source audio **vivante** dans la boucle (live ou repli post-mux).
+struct SourceAudioActive {
+    cfg: SourceAudioCfg,
+    live: Option<crate::audio::live::SourceLive>,
+    piste: Option<crate::audio::piste::CapturePiste>,
+    anneau: Option<Arc<Mutex<crate::audio::live::AnneauAudio>>>,
+    niveaux: Arc<NiveauxPartages>,
+    appareil: Option<String>,
+    repli: bool,
+    erreur: Option<String>,
+    /// Index dans `MixeurLocal::entrees()` (`None` en post-mux).
+    index_mix: Option<usize>,
+}
+
+/// Genre de source → sens WASAPI.
+fn sens_de(genre: GenreAudio) -> Sens {
+    match genre {
+        GenreAudio::Desktop => Sens::Sortie,
+        GenreAudio::Micro => Sens::Entree,
+    }
+}
+
+/// Nom technique (thread + fichier temporaire) : neutralise tout caractère
+/// hors `[A-Za-z0-9_-]` et suffixe un FNV-1a de l'id — deux ids distincts ne
+/// peuvent pas produire le même fichier temporaire.
+fn nom_technique(id: &str) -> String {
+    let nettoye: String = id
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for octet in id.bytes() {
+        hash ^= u64::from(octet);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    let base = if nettoye.is_empty() {
+        "source"
+    } else {
+        nettoye.as_str()
+    };
+    format!("{base}-{hash:016x}")
+}
+
+/// Démarre une source (live ou repli post-mux) et publie son périphérique
+/// réel / son erreur. Une source indisponible ne fait **jamais** échouer la
+/// sortie : elle est muette et signalée.
+fn demarrer_source_audio(
+    cfg: &SourceAudioCfg,
+    audio_live: bool,
+    compteurs: &CompteursMoteur,
+) -> SourceAudioActive {
+    let gain = cfg.gain_effectif();
+    let nom = nom_technique(&cfg.id);
+    let mut active = SourceAudioActive {
+        cfg: cfg.clone(),
+        live: None,
+        piste: None,
+        anneau: None,
+        niveaux: Arc::new(NiveauxPartages::nouveau()),
+        appareil: None,
+        repli: false,
+        erreur: None,
+        index_mix: None,
+    };
+    if audio_live {
+        match crate::audio::live::SourceLive::demarrer(
+            sens_de(cfg.genre),
+            gain,
+            &nom,
+            cfg.peripherique.as_deref(),
+        ) {
+            Ok(mut live) => {
+                active.niveaux = live.niveaux();
+                active.anneau = Some(live.anneau());
+                match live.attendre_demarrage(Duration::from_millis(400)) {
+                    Some(Ok(appareil)) => {
+                        active.appareil = Some(appareil.nom);
+                        active.repli = appareil.repli;
+                    }
+                    Some(Err(e)) => {
+                        active.erreur = Some(e.clone());
+                        compteurs.degrader(format!("audio {nom} indisponible : {e}"));
+                    }
+                    None if live.est_vivante() => {
+                        compteurs.degrader(format!("audio {nom} : démarrage lent (> 400 ms)"));
+                    }
+                    None => {
+                        let message = "capture arrêtée au démarrage".to_string();
+                        compteurs.degrader(format!("audio {nom} : {message}"));
+                        active.erreur = Some(message);
+                    }
+                }
+                // Aligne la source sur « maintenant » : le pré-roll WASAPI
+                // (200 ms) est jeté, comme au démarrage de session. Sans ça,
+                // une source ajoutée à chaud jouerait ~200 ms en retard.
+                if let Some(anneau) = &active.anneau {
+                    anneau.lock().unwrap_or_else(|e| e.into_inner()).purger();
+                }
+                active.live = Some(live);
+            }
+            Err(e) => {
+                active.erreur = Some(e.to_string());
+                compteurs.degrader(format!("audio {nom} indisponible : {e}"));
+            }
+        }
+    } else {
+        match crate::audio::piste::demarrer(
+            sens_de(cfg.genre),
+            gain,
+            &nom,
+            cfg.peripherique.as_deref(),
+        ) {
+            Ok(mut piste) => {
+                active.niveaux = piste.niveaux();
+                match piste.attendre_demarrage(Duration::from_millis(400)) {
+                    Some(Ok(appareil)) => {
+                        active.appareil = Some(appareil.nom);
+                        active.repli = appareil.repli;
+                    }
+                    Some(Err(e)) => {
+                        active.erreur = Some(e.clone());
+                        compteurs.degrader(format!("audio {nom} indisponible : {e}"));
+                    }
+                    None if piste.est_vivante() => {
+                        compteurs.degrader(format!("audio {nom} : démarrage lent (> 400 ms)"));
+                    }
+                    None => {
+                        let message = "capture arrêtée au démarrage".to_string();
+                        compteurs.degrader(format!("audio {nom} : {message}"));
+                        active.erreur = Some(message);
+                    }
+                }
+                active.piste = Some(piste);
+            }
+            Err(e) => {
+                active.erreur = Some(e.to_string());
+                compteurs.degrader(format!("audio {nom} indisponible : {e}"));
+            }
+        }
+    }
+    active
+}
+
+/// Arrête une source et archive son PCM (réparation du post-mux).
+fn arreter_source(
+    source: &mut SourceAudioActive,
+    archivees: &mut Vec<crate::audio::piste::Piste>,
+) {
+    if let Some(live) = source.live.take() {
+        match live.arreter() {
+            Ok(mut piste) => {
+                // Le repli post-mux applique un gain unique par piste : le
+                // dernier réglage connu est le moins faux (le direct, lui,
+                // applique le gain par bloc dans le mixeur).
+                piste.gain_milliemes = source.cfg.gain_effectif();
+                archivees.push(piste);
+            }
+            Err(e) => log::warn!("audio {} : arrêt : {e}", source.cfg.id),
+        }
+    }
+    if let Some(piste) = source.piste.take() {
+        match piste.arreter() {
+            Ok(mut piste) => {
+                piste.gain_milliemes = source.cfg.gain_effectif();
+                archivees.push(piste);
+            }
+            Err(e) => log::warn!("audio {} : arrêt : {e}", source.cfg.id),
+        }
+    }
+    source.anneau = None;
+    source.index_mix = None;
+}
+
+/// Reconstruit les entrées **fixes** du mixeur (sources WASAPI) et rend leur
+/// nombre. Les anneaux médias sont réempilés par `rafraichir_entrees_media`.
+fn reconstruire_entrees_audio(
+    mixeur: &mut crate::audio::live::MixeurLocal,
+    sources: &mut [SourceAudioActive],
+) -> usize {
+    let entrees = mixeur.entrees();
+    entrees.clear();
+    let mut nb = 0;
+    for source in sources.iter_mut() {
+        source.index_mix = None;
+        let Some(anneau) = source.anneau.as_ref() else {
+            continue;
+        };
+        entrees.push(crate::audio::live::EntreeMix {
+            anneau: Arc::clone(anneau),
+            gain_milliemes: source.cfg.gain_effectif(),
+        });
+        source.index_mix = Some(entrees.len() - 1);
+        nb += 1;
+    }
+    nb
+}
+
+/// Publie l'état audio vers l'app (périphériques, erreurs, compteurs
+/// partagés). Appelé **sur changement**, jamais par frame.
+fn publier_etat_audio(
+    partage: &Arc<Mutex<AudioEtatPartage>>,
+    sources: &[SourceAudioActive],
+    master: &Arc<NiveauxPartages>,
+    actif: bool,
+) {
+    let mut etat = partage.lock().unwrap_or_else(|e| e.into_inner());
+    etat.actif = actif;
+    etat.master = Some(Arc::clone(master));
+    etat.sources = sources
+        .iter()
+        .map(|source| SourceAudioPartagee {
+            id: source.cfg.id.clone(),
+            genre: source.cfg.genre,
+            appareil: source.appareil.clone(),
+            repli: source.repli,
+            erreur: source.erreur.clone(),
+            gain: source.cfg.gain,
+            mute: source.cfg.mute,
+            niveaux: Arc::clone(&source.niveaux),
+        })
+        .collect();
+}
+
+/// Applique une nouvelle config audio **à chaud** : diff par `id` (retrait,
+/// ajout, réordonnancement), redémarrage de la seule source dont le
+/// périphérique change, gain/mute immédiats.
+#[allow(clippy::too_many_arguments)]
+fn appliquer_audio(
+    nouvelle: &AudioCfg,
+    sources: &mut Vec<SourceAudioActive>,
+    mixeur: &mut crate::audio::live::MixeurLocal,
+    audio_live: bool,
+    pistes_archivees: &mut Vec<crate::audio::piste::Piste>,
+    nb_fixes: &mut usize,
+    nb_scene: &mut usize,
+    medias: &[MediaChargee],
+    compteurs: &CompteursMoteur,
+) {
+    // 1) Retirer les sources absentes.
+    let mut index = 0;
+    while index < sources.len() {
+        if nouvelle.par_id(&sources[index].cfg.id).is_none() {
+            let mut retiree = sources.remove(index);
+            arreter_source(&mut retiree, pistes_archivees);
+        } else {
+            index += 1;
+        }
+    }
+    // 2) Réordonner / redémarrer / ajouter, dans l'ordre de la config.
+    let mut ordonnees = Vec::with_capacity(nouvelle.sources.len());
+    for cfg in &nouvelle.sources {
+        match sources.iter().position(|s| s.cfg.id == cfg.id) {
+            Some(position) => {
+                let mut active = sources.remove(position);
+                let redemarrer = active.cfg.peripherique != cfg.peripherique
+                    || active.cfg.genre != cfg.genre;
+                if redemarrer {
+                    arreter_source(&mut active, pistes_archivees);
+                    active = demarrer_source_audio(cfg, audio_live, compteurs);
+                } else {
+                    active.cfg.gain = cfg.gain;
+                    active.cfg.mute = cfg.mute;
+                }
+                ordonnees.push(active);
+            }
+            None => ordonnees.push(demarrer_source_audio(cfg, audio_live, compteurs)),
+        }
+    }
+    for mut reste in sources.drain(..) {
+        arreter_source(&mut reste, pistes_archivees);
+    }
+    *sources = ordonnees;
+    // 3) Reconstruire le mix fixe + les anneaux médias (le zéro du flux
+    //    n'est pas recalé : le direct continue).
+    if audio_live {
+        *nb_fixes = reconstruire_entrees_audio(mixeur, sources);
+        rafraichir_entrees_media(mixeur, medias, *nb_fixes);
+        *nb_scene = mixeur.entrees().len();
+    }
+}
+
 /// Registre des anneaux **médias** du mixeur live : les `nb_fixes` entrées
 /// de tête (sources WASAPI) sont conservées, le reste est reconstruit sur
 /// les médias courants — une vidéo ajoutée ou remplacée à chaud rejoint le
@@ -2206,6 +2641,7 @@ fn rafraichir_entrees_media(
 
 /// Corps du fil moteur. Toute erreur remonte à l'état (`Erreur`) ; aucune
 /// panique ne doit traverser le fil.
+#[allow(clippy::too_many_arguments)]
 fn boucle(
     cfg: SortieCfg,
     scene: SceneChargee,
@@ -2215,6 +2651,10 @@ fn boucle(
     apercu_partage: Arc<Mutex<Option<ApercuFrame>>>,
     arret: Arc<AtomicBool>,
     encodeur_partage: Arc<Mutex<Option<EncodeurInfo>>>,
+    // Mixeur audio : config voulue (versionnée) + état publié à l'app.
+    audio_cfg: Arc<Mutex<AudioCfg>>,
+    audio_version: Arc<AtomicU64>,
+    audio_etat: Arc<Mutex<AudioEtatPartage>>,
 ) -> Result<(), String> {
     let SceneChargee {
         sources,
@@ -2454,10 +2894,20 @@ fn boucle(
         ));
     }
 
-    // Audio demandé : `actif()` = au moins une source cochée. Il pilote
-    // **deux** voies — live (pipe nommé → AAC dans le conteneur, en direct)
-    // ou post-mux (PCM fichier + `muxer_audio` à l'arrêt, historique).
-    let audio_demande = cfg.audio.filter(|a| a.actif());
+    // Audio demandé : config courante du mixeur (versionnée). `actif()` = au
+    // moins une source déclarée. Il pilote **deux** voies — live (pipe nommé
+    // → AAC dans le conteneur, en direct) ou post-mux (PCM fichier +
+    // `muxer_audio` à l'arrêt, historique).
+    let mut audio_courante = audio_cfg
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone();
+    let mut version_audio = audio_version.load(Ordering::Relaxed);
+    let audio_actif = audio_courante.actif();
+    // Une piste audio est créée dès que la session en demande une (même
+    // vide) : ajouter la première source à chaud doit s'entendre, sans
+    // redémarrer l'enregistrement.
+    let audio_configure = cfg.audio.is_some();
 
     let mut sinks: Vec<Box<dyn Sink>> = Vec::new();
     // Chemins des sorties **fichier** : le post-mux (repli/réparation) se
@@ -2471,7 +2921,7 @@ fn boucle(
             SinkCfg::Fichier { chemin, conteneur } => {
                 // Voie live tentée quand l'audio est demandé ; échec → sink
                 // classique + post-mux à l'arrêt (zéro régression).
-                if audio_demande.is_some() {
+                if audio_configure {
                     match FfmpegSink::nouveau_avec_audio_codec(
                         None, chemin, *conteneur, cfg.codec, fps, index,
                     ) {
@@ -2504,7 +2954,7 @@ fn boucle(
                         codec: cfg.codec,
                         fps,
                         index,
-                        audio: audio_demande.is_some(),
+                        audio: audio_configure,
                     },
                     &compteurs,
                 )?;
@@ -2520,7 +2970,7 @@ fn boucle(
                         codec: cfg.codec,
                         fps,
                         index,
-                        audio: audio_demande.is_some(),
+                        audio: audio_configure,
                     },
                     &compteurs,
                 )?;
@@ -2561,106 +3011,44 @@ fn boucle(
 
     compteurs.maj_resolution(ow, oh);
 
-    // Audio : un thread par source, démarré **juste avant** la boucle pour
-    // que l'offset A/V reste borné. Une source indisponible dégrade
-    // l'enregistrement (muet sur cette source), elle ne l'annule jamais.
+    // Audio : N sources, démarrées **juste avant** la boucle pour que
+    // l'offset A/V reste borné. Une source indisponible dégrade
+    // l'enregistrement (muette sur cette source), elle ne l'annule jamais.
     //
     // Deux voies selon le sink réussi :
     // - **live** (`audio_live`) : `SourceLive` pousse dans un anneau (mixage
-    //   temps réel par `MixeurLocal`, dans cette boucle) **et** écrit le PCM
-    //   fichier — le post-mux reste la réparation si le pipe casse ;
-    // - **post-mux** (repli) : `CapturePiste` historique, `muxer_audio` à
-    //   l'arrêt — rien ne change par rapport à avant ce lot.
-    let mut captures_audio: Vec<crate::audio::piste::CapturePiste> = Vec::new();
-    let mut sources_live: Vec<crate::audio::live::SourceLive> = Vec::new();
+    //   temps réel par `MixeurLocal`) **et** écrit le PCM fichier — le
+    //   post-mux reste la réparation si le pipe casse ;
+    // - **post-mux** (repli) : `CapturePiste`, `muxer_audio` à l'arrêt.
     let mut mixeur = crate::audio::live::MixeurLocal::nouveau();
-    // Entrée loopback (« desktop audio ») du mixeur — cible du mute de
-    // l'écran d'attente, équivalent natif du `SetSceneItemEnabled false`
-    // posé par le mode OBS sur les sources `desktop|bureau`.
-    let mut index_loopback: Option<usize> = None;
-    let mut gain_loopback_milliemes: u32 = 0;
-    if let Some(audio) = audio_demande {
-        if audio_live {
-            for (sens, actif, gain, nom) in [
-                (
-                    crate::audio::Sens::Sortie,
-                    audio.loopback,
-                    audio.gain_loopback,
-                    "loop",
-                ),
-                (
-                    crate::audio::Sens::Entree,
-                    audio.micro,
-                    audio.gain_micro,
-                    "mic",
-                ),
-            ] {
-                if !actif {
-                    continue;
-                }
-                match crate::audio::live::SourceLive::demarrer(sens, gain, nom) {
-                    Ok(mut source) => {
-                        // Aligne le son sur la première frame : on attend le
-                        // premier paquet réel (buffer WASAPI de 200 ms).
-                        let _ = source.attendre_demarrage(Duration::from_millis(400));
-                        if sens == crate::audio::Sens::Sortie {
-                            index_loopback = Some(mixeur.entrees().len());
-                            gain_loopback_milliemes = gain;
-                        }
-                        mixeur.entrees().push(crate::audio::live::EntreeMix {
-                            anneau: source.anneau(),
-                            gain_milliemes: gain,
-                        });
-                        sources_live.push(source);
-                    }
-                    Err(e) => compteurs.degrader(format!("audio {nom} indisponible : {e}")),
-                }
-            }
-        } else if !chemins_sortie.is_empty() {
-            // Repli post-mux : n'a de sens qu'avec au moins une sortie
-            // fichier à réécrire à l'arrêt — sur une sortie 100 % réseau,
-            // capturer du PCM jetable serait pur gâchis.
-            for (sens, actif, gain, nom) in [
-                (
-                    crate::audio::Sens::Sortie,
-                    audio.loopback,
-                    audio.gain_loopback,
-                    "loop",
-                ),
-                (
-                    crate::audio::Sens::Entree,
-                    audio.micro,
-                    audio.gain_micro,
-                    "mic",
-                ),
-            ] {
-                if !actif {
-                    continue;
-                }
-                match crate::audio::piste::demarrer(sens, gain, nom) {
-                    Ok(mut capture) => {
-                        let _ = capture.attendre_demarrage(Duration::from_millis(400));
-                        captures_audio.push(capture);
-                    }
-                    Err(e) => compteurs.degrader(format!("audio {nom} indisponible : {e}")),
-                }
-            }
+    let niveaux_master = mixeur.niveaux();
+    let mut sources_audio: Vec<SourceAudioActive> = Vec::new();
+    let mut pistes_archivees: Vec<crate::audio::piste::Piste> = Vec::new();
+    let mut nb_entrees_fixes = 0usize;
+    let mut nb_entrees_scene = 0usize;
+    // Repli post-mux : n'a de sens qu'avec au moins une sortie fichier à
+    // réécrire à l'arrêt — sur une sortie 100 % réseau, capturer du PCM
+    // jetable serait pur gâchis.
+    let post_mux_possible = !chemins_sortie.is_empty();
+    if audio_actif && (audio_live || post_mux_possible) {
+        for source in &audio_courante.sources {
+            sources_audio.push(demarrer_source_audio(source, audio_live, &compteurs));
         }
     }
-    // Entrées « fixes » = les sources WASAPI ; les anneaux des médias sont
-    // empilés après et reconstruits à chaque `appliquer_scene` — une vidéo
-    // ajoutée à chaud rejoint le mix (contrat « appliquer à chaud »).
-    let nb_entrees_fixes = mixeur.entrees().len();
-    // Entrées de scène (fixes + médias) : tout ce qui est ajouté après est
-    // reconstruit à la frame (média de l'écran d'attente).
-    let mut nb_entrees_scene = nb_entrees_fixes;
     if audio_live {
+        nb_entrees_fixes = reconstruire_entrees_audio(&mut mixeur, &mut sources_audio);
         rafraichir_entrees_media(&mut mixeur, &vivante.medias, nb_entrees_fixes);
         nb_entrees_scene = mixeur.entrees().len();
         // Zéro du flux : purge le pré-roll WASAPI (le buffer de 200 ms rempli
         // pendant l'alignement n'est pas de l'audio « t = 0 »).
         mixeur.demarrer();
     }
+    publier_etat_audio(
+        &audio_etat,
+        &sources_audio,
+        &niveaux_master,
+        !sources_audio.is_empty(),
+    );
 
     let debut = Instant::now();
     let mut dernier_echantillon = Instant::now();
@@ -2698,6 +3086,33 @@ fn boucle(
                 rafraichir_entrees_media(&mut mixeur, &vivante.medias, nb_entrees_fixes);
                 nb_entrees_scene = mixeur.entrees().len();
             }
+        }
+        // Audio à chaud : la version change quand l'app a sauvegardé une
+        // config (gain/mute immédiats ; périphérique/ajout/retrait = diff).
+        let version = audio_version.load(Ordering::Relaxed);
+        if version != version_audio {
+            version_audio = version;
+            audio_courante = audio_cfg
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone();
+            appliquer_audio(
+                &audio_courante,
+                &mut sources_audio,
+                &mut mixeur,
+                audio_live,
+                &mut pistes_archivees,
+                &mut nb_entrees_fixes,
+                &mut nb_entrees_scene,
+                &vivante.medias,
+                &compteurs,
+            );
+            publier_etat_audio(
+                &audio_etat,
+                &sources_audio,
+                &niveaux_master,
+                !sources_audio.is_empty(),
+            );
         }
         let SceneVivante {
             captures,
@@ -2792,12 +3207,22 @@ fn boucle(
                     gain_milliemes: gain_pop,
                 });
             }
-            if let Some(index) = index_loopback {
+            // Mute « bureau » (écran d'attente) : toutes les sources Desktop,
+            // équivalent natif du `SetSceneItemEnabled false` posé par le
+            // mode OBS sur les sources `desktop|bureau`. Le gain configuré
+            // est restauré à la sortie du BRB (mute utilisateur compris).
+            for source in &sources_audio {
+                if source.cfg.genre != GenreAudio::Desktop {
+                    continue;
+                }
+                let Some(index) = source.index_mix else {
+                    continue;
+                };
                 if let Some(entree) = entrees.get_mut(index) {
                     entree.gain_milliemes = if mute_bureau {
                         0
                     } else {
-                        gain_loopback_milliemes
+                        source.cfg.gain_effectif()
                     };
                 }
             }
@@ -3344,18 +3769,15 @@ fn boucle(
     // (post-mux historique, ou **réparation** si le live a cassé en cours —
     // `muxer_audio` remappe `0:v` + les PCM sur le fichier existant).
     // Le PCM temporaire est supprimé dans tous les cas.
-    let mut pistes: Vec<crate::audio::piste::Piste> = Vec::new();
-    for source in sources_live {
-        match source.arreter() {
-            Ok(piste) => pistes.push(piste),
-            Err(e) => compteurs.degrader(format!("audio : {e}")),
-        }
+    let mut pistes: Vec<crate::audio::piste::Piste> = std::mem::take(&mut pistes_archivees);
+    for source in &mut sources_audio {
+        arreter_source(source, &mut pistes);
     }
-    for capture in captures_audio {
-        match capture.arreter() {
-            Ok(piste) => pistes.push(piste),
-            Err(e) => compteurs.degrader(format!("audio : {e}")),
-        }
+    {
+        // Plus de session : le mixeur ne publie plus de niveaux.
+        let mut etat = audio_etat.lock().unwrap_or_else(|e| e.into_inner());
+        etat.actif = false;
+        etat.sources.clear();
     }
     // Live sain → le fichier porte déjà son AAC, rien à remuxer.
     let post_mux_requis = !audio_live || audio_live_casse;

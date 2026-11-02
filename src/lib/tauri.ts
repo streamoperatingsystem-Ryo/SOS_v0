@@ -1446,10 +1446,10 @@ export interface AudienceSessionDetail {
 }
 
 /// Réglages de sortie du moteur natif — bloc `sortie` de moteur.json.
-/// `gain_*` en millièmes (1000 = 100 %, max 4000 — bornes backend) ;
 /// `conteneur` = "mp4" | "mkv" (fichier seul) ; `resolution` = hauteur
 /// de sortie en px (null = canvas — la largeur est dérivée du ratio
-/// côté backend).
+/// côté backend). L'audio vit dans son propre bloc (`audio`) et se règle
+/// dans la section « Audio ».
 export interface SortieNatifCfg {
   codec: string;
   conteneur: string;
@@ -1457,10 +1457,6 @@ export interface SortieNatifCfg {
   debit_kbps: number;
   fps: number;
   preset: string;
-  audio_loopback: boolean;
-  audio_micro: boolean;
-  gain_loopback: number;
-  gain_micro: number;
 }
 
 /// Réglages du projecteur natif — bloc `apercu` de moteur.json.
@@ -1469,6 +1465,68 @@ export interface SortieNatifCfg {
 export interface ApercuNatifCfg {
   largeur: number;
   fps: number;
+}
+
+/// Une source du mixeur audio (bloc `audio` de moteur.json).
+/// `gain` en millièmes (1000 = unité) ; `peripherique` = ID `IMMDevice`
+/// (`null` = périphérique par défaut du système).
+export interface SourceAudioCfg {
+  id: string;
+  genre: "desktop" | "micro";
+  peripherique: string | null;
+  gain: number;
+  mute: boolean;
+}
+
+/// Mixeur audio persisté — N sources, ordre du mixage.
+export interface AudioMoteurCfg {
+  sources: SourceAudioCfg[];
+}
+
+/// Périphérique audio actif (énumération WASAPI).
+export interface PeripheriqueAudio {
+  id: string;
+  nom: string;
+  defaut: boolean;
+}
+
+export interface PeripheriquesAudio {
+  sorties: PeripheriqueAudio[];
+  entrees: PeripheriqueAudio[];
+}
+
+/// Niveau d'un canal en dBFS (−96 = plancher/silence).
+export interface CanalNiveau {
+  peak_db: number;
+  rms_db: number;
+  hold_db: number;
+}
+
+/// Niveau stéréo + latch d'écrêtage.
+export interface NiveauAudio {
+  gauche: CanalNiveau;
+  droite: CanalNiveau;
+  ecretage: boolean;
+}
+
+/// État d'une source pendant une sortie : périphérique réellement ouvert,
+/// repli éventuel, erreur, et niveau **pré-fader** mesuré par le moteur.
+export interface SourceAudioEtat {
+  id: string;
+  genre: "desktop" | "micro";
+  appareil: string | null;
+  repli: boolean;
+  erreur: string | null;
+  gain: number;
+  mute: boolean;
+  niveau: NiveauAudio;
+}
+
+/// Photographie du mixeur (bus programme inclus).
+export interface AudioEtat {
+  actif: boolean;
+  sources: SourceAudioEtat[];
+  master: NiveauAudio;
 }
 
 /// Paramètres de `moteur_stream_demarrer` : seuls protocole + url sont
@@ -1642,6 +1700,32 @@ export const tauri = {
   /// Persiste les réglages de sortie natifs (refusés si invalides).
   async moteurSortieConfigSauver(cfg: SortieNatifCfg): Promise<void> {
     await invoke("moteur_sortie_config_sauver", { cfg });
+  },
+
+  /// Périphériques audio actifs (sorties = loopback, entrées = micros).
+  async moteurAudioPeripheriques(): Promise<PeripheriquesAudio> {
+    return await invoke("moteur_audio_peripheriques");
+  },
+
+  /// Niveaux + état du mixeur — lu à ~20 Hz **uniquement** panneau ouvert.
+  async moteurAudioEtat(): Promise<AudioEtat> {
+    return await invoke("moteur_audio_etat");
+  },
+
+  /// Mixeur persisté (moteur.json, bloc `audio`).
+  async moteurAudioConfig(): Promise<AudioMoteurCfg> {
+    return await invoke("moteur_audio_config");
+  },
+
+  /// Persiste **et applique à chaud** le mixeur (gain/mute immédiats,
+  /// périphérique/ajout/retrait = redémarrage de la seule source).
+  async moteurAudioSauver(cfg: AudioMoteurCfg): Promise<void> {
+    await invoke("moteur_audio_sauver", { cfg });
+  },
+
+  /// Efface les latches d'écrêtage (sources + bus programme).
+  async moteurAudioResetEcretage(): Promise<void> {
+    await invoke("moteur_audio_reset_ecretage");
   },
 
   /// Réglages du projecteur natif persistés (bloc `apercu` de moteur.json)

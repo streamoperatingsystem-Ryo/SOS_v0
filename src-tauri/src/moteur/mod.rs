@@ -13,7 +13,8 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use sos_moteur_api::{
-    ApercuCfg, AudioCfg, Capacites, Codec, Conteneur, Moteur, MoteurEtat, SinkCfg, SortieCfg,
+    ApercuCfg, AudioCfg, Capacites, Codec, Conteneur, GenreAudio, Moteur, MoteurEtat, SinkCfg,
+    SortieCfg, SourceAudioCfg,
 };
 use sos_moteur_natif::chat::{Emote, MessageChat};
 use sos_moteur_natif::input::{EtatInput, EtatManette, EtatSouris};
@@ -302,13 +303,54 @@ fn appliquer_sortie_cfg(
     cfg.fps = s.fps;
     cfg.preset = resoudre_preset(Some(&s.preset));
     cfg.resolution = resoudre_resolution(s.resolution, cfg.canvas);
-    cfg.audio = Some(AudioCfg {
-        loopback: s.audio_loopback,
-        micro: s.audio_micro,
-        gain_loopback: s.gain_loopback,
-        gain_micro: s.gain_micro,
-    });
     Ok(())
+}
+
+/// Traduit le mixeur persisté (`moteur.json`, bloc `audio`) vers le contrat
+/// moteur. Genre inconnu, id vide/doublon ou gain hors bornes → erreur
+/// honnête **avant** tout contact WASAPI.
+fn audio_cfg_depuis_persistee(
+    cfg: &crate::config::AudioMoteurCfg,
+) -> Result<AudioCfg, String> {
+    let mut sources = Vec::with_capacity(cfg.sources.len());
+    for source in &cfg.sources {
+        let genre = GenreAudio::depuis_id(&source.genre).ok_or_else(|| {
+            format!(
+                "genre audio inconnu : {} (desktop|micro attendu)",
+                source.genre
+            )
+        })?;
+        sources.push(SourceAudioCfg {
+            id: source.id.clone(),
+            genre,
+            peripherique: source
+                .peripherique
+                .as_deref()
+                .map(str::trim)
+                .filter(|p| !p.is_empty())
+                .map(str::to_string),
+            gain: source.gain,
+            mute: source.mute,
+        });
+    }
+    let audio = AudioCfg { sources };
+    audio.valider().map_err(|e| e.to_string())?;
+    Ok(audio)
+}
+
+/// Mixeur persisté, prêt pour le moteur — non fatal : un bloc absent ou
+/// cassé retombe sur les défauts produit (jamais de sortie muette).
+fn audio_cfg_persistee(app: &AppHandle) -> AudioCfg {
+    match crate::config::lire_audio_moteur(app) {
+        Ok(cfg) => audio_cfg_depuis_persistee(&cfg).unwrap_or_else(|e| {
+            log::warn!("audio moteur.json invalide ({e}) — défauts produit");
+            AudioCfg::default()
+        }),
+        Err(e) => {
+            log::warn!("audio moteur.json illisible ({e}) — défauts produit");
+            AudioCfg::default()
+        }
+    }
 }
 
 /// Relit la config sortie persistée — non-fatal : fichier absent ou cassé
@@ -396,11 +438,6 @@ fn valider_sortie_cfg(s: &crate::config::SortieNatifCfg) -> Result<(), String> {
             s.preset
         ));
     }
-    for (nom, gain) in [("loopback", s.gain_loopback), ("micro", s.gain_micro)] {
-        if gain > 4000 {
-            return Err(format!("gain {nom} hors bornes : {gain} millièmes (max 4000)"));
-        }
-    }
     Ok(())
 }
 
@@ -422,6 +459,143 @@ pub fn moteur_sortie_config_sauver(
     crate::config::sauver_sortie_moteur(&app, &cfg)
 }
 
+// ===== Mixeur audio — périphériques, niveaux, configuration =====
+
+#[derive(Serialize)]
+pub struct PeripheriqueAudioEtat {
+    pub id: String,
+    pub nom: String,
+    pub defaut: bool,
+}
+
+#[derive(Serialize)]
+pub struct PeripheriquesAudioEtat {
+    pub sorties: Vec<PeripheriqueAudioEtat>,
+    pub entrees: Vec<PeripheriqueAudioEtat>,
+}
+
+/// Périphériques audio actifs (sorties = loopback, entrées = micros).
+/// Énumération sans effet de bord (COM MTA), appelée à l'ouverture du
+/// mixeur et par le bouton « Rafraîchir » — jamais en tâche de fond.
+#[tauri::command]
+pub fn moteur_audio_peripheriques() -> Result<PeripheriquesAudioEtat, String> {
+    use sos_moteur_natif::audio::{capture, Sens};
+    let convertir = |liste: Vec<capture::PeripheriqueAudio>| {
+        liste
+            .into_iter()
+            .map(|p| PeripheriqueAudioEtat {
+                id: p.id,
+                nom: p.nom,
+                defaut: p.defaut,
+            })
+            .collect::<Vec<_>>()
+    };
+    let sorties = capture::lister(Sens::Sortie).map_err(|e| e.to_string())?;
+    let entrees = capture::lister(Sens::Entree).map_err(|e| e.to_string())?;
+    Ok(PeripheriquesAudioEtat {
+        sorties: convertir(sorties),
+        entrees: convertir(entrees),
+    })
+}
+
+#[derive(Serialize)]
+pub struct CanalNiveauEtat {
+    pub peak_db: f32,
+    pub rms_db: f32,
+    pub hold_db: f32,
+}
+
+#[derive(Serialize)]
+pub struct NiveauAudioEtat {
+    pub gauche: CanalNiveauEtat,
+    pub droite: CanalNiveauEtat,
+    pub ecretage: bool,
+}
+
+#[derive(Serialize)]
+pub struct SourceAudioEtat {
+    pub id: String,
+    pub genre: String,
+    pub appareil: Option<String>,
+    pub repli: bool,
+    pub erreur: Option<String>,
+    pub gain: u32,
+    pub mute: bool,
+    pub niveau: NiveauAudioEtat,
+}
+
+#[derive(Serialize)]
+pub struct AudioEtat {
+    pub actif: bool,
+    pub sources: Vec<SourceAudioEtat>,
+    pub master: NiveauAudioEtat,
+}
+
+fn convertir_niveau(niveau: sos_moteur_natif::audio::NiveauAudio) -> NiveauAudioEtat {
+    let canal = |c: sos_moteur_natif::audio::CanalNiveau| CanalNiveauEtat {
+        peak_db: c.peak_db,
+        rms_db: c.rms_db,
+        hold_db: c.hold_db,
+    };
+    NiveauAudioEtat {
+        gauche: canal(niveau.gauche),
+        droite: canal(niveau.droite),
+        ecretage: niveau.ecretage,
+    }
+}
+
+/// Niveaux et état des sources — lu par le mixeur UI à ~20 Hz **uniquement
+/// pendant que la section Audio est ouverte**.
+#[tauri::command]
+pub fn moteur_audio_etat(registre: State<'_, RegistreMoteur>) -> AudioEtat {
+    let etat = registre.natif().etat_audio();
+    AudioEtat {
+        actif: etat.actif,
+        sources: etat
+            .sources
+            .into_iter()
+            .map(|s| SourceAudioEtat {
+                id: s.id,
+                genre: s.genre.id().to_string(),
+                appareil: s.appareil,
+                repli: s.repli,
+                erreur: s.erreur,
+                gain: s.gain,
+                mute: s.mute,
+                niveau: convertir_niveau(s.niveau),
+            })
+            .collect(),
+        master: convertir_niveau(etat.master),
+    }
+}
+
+/// Mixeur persisté (moteur.json, bloc `audio`) — pré-remplissage du panneau.
+#[tauri::command]
+pub fn moteur_audio_config(app: AppHandle) -> Result<crate::config::AudioMoteurCfg, String> {
+    crate::config::lire_audio_moteur(&app)
+}
+
+/// Sauve le mixeur et l'applique **à chaud** : la boucle diffère par `id`
+/// (gain/mute immédiats, périphérique/ajout/retrait = redémarrage de la
+/// seule source concernée). Refusé si invalide — le disque ne reçoit que
+/// des valeurs applicables.
+#[tauri::command]
+pub fn moteur_audio_sauver(
+    app: AppHandle,
+    registre: State<'_, RegistreMoteur>,
+    cfg: crate::config::AudioMoteurCfg,
+) -> Result<(), String> {
+    let audio = audio_cfg_depuis_persistee(&cfg)?;
+    crate::config::sauver_audio_moteur(&app, &cfg)?;
+    registre.natif().maj_audio(audio).map_err(|e| e.to_string())
+}
+
+/// Efface les latches d'écrêtage (toutes sources + bus programme).
+#[tauri::command]
+pub fn moteur_audio_reset_ecretage(registre: State<'_, RegistreMoteur>) {
+    registre.natif().reset_ecretage();
+}
+
 fn demarrer_bloquant(
     app: &AppHandle,
     chemin: &Path,
@@ -436,6 +610,7 @@ fn demarrer_bloquant(
     cfg.apercu = apercu_cfg_persistee(app);
     let sortie = sortie_cfg_persistee(app);
     appliquer_sortie_cfg(&mut cfg, &sortie)?;
+    cfg.audio = Some(audio_cfg_persistee(app));
     let fps = cfg.fps;
     registre
         .natif()
@@ -748,12 +923,7 @@ fn demarrer_stream_bloquant(
         debit_kbps,
         preset: preset.clone(),
         cle: cle.clone(),
-        audio: Some(AudioCfg {
-            loopback: sortie.audio_loopback,
-            micro: sortie.audio_micro,
-            gain_loopback: sortie.gain_loopback,
-            gain_micro: sortie.gain_micro,
-        }),
+        audio: Some(audio_cfg_persistee(app)),
     };
     registre
         .natif()
@@ -3818,5 +3988,83 @@ mod tests {
         assert!(decoder_frame_snapshot(r#"{"type":"chat","message":{}}"#).is_none());
         assert!(decoder_frame_snapshot(r#"{"type":"snapshot"}"#).is_none());
         assert!(decoder_frame_snapshot("pas du json").is_none());
+    }
+
+    #[test]
+    fn audio_persistee_vers_contrat_moteur() {
+        let cfg = crate::config::AudioMoteurCfg {
+            sources: vec![
+                crate::config::SourceAudioPersistee {
+                    id: "desktop".to_string(),
+                    genre: "desktop".to_string(),
+                    peripherique: Some("  {dev-sortie}  ".to_string()),
+                    gain: 800,
+                    mute: true,
+                },
+                crate::config::SourceAudioPersistee {
+                    id: "micro".to_string(),
+                    genre: "micro".to_string(),
+                    peripherique: Some("   ".to_string()),
+                    gain: 1000,
+                    mute: false,
+                },
+            ],
+        };
+        let audio = audio_cfg_depuis_persistee(&cfg).expect("config valide");
+        assert_eq!(audio.sources.len(), 2);
+        assert_eq!(audio.sources[0].genre, GenreAudio::Desktop);
+        // ID trimé, chaîne vide → périphérique par défaut.
+        assert_eq!(
+            audio.sources[0].peripherique.as_deref(),
+            Some("{dev-sortie}")
+        );
+        assert_eq!(audio.sources[1].peripherique, None);
+        assert_eq!(audio.sources[0].gain_effectif(), 0);
+        assert_eq!(audio.sources[1].gain_effectif(), 1000);
+    }
+
+    #[test]
+    fn audio_persistee_refuse_genre_inconnu_et_doublon() {
+        let genre = crate::config::AudioMoteurCfg {
+            sources: vec![crate::config::SourceAudioPersistee {
+                id: "x".to_string(),
+                genre: "app".to_string(),
+                peripherique: None,
+                gain: 1000,
+                mute: false,
+            }],
+        };
+        assert!(audio_cfg_depuis_persistee(&genre).is_err());
+
+        let doublon = crate::config::AudioMoteurCfg {
+            sources: vec![
+                crate::config::SourceAudioPersistee {
+                    id: "micro".to_string(),
+                    genre: "micro".to_string(),
+                    peripherique: None,
+                    gain: 1000,
+                    mute: false,
+                },
+                crate::config::SourceAudioPersistee {
+                    id: "micro".to_string(),
+                    genre: "micro".to_string(),
+                    peripherique: None,
+                    gain: 1000,
+                    mute: false,
+                },
+            ],
+        };
+        assert!(audio_cfg_depuis_persistee(&doublon).is_err());
+
+        let gain = crate::config::AudioMoteurCfg {
+            sources: vec![crate::config::SourceAudioPersistee {
+                id: "micro".to_string(),
+                genre: "micro".to_string(),
+                peripherique: None,
+                gain: 4001,
+                mute: false,
+            }],
+        };
+        assert!(audio_cfg_depuis_persistee(&gain).is_err());
     }
 }

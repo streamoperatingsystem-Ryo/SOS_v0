@@ -154,6 +154,11 @@ Fichiers dans `%APPDATA%\com.streamos.v0\` (identifiant Tauri `com.streamos.v0` 
 PAS "StreamOS" ; `config.rs` → `app_data_dir()`) :
 - `config.json` — `{ "sceneId": "..." }` (scène courante, migration legacy)
 - `obs_canvas.json` — résolution canvas OBS (globale)
+- `moteur.json` — moteur natif : `mode` (`"obs"`|`"natif"`), blocs `sortie`
+  (codec, conteneur, fps, débit, preset, résolution), `apercu` (projecteur)
+  et **`audio`** — mixeur à N sources `{ id, genre, peripherique, gain, mute }`,
+  appliqué **à chaud** (cf. `docs/features/audio.md`). Migration one-shot
+  depuis l'ancien `sortie.audio_loopback/micro` au premier lancement.
 - `alertes_config.json` — config des alertes par type (alertes.rs)
 - `commandes_config.json` — commandes chat `!cmd` (commandes.rs)
 - `musique_config.json` — config musique `!rs` : noms de commandes, cooldowns,
@@ -785,3 +790,4 @@ exact par géométrie de glyphes) — chacun une tranche à part (§70), puis **
 | Emoji Arena — combat 1v1 piloté par le chat | `docs/features/fight.md` |
 | Commande cadres chat « !cadres <couleur> » | `docs/features/cadres-chat.md` |
 | Moteur natif — capture/encodage sans OBS (cible) | `docs/features/moteur-natif.md` |
+| Mixeur audio natif — N sources, périphériques, vu-mètres | `docs/features/audio.md` |

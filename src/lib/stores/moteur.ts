@@ -8,6 +8,9 @@ import { writable, derived, get } from "svelte/store";
 import {
   tauri,
   type ApercuNatifCfg,
+  type AudioEtat,
+  type AudioMoteurCfg,
+  type PeripheriquesAudio,
   type SortieNatifCfg,
   type StreamCfgPersistee,
   type StreamDemarrerCfg,
@@ -97,10 +100,6 @@ export const sortieCfg = writable<SortieNatifCfg>({
   debit_kbps: 6000,
   fps: 60,
   preset: "equilibre",
-  audio_loopback: true,
-  audio_micro: true,
-  gain_loopback: 1000,
-  gain_micro: 1000,
 });
 
 /// Dernière config stream persistée dans le keyring — pré-remplissage du
@@ -122,6 +121,103 @@ export async function chargerSortieCfg(): Promise<void> {
 export async function sauverSortieCfg(cfg: SortieNatifCfg): Promise<void> {
   await tauri.moteurSortieConfigSauver(cfg);
   sortieCfg.set(cfg);
+}
+
+// ===== Mixeur audio — bloc `audio` de moteur.json =====
+
+/// Configuration persistée du mixeur (source de vérité de l'UI).
+export const audioCfg = writable<AudioMoteurCfg>({ sources: [] });
+
+/// Périphériques actifs (énumération WASAPI, rafraîchie à la demande).
+export const audioPeripheriques = writable<PeripheriquesAudio>({
+  sorties: [],
+  entrees: [],
+});
+
+/// Niveaux + état des sources pendant une sortie (`null` = jamais lu).
+export const audioEtat = writable<AudioEtat | null>(null);
+
+/// Erreur de lecture/écriture du mixeur (affichée dans la section Audio).
+export const audioErreur = writable<string | null>(null);
+
+let timerAudio: ReturnType<typeof setInterval> | null = null;
+let sauvegardeAudio: ReturnType<typeof setTimeout> | null = null;
+
+/// Relit le mixeur persisté. Déclenche aussi la **migration** du legacy
+/// (`sortie.audio_loopback/micro`) côté backend, une seule fois.
+export async function chargerAudioCfg(): Promise<void> {
+  try {
+    audioCfg.set(await tauri.moteurAudioConfig());
+    audioErreur.set(null);
+  } catch (e) {
+    audioErreur.set(String(e));
+  }
+}
+
+/// Relit la liste des périphériques (ouverture du panneau / bouton).
+export async function chargerAudioPeripheriques(): Promise<void> {
+  try {
+    audioPeripheriques.set(await tauri.moteurAudioPeripheriques());
+  } catch (e) {
+    audioErreur.set(String(e));
+  }
+}
+
+async function tickAudio(): Promise<void> {
+  try {
+    audioEtat.set(await tauri.moteurAudioEtat());
+  } catch {
+    // Non-fatal : la section garde les derniers niveaux connus.
+  }
+}
+
+/// Démarre le polling 20 Hz (idempotent) — **uniquement** panneau monté.
+export function demarrerPollingAudio(): void {
+  if (timerAudio !== null) return;
+  void tickAudio();
+  timerAudio = setInterval(tickAudio, 50);
+}
+
+/// Arrête le polling (démontage du panneau). Idempotent.
+export function arreterPollingAudio(): void {
+  if (timerAudio !== null) {
+    clearInterval(timerAudio);
+    timerAudio = null;
+  }
+}
+
+/// Persiste et applique **immédiatement** (mute, périphérique, ajout,
+/// retrait). Rend `false` si le backend a refusé (l'erreur est publiée).
+export async function sauverAudioCfg(cfg: AudioMoteurCfg): Promise<boolean> {
+  try {
+    await tauri.moteurAudioSauver(cfg);
+    audioCfg.set(cfg);
+    audioErreur.set(null);
+    return true;
+  } catch (e) {
+    audioErreur.set(String(e));
+    return false;
+  }
+}
+
+/// Met à jour l'UI tout de suite et persiste après 150 ms — un slider de
+/// gain ne doit pas écrire 20 fois par seconde sur disque.
+export function sauverAudioCfgDiffere(cfg: AudioMoteurCfg): void {
+  audioCfg.set(cfg);
+  if (sauvegardeAudio !== null) clearTimeout(sauvegardeAudio);
+  sauvegardeAudio = setTimeout(() => {
+    sauvegardeAudio = null;
+    void sauverAudioCfg(get(audioCfg));
+  }, 150);
+}
+
+/// Efface les latches d'écrêtage (sources + bus programme).
+export async function resetEcretageAudio(): Promise<void> {
+  try {
+    await tauri.moteurAudioResetEcretage();
+  } catch (e) {
+    audioErreur.set(String(e));
+  }
 }
 
 /// Réglages du projecteur natif (moteur.json, bloc `apercu`) — qualité et

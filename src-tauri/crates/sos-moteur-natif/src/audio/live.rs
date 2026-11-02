@@ -22,8 +22,9 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use super::capture;
+use super::capture::AppareilOuvert;
 use super::piste::Piste;
-use super::{ErreurAudio, Sens};
+use super::{ErreurAudio, NiveauxPartages, Sens};
 
 /// Format cible unique du mixage live : 48 kHz stéréo (entrée `-f s16le` de
 /// FFmpeg, AAC 48 kHz en sortie — même contrat que le post-mux).
@@ -162,9 +163,11 @@ pub struct EntreeMix {
 pub struct SourceLive {
     arret: Arc<AtomicBool>,
     fil: Option<JoinHandle<Result<Piste, ErreurAudio>>>,
-    /// Signale le **premier paquet réellement capturé**.
-    demarrage: Option<Receiver<()>>,
+    /// Premier paquet capturé → périphérique réellement ouvert (ou l'erreur
+    /// d'ouverture, remontée sans attendre l'arrêt).
+    demarrage: Option<Receiver<Result<AppareilOuvert, String>>>,
     anneau: Arc<Mutex<AnneauAudio>>,
+    niveaux: Arc<NiveauxPartages>,
 }
 
 impl SourceLive {
@@ -173,7 +176,12 @@ impl SourceLive {
     /// Rend immédiatement : une erreur d'ouverture WASAPI ne survient que
     /// dans le thread — elle remontera par `attendre_demarrage` (délai
     /// écoulé) puis `arreter`, comme pour `piste::demarrer`.
-    pub fn demarrer(sens: Sens, gain_milliemes: u32, nom: &str) -> Result<Self, ErreurAudio> {
+    pub fn demarrer(
+        sens: Sens,
+        gain_milliemes: u32,
+        nom: &str,
+        peripherique: Option<&str>,
+    ) -> Result<Self, ErreurAudio> {
         let chemin = std::env::temp_dir().join(format!(
             "sos-audio-{}-{}.pcm",
             std::process::id(),
@@ -181,23 +189,38 @@ impl SourceLive {
         ));
         let anneau = Arc::new(Mutex::new(AnneauAudio::nouveau()));
         let anneau_fil = Arc::clone(&anneau);
+        let niveaux = Arc::new(NiveauxPartages::nouveau());
+        let niveaux_fil = Arc::clone(&niveaux);
+        let peripherique = peripherique.map(str::to_string);
         let arret = Arc::new(AtomicBool::new(false));
         let drapeau = Arc::clone(&arret);
         let chemin_fil = chemin.clone();
-        let (tx, rx) = mpsc::channel::<()>();
+        let (tx, rx) = mpsc::channel::<Result<AppareilOuvert, String>>();
 
         let fil = std::thread::Builder::new()
             .name(format!("sos-audio-{nom}"))
             .spawn(move || -> Result<Piste, ErreurAudio> {
-                let mut capteur = capture::ouvrir(sens)?;
+                let (mut capteur, appareil) =
+                    match capture::ouvrir(sens, peripherique.as_deref(), niveaux_fil) {
+                        Ok(ouvert) => ouvert,
+                        Err(e) => {
+                            let _ = tx.send(Err(e.to_string()));
+                            return Err(e);
+                        }
+                    };
                 let format = capteur.format();
                 anneau_fil
                     .lock()
                     .unwrap_or_else(|e| e.into_inner())
                     .configurer(format.taux, format.canaux);
-                let fichier = File::create(&chemin_fil).map_err(|e| {
-                    ErreurAudio::Lecture(format!("création {} : {e}", chemin_fil.display()))
-                })?;
+                let fichier = match File::create(&chemin_fil) {
+                    Ok(fichier) => fichier,
+                    Err(e) => {
+                        let message = format!("création {} : {e}", chemin_fil.display());
+                        let _ = tx.send(Err(message.clone()));
+                        return Err(ErreurAudio::Lecture(message));
+                    }
+                };
                 let mut sortie = BufWriter::with_capacity(64 * 1024, fichier);
                 let mut tampon: Vec<f32> = Vec::with_capacity(8192);
                 let mut octets: Vec<u8> = Vec::with_capacity(8192 * 2);
@@ -223,7 +246,7 @@ impl SourceLive {
                         ErreurAudio::Lecture(format!("écriture {} : {e}", chemin_fil.display()))
                     })?;
                     if echantillons == 0 {
-                        let _ = tx.send(());
+                        let _ = tx.send(Ok(appareil.clone()));
                     }
                     echantillons += lus as u64;
                 }
@@ -251,6 +274,7 @@ impl SourceLive {
             fil: Some(fil),
             demarrage: Some(rx),
             anneau,
+            niveaux,
         })
     }
 
@@ -259,13 +283,30 @@ impl SourceLive {
         Arc::clone(&self.anneau)
     }
 
-    /// Attend le premier paquet audio (≤ `delai`) — alignement A/V,
-    /// identique à `CapturePiste::attendre_demarrage`.
-    pub fn attendre_demarrage(&mut self, delai: Duration) -> bool {
+    /// Compteurs de niveau de cette source (pré-fader).
+    pub fn niveaux(&self) -> Arc<NiveauxPartages> {
+        Arc::clone(&self.niveaux)
+    }
+
+    /// Attend le premier paquet audio (≤ `delai`) — alignement A/V.
+    ///
+    /// `Some(Ok(appareil))` = capture vivante (périphérique réellement
+    /// ouvert, repli éventuel signalé) ; `Some(Err(message))` = ouverture
+    /// refusée ; `None` = aucun paquet dans le délai.
+    pub fn attendre_demarrage(
+        &mut self,
+        delai: Duration,
+    ) -> Option<Result<AppareilOuvert, String>> {
         match self.demarrage.take() {
-            Some(rx) => matches!(rx.recv_timeout(delai), Ok(())),
-            None => true,
+            Some(rx) => rx.recv_timeout(delai).ok(),
+            None => None,
         }
+    }
+
+    /// Capture vivante ? (`false` = thread terminé — ouverture refusée,
+    /// périphérique débranché, erreur de lecture).
+    pub fn est_vivante(&self) -> bool {
+        self.fil.as_ref().is_some_and(|fil| !fil.is_finished())
     }
 
     /// Arrête la capture et attend le thread. Rend la `Piste` écrite — le
@@ -297,6 +338,8 @@ pub struct MixeurLocal {
     entrees: Vec<EntreeMix>,
     tampon: Vec<f32>,
     octets: Vec<u8>,
+    /// Niveaux du **bus programme** (post-gain, post-mute).
+    niveaux: Arc<NiveauxPartages>,
 }
 
 impl MixeurLocal {
@@ -308,7 +351,13 @@ impl MixeurLocal {
             entrees: Vec::new(),
             tampon: Vec::new(),
             octets: Vec::new(),
+            niveaux: Arc::new(NiveauxPartages::nouveau()),
         }
+    }
+
+    /// Niveaux du bus programme (vu-mètre master).
+    pub fn niveaux(&self) -> Arc<NiveauxPartages> {
+        Arc::clone(&self.niveaux)
     }
 
     /// Entrées du mix — les anneaux média y sont rafraîchis à chaque
@@ -330,6 +379,7 @@ impl MixeurLocal {
         }
         self.debut = Instant::now();
         self.emises = 0;
+        self.niveaux.reinitialiser();
     }
 
     /// Produit les frames dues et les rend en **s16le** (48 kHz stéréo).
@@ -357,6 +407,8 @@ impl MixeurLocal {
                 .unwrap_or_else(|e| e.into_inner())
                 .mixer_dans(n, &mut self.tampon, gain);
         }
+        // Mesure du bus programme : post-gain, post-mute (ce qui part).
+        self.niveaux.maj(&self.tampon, CANAUX_CIBLE, TAUX_CIBLE);
         self.octets.clear();
         self.octets.reserve(n * cible_canaux * 2);
         for valeur in &self.tampon {
@@ -496,5 +548,28 @@ mod tests {
         mixeur.demarrer();
         let pcm = mixeur.produire_jusqu(480);
         assert!(pcm.iter().all(|&b| b == 0), "pré-roll purgé → silence");
+    }
+
+    /// Le bus programme mesure le mix **post-gain** (0,5 → −6,02 dBFS).
+    #[test]
+    fn master_mesure_le_mix_post_gain() {
+        let mut mixeur = MixeurLocal::nouveau();
+        let anneau = Arc::new(Mutex::new(AnneauAudio::avec_format(48_000, 2)));
+        anneau
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pousser(&vec![1.0f32; 480 * 2]);
+        mixeur.entrees().push(EntreeMix {
+            anneau,
+            gain_milliemes: 500,
+        });
+        mixeur.produire_jusqu(480);
+        let niveau = mixeur.niveaux().lire();
+        assert!(
+            (niveau.gauche.peak_db - (-6.0206)).abs() < 0.2,
+            "{:?}",
+            niveau.gauche
+        );
+        assert!((niveau.droite.peak_db - niveau.gauche.peak_db).abs() < 0.01);
     }
 }

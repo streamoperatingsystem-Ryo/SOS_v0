@@ -219,41 +219,151 @@ impl fmt::Debug for SinkCfg {
     }
 }
 
-/// Sources audio d'un enregistrement — loopback (son du PC) + micro.
+/// Nature d'une source audio du mixeur.
 ///
-/// Gains en **millièmes** (1000 = unité, 0 = muet) : `SortieCfg` dérive `Eq`,
-/// un `f32` casserait le contrat partagé.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// Les identifiants sont **stables** (persistés dans `moteur.json`) : ne
+/// jamais les renommer sans migration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum GenreAudio {
+    /// Loopback d'un périphérique de sortie (« son du PC », desktop audio).
+    Desktop,
+    /// Périphérique d'entrée (micro, interface, mixette…).
+    Micro,
+}
+
+impl GenreAudio {
+    pub fn id(self) -> &'static str {
+        match self {
+            GenreAudio::Desktop => "desktop",
+            GenreAudio::Micro => "micro",
+        }
+    }
+
+    /// Inverse de [`GenreAudio::id`]. `None` si l'identifiant est inconnu.
+    pub fn depuis_id(id: &str) -> Option<Self> {
+        match id {
+            "desktop" => Some(GenreAudio::Desktop),
+            "micro" => Some(GenreAudio::Micro),
+            _ => None,
+        }
+    }
+}
+
+/// Une source du mixeur audio.
+///
+/// `id` est la clé stable du diff à chaud et des niveaux (vu-mètres) : elle
+/// ne change jamais, même quand on change de périphérique.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceAudioCfg {
+    /// Identifiant stable, unique dans la sortie (ex. `"desktop"`, `"micro-2"`).
+    pub id: String,
+    pub genre: GenreAudio,
+    /// ID `IMMDevice` du périphérique ; `None` = périphérique par défaut du
+    /// système (le repli est alors explicite dans le diagnostic du moteur).
+    pub peripherique: Option<String>,
+    /// Gain en millièmes (1000 = unité, 0 = silence).
+    pub gain: u32,
+    /// Coupure utilisateur — le gain est conservé pour la restauration.
+    pub mute: bool,
+}
+
+impl SourceAudioCfg {
+    /// Source « son du PC » par défaut (périphérique de sortie par défaut).
+    pub fn desktop() -> Self {
+        Self {
+            id: "desktop".to_string(),
+            genre: GenreAudio::Desktop,
+            peripherique: None,
+            gain: 1000,
+            mute: false,
+        }
+    }
+
+    /// Source « micro » par défaut (périphérique d'entrée par défaut).
+    pub fn micro() -> Self {
+        Self {
+            id: "micro".to_string(),
+            genre: GenreAudio::Micro,
+            peripherique: None,
+            gain: 1000,
+            mute: false,
+        }
+    }
+
+    /// Gain réellement appliqué (0 quand la source est coupée).
+    pub fn gain_effectif(&self) -> u32 {
+        if self.mute {
+            0
+        } else {
+            self.gain
+        }
+    }
+
+    /// Refuse une source inexploitable **avant** de toucher à WASAPI.
+    pub fn valider(&self) -> Result<(), ErreurMoteur> {
+        if self.id.trim().is_empty() {
+            return Err(ErreurMoteur::Configuration(
+                "source audio sans identifiant".to_string(),
+            ));
+        }
+        if self.gain > 4000 {
+            return Err(ErreurMoteur::Configuration(format!(
+                "gain audio hors bornes pour « {} » : {} millièmes (max 4000)",
+                self.id, self.gain
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// Mixeur du programme : les sources audio d'une sortie, dans l'ordre du
+/// mixage. Aucune source = sortie muette (pas de piste audio dans le
+/// conteneur, comportement historique des harnais vidéo).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AudioCfg {
-    /// Loopback du périphérique de sortie par défaut (= « desktop audio »).
-    pub loopback: bool,
-    /// Micro du périphérique d'entrée par défaut.
-    pub micro: bool,
-    /// Gain du loopback, en millièmes (1000 = 1.0).
-    pub gain_loopback: u32,
-    /// Gain du micro, en millièmes (1000 = 1.0).
-    pub gain_micro: u32,
+    pub sources: Vec<SourceAudioCfg>,
 }
 
 impl AudioCfg {
-    /// `true` si au moins une source est demandée.
+    /// `true` dès qu'une source est déclarée — une source coupée garde sa
+    /// piste (silence), comme une source mutée d'OBS.
     pub fn actif(&self) -> bool {
-        self.loopback || self.micro
+        !self.sources.is_empty()
+    }
+
+    pub fn par_id(&self, id: &str) -> Option<&SourceAudioCfg> {
+        self.sources.iter().find(|s| s.id == id)
     }
 
     /// Gain en facteur flottant (1000 → 1.0).
     pub fn facteur(gain_milliemes: u32) -> f32 {
         gain_milliemes as f32 / 1000.0
     }
+
+    /// Valide l'ensemble : identifiants non vides et **uniques** (les niveaux
+    /// sont indexés par `id`), gains bornés.
+    pub fn valider(&self) -> Result<(), ErreurMoteur> {
+        for source in &self.sources {
+            source.valider()?;
+        }
+        for (i, source) in self.sources.iter().enumerate() {
+            if self.sources[..i].iter().any(|s| s.id == source.id) {
+                return Err(ErreurMoteur::Configuration(format!(
+                    "source audio « {} » en double",
+                    source.id
+                )));
+            }
+        }
+        Ok(())
+    }
 }
 
 impl Default for AudioCfg {
+    /// Défaut produit : son du PC + micro, périphériques par défaut, gain
+    /// unité — l'équivalent de la configuration historique.
     fn default() -> Self {
         Self {
-            loopback: true,
-            micro: true,
-            gain_loopback: 1000,
-            gain_micro: 1000,
+            sources: vec![SourceAudioCfg::desktop(), SourceAudioCfg::micro()],
         }
     }
 }
@@ -358,17 +468,8 @@ impl SortieCfg {
                 "débit nul".to_string(),
             ));
         }
-        if let Some(audio) = self.audio {
-            for (nom, gain) in [
-                ("loopback", audio.gain_loopback),
-                ("micro", audio.gain_micro),
-            ] {
-                if gain > 4000 {
-                    return Err(ErreurMoteur::Configuration(format!(
-                        "gain {nom} hors bornes : {gain} millièmes (max 4000)"
-                    )));
-                }
-            }
+        if let Some(audio) = &self.audio {
+            audio.valider()?;
         }
         Ok(())
     }
@@ -577,25 +678,53 @@ mod tests {
 
         let mut cfg = SortieCfg::fichier("C:/tmp/x.mp4", Conteneur::Mp4);
         cfg.audio = Some(AudioCfg {
-            gain_micro: 4001,
-            ..AudioCfg::default()
+            sources: vec![SourceAudioCfg {
+                gain: 4001,
+                ..SourceAudioCfg::micro()
+            }],
         });
         assert!(matches!(cfg.valider(), Err(ErreurMoteur::Configuration(_))));
     }
 
     #[test]
+    fn genre_audio_identifiants_stables() {
+        for genre in [GenreAudio::Desktop, GenreAudio::Micro] {
+            assert_eq!(GenreAudio::depuis_id(genre.id()), Some(genre));
+        }
+        assert_eq!(GenreAudio::depuis_id("app"), None);
+    }
+
+    #[test]
     fn audio_cfg_defauts_et_gains() {
         let cfg = AudioCfg::default();
-        assert!(cfg.loopback && cfg.micro && cfg.actif());
-        assert_eq!(AudioCfg::facteur(cfg.gain_loopback), 1.0);
+        assert!(cfg.actif());
+        assert_eq!(cfg.sources.len(), 2);
+        assert_eq!(cfg.sources[0].genre, GenreAudio::Desktop);
+        assert_eq!(cfg.sources[1].genre, GenreAudio::Micro);
+        assert_eq!(cfg.sources[0].gain_effectif(), 1000);
         assert_eq!(AudioCfg::facteur(500), 0.5);
-        assert!(!AudioCfg {
-            loopback: false,
-            micro: false,
-            gain_loopback: 1000,
-            gain_micro: 1000,
-        }
-        .actif());
+
+        let muet = SourceAudioCfg {
+            mute: true,
+            ..SourceAudioCfg::desktop()
+        };
+        assert_eq!(muet.gain_effectif(), 0);
+        assert_eq!(muet.gain, 1000, "le gain est conservé sous mute");
+
+        // Aucune source = sortie muette (harnais vidéo), mais config valide.
+        let vide = AudioCfg { sources: Vec::new() };
+        assert!(!vide.actif());
+        assert!(vide.valider().is_ok());
+
+        // Identifiants uniques exigés (clé des niveaux et du diff à chaud).
+        let doublon = AudioCfg {
+            sources: vec![SourceAudioCfg::desktop(), SourceAudioCfg::desktop()],
+        };
+        assert!(matches!(
+            doublon.valider(),
+            Err(ErreurMoteur::Configuration(_))
+        ));
+
         // Un enregistrement « produit » a du son ; un harnais vidéo non.
         assert!(SortieCfg::fichier("C:/tmp/x.mp4", Conteneur::Mp4).audio.is_some());
     }

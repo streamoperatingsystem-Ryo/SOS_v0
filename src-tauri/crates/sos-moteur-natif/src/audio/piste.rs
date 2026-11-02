@@ -25,7 +25,8 @@ use std::time::Duration;
 use std::thread::JoinHandle;
 
 use super::capture;
-use super::{ErreurAudio, Sens};
+use super::capture::AppareilOuvert;
+use super::{ErreurAudio, NiveauxPartages, Sens};
 
 /// Une piste capturée, prête à être muxée.
 #[derive(Debug, Clone, PartialEq)]
@@ -43,8 +44,9 @@ pub struct Piste {
 pub struct CapturePiste {
     arret: Arc<AtomicBool>,
     fil: Option<JoinHandle<Result<Piste, ErreurAudio>>>,
-    /// Signale le **premier paquet réellement écrit**.
-    demarrage: Option<Receiver<()>>,
+    /// Premier paquet écrit → périphérique réellement ouvert (ou l'erreur).
+    demarrage: Option<Receiver<Result<AppareilOuvert, String>>>,
+    niveaux: Arc<NiveauxPartages>,
 }
 
 impl CapturePiste {
@@ -54,13 +56,27 @@ impl CapturePiste {
     /// fois que le son produit des échantillons. Sinon le buffer WASAPI
     /// (200 ms) décale toute la piste par rapport à la première frame —
     /// mesuré : 2,83 s d'audio pour 3 s de vidéo.
-    pub fn attendre_demarrage(&mut self, delai: Duration) -> bool {
+    pub fn attendre_demarrage(
+        &mut self,
+        delai: Duration,
+    ) -> Option<Result<AppareilOuvert, String>> {
         match self.demarrage.take() {
             // `Disconnected` = le thread s'est terminé (périphérique refusé) :
             // inutile d'attendre, l'erreur remontera à `arreter`.
-            Some(rx) => matches!(rx.recv_timeout(delai), Ok(())),
-            None => true,
+            Some(rx) => rx.recv_timeout(delai).ok(),
+            None => None,
         }
+    }
+
+    /// Compteurs de niveau de cette source (pré-fader).
+    pub fn niveaux(&self) -> Arc<NiveauxPartages> {
+        Arc::clone(&self.niveaux)
+    }
+
+    /// Capture vivante ? (`false` = thread terminé — ouverture refusée,
+    /// périphérique débranché, erreur de lecture).
+    pub fn est_vivante(&self) -> bool {
+        self.fil.as_ref().is_some_and(|fil| !fil.is_finished())
     }
 
     /// Arrête la capture et attend le thread (≤ 150 ms, le temps d'un paquet).
@@ -80,7 +96,12 @@ impl CapturePiste {
 /// Rend une erreur si le périphérique ne s'ouvre pas : l'appelant **dégrade**
 /// (enregistrement muet sur cette source) plutôt que d'échouer — un micro
 /// occupé ne doit pas annuler un enregistrement.
-pub fn demarrer(sens: Sens, gain_milliemes: u32, nom: &str) -> Result<CapturePiste, ErreurAudio> {
+pub fn demarrer(
+    sens: Sens,
+    gain_milliemes: u32,
+    nom: &str,
+    peripherique: Option<&str>,
+) -> Result<CapturePiste, ErreurAudio> {
     let chemin = std::env::temp_dir().join(format!(
         "sos-audio-{}-{}.pcm",
         std::process::id(),
@@ -95,16 +116,31 @@ pub fn demarrer(sens: Sens, gain_milliemes: u32, nom: &str) -> Result<CapturePis
     let arret = Arc::new(AtomicBool::new(false));
     let drapeau = Arc::clone(&arret);
     let chemin_fil = chemin.clone();
-    let (tx, rx) = mpsc::channel::<()>();
+    let niveaux = Arc::new(NiveauxPartages::nouveau());
+    let niveaux_fil = Arc::clone(&niveaux);
+    let peripherique = peripherique.map(str::to_string);
+    let (tx, rx) = mpsc::channel::<Result<AppareilOuvert, String>>();
 
     let fil = std::thread::Builder::new()
         .name(format!("sos-audio-{nom}"))
         .spawn(move || -> Result<Piste, ErreurAudio> {
-            let mut capteur = capture::ouvrir(sens)?;
+            let (mut capteur, appareil) =
+                match capture::ouvrir(sens, peripherique.as_deref(), niveaux_fil) {
+                    Ok(ouvert) => ouvert,
+                    Err(e) => {
+                        let _ = tx.send(Err(e.to_string()));
+                        return Err(e);
+                    }
+                };
             let format = capteur.format();
-            let fichier = File::create(&chemin_fil).map_err(|e| {
-                ErreurAudio::Lecture(format!("création {} : {e}", chemin_fil.display()))
-            })?;
+            let fichier = match File::create(&chemin_fil) {
+                Ok(fichier) => fichier,
+                Err(e) => {
+                    let message = format!("création {} : {e}", chemin_fil.display());
+                    let _ = tx.send(Err(message.clone()));
+                    return Err(ErreurAudio::Lecture(message));
+                }
+            };
             let mut sortie = BufWriter::with_capacity(64 * 1024, fichier);
             let mut tampon: Vec<f32> = Vec::with_capacity(8192);
             let mut octets: Vec<u8> = Vec::with_capacity(8192 * 2);
@@ -126,7 +162,7 @@ pub fn demarrer(sens: Sens, gain_milliemes: u32, nom: &str) -> Result<CapturePis
                     ErreurAudio::Lecture(format!("écriture {} : {e}", chemin_fil.display()))
                 })?;
                 if echantillons == 0 {
-                    let _ = tx.send(());
+                    let _ = tx.send(Ok(appareil.clone()));
                 }
                 echantillons += lus as u64;
             }
@@ -153,6 +189,7 @@ pub fn demarrer(sens: Sens, gain_milliemes: u32, nom: &str) -> Result<CapturePis
         arret,
         fil: Some(fil),
         demarrage: Some(rx),
+        niveaux,
     })
 }
 
@@ -164,7 +201,7 @@ mod tests {
     /// paniquer) : c'est ce qui permet à un enregistrement de continuer muet.
     #[test]
     fn demarrage_sans_peripherique_ne_panique_pas() {
-        match demarrer(Sens::Entree, 1000, "test-sans-device") {
+        match demarrer(Sens::Entree, 1000, "test-sans-device", None) {
             Ok(capture) => {
                 // Un device existe : on arrête tout de suite, la piste doit
                 // être cohérente (durée ≥ 0, format non nul).

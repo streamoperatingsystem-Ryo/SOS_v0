@@ -7,6 +7,7 @@ export type Section =
   | "connexions"
   | "communaute"
   | "obs"
+  | "audio"
   | "preview"
   | "personnalisation"
   | "ergonomie";

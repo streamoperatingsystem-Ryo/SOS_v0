@@ -3,22 +3,29 @@
 //! Lecture par **polling** (pas d'événement) : `GetNextPacketSize` toutes les
 //! 3 ms au plus, plafonné à 150 ms d'attente. Coût négligeable pour un
 //! enregistreur, et aucune dépendance à `Win32_Security`/`Threading`.
+//!
+//! Deux services en plus de la capture :
+//! - **énumération** des périphériques actifs (nom convivial + ID stable) ;
+//! - **mesure de niveau** pré-fader, calculée sur les échantillons bruts.
 
 use std::ffi::c_void;
 use std::ptr::null_mut;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows::core::GUID;
+use windows::Win32::Devices::FunctionDiscovery::PKEY_Device_FriendlyName;
 use windows::Win32::Media::Audio::{
-    eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
-    MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+    eCapture, eConsole, eRender, EDataFlow, IAudioCaptureClient, IAudioClient, IMMDevice,
+    IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT,
+    AUDCLNT_SHAREMODE_SHARED, AUDCLNT_STREAMFLAGS_LOOPBACK, DEVICE_STATE_ACTIVE, WAVEFORMATEX,
+    WAVEFORMATEXTENSIBLE,
 };
 use windows::Win32::System::Com::{
-    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
+    CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED, STGM_READ,
 };
 
-use super::{ErreurAudio, FormatAudio, Sens};
+use super::{ErreurAudio, FormatAudio, NiveauxPartages, Sens};
 
 const WAVE_FORMAT_PCM: u16 = 1;
 const WAVE_FORMAT_IEEE_FLOAT: u16 = 3;
@@ -30,6 +37,26 @@ const HNS_BUFFER: i64 = 2_000_000;
 const ATTENTE: Duration = Duration::from_millis(150);
 const PAS_SOMMEIL: Duration = Duration::from_millis(3);
 
+/// Un périphérique audio actif, tel que présenté dans le mixeur.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PeripheriqueAudio {
+    /// ID `IMMDevice` — stable tant que le périphérique est installé.
+    pub id: String,
+    /// Nom convivial (« Haut-parleurs (Realtek…) »).
+    pub nom: String,
+    /// Périphérique par défaut du système pour ce sens.
+    pub defaut: bool,
+}
+
+/// Périphérique réellement ouvert (avec repli explicite éventuel).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppareilOuvert {
+    pub id: String,
+    pub nom: String,
+    /// `true` = l'ID demandé n'existait plus, le défaut a été utilisé.
+    pub repli: bool,
+}
+
 /// Client de capture WASAPI ouvert.
 pub struct Capteur {
     client: IAudioClient,
@@ -37,6 +64,7 @@ pub struct Capteur {
     canaux: u16,
     taux: u32,
     flottant: bool,
+    niveaux: Arc<NiveauxPartages>,
 }
 
 impl Capteur {
@@ -48,15 +76,25 @@ impl Capteur {
         }
     }
 
+    /// Compteurs de niveau de cette source (pré-fader).
+    pub fn niveaux(&self) -> Arc<NiveauxPartages> {
+        Arc::clone(&self.niveaux)
+    }
+
     /// Attend un paquet (≤ 150 ms) puis draine tout ce qui est disponible.
     pub fn lire(&mut self, sortie: &mut Vec<f32>) -> Result<usize, ErreurAudio> {
         let debut = Instant::now();
         loop {
             let lus = self.drainer(sortie)?;
             if lus > 0 {
+                // Les `lus` derniers échantillons sont les nouveaux.
+                let depuis = sortie.len() - lus;
+                self.niveaux.maj(&sortie[depuis..], self.canaux, self.taux);
                 return Ok(lus);
             }
             if debut.elapsed() >= ATTENTE {
+                // Périphérique muet : le vu-mètre décroît, il ne gèle pas.
+                self.niveaux.decroitre(debut.elapsed().as_secs_f32(), self.taux);
                 return Ok(0);
             }
             std::thread::sleep(PAS_SOMMEIL);
@@ -119,21 +157,152 @@ impl Drop for Capteur {
     }
 }
 
-/// Ouvre le périphérique par défaut dans le sens demandé.
+/// Sens → flux WASAPI.
+fn flux(sens: Sens) -> EDataFlow {
+    if sens == Sens::Sortie {
+        eRender
+    } else {
+        eCapture
+    }
+}
+
+/// ID `IMMDevice` (chaîne à libérer par `CoTaskMemFree`).
+fn id_de(device: &IMMDevice) -> Option<String> {
+    unsafe {
+        let pointeur = device.GetId().ok()?;
+        let texte = pointeur.to_string().ok();
+        CoTaskMemFree(Some(pointeur.0 as *const c_void));
+        texte
+    }
+}
+
+/// Nom convivial (`PKEY_Device_FriendlyName`) — `None` si le store refuse.
+fn nom_convivial(device: &IMMDevice) -> Option<String> {
+    unsafe {
+        let store = device.OpenPropertyStore(STGM_READ).ok()?;
+        let valeur = store.GetValue(&PKEY_Device_FriendlyName).ok()?;
+        let nom = valeur.to_string();
+        (!nom.trim().is_empty()).then_some(nom)
+    }
+}
+
+/// ID du périphérique par défaut pour ce flux (s'il existe).
+fn defaut_id(enumerateur: &IMMDeviceEnumerator, flux: EDataFlow) -> Option<String> {
+    unsafe {
+        enumerateur
+            .GetDefaultAudioEndpoint(flux, eConsole)
+            .ok()
+            .and_then(|device| id_de(&device))
+    }
+}
+
+/// Cherche un périphérique actif par ID.
+fn trouver(
+    enumerateur: &IMMDeviceEnumerator,
+    flux: EDataFlow,
+    id: &str,
+) -> Result<Option<IMMDevice>, ErreurAudio> {
+    unsafe {
+        let collection = enumerateur
+            .EnumAudioEndpoints(flux, DEVICE_STATE_ACTIVE)
+            .map_err(|e| ErreurAudio::Init(format!("EnumAudioEndpoints : {}", e.message())))?;
+        let total = collection
+            .GetCount()
+            .map_err(|e| ErreurAudio::Init(format!("GetCount : {}", e.message())))?;
+        for index in 0..total {
+            let Ok(device) = collection.Item(index) else {
+                continue;
+            };
+            if id_de(&device).as_deref() == Some(id) {
+                return Ok(Some(device));
+            }
+        }
+        Ok(None)
+    }
+}
+
+/// Liste les périphériques **actifs** d'un sens : défaut en tête, puis
+/// ordre alphabétique (insensible à la casse).
+pub fn lister(sens: Sens) -> Result<Vec<PeripheriqueAudio>, ErreurAudio> {
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
+        let enumerateur: IMMDeviceEnumerator =
+            CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
+                .map_err(|e| ErreurAudio::Init(format!("MMDeviceEnumerator : {}", e.message())))?;
+        let flux = flux(sens);
+        let defaut = defaut_id(&enumerateur, flux);
+        let collection = enumerateur
+            .EnumAudioEndpoints(flux, DEVICE_STATE_ACTIVE)
+            .map_err(|e| ErreurAudio::Init(format!("EnumAudioEndpoints : {}", e.message())))?;
+        let total = collection
+            .GetCount()
+            .map_err(|e| ErreurAudio::Init(format!("GetCount : {}", e.message())))?;
+        let mut liste = Vec::with_capacity(total as usize);
+        for index in 0..total {
+            let Ok(device) = collection.Item(index) else {
+                continue;
+            };
+            let Some(id) = id_de(&device) else {
+                continue;
+            };
+            let nom = nom_convivial(&device).unwrap_or_else(|| id.clone());
+            liste.push(PeripheriqueAudio {
+                defaut: defaut.as_deref() == Some(id.as_str()),
+                id,
+                nom,
+            });
+        }
+        liste.sort_by(|a, b| {
+            b.defaut
+                .cmp(&a.defaut)
+                .then_with(|| a.nom.to_lowercase().cmp(&b.nom.to_lowercase()))
+        });
+        Ok(liste)
+    }
+}
+
+/// Ouvre un périphérique précis (`None` = défaut) dans le sens demandé.
 ///
-/// `Sortie` = loopback (flag `AUDCLNT_STREAMFLAGS_LOOPBACK` sur le device de
-/// rendu) ; `Entree` = capture directe du micro.
-pub fn ouvrir(sens: Sens) -> Result<Capteur, ErreurAudio> {
+/// Un ID inconnu (périphérique débranché) **replie sur le défaut** et le
+/// signale (`AppareilOuvert::repli`) : l'enregistrement continue, l'UI peut
+/// afficher l'avertissement au lieu d'une piste muette silencieuse.
+pub fn ouvrir(
+    sens: Sens,
+    peripherique: Option<&str>,
+    niveaux: Arc<NiveauxPartages>,
+) -> Result<(Capteur, AppareilOuvert), ErreurAudio> {
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
 
         let enumerateur: IMMDeviceEnumerator =
             CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
                 .map_err(|e| ErreurAudio::Init(format!("MMDeviceEnumerator : {}", e.message())))?;
-        let flux = if sens == Sens::Sortie { eRender } else { eCapture };
-        let device = enumerateur
-            .GetDefaultAudioEndpoint(flux, eConsole)
-            .map_err(|e| ErreurAudio::Init(format!("GetDefaultAudioEndpoint : {}", e.message())))?;
+        let flux = flux(sens);
+        let mut repli = false;
+        let device = match peripherique.map(str::trim).filter(|id| !id.is_empty()) {
+            Some(id) => match trouver(&enumerateur, flux, id)? {
+                Some(device) => device,
+                None => {
+                    repli = true;
+                    enumerateur
+                        .GetDefaultAudioEndpoint(flux, eConsole)
+                        .map_err(|e| {
+                            ErreurAudio::Init(format!(
+                                "périphérique « {id} » introuvable et défaut indisponible : {}",
+                                e.message()
+                            ))
+                        })?
+                }
+            },
+            None => enumerateur
+                .GetDefaultAudioEndpoint(flux, eConsole)
+                .map_err(|e| {
+                    ErreurAudio::Init(format!("GetDefaultAudioEndpoint : {}", e.message()))
+                })?,
+        };
+        let id = id_de(&device).unwrap_or_default();
+        let nom = nom_convivial(&device).unwrap_or_else(|| id.clone());
+
         let client: IAudioClient = device
             .Activate(CLSCTX_ALL, None)
             .map_err(|e| ErreurAudio::Init(format!("Activate IAudioClient : {}", e.message())))?;
@@ -180,12 +349,16 @@ pub fn ouvrir(sens: Sens) -> Result<Capteur, ErreurAudio> {
             .Start()
             .map_err(|e| ErreurAudio::Init(format!("Start : {}", e.message())))?;
 
-        Ok(Capteur {
-            client,
-            capture,
-            canaux: fmt.nChannels,
-            taux: fmt.nSamplesPerSec,
-            flottant,
-        })
+        Ok((
+            Capteur {
+                client,
+                capture,
+                canaux: fmt.nChannels,
+                taux: fmt.nSamplesPerSec,
+                flottant,
+                niveaux,
+            },
+            AppareilOuvert { id, nom, repli },
+        ))
     }
 }
