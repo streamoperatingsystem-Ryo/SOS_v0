@@ -61,6 +61,10 @@ export async function initJustChatting(): Promise<void> {
   registerApresSyncCaptures(async () => {
     if (get(jcActif)) {
       await syncObsJC();
+      // Changement de scène pendant JC : le moteur natif reçoit la dérivée
+      // de la NOUVELLE scène (sinon il garderait l'ancienne).
+      const derivee = sceneDerivee(get(sceneStore));
+      if (derivee) await syncNatifJC(derivee);
     }
   });
 }
@@ -186,6 +190,18 @@ async function syncObsJC(): Promise<void> {
 // ACTIONS
 // =============================================================================
 
+/// Pousse la scène au moteur NATIF (mode Rust) — même copie que celle
+/// envoyée à OBS. Sans elle, le moteur continuait d'afficher tous les
+/// widgets pendant JC (trous non percés : capture de fond plein canvas).
+/// Non fatal : hors session, l'application ne fait que préparer la suivante.
+async function syncNatifJC(scene: Scene): Promise<void> {
+  try {
+    await tauri.moteurAppliquerScene(scene);
+  } catch {
+    // Moteur natif inactif → sans effet, la prochaine scène s'appliquera.
+  }
+}
+
 /// Active ou coupe le mode. Bascule Rust (frame WS + event) puis sync OBS.
 export async function setJustChatting(actif: boolean): Promise<void> {
   await tauri.justChattingSetActif(actif);
@@ -193,9 +209,14 @@ export async function setJustChatting(actif: boolean): Promise<void> {
   // doit refléter la nouvelle valeur (l'event Rust reviendra — idempotent).
   await chargerJustChatting();
   if (actif) {
-    // ON : scène dérivée → caméra/chats seuls côté OBS + caméra au rect JC.
+    // ON : scène dérivée → caméra/chats seuls côté OBS + caméra au rect JC,
+    // et la MÊME copie au moteur natif (parité des deux rendus).
     await syncObsJC();
+    const derivee = sceneDerivee(get(sceneStore));
+    if (derivee) await syncNatifJC(derivee);
   } else {
+    // OFF : le moteur natif reprend la scène RÉELLE (jamais mutée).
+    await syncNatifJC(get(sceneStore));
     // OFF : sync captures de la scène RÉELLE (réactive trous + fond, recale
     // la caméra sur le widget jamais muté) puis masque FORCÉ — le cache de
     // syncCameraMask détient encore la clé réelle alors que le PNG OBS est

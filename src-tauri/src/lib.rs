@@ -1,5 +1,7 @@
 mod api_deck;
 mod alertes;
+mod cache_clips;
+mod cache_images;
 mod cadres_cmd;
 mod commandes;
 mod config;
@@ -4550,6 +4552,7 @@ pub fn run() {
             moteur::moteur_stream_config,
             moteur::moteur_stream_oublier,
             moteur::moteur_chat_message,
+            moteur::moteur_appliquer_scene,
             moteur::moteur_apercu,
             moteur::moteur_apercu_config,
             moteur::moteur_apercu_config_sauver,

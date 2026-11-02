@@ -9,6 +9,7 @@
     sceneStore,
     mettreWidgetPlan,
     setCameraCachee,
+    setWidgetCachee,
     type SnapTarget,
   } from "../stores/scene";
   import { afficherGuidesDrag, masquerGuides } from "../stores/guides";
@@ -41,6 +42,10 @@
   // widget ignoré par diffusion.html. Le placeholder dashboard reflète
   // l'état (label « masquée » + bouton œil visible en permanence).
   let cameraCachee = $derived(isCamera && w.cameraCachee === true);
+  // Widget masqué en diffusion (bouton œil, widgets NON caméra — la
+  // caméra a cameraCachee). Fantôme dashboard + œil épinglé, ignoré
+  // partout en diffusion/natif — mêmes effets que cameraCachee.
+  let widgetCachee = $derived(!isCamera && w.cachee === true);
   let isInputViewer = $derived(widgetType === "input-viewer");
   let isSpeedrun = $derived(widgetType === "speedrun");
   let isGoal = $derived(widgetType === "goal");
@@ -517,6 +522,11 @@
             disabled: estDevant,
             onclick: () => void mettreWidgetPlan(w.id, "avant"),
           },
+          {
+            icone: widgetCachee ? "🚫" : "👁",
+            titre: $t(widgetCachee ? "commun.afficher" : "commun.masquer"),
+            onclick: () => void setWidgetCachee(w.id, !widgetCachee),
+          },
         ]
   );
 
@@ -543,6 +553,7 @@
   class="widget"
   class:dragging
   class:morphable
+  class:cachee={widgetCachee}
   data-widget-id={w.id}
   style="left:{w.x}px; top:{w.y}px; width:{w.largeur}px; height:{w.hauteur}px; z-index:{w.z};"
   onpointerdown={onpointerdown}
@@ -861,7 +872,7 @@
   hauteur={w.hauteur}
   {scale}
   boutons={badgeBoutons}
-  visible={cameraCachee}
+  visible={cameraCachee || widgetCachee}
   widgetId={w.id}
 />
 
@@ -874,6 +885,12 @@
   }
   .widget.dragging {
     cursor: grabbing;
+  }
+  /* Widget masqué en diffusion (cachee, bouton œil) : fantôme atténué —
+     le widget reste éditable (position, options conservées ; œil épinglé
+     — même sémantique que .module.masque et .camera-actif.cachee). */
+  .widget.cachee {
+    opacity: 0.35;
   }
   .widget-3d {
     width: 100%;

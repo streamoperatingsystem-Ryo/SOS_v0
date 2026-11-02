@@ -4537,6 +4537,7 @@ dependencies = [
  "sos-moteur-api",
  "sos-scene",
  "windows 0.58.0",
+ "windows-core 0.58.0",
  "wuff",
 ]
 

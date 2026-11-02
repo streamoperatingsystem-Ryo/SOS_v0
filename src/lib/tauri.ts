@@ -94,6 +94,11 @@ export interface Widget {  id: string;
   /// dashboard) : items OBS désactivés + widget ignoré par diffusion.html.
   /// undefined/false = visible (défaut).
   cameraCachee?: boolean;
+  /// Widget masqué en diffusion (bouton œil au survol, widgets NON caméra
+  /// — la caméra garde `cameraCachee`) : ignoré partout en diffusion
+  /// (zone repeinte par le fond) et dans le moteur natif ; source OBS
+  /// `obsSource` désactivée. undefined/false = visible (défaut).
+  cachee?: boolean;
   /// Mode d'affichage des widgets type "input-viewer" : "clavier" (défaut),
   /// "souris", "numpad" ou "manette".
   inputMode?: string;
@@ -658,6 +663,10 @@ export interface Scene {
   /// Présence = fond capture (prioritaire sur bgMedia — le média n'est pas
   /// peint tant que la capture est active).
   bgObsSource?: string;
+  /// Cible de capture du FOND pour le moteur natif (mode Rust). Prioritaire
+  /// sur bgSlides/bgMedia ; bgObsSource reste le chemin du mode OBS — les
+  /// deux peuvent coexister, chaque mode lit le sien.
+  bgCaptureCible?: CaptureCible;
   /// Cadre unifié de la scène : appliqué à chaque widget (clip-path +
   /// overlay SVG) ET au bord extérieur du canvas.
   cadreWidget?: CadreConfig;
@@ -1811,6 +1820,14 @@ export const tauri = {
     await invoke("scene_sync_captures", { host, port, password, scene });
   },
 
+  /// Applique une scène **fournie** au moteur natif (mode Rust).
+  /// Utilisé par Just Chatting : la scène dérivée (caméra + chats aux rects
+  /// JC) part au moteur comme elle part à OBS, sans jamais muter la scène
+  /// persistée. Application différentielle côté Rust.
+  async moteurAppliquerScene(scene: Scene): Promise<void> {
+    await invoke("moteur_appliquer_scene", { scene });
+  },
+
   // ===== Just Chatting (overlay non-destructif, état runtime non persisté) =====
 
   /// Snapshot JC (actif + layouts paysage/portrait). OFF au boot.
@@ -2003,7 +2020,7 @@ export const tauri = {
     host: string,
     port: number,
     password: string,
-    items: { sourceName: string; x: number; y: number; w: number; h: number; fit: string; zoom: number; rot: number }[]
+    items: { sourceName: string; x: number; y: number; w: number; h: number; fit: string; zoom: number; rot: number; visible?: boolean }[]
   ): Promise<void> {
     await invoke("obs_sync_trous", { host, port, password, items });
   },

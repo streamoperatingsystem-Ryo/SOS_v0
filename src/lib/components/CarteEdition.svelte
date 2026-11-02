@@ -310,6 +310,11 @@
   // Fond = capture OBS (app/jeu plein canvas) : PRIORITAIRE sur le média —
   // bgMedia reste stocké mais n'est pas peint tant que la capture est active.
   let bgObsSource = $derived($sceneStore.bgObsSource ?? null);
+  // Fond = capture, quel que soit le mode : `bgObsSource` (OBS) ou
+  // `bgCaptureCible` (moteur Rust) — chaque mode lit le sien.
+  let bgCapture = $derived(
+    bgObsSource !== null || ($sceneStore.bgCaptureCible ?? null) !== null
+  );
   let hasBgTitre = $derived(($sceneStore.bgTitre ?? "").length > 0);
   let fondVideoEl = $derived($videoRegistry.get("fond"));
   let bgPaused = $derived($sceneStore.bgPaused ?? true);
@@ -1118,10 +1123,10 @@
           {/if}
         {:else}
           <!-- ====== ÉDITION FOND ====== -->
-          {#if bgObsSource}
+          {#if bgCapture}
             <!-- Fond = capture app/jeu (prioritaire sur le média — le média
                  stocké n'est pas peint tant que la capture est active). -->
-            <p class="hint">{$t("carteEdition.fondCaptureHint")}</p>
+            <p class="hint">{$t("obsSourceDialog.hintFond")}</p>
             <button class="action" onclick={() => (obsFondDialogOpen = true)}>{$t("carteEdition.changerCapture")}</button>
             <button class="action danger" onclick={() => { void retirerFondCapture(); }}>{$t("carteEdition.retirerCapture")}</button>
             <button class="action" onclick={() => titreFondModalOpen.set(true)}>

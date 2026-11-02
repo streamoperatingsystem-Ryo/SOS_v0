@@ -37,10 +37,30 @@
   configs JSON, `telemetrie/events.jsonl`, snapshots followers) + keyring
   Windows natif (tokens Twitch/YouTube). Aucune DB distante, aucun compte
   StreamOS, aucun tracker.
+- **Cache d'images du chat** (2026-11-01, lot G) : GET `https` vers les CDN
+  d'emotes déjà listés (BTTV/7TV/FFZ), `static-cdn.jtvnw.net` (avatars
+  Twitch) et les CDN d'avatars YouTube/TikTok, **déclenché par un message de
+  chat** quand le moteur natif est actif. Taille bornée (2 Mio), User-Agent
+  générique, aucune auth, aucune donnée utilisateur envoyée ; écrit uniquement
+  dans `medias/cache/`. **Même cache, même politique** pour les images de la
+  présentation streamer (`static-cdn.jtvnw.net` : bannière de chaîne en E6a,
+  avatar / boîtes de jeux / vignettes de clips en E6b-E6c), déclenché par
+  l'action manuelle « présenter un streamer ».
+- **Clips de la présentation — nouvel hôte** (2026-11-01, lot E6c, accord
+  utilisateur explicite) : GET `https` vers **`clips-media-assets2.twitch.tv`**
+  uniquement — vignettes `…-preview-WxH.jpg` (grille 2×2 de la carte,
+  déclenchées par `presentation-show`) et MP4 **signés** Twitch
+  (`…-N.mp4?sig=…`, déclenchés par le clic « jouer un clip »). Aucune auth
+  StreamOS, aucune donnée utilisateur envoyée, User-Agent générique, taille
+  bornée. Vignettes → `medias/cache/` (cache images existant) ; MP4 →
+  **préchargés sur disque** dans `medias/clips/` (nom = FNV-1a 64 de l'URL,
+  purge bornée, écriture atomique) : le moteur ne lit qu'un **fichier local**
+  (§13.8), et l'URL signée peut expirer côté Twitch sans casser la lecture.
 - **Ce qui sort réseau** : UNIQUEMENT les APIs officielles des plateformes
   (Twitch Helix/IRC/EventSub, YouTube Data API, Kick Pusher, TikTok
   Webcast) + APIs publiques d'emotes (BTTV/7TV/FFZ) + jacquettes
-  (`static-cdn.jtvnw.net`, hôte figé) + GQL public des clips Twitch. Toutes
+  (`static-cdn.jtvnw.net`, hôte figé) + clips (`clips-media-assets2.twitch.tv`,
+  hôte figé) + GQL public des clips Twitch. Toutes
   initiées par une action utilisateur ou une feature activée — jamais de
   beacon, d'analytics, de crash-reporting ni de fingerprinting.
 - **Téléchargement entrant — plugin fond vert** (2026-10-22, accord
@@ -73,6 +93,16 @@ npm run check                        # svelte-check : types + identifiants incon
 npm run build                        # build production
 npm run tauri dev                    # dev complet (Rust + frontend)
 ```
+
+> 🧹 **HYGIÈNE DISQUE — `target/debug/deps` grossit sans limite (2026-11-02)** :
+> chaque compilation interrompue (`Ctrl+C` sur `npm run tauri dev`) laisse ses
+> `*.rcgu.o` (≈20 Mo pièce, ~300 par recompilation de `streamos_v0_lib`) et
+> parfois un dossier `.tmp*.temp-archive/` ; rustc ne les supprime jamais.
+> Constat : 33 786 objets orphelins + 37 archives → 60 Go rendus au volume,
+> `deps` retombé de 141 Go à 23 Go. Purge :
+> `powershell -ExecutionPolicy Bypass -File tools\nettoyage-cargo.ps1`
+> (`-Simulation` pour voir, `-InclureIncremental` pour les sessions de
+> `debug/incremental`). Ne touche JAMAIS `.rlib`/`.rmeta`/`.pdb`.
 
 > ⚠️ **BASE ZÉRO-WARNING (2026-09-14)** : `cargo clippy` (exit 0) et
 > `npm run check` (0 erreur) sont le niveau de référence du dépôt. Toute
@@ -172,6 +202,15 @@ PAS "StreamOS" ; `config.rs` → `app_data_dir()`) :
 - `scenes/` — scènes SOS (JSON)
 - `medias/` — médias importés (`medias/musique/` = bibliothèque musicale,
   noms de fichiers CONSERVÉS ≠ uuid des alertes)
+- `medias/cache/` — images du chat (avatars + emotes), nom = FNV-1a 64 de
+  l'URL, **sans extension** (WIC détecte le format) ; téléchargées par l'app
+  à la volée (cache_images.rs), purgées au-delà de 1 024 fichiers. Le moteur
+  ne lit que ces fichiers (aucun accès réseau, §13.8). Sert aussi aux images
+  de la présentation (bannière, avatar, boîtes de jeux, vignettes de clips)
+- `medias/clips/` — clips de la présentation **préchargés** (lot E6c), nom =
+  FNV-1a 64 de l'URL signée + `.mp4` (cache_clips.rs, écriture atomique,
+  purge au-delà de 8 fichiers, 256 Mio max). Le moteur ne lit que ces
+  fichiers : l'URL signée Twitch peut expirer sans casser la lecture
 - `obs/` — cache des masques PNG caméra `masque-{camera|fond}-<hash16>.png`
   (obs_trou.rs + mask_png.rs — nettoyage des orphelins intégré)
 
@@ -460,6 +499,232 @@ propres, l'anneau éventuel (`cameraBord`) dérive du cadre de scène.
    composant et ne s'appliqueraient pas à un composant enfant sans duplication.
    (L'ancien snippet `controlesMedia` de Toolbar n'existe plus — migration
    vers la carte d'édition contextuelle.)
+
+## Plan de suivi — parité moteur natif (OBS → Rust)
+
+> **Cible actée (2026-11-01)** : parité complète avec le mode OBS, pas une
+> liste de « limites assumées ». Toute scène doit être **acceptée** et rendue
+> à l'identique. Cette table est le **point de reprise** d'une nouvelle
+> fenêtre de contexte : état, prochain lot, pièges déjà payés.
+> Convention : un lot = liste blanche fermée ; `cargo clippy` exit 0 +
+> `cargo test` vert + `npm run check` 0 erreur avant le lot suivant.
+
+### Architecture — un seul contrat, deux rendus (RÈGLE)
+
+> Réponse à la question « faut-il décupler chaque fonctionnalité en deux ? » :
+> **non**. Une fonctionnalité n'a **jamais** deux logiques. Ce qui existe en
+> double est uniquement la **couche de rendu** (et la capture, par nécessité).
+
+1. **Une seule vérité de scène** : `Scene` (JSON, `sos-scene`) + `RuntimeState`
+   (frames `chat_tx`, events Tauri) alimentent **les deux** rendus. Aucun état
+   métier dupliqué, aucune config « mode OBS » vs « mode Rust ».
+2. **Deux renderers, une seule spec** : `diffusion.html` (DOM/Chromium, mode
+   OBS) et `sos-moteur-natif` (Direct2D, mode Rust). La parité est la
+   **spec** : même géométrie, mêmes couleurs, mêmes timings. Un écart est un
+   bug, pas une variante.
+3. **Capture : deux backends, une cible** : OBS (`obsSource`) vs WGC/MF
+   (`captureCible`, `bgCaptureCible`). La cible vit dans la scène ; chaque
+   mode lit la sienne — on ne recopie pas une config d'un mode à l'autre.
+4. **La dérive se mesure** : chaque lot de rendu porte des tests de géométrie
+   contre les valeurs TS **mesurées** (polygones, points) ; le harnais SSIM
+   (plan §20) reste à brancher pour les pixels.
+
+| Lot | État | Contenu | Périmètre (fichiers) |
+|---|---|---|---|
+| A | **fait** (2026-11-01) | Accepter toutes les scènes : la garde ne juge plus le contenu, seulement « moteur jamais configuré ». Dégradation signalée pour `bgObsSource` non rendu. | `crates/sos-moteur-natif/src/moteur.rs` |
+| B | **fait** (2026-11-01) | Fond = capture native (`bgCaptureCible`), prioritaire sur `bgObsSource` / `bgSlides` / `bgMedia` ; dialogue de fond en mode Rust **sans OBS**. Vérifié : 204 + 9 tests, clippy workspace 0, svelte-check 0. | `crates/sos-scene/src/lib.rs`, `crates/sos-moteur-natif/src/scene_sources.rs`, `crates/sos-moteur-natif/src/moteur.rs`, `src/lib/tauri.ts`, `src/lib/stores/scene.ts`, `src/lib/components/ObsSourceDialog.svelte`, `src/lib/components/CarteEdition.svelte` |
+| C1 | **fait** (2026-11-01) | `animer` : segment comète (7 % du périmètre, 4 s/tour, `couleurFin`, `0,7 × trait`, bouts ronds) sur `mgstyle`/`thin-line` ; `trace_comete` = **chemin du SVG** (rect plein / rect arrondi), pas le polygone de découpe ; horloge `pts_us` ; carte alerte animée aussi ; `Capacites.cadres_animes = true`. 207 tests, clippy 0. | `crates/sos-moteur-natif/src/cadres.rs`, `scene_sources.rs`, `texte/mod.rs`, `texte/alertes.rs`, `moteur.rs` |
+| C2a | **fait** (2026-11-01) | `carre` + `arrondis` : trait dégradé (rect / rect arrondi `rx=8`), clip `arrondis` `r=min(8,W/4,H/4)` et `carre` **aucun**, comète `rx=8` non bornée (rognée par le clip). 209 tests, clippy 0. | `crates/sos-moteur-natif/src/cadres.rs` |
+| C2b-1 | **fait** (2026-11-01) | `tribal` : octogone `tribalPath`, 4 traits (halo / 22 % / dégradé / filet), motif corps+balayures rempli au dégradé, équerres (boîte > 130×90), respiration `opacity 0.85;1;0.85` (4 s), nœud voyageur 5,5 s **hors clip**. 212 tests, clippy 0. | `crates/sos-moteur-natif/src/cadres.rs` |
+| C2b-2 | **fait** (2026-11-01) | `cyberpunk` : octogone biseauté (`bevel = max(8, round(3.5·ep))`, borné W/4·H/4), 4 traits (néon 22 % / dégradé / liseré intérieur 3 stops / filet blanc), runner 5 s **hors clip**. Ornements de marge (équerres, circuits, code-barres) **invisibles** dans la référence → non portés. 213 tests, clippy 0. | `crates/sos-moteur-natif/src/cadres.rs` |
+| C2b-3 | **fait** (2026-11-01) | `story` : bord festonné en cubiques (`s = max(12, round(4·ep))`), 3 traits ronds, cœurs de coin + de bord, volutes (rognées au bord), étincelle voyageuse 7 s. Aplatissement cubique 12 pas partagé. 215 tests, clippy 0. | `crates/sos-moteur-natif/src/cadres.rs` |
+| C2b-4 | **fait** (2026-11-01) | `hexagon` (bord octogonal, nœuds, cadre intérieur inséré, nœud voyageur 6 s) et `arena` (octogone allongé, canal + double filet, écho, nœuds, cartouches/ailerons, 4 orbs radial + croix X pulsées 3,5 s, nœud voyageur 5 s). **9/9 styles portés.** 217 tests, clippy 0. | `crates/sos-moteur-natif/src/cadres.rs` |
+| D1 | **fait** (2026-11-01) | Caméra : forme = cadre de scène quand `cameraForme` est absent (ou inconnu) ; une forme dédiée (`cercle`/`carre`) remplace le cadre. `camera_forme_dediee` + tests (`camera_sans_forme_dediee_suit_le_cadre_de_scene` ; `cadres_bord_plus_widgets_avec_exclusions` attend 4 cadres). 205 tests, clippy 0. | `crates/sos-moteur-natif/src/scene_sources.rs` |
+| D2 | **fait** (2026-11-01) | Anneau `cameraBord` des formes dédiées : cercle/rect, trait `clamp(strokeWidth,1.5,12)`, dégradé `stopsLiseres` **diagonal TL→BR** (le SVG n'utilise pas `gradientAngle`), fallback `#e0e0e0→#9a9a9a` ép. 4, rogné à la forme (couche cercle / clip rect). `SourceCfg.anneau` + `anneau_camera_de`. 219 tests, clippy 0. | `cadres.rs`, `scene_sources.rs`, `texte/mod.rs`, `moteur.rs` |
+| D3 | **fait** (2026-11-01) | Caméra : libération du capteur dshow **après** une bascule acceptée (`camera_sync visible=false`, jamais `RemoveInput`), réactivation au retour (`syncCapturesOBS`) ; hot-plug natif = session morte jamais réutilisée (recréée à la prochaine application de scène) + dégradation 1 Hz « débranchée ». Reste : relance sans mutation de scène (lot I). 219 tests, clippy 0, svelte-check 0. | `src/lib/stores/moteur.ts`, `capture/camera.rs`, `moteur.rs` |
+| E1 | **fait** (2026-11-01) | Overlay **welcome** (clip de bienvenue) : frames `chat_tx` `welcome-clip-play`/`-stop`/`-config` + `position-overlay-config` **partagé** avec les alertes (⚠️ `welcome:etat` = état dashboard, PAS le canal du rendu) ; squelette (carte + cadre de scène + pseudo/CTA/bio) et spotlight (voile 350 ms + carte 85 % + intro 3 s + split 600 ms), `z = 9999`. Sans média (URLs distantes → lot G) et sans son, dégradations documentées. 228 + 223 tests, clippy 0, svelte-check 0. | `texte/welcome.rs` (nouveau), `texte/mod.rs`, `moteur.rs`, `src/moteur/mod.rs` |
+| E2 | **fait** (2026-11-01) | **Bandeau 1er message** : frames `chat_tx` `bandeau-premier-message-play`/`-stop`/`-config` (⚠️ `bandeau:etat` = dashboard, PAS le rendu) ; barre pleine largeur bas/haut, fond dégradé + filet 2 px + ligne lumineuse aux couleurs du cadre, pastille « ✦ PREMIER MESSAGE », avatar rond 44 px (cache disque), pseudo 15 px + message 20 px, entrée opacité 0,45 s + glissière 0,5 s, sortie 550 ms, `z = 9998`. Mascotte Streamy non portée (asset du serveur). 238 + 230 tests, clippy 0, svelte-check 0. | `texte/bandeau.rs` (nouveau), `texte/mod.rs`, `moteur.rs`, `src/moteur/mod.rs` |
+| E3 | **fait** (2026-11-01) | **Écran d'attente BRB** : canal réel = frames `chat_tx` **`ecran-attente-etat`** (⚠️ `ecran-attente:etat` = dashboard) ; `muter_bureau` **ajouté à la frame** (le DOM ignore le champ). Aurore teintée cadre, média local plein cadre (`cover`, vidéo en boucle + recalage + son mixé), voile, titre dégradé, carte minuteur (label + chrono + cadre de scène masqué au polygone), layout `signature` (stries à comète, Streamy + orbites, wordmark `screen`→alpha de luminance, morse) — PNG de marque **embarqués** (`include_bytes!` + `decoder_pbgra_memoire`). Mute « bureau » = **gain 0 de l'entrée loopback du mixeur** (aucun changement dans `audio/live.rs`), `z = 9990`. 248 + 233 tests, clippy 0, svelte-check 0. Écart signalé : bord du canvas `i32::MAX` (crate) vs `z-index: 100` (DOM) → peint au-dessus des overlays. | `texte/attente.rs` (nouveau), `texte/mod.rs`, `moteur.rs`, `gpu.rs`, `media.rs`, `src/moteur/mod.rs`, `src/ecran_attente.rs` |
+| E4 | **fait** (2026-11-01) | **Pad numérique** : canal réel = frames `chat_tx` **`pad-play`/`pad-stop`** + `position-overlay-config` partagé (⚠️ `pad:touche*` = events dashboard). Carte média (image/vidéo une seule lecture) + pop-in `scale(0.6)→1` + fondu 0,3 s, effets `bounce`/`zoom`, mode **plein écran** (contain, sans cadre, transparence), cadre de scène sur la carte, `z = 9995`. Son : vidéo / fichier `son` / touche `audio` — nouveau `media::AudioFichier` (Source Reader audio seul) + `LectureCfg::boucle_infinie` (le pad ne boucle pas). 253 + 236 tests, clippy 0, svelte-check 0. **Chrono 2 non porté** (overlay distinct du même module, à planifier). | `texte/pad.rs` (nouveau), `texte/mod.rs`, `moteur.rs`, `media.rs`, `src/moteur/mod.rs` |
+| E5 | **fait** (2026-11-01) | **Emoji Arena** : canal réel = frames `chat_tx` **`fight-state`** (⚠️ `fight:update` = dashboard). Arène 1v1 (zones, PV dégradées 3 paliers, emojis **couleur**, chips de coups, badge « À TOI », timers), colonne centrale (tour + timer + temps de match), bannière lobby/fin, toast d'info ; échéances décomptées **en local** (tick 250 ms du DOM), animations lunge/secousse/esquive/popups/impact/KO, `z = 9993`. **Piège payé** : `ID2D1RenderTarget::DrawTextLayout` n'active pas les glyphes COLR/CPAL → emojis blancs ; il faut `ID2D1DeviceContext` + `ENABLE_COLOR_FONT`. 261 + 238 tests, clippy 0, svelte-check 0. | `texte/fight.rs` (nouveau), `texte/mod.rs`, `moteur.rs`, `src/moteur/mod.rs` |
+| E6 | **FAIT** (2026-11-01) — E6a + E6b + E6c + E6d | **Présentation streamer** : canal réel = frames `chat_tx` **`presentation-show`** (payload `mode` + `donnees`), `-hide`, `-mode`, `-clip-play`/`-clip-stop`, `-audio-play`/`-audio-stop` (⚠️ `presentation:etat` = dashboard). **E6a** : voile `10000` (fond radial, bannière + scrim, 3 orbes, sol, 3 spots, 20 poussières), rideaux + cantonné + embrasses `10001`, public `10003`, entrée/sortie théâtrale et mode `card`. **E6b** : carte `10002` (avatar rond + anneau, nom, `@login`, badges, bio 5 lignes, jeu, lien, `EN DIRECT · viewers`, titre, jeux récents) — colonnes dimensionnées par `repartition_colonnes` (miroir de `flex-shrink`), images par le cache disque (`url_box_art` partagé app/crate). **E6c** : grille 2×2 de vignettes dans la carte (durée + titre tronqué) et lecteur plein écran `10004` — MP4 **préchargé sur disque** par l'app (`medias/clips/`), hôte `clips-media-assets2.twitch.tv` ajouté au contrat vie privée, son du clip mixé. **E6d** : 2 pistes audio (`voix` one-shot, `musique` en boucle) sur `medias/…` → `media::AudioFichier` (E4) + 2 entrées de mixeur, gain 1000 ; `show`/`hide` coupent tout. 286 + 245 tests, clippy 0, svelte-check 0. **Lot E6 complet.** | `texte/presentation.rs` (nouveau), `texte/mod.rs`, `moteur.rs`, `src/moteur/mod.rs` |
+| E7 | **fait** (2026-11-01) | **Pop de validation des splits** : **le contenu ne vient pas d'une frame dédiée** — il est dérivé des **mêmes** frames `chat_tx` `speedrun-etat` (`EtatSpeedrun::pop_pour`, miroir `srPointEtatFranchi`), lues **avant** application ; seule la **position** arrive par `splitpop-pos` (squelette dédié `position_splitpop.json`). Badge « SPLIT n », hero Anton `skewX(-5deg)` (delta vs PB cumulé) ou mot VALIDÉ/SKIP, impact `scale(.15) rotate(-9deg) → 1.22 → 1`, re-pop 2 s/4 s, dédup 1,5 s, `z = 9993`. Son du pop non porté (signalé). **Piège payé** : `CENTER` dans une boîte de 4096 px envoie le texte hors écran (E3). 293 + 246 tests, clippy 0, svelte-check 0. | `texte/splitpop.rs` (nouveau), `texte/speedrun.rs`, `scene_sources.rs`, `texte/mod.rs`, `moteur.rs`, `src/moteur/mod.rs` |
+| F | **fait** (2026-11-01) | **Just Chatting** : la scène dérivée (`sceneDerivee`, copie en mémoire) partait **seulement** à OBS — le moteur natif gardait la scène complète (trou non percé → capture de fond plein canvas visible). Nouvelle commande **`moteur_appliquer_scene(scene)`** (application différentielle, aucune écriture disque, scène persistée jamais mutée) ; `justChatting.ts` pousse la **même** copie aux deux rendus (ON, OFF = scène réelle, et hook post-sync captures). 293 + 246 tests, clippy 0, svelte-check 0. | `src/lib/stores/justChatting.ts`, `src/lib/tauri.ts`, `src-tauri/src/moteur/mod.rs`, `src-tauri/src/lib.rs` |
+| G | **fait** (2026-11-01) | Chat : badges emoji + logo plateforme + avatar rond + emotes inline + bordure par message. **Images = cache disque côté app** (`medias/cache/<fnv16(url)>`, téléchargement à la volée, le moteur ne lit qu'un fichier local — invariant §13.8). Objets inline DirectWrite via un `IDWriteTextRenderer` maison (`DrawTextLayout` ne peint pas les objets inline). 233 + 228 tests, clippy 0, svelte-check 0. | `texte/chat.rs`, `chat.rs`, `scene_sources.rs`, `texte/mod.rs`, `texte/goal.rs`, `moteur.rs`, `cache_images.rs` (app), `moteur/mod.rs`, `Cargo.toml` |
+| H | **FAIT** (2026-11-02) | **Lot H complet.** **H1** : titres de widget dans l'**ordre z** — `GenreCalque::Titre` entre le contenu et la bordure, une entrée par titre à son `z` ; les titres de **fond** (`bgTitre*`, `z = i32::MIN+1`) restent en passe finale. **H2/H2b/H2c** : les cinq contenus de widget (chat, input viewer, goal, speedrun, musique) **et** les titres de widget dessinent **dans** l'offscreen du plan `perspective(d) rotateX/Y` (`groupe_de(rect, z)`) — `cible_rt` étant une vue `ID2D1RenderTarget` du même `ID2D1DeviceContext`, le `SetTarget` redirige le texte DirectWrite sans blit ; clé `(rect, z)` verrouillée par test (titre = `TexteCfg.cadre`). **H3** : `line-height: 1.1` des titres (`SetLineSpacing` UNIFORM + baseline demi-interligne), boîte CSS distincte de la texture (marge contour), `margin-*: ±2px` des titres de widget. **H4** : contour **exact** par géométrie de glyphes (`GetGlyphRunOutline` + `Widen`), repli 16 passes pour les polices **simulées** (gras/oblique synthétique). Corrigé au passage : chat cassé par deux `inline.push(brush.cast())` (lot G) + espacement 2 px pseudo/`:` du DOM. 298 + 246 tests, clippy 0, svelte-check 0. | `moteur.rs`, `scene_sources.rs`, `texte/mod.rs`, `texte/chat.rs` |
+| I | **en cours** — I-a + I-b faits (2026-11-02) | **I-a** : gel de composition avec `audio_live` — le pipe audio nommé était en `PIPE_WAIT` : FFmpeg cessait de le drainer en attendant de la vidéo, la composition bloquait dans `WriteFile` → interblocage (388 composites puis gel). Passé en `PIPE_NOWAIT` + « bloc sauté » sur tampon plein. Vérifié : 890 composites en 15 s, MP4 à deux flux. **Son du pop de split (`srPointsSon`) porté** (§68) : contrat + rendu + entrée de mixeur, test unitaire. **I-b** : `FfmpegSink` écrit par un **fil dédié** + file bornée (8 paquets, échéance 3 s) → la composition ne bloque plus jamais sur le stdin vidéo, un FFmpeg figé devient une dégradation explicite ; cause d'arrêt conservée dans l'erreur. **Gel n° 2 levé** : la cause n'était ni le pop ni l'audio mais la **fenêtre d'analyse PCM** de FFmpeg (819 200 o = 4,27 s lus au rythme réel **sans lire stdin**) — le stdin vidéo débordait (74 055 o absorbés), la composition bloquée n'alimentait plus le pipe audio → interblocage. Correctif : `-analyzeduration 1` + `-probesize 32` sur l'entrée audio (§75). **Reste** : `FILE_ECRITURE` en octets (marge nulle à 6 000 kbps), décalage audio au démarrage (~1 s de PCM sautée, à vérifier), canvas différent en cours de sortie, `hwnd` périmé, PlayerBar/seek, `capture_jeu`, relance caméra sans mutation. | `output/ffmpeg.rs`, `moteur.rs`, `texte/splitpop.rs`, `texte/speedrun.rs`, `scene_sources.rs`, `texte/mod.rs` |
+| J | plus tard | **Fond vert sans OBS** — solution maison (décision utilisateur 2026-11-01), remplace le plugin OBS `background_removal`. | à définir |
+
+### Reprise — prochaine fenêtre de contexte
+
+1. Lire ce plan, puis `docs/features/moteur-natif.md` §58 (reste à faire) et
+   la doc de l'overlay concerné dans `docs/features/` (§57 bienvenue, §60
+   bandeau, §61 écran d'attente — déjà portés).
+2. **E6 — présentation streamer** : **canal réel déjà vérifié** (2026-11-01,
+   ne pas le re-supposer) — frames `chat_tx` `presentation-show` (payload
+   `mode` + `donnees`), `-hide`, `-mode`, `-clip-play`/`-clip-stop`,
+   `-audio-play`/`-audio-stop` ; `presentation:etat` = dashboard.
+   Le lot est **volumineux** : l'attaquer par tranches, chacune verte.
+   - **E6a — FAIT** (2026-11-01) : décor théâtral. Trois entrées de plan
+     `GenreCalque::Presentation` (l'index porte la **couche**) : voile
+     `z 10000` (fond radial, bannière + scrim, 3 orbes, sol, 3 spots,
+     20 poussières), rideaux + cantonné + embrasses `z 10001`, public
+     `z 10003`. Chorégraphie locale (`debut` / `debut_chore` / `fin`) :
+     voile 0,5 s, décor 0,6 s, rideaux 1,2 s après le double `rAF` (~33 ms),
+     embrasses après 0,75 s, masquage à 1 250 ms (théâtral) / 500 ms (card).
+     Mode `card` : **le voile reste affiché** (le code du DOM fait foi, pas
+     son commentaire). `Math.random()` → PRNG déterministe.
+   - **E6b — FAIT** (2026-11-01, §65) : carte `z 10002` — avatar rond (image
+     `cover` clippée au cercle, bord blanc 5 px, anneau violet 6 px), nom,
+     `@login`, badges PARTNER/AFFILIATE (dégradé 135°), bio rognée à 5 lignes,
+     jeu courant, `twitch.tv/<login>`, `EN DIRECT · <viewers>`, titre live,
+     boîtes des jeux récents. Colonnes dimensionnées à leur contenu puis
+     réduites proportionnellement (`repartition_colonnes`, miroir de
+     `flex-shrink`) ; en mode `card` elles s'empilent (760 px). Images par le
+     cache disque ; `url_box_art` (crate) est **la** substitution
+     `{width}x{height}` → `96x128`, appelée aussi par l'app au préchargement.
+   - **E6c — FAIT** (2026-11-01, §66) : grille 2×2 de vignettes dans la carte
+     (cellule 16/9, pastille de durée, titre `nowrap` tronqué à l'ellipse) et
+     lecteur plein écran `z 10004` (voile 90 %, vidéo bornée 88 % × 82 %,
+     titre 30 px). **MP4 préchargé sur disque** par l'app
+     (`medias/clips/<fnv16(url)>.mp4`, `cache_clips.rs`) — hôte
+     `clips-media-assets2.twitch.tv` **documenté dans le contrat vie privée**
+     avant le code. Fin de clip sur `duree_ms` ; son du clip mixé (gain 1000).
+     ⚠️ `DWRITE_WORD_WRAPPING_NO_WRAP` ne rogne pas : il faut `SetTrimming`.
+   - **E6d — FAIT** (2026-11-01, §67) : 2 pistes (`voix` one-shot, `musique`
+     en boucle) sur `medias/…` (fichiers **locaux**) → `media::AudioFichier`
+     (E4) + 2 entrées de mixeur, gain 1000 ; `show`/`hide` arrêtent tout.
+     ⚠️ **Pas de vérification audio de bout en bout** : le harnais avec
+     loopback se fige dans `Apercu::lire` (bug **pré-existant**, reproduit
+     sans la présentation) — cf. l'encart du §67.
+
+### Reprise — après le lot E7
+
+Lots **E6, E7 et F terminés**, **H1** fait (titres dans l'ordre z). Restent
+**H2** (3D chat/input), **H3** (`line-height` des titres) et **H4** (contour
+exact par géométrie de glyphes) — chacun une tranche à part (§70), puis **I**
+(robustesse : gel `Apercu::lire` §67, son du pop §68).
+3. Vérifier le canal de **chaque** overlay avant de le porter : events Tauri
+   (`presentation:etat`) ou frames `chat_tx` (`splitpop-pos`, `chrono2-etat`).
+   Ne jamais supposer.
+4. **Chrono 2** (module pad, `chrono2-etat` + `chrono2-pos`) : overlay distinct
+   non porté par E4 — à planifier (position dédiée `position_chrono.json`).
+
+### Pièges déjà payés — ne pas les redécouvrir
+
+- La garde « scène vide » **ne doit pas** énumérer les catégories de contenu :
+  chaque nouveau renderer créerait un faux refus. Sentinel = « rien n'a jamais
+  été configuré » (`jamais_configure`, `moteur.rs`).
+- `bgObsSource` est un concept OBS : le moteur natif ne le rend pas (signalé
+  en dégradation). Le fond capturé natif vit dans `Scene.bgCaptureCible`
+  (lot B) — `bgObsSource` et `bgCaptureCible` coexistent, chaque mode lit le
+  sien. Nom de source réservé côté moteur : `scene_sources::FOND_CAPTURE`
+  (`"__fond"`), jamais un id de widget.
+- Un switch de layout vers une scène avec caméra bloque la composition 1–2 s
+  (négociation MF sur le thread de composition) — lot D3.
+- Caméra : le cadre de scène s'applique **sauf** forme dédiée reconnue
+  (`camera_forme_dediee`, `scene_sources.rs`). Un `cameraForme` inconnu
+  (« hexagone ») n'est pas une forme dédiée : cadre de scène, comme le DOM.
+- Comète `animer` : le tracé est le **chemin du SVG du style** (rectangle
+  plein `mgstyle`, rectangle arrondi `thin-line`), **pas** le polygone de
+  découpe — la rognure vient de la couche. Phase = `temps_s / 4`, segment =
+  7 % du périmètre, couleur `couleurFin` (jamais le dégradé).
+- **Tous les nœuds/runners/étincelles voyagent dans la couche** (donc rognés
+  au bord) : le `clip-path` du parent s'applique aussi aux éléments dessinés
+  après le groupe clippé du SVG. Ne pas les dessiner hors couche.
+- Ornements de **marge** (équerres cyberpunk, circuits, code-barres, alvéoles
+  hexagon, étincelles story, volutes) : **hors polygone → invisibles dans la
+  référence**, donc non portés. Ne pas les « rajouter » sans preuve visuelle.
+- Carrousel : `mediaSlides` non vide est **prioritaire** sur `media` — un
+  widget sans `media` doit quand même produire un média (sinon son carrousel
+  n'existe pas côté moteur). Même règle pour le fond (`bgSlides` > `bgMedia`).
+- `arrondis` : le **clip** est borné (`r = min(8, W/4, H/4)`) mais le
+  **tracé de la comète** utilise `rx = 8` non borné (le DOM fait exactement
+  ça) — ne pas « corriger » l'un par l'autre.
+- Le canvas de session est figé au démarrage : un layout d'un autre canvas est
+  signalé mais composé dans l'ancien — lot I.
+- **Une ligne « centrée » n'est pas centrée sur la carte** : `CreateTextLayout`
+  avec une largeur de 4096 px et `DWRITE_TEXT_ALIGNMENT_CENTER` centre le texte
+  dans *la boîte de mise en page*, pas dans la carte — les chiffres du chrono
+  de l'écran d'attente atterrissaient 2 000 px à droite (hors du masque, donc
+  invisibles). Mise en page en `LEADING` + centrage manuel
+  (`x = centre − metrics.width / 2`) ; `CENTER` réservé aux boîtes qui sont
+  réellement la boîte de l'élément (titre, largeur 90 % du canvas).
+- **Les emojis sortent en blanc avec `ID2D1RenderTarget::DrawTextLayout`** :
+  cette interface n'active pas les glyphes COLR/CPAL. Il faut le
+  `ID2D1DeviceContext` avec `D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT`
+  (vérifié au rendu sur l'arène `!fight`, 2026-11-01).
+- **Le bord du canvas est au-dessus des overlays dans le crate** :
+  `cadres_depuis_scene` pose `z = i32::MAX` alors que `#cadre-app-overlay` du
+  DOM est à `z-index: 100` (sous pad/alertes/bandeau/bienvenue/attente).
+  Invisible avec les cartes E1/E2, **visible en plein écran** (E3). Écart
+  **signalé, non tranché** (cf. `docs/features/moteur-natif.md` §61).
+- **Un arc `D2D1_ARC_SEGMENT` qui prend le grand arc évide la forme** : le
+  fauteuil du public (E6a) sortait en « M » (deux lobes + un creux au milieu)
+  avec `D2D1_SWEEP_DIRECTION_CLOCKWISE` + `D2D1_ARC_SIZE_SMALL` — les
+  extrémités étant à 90° l'une de l'autre dans le **sens anti-horaire**, D2D
+  satisfaisait le drapeau en traçant les 270° restants (vers l'intérieur).
+  Un contour parcouru bas → droite → haut → gauche (y vers le bas) est
+  **anti-horaire** : les quatre coins sont
+  `D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE`. Vérifié au rendu (2026-11-01).
+- **`repeating-linear-gradient` = une seule brosse `D2D1_EXTEND_MODE_WRAP`**
+  sur la période (88 px des plis de rideau) : ne pas paver à la main, et ne
+  pas confondre avec `CLAMP` (les plis se figeraient au premier arrêt).
+- **`presentation-show` n'arrive qu'une fois** : toute la chorégraphie est
+  une horloge **locale** (`debut` / `debut_chore` / `fin`). Un `show` pendant
+  le fondu de sortie repart des phases **courantes** (`depart`), jamais du
+  noir — le CSS interpole depuis la valeur calculée, pas depuis 0.
+- **`cible_rt` n'est PAS une seconde cible** : `DessinateurTexte::nouveau`
+  fait `let cible_rt: ID2D1RenderTarget = cible.cast()` sur le **même**
+  `ID2D1DeviceContext`. Tout dessin passé par `cible_rt`
+  (`DrawTextLayout`, `DrawBitmap`, `PushAxisAlignedClip`, `PushLayer`) suit
+  donc le `SetTarget` courant — c'est ce qui permet à un contenu DirectWrite
+  (chat, input viewer, lot H2) d'être composé **dans** l'offscreen d'un plan
+  à perspective sans offscreen dédié ni blit. Corollaire : un
+  `SetTarget` non restauré après un offscreen imbriqué détourne **tout** le
+  rendu suivant (motif correct : `GetTarget` avant, restauration après, cf.
+  `texte/media.rs`).
+- **Ne jamais écrire sur le stdin de FFmpeg depuis la boucle de
+  composition** : `WriteFile` y bloque dès que FFmpeg cesse de drainer, et
+  la composition bloquée ne produit plus la vidéo qu'il attend — interblocage
+  à deux flux (mesuré : 1,5 s puis gel définitif). `FfmpegSink` écrit par un
+  **fil dédié** + file bornée + échéance de 3 s (§75). Même règle pour tout
+  futur sink bloquant.
+- **Une entrée PCM de FFmpeg doit avoir son analyse coupée** : `-f s16le
+  -ar -ac` spécifie tout, mais `avformat_find_stream_info` lisait quand même
+  **819 200 o (4,27 s de PCM) au rythme réel sans lire stdin**. Le stdin
+  vidéo (tampon mesuré : 74 055 o) débordait, la composition bloquée
+  n'alimentait plus le pipe audio → **interblocage définitif** (gel n° 2,
+  §75). Correctif : `-analyzeduration 1` + `-probesize 32` sur l'entrée
+  audio. Toute nouvelle entrée temps réel de FFmpeg doit être traitée de
+  même — et non « corrigée » en agrandissant la file d'écriture.
+- **Un pipe en `PIPE_WAIT` peut geler la composition** : `PipeAudio::ecrire`
+  bloquait dans `WriteFile` quand FFmpeg cessait de drainer le pipe audio
+  (il attendait de la vidéo, que la composition bloquée ne produisait plus) —
+  interblocage à deux flux, 388 composites puis gel. Le pipe serveur est
+  passé en `PIPE_NOWAIT` (bloc sauté sur tampon plein). Corollaire : sur un
+  `HRESULT`, comparer `HRESULT::from_win32(code)` et **jamais** le code
+  Win32 nu (`0x8007_00E7 ≠ 231`). Détails §74.
+- **Une police simulée n'a pas de tracé exact** : `GetGlyphRunOutline` rend
+  le contour **non embelli** d'un gras/oblique synthétique (les 20 familles
+  embarquées n'ont qu'une graisse, donc tout `titreGras`/`titreItalique` est
+  simulé). Le contour exact (H4, §73) est donc réservé aux runs dont
+  `IDWriteFontFace::GetSimulations() == 0` ; les autres gardent
+  l'approximation par 16 passes décalées. Ne pas « uniformiser » sans
+  comparer au rendu actuel.
+- **`SetCharacterSpacing` s'applique à **chaque** glyphe de la plage** : un
+  trailing de 2 px sur `{pseudo}` espacerait toutes les lettres. Le
+  `margin-right: 2px` du DOM se miroite avec une plage d'**un** caractère
+  (dernier du pseudo, puis le `:`).
+- **Une brosse n'est pas un objet inline** : `cast()` un
+  `ID2D1SolidColorBrush` vers `IDWriteInlineObject` rend `E_NOINTERFACE`.
+  `construire_bloc` (chat) le faisait pour la puce et le séparateur `:` →
+  **tout** message avec pseudo mettait le moteur en
+  `Erreur(… séparateur inline …)`, zéro composite, et le sink FFmpeg mourait
+  sur « Output file does not contain any stream ». Les deux `push` sont
+  supprimés (2026-11-02, §71) : les brosses sont déjà retenues par
+  `SetDrawingEffect`. Ne jamais pousser autre chose qu'un vrai
+  `IDWriteInlineObject` dans `_inline`.
 
 ## Index — docs/features/
 

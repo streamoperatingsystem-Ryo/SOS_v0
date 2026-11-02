@@ -325,7 +325,7 @@ pub(super) enum LogoGoal {
 }
 
 /// `logoPlateforme(p)` — SVG pour twitch/kick, badge texte youtube/tiktok.
-fn badge_plateforme(plateforme: &str) -> Option<&'static str> {
+pub(super) fn badge_plateforme(plateforme: &str) -> Option<&'static str> {
     match plateforme {
         "youtube" => Some("YT"),
         "tiktok" => Some("TT"),
@@ -835,7 +835,7 @@ impl DessinateurTexte {
     /// Glyphe de plateforme (viewBox) — créé à la demande, partagé par tous
     /// les widgets goal (le scale est posé au dessin). Retour **possédé**
     /// (AddRef) : le bloc de texte garde son emprunt de `blocs_goal`.
-    fn logo_goal(&mut self, logo: LogoGoal) -> Result<ID2D1PathGeometry, ErreurTexte> {
+    pub(super) fn logo_goal(&mut self, logo: LogoGoal) -> Result<ID2D1PathGeometry, ErreurTexte> {
         if !self.logos_goal.contains_key(&logo) {
             let geo = creer_logo(&self.d2d, logo)?;
             self.logos_goal.insert(logo, geo);

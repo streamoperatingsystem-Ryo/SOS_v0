@@ -70,6 +70,17 @@
   `.sidebar-col`, `.scene-bar`, `.drop-bar`) sont `transparent`.
   `--fond-panneau` reste pour les panneaux flottants (modales, dropdowns,
   carte d'édition).
+  - **Nuage moteur** (2026-11-02) : `.nuage-moteur`, calque de `.fond-decor`
+    posé APRÈS `.fond-image` et AVANT les orbs, peint avec la recette
+    `--nuage-moteur` (App.svelte, sur `main`) — six radial-gradients statiques
+    (aucun filtre, aucune animation) teintés par `--moteur-couleur` :
+    orange `--moteur-natif` en Rust, bleu `--moteur-obs` en OBS. Masse
+    principale le long de la colonne gauche + bande haute (seules zones de
+    chrome laissées transparentes par le canvas opaque). `main.fond-dash`
+    réutilise la même recette EN PREMIER (au-dessus du voile) pour que le
+    mode reste lisible sur l'image de fond. Il remplace le contour de
+    fenêtre pointillé orange/bleu (`main.mode-*::after`) supprimé le même
+    jour ; `--moteur-couleur` ne sert plus qu'au nuage et aux boutons mode.
 - **Accent utilisateur (couleur du cadre)** : `App.svelte` pousse la
   couleur EFFECTIVE du cadre unifié (`cadreWidget` — source unique)
   dans `--cadre-couleur` / `--cadre-couleur-fin` sur `:root`, résolue via

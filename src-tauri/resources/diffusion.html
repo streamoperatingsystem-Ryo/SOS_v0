@@ -4928,9 +4928,9 @@
           const w = ws[i];
           // Trous + caméra : le widget caméra est un trou — la source OBS
           // "SOS-Caméra" (dshow_input sous SOS-Diffusion) apparaît à travers.
-          // cameraCachee = widget masqué (bouton œil dashboard) : pas de
-          // trou — la zone est repeinte par le fond de scène.
-          if (w.trou === true || (w.type === "camera" && w.cameraCachee !== true)) {
+          // cameraCachee/cachee = widget masqué (bouton œil dashboard) :
+          // pas de trou — la zone est repeinte par le fond de scène.
+          if (w.cachee !== true && (w.trou === true || (w.type === "camera" && w.cameraCachee !== true))) {
             const rx = w.rotateX || 0;
             const ry = w.rotateY || 0;
 
@@ -7154,10 +7154,11 @@
           var w = scene.widgets[i];
           var wtype = w.type || "media";
 
-          // Caméra masquée (cameraCachee, bouton œil dashboard) : widget
-          // ignoré complètement — pas de div, pas de cadre. Sans seen.add :
-          // le DELETE en fin de boucle détruit l'entry existante au flip.
-          if (wtype === "camera" && w.cameraCachee === true) continue;
+          // Widget masqué (cachee — bouton œil dashboard) ou caméra
+          // masquée (cameraCachee) : ignoré complètement — pas de div,
+          // pas de cadre. Sans seen.add : le DELETE en fin de boucle
+          // détruit l'entry existante au flip.
+          if (w.cachee === true || (wtype === "camera" && w.cameraCachee === true)) continue;
 
           // Trous + caméra : widget transparent (le trou est dans le canvas de
           // fond via destination-out). On crée un élément DOM transparent pour

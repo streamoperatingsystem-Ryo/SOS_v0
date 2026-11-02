@@ -271,12 +271,13 @@ pub struct ApercuCfg {
 }
 
 impl Default for ApercuCfg {
-    /// Défaut produit : 1280 px à 30 fps — net en plein écran sans coût
-    /// mesurable (un `VideoProcessorBlt` ≈ 0,15 ms en 1360×768).
+    /// Défaut produit : 480 px à 10 fps — l'aperçu doit rester quasi gratuit
+    /// (lecture GPU→CPU + transfert IPC), quitte à être moins net ; les deux
+    /// réglages restent exposés (bloc « Projecteur » de la modale Sortie).
     fn default() -> Self {
         Self {
-            largeur: 1280,
-            fps: 30,
+            largeur: 480,
+            fps: 10,
         }
     }
 }

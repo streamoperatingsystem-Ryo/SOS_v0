@@ -26,7 +26,13 @@ sos-scene = { path = "../sos-scene" }
 serde_json = "1"
 
 [target.'cfg(windows)'.dependencies]
+# `#[implement]` (objets inline DirectWrite) : la macro développe des chemins
+# `::windows_core::…`, la crate doit donc être une dépendance directe.
+windows-core = "0.58"
 windows = { version = "0.58", features = [
+    # Objets inline DirectWrite (emotes du chat, lot G) : les traits
+    # `*_Impl` ne sont générés que sous cette feature.
+    "implement",
     "Win32_Foundation",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",

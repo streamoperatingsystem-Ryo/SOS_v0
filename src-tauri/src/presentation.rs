@@ -394,9 +394,16 @@ impl PresentationState {
     /// Joue un clip sur la diffusion : résout l'URL MP4 signée (cache 10 min)
     /// puis émet `presentation-clip-play`. Le titre/durée sont repris du clip
     /// connu dans `courant` (meilleure info que rien).
+    ///
+    /// Le MP4 est **préchargé sur disque** (`medias/clips/<fnv16(url)>.mp4`,
+    /// lot E6c) : le moteur natif ne fait aucun réseau (§13.8) et l'URL signée
+    /// expire. Le téléchargement part en tâche de fond — la frame est émise
+    /// tout de suite, le lecteur natif affiche le voile + le titre et re-tente
+    /// de lire le fichier toutes les 500 ms (comme un `<video>` en buffering).
     pub async fn clip_jouer(&self, slug: &str) -> Result<(), String> {
         // Lecteur quasi plein écran (~88 % du canvas) → qualité maximale.
         let mp4_url = twitch_clips::resoudre_mp4(slug, 1080).await?;
+        crate::cache_clips::precharger(&self.app, &mp4_url);
         let (titre, duree_ms) = {
             let courant = self.courant.lock().unwrap();
             courant

@@ -26,7 +26,9 @@ use crate::media::{CarrouselCfg, EffetsCfg, Fit, LectureCfg, MediaCfg, PerspCfg,
 use crate::moteur::{CibleCapture, FormeCamera, SourceCfg};
 use crate::texte::{
     accent_module, opacite_module, taille_module, CibleTitre, GoalCfg, HorlogeCfg, MethodeTemps,
-    ModeDelta, ModeMusique, ModeTemps, MusiqueCfg, PositionTitre, PrecisionTemps, SpeedrunCfg,
+    EqualiseurCfg, ModeDelta, ModeMusique, ModeTemps, MusiqueCfg, MusiqueModuleCfg, ObjectifCfg,
+    ObjectifLigneCfg, PositionTitre, SpotsCfg, Z_EQ, Z_SPOTS,
+    PrecisionTemps, SpeedrunCfg,
     StyleBoite, StyleTexte, TexteCfg, POLICE_DEFAUT, Z_MODULES,
 };
 
@@ -48,14 +50,48 @@ fn cible_de(cible: &CaptureCible) -> CibleCapture {
 /// (`captureCible` persistée, ou `cibles[id]` pour le harnais
 /// `parite_scene`), ou c'est une caméra **non cachée** (`cameraCachee` =
 /// œil du dashboard : la zone est repeinte par le fond, aucune session).
+/// Un widget `cachee` (œil dashboard, non caméra) n'est jamais une
+/// capture — même sémantique, aucun calque produit.
 /// Remplace l'ancien marqueur `trou`, concept du mode OBS (D8).
 /// `medias_depuis_scene` / `boites_depuis_scene` ne reçoivent pas la table
 /// `cibles` (signature fixée par `moteur.rs`, hors périmètre N1) : leur
 /// exclusion équivalente est `w.captureCible.is_some()`.
 fn est_capture(w: &Widget, cibles: &HashMap<String, CibleCapture>) -> bool {
-    (w.widget_type == "camera" && !w.cameraCachee)
-        || w.captureCible.is_some()
-        || cibles.contains_key(&w.id)
+    // `cachee` (œil dashboard, widgets non caméra) : aucune session —
+    // la zone est repeinte par le fond, comme `cameraCachee`.
+    !w.cachee
+        && ((w.widget_type == "camera" && !w.cameraCachee)
+            || w.captureCible.is_some()
+            || cibles.contains_key(&w.id))
+}
+
+/// `cameraForme` "cercle"/"carre" = forme dédiée qui **remplace** le cadre de
+/// scène pour la caméra (contrat 9). Un nom inconnu n'en est pas une : la
+/// caméra suit alors le cadre de scène, comme `applyCadreWidget`.
+fn camera_forme_dediee(w: &Widget) -> bool {
+    w.widget_type == "camera"
+        && matches!(w.cameraForme.as_deref(), Some("cercle" | "carre"))
+}
+
+/// Anneau `cameraBord` d'une caméra à forme dédiée : couleurs et épaisseur
+/// du cadre de scène (fallback blanc→gris quand aucun cadre actif), miroir de
+/// `svgAnneauCamera` / `gradientCadre`. `None` = pas d'anneau.
+fn anneau_camera_de(scene: &Scene, w: &Widget) -> Option<crate::cadres::AnneauCamera> {
+    if !w.cameraBord || !camera_forme_dediee(w) {
+        return None;
+    }
+    match cadre_actif(scene) {
+        Some(c) => Some(crate::cadres::AnneauCamera {
+            epaisseur: c.strokeWidth,
+            couleur: couleur_cadre(&c.couleur, [255, 255, 255, 255]),
+            couleur_fin: couleur_cadre(&c.couleurFin, [0, 0, 0, 255]),
+        }),
+        None => Some(crate::cadres::AnneauCamera {
+            epaisseur: 4.0,
+            couleur: [0xe0, 0xe0, 0xe0, 255],
+            couleur_fin: [0x9a, 0x9a, 0x9a, 255],
+        }),
+    }
 }
 
 /// Forme dédiée du widget caméra (`cameraForme`, contrat 9) : `"cercle"` →
@@ -85,6 +121,8 @@ fn lecture(paused: bool, a: Option<f64>, b: Option<f64>) -> LectureCfg {
             (Some(a), Some(b)) if b > a => Some((a, b)),
             _ => None,
         },
+        // Médias de scène : `v.loop` implicite du DOM.
+        boucle_infinie: true,
     }
 }
 
@@ -107,41 +145,64 @@ fn carrousel(
     })
 }
 
+/// Nom réservé de la source de fond capturé (`bgCaptureCible`) — jamais un
+/// id de widget (les ids sont des uuid).
+pub const FOND_CAPTURE: &str = "__fond";
+
 /// Construit les sources du moteur depuis la scène et la table des cibles.
 ///
 /// Priorité à `Widget.captureCible` (persisté dans la scène) ; `cibles` ne
 /// sert que de repli pour les scènes anciennes ou les widgets sans cible
 /// persistée. Un widget absent des deux est ignoré (pas de capture par
 /// défaut) — sauf la caméra non cachée, dont la cible est son device.
+///
+/// Le fond capturé (`Scene.bgCaptureCible`, mode Rust) produit une source
+/// **plein canvas** à `z = i32::MIN`, sous tout le reste — même rang que le
+/// fond média, que `medias_depuis_scene` cesse alors de peindre.
 pub fn sources_depuis_scene(
     scene: &Scene,
     cibles: &HashMap<String, CibleCapture>,
 ) -> Vec<SourceCfg> {
-    scene
-        .widgets
-        .iter()
-        .filter(|w| est_capture(w, cibles) && w.largeur > 0.0 && w.hauteur > 0.0)
-        .filter_map(|w| {
-            let cible = if w.widget_type == "camera" {
-                CibleCapture::Camera {
-                    device: w.cameraDeviceId.clone(),
-                }
-            } else {
-                w.captureCible
-                    .as_ref()
-                    .map(cible_de)
-                    .or_else(|| cibles.get(&w.id).cloned())?
-            };
-            Some(SourceCfg {
-                nom: w.id.clone(),
-                cible,
-                rect: (w.x, w.y, w.largeur, w.hauteur),
-                z: w.z,
-                cadre: cadre_de_widget(scene, w),
-                forme_camera: forme_camera(w),
-            })
-        })
-        .collect()
+    let mut sources = Vec::new();
+    if let Some(cible) = &scene.bgCaptureCible {
+        sources.push(SourceCfg {
+            nom: FOND_CAPTURE.to_string(),
+            cible: cible_de(cible),
+            rect: (0.0, 0.0, scene.canvasW as f64, scene.canvasH as f64),
+            z: i32::MIN,
+            cadre: None,
+            forme_camera: None,
+            anneau: None,
+        });
+    }
+    sources.extend(
+        scene
+            .widgets
+            .iter()
+            .filter(|w| est_capture(w, cibles) && w.largeur > 0.0 && w.hauteur > 0.0)
+            .filter_map(|w| {
+                let cible = if w.widget_type == "camera" {
+                    CibleCapture::Camera {
+                        device: w.cameraDeviceId.clone(),
+                    }
+                } else {
+                    w.captureCible
+                        .as_ref()
+                        .map(cible_de)
+                        .or_else(|| cibles.get(&w.id).cloned())?
+                };
+                Some(SourceCfg {
+                    nom: w.id.clone(),
+                    cible,
+                    rect: (w.x, w.y, w.largeur, w.hauteur),
+                    z: w.z,
+                    cadre: cadre_de_widget(scene, w),
+                    forme_camera: forme_camera(w),
+                    anneau: anneau_camera_de(scene, w),
+                })
+            }),
+    );
+    sources
 }
 
 /// Construit les médias statiques de la scène (fond + widgets média).
@@ -149,8 +210,9 @@ pub fn sources_depuis_scene(
 /// `base` = dossier des données de l'app (`%APPDATA%\com.streamos.v0\`) ;
 /// les chemins de la scène sont relatifs (`medias/<uuid>.<ext>`).
 /// Le fond (`bgSlides` prioritaire sur `bgMedia`) est composé sous tout le
-/// reste (`z = i32::MIN`). Une page transparente (`bgObsSource`) n'a pas de
-/// média. Les widgets de capture (cible persistée) et la caméra sont
+/// reste (`z = i32::MIN`). Une page transparente (`bgObsSource`) ou un fond
+/// capturé (`bgCaptureCible`) n'a pas de média. Les widgets de capture (cible
+/// persistée) et la caméra sont
 /// exclus (captures, pas des médias).
 ///
 /// Transforms 2D (miroir `applyMediaStyle` / `dessinerContenuFond`) : le fond
@@ -161,7 +223,7 @@ pub fn sources_depuis_scene(
 /// `fitRects`).
 pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
     let mut medias = Vec::new();
-    if scene.bgObsSource.is_none() {
+    if scene.bgObsSource.is_none() && scene.bgCaptureCible.is_none() {
         let fond_slides = scene
             .bgSlides
             .as_ref()
@@ -219,10 +281,18 @@ pub fn medias_depuis_scene(scene: &Scene, base: &Path) -> Vec<MediaCfg> {
         // Même exclusion que `boites_depuis_scene` : la table `cibles`
         // n'atteint pas cette fonction (signature fixée par `moteur.rs`,
         // hors périmètre N1) → seule la cible persistée exclut le média.
-        if w.captureCible.is_some() || w.widget_type == "camera" {
+        if w.cachee || w.captureCible.is_some() || w.widget_type == "camera" {
             continue;
         }
-        if let Some(rel) = &w.media {
+        // `mediaSlides` non vide est prioritaire sur `media` (contrat
+        // carrousel) : un widget qui n'a QUE des slides doit produire un
+        // média — sinon son carrousel n'existe pas côté moteur.
+        let slides = w.mediaSlides.as_deref().filter(|s| !s.is_empty());
+        let rel = slides
+            .and_then(|s| s.first())
+            .map(|s| s.rel.as_str())
+            .or(w.media.as_deref().filter(|m| !m.is_empty()));
+        if let Some(rel) = rel {
             medias.push(MediaCfg {
                 chemin: base.join(rel),
                 rect: (w.x, w.y, w.largeur, w.hauteur),
@@ -293,7 +363,7 @@ pub fn persps_depuis_scene(scene: &Scene) -> Vec<PerspCfg> {
         });
     }
     for w in &scene.widgets {
-        if w.rotateX != 0.0 || w.rotateY != 0.0 {
+        if !w.cachee && (w.rotateX != 0.0 || w.rotateY != 0.0) {
             groupes.push(PerspCfg {
                 rect: (w.x, w.y, w.largeur, w.hauteur),
                 z: w.z,
@@ -364,6 +434,7 @@ fn cadre_cfg(cadre: &CadreConfig, rect: (f64, f64, f64, f64), z: i32) -> Option<
         couleur_fin,
         gradient_angle: cadre.gradientAngle,
         z,
+        animer: cadre.animer,
     })
 }
 
@@ -378,8 +449,10 @@ fn cadre_msg_scale(stroke_width: f64) -> f64 {
 ///
 /// Miroir de `applyCadreWidget` + les exceptions du dépôt :
 /// - `sansCadre` (opt-out par instance — 8 widgets sur la scène de référence) ;
-/// - caméra : sa découpe est portée par `forme_camera` (contrat 9), jamais
-///   par le cadre de scène — et l'anneau `cameraBord` est hors lot ;
+/// - caméra **à forme dédiée** (`cameraForme` "cercle"/"carre") : sa découpe
+///   est portée par `forme_camera` (contrat 9), le cadre de scène ne
+///   s'applique PAS. Sans forme dédiée (absent ou nom inconnu), le cadre de
+///   scène s'applique comme à tout widget — parité `diffusion.html` ;
 /// - chat `bulles` : `diffusion.html` masque le cadre du widget et décore
 ///   chaque bulle (hors tranche) → aucun cadre de widget ;
 /// - goal : cadre à l'échelle « bulle » (`cadreGoal` = `cadreMsgScale` sur
@@ -387,7 +460,7 @@ fn cadre_msg_scale(stroke_width: f64) -> f64 {
 ///   trait (un seul `CadreCfg`, index `voie.geometries` commun).
 pub fn cadre_de_widget(scene: &Scene, w: &Widget) -> Option<CadreCfg> {
     let cadre = cadre_actif(scene)?;
-    if w.sansCadre || w.widget_type == "camera" {
+    if w.cachee || w.sansCadre || camera_forme_dediee(w) {
         return None;
     }
     if w.widget_type == "chat" && w.chatStyle.as_deref() == Some("bulles") {
@@ -448,7 +521,8 @@ fn style_boite(w: &Widget) -> StyleBoite {
 ///   voulue** : en natif l'exclusion porte sur la cible (`captureCible`),
 ///   pas le flag `trou` (D8) — un widget `trou: true` SANS cible reçoit sa
 ///   boîte et son voile comme tout widget ordinaire ;
-/// - `cameraCachee` → le widget n'existe pas du tout.
+/// - `cameraCachee`/`cachee` → le widget n'existe pas du tout (œil
+///   dashboard : caméra via `cameraCachee`, autres widgets via `cachee`).
 ///
 /// Le cadre éventuel est celui de [`cadre_de_widget`] : le chat `bulles` n'en
 /// a pas (il garde donc sa bordure), les autres widgets à cadre en ont un.
@@ -456,7 +530,7 @@ pub fn boites_depuis_scene(scene: &Scene) -> Vec<BoiteCfg> {
     scene
         .widgets
         .iter()
-        .filter(|w| !w.sansCadre && w.captureCible.is_none() && w.widget_type != "camera")
+        .filter(|w| !w.cachee && !w.sansCadre && w.captureCible.is_none() && w.widget_type != "camera")
         .filter(|w| w.largeur > 0.0 && w.hauteur > 0.0)
         .map(|w| BoiteCfg {
             rect: (w.x, w.y, w.largeur, w.hauteur),
@@ -476,7 +550,7 @@ pub fn input_depuis_scene(scene: &Scene) -> Vec<InputCfg> {
     scene
         .widgets
         .iter()
-        .filter(|w| w.widget_type == "input-viewer" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .filter(|w| !w.cachee && w.widget_type == "input-viewer" && w.largeur > 0.0 && w.hauteur > 0.0)
         .map(|w| InputCfg {
             rect: (w.x, w.y, w.largeur, w.hauteur),
             z: w.z,
@@ -511,7 +585,7 @@ pub fn goals_depuis_scene(scene: &Scene) -> Vec<GoalCfg> {
     scene
         .widgets
         .iter()
-        .filter(|w| w.widget_type == "goal" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .filter(|w| !w.cachee && w.widget_type == "goal" && w.largeur > 0.0 && w.hauteur > 0.0)
         .map(|w| GoalCfg {
             id: w.id.clone(),
             rect: (w.x, w.y, w.largeur, w.hauteur),
@@ -578,7 +652,7 @@ pub fn speedruns_depuis_scene(scene: &Scene) -> Vec<SpeedrunCfg> {
     scene
         .widgets
         .iter()
-        .filter(|w| w.widget_type == "speedrun" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .filter(|w| !w.cachee && w.widget_type == "speedrun" && w.largeur > 0.0 && w.hauteur > 0.0)
         .map(|w| {
             let taille = w.srTaillePolice.unwrap_or(16) as f32;
             SpeedrunCfg {
@@ -594,6 +668,12 @@ pub fn speedruns_depuis_scene(scene: &Scene) -> Vec<SpeedrunCfg> {
                 couleur_ahead: couleur_sr(w.srCouleurAhead.as_ref(), [0x22, 0xc5, 0x5e, 255]),
                 couleur_behind: couleur_sr(w.srCouleurBehind.as_ref(), [0xc0, 0x39, 0x2b, 255]),
                 couleur_actif: couleur_sr(w.srCouleurActif.as_ref(), accent.0),
+                voir_points: w.srVoirPoints != Some(false),
+                points_duree_pop: w.srPointsDureePop.unwrap_or(2).max(1) as u32,
+                // `srPointsSon` : fichier **local** (`medias/…`) — le son du
+                // pop est joué par le moteur à chaque validation (§68).
+                points_son: w.srPointsSon.clone().filter(|s| !s.is_empty()),
+                points_son_volume: w.srPointsSonVolume.unwrap_or(1.0).clamp(0.0, 1.0),
                 voir_titre: w.srVoirTitre != Some(false),
                 voir_cat: w.srVoirCategorie != Some(false),
                 voir_statut: w.srVoirStatut != Some(false),
@@ -661,7 +741,7 @@ pub fn musiques_depuis_scene(scene: &Scene) -> Vec<MusiqueCfg> {
     scene
         .widgets
         .iter()
-        .filter(|w| w.widget_type == "musique" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .filter(|w| !w.cachee && w.widget_type == "musique" && w.largeur > 0.0 && w.hauteur > 0.0)
         .map(|w| MusiqueCfg {
             id: w.id.clone(),
             rect: (w.x, w.y, w.largeur, w.hauteur),
@@ -708,6 +788,160 @@ pub fn horloges_depuis_scene(scene: &Scene) -> Vec<HorlogeCfg> {
     }]
 }
 
+/// Module objectifs de la scène (`scene.modules.objectifs` — singleton
+/// actif). Même gabarit que [`horloges_depuis_scene`] : `m.actif` gate,
+/// rect non nul, défauts DOM, z `Z_MODULES`, cadre opt-in
+/// ([`cadre_de_module`]). Les valeurs live ne sont PAS ici — elles
+/// arrivent par `EtatGoals` (frames `communaute`/`viewers`/`goal-twitch`),
+/// comme le widget goal. `--mod-fs` : `taille || min(h/(n*2.4+δ), w*0.075)`
+/// plancher 8 px — miroir `fsDefaut` de ModuleHud.svelte.
+pub fn objectifs_depuis_scene(scene: &Scene) -> Vec<ObjectifCfg> {
+    let Some(m) = scene
+        .modules
+        .as_ref()
+        .and_then(|modules| modules.objectifs.as_ref())
+        .filter(|m| m.actif && m.largeur > 0.0 && m.hauteur > 0.0)
+    else {
+        return Vec::new();
+    };
+    let n = m.lignes.as_ref().map(|l| l.len()).unwrap_or(0).max(1) as f64;
+    let a_titre = m.titre.as_deref().is_some_and(|t| !t.is_empty());
+    let defaut = (m.hauteur / (n * 2.4 + if a_titre { 1.6 } else { 0.8 }))
+        .min(m.largeur * 0.075);
+    let taille = m
+        .taille
+        .filter(|&t| t > 0)
+        .map(|t| t as f64)
+        .unwrap_or(defaut)
+        .round()
+        .max(8.0) as f32;
+    vec![ObjectifCfg {
+        rect: (m.x, m.y, m.largeur, m.hauteur),
+        z: Z_MODULES,
+        titre: m.titre.clone(),
+        lignes: m
+            .lignes
+            .clone()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|l| ObjectifLigneCfg {
+                plateforme: l.plateforme.unwrap_or_else(|| "twitch".to_string()),
+                metrique: l.metrique.unwrap_or_else(|| "followers".to_string()),
+                cible: l.cible.unwrap_or(0),
+                label: l.label,
+                goal_id: l.goalId,
+            })
+            .collect(),
+        police: m.police.clone(),
+        taille,
+        opacite: opacite_module(m),
+        accent: accent_module(scene),
+        cadre: cadre_de_module(scene, m),
+    }]
+}
+
+/// Module musique de la scène (`scene.modules.musique` — singleton
+/// actif). Même gabarit que [`objectifs_depuis_scene`] : `m.actif` gate,
+/// rect non nul, z `Z_MODULES`, cadre opt-in. Les valeurs live ne sont
+/// PAS ici — elles arrivent par `EtatMusique` (events `musique:update`).
+/// `--mod-fs` : `taille || hauteur × 0,24` plancher 8 px — miroir
+/// `appliquerStyleModule(entry, m, m.hauteur * 0.24)` de diffusion.html.
+pub fn musique_modules_depuis_scene(scene: &Scene) -> Vec<MusiqueModuleCfg> {
+    let Some(m) = scene
+        .modules
+        .as_ref()
+        .and_then(|modules| modules.musique.as_ref())
+        .filter(|m| m.actif && m.largeur > 0.0 && m.hauteur > 0.0)
+    else {
+        return Vec::new();
+    };
+    let taille = m
+        .taille
+        .filter(|&t| t > 0)
+        .map(|t| t as f64)
+        .unwrap_or(m.hauteur * 0.24)
+        .round()
+        .max(8.0) as f32;
+    vec![MusiqueModuleCfg {
+        rect: (m.x, m.y, m.largeur, m.hauteur),
+        z: Z_MODULES,
+        afficher_temps: m.afficherTemps.unwrap_or(true),
+        police: m.police.clone(),
+        taille,
+        opacite: opacite_module(m),
+        accent: accent_module(scene),
+        cadre: cadre_de_module(scene, m),
+    }]
+}
+
+/// Module équaliseur de la scène (`scene.modules.equaliseur`).
+///
+/// Même gate `m.actif` + rect non nul que les autres modules, MAIS pas de
+/// z `Z_MODULES` ni de cadre : la couche `#eq-root` est un canvas plein
+/// écran SOUS les widgets (`Z_EQ`), sans clip — les bulles débordent du
+/// rect comme dans le DOM. Couleurs : `eqCouleur` user (hex strict)
+/// sinon l'accent du cadre de scène ; `eqCouleurFin` posée par l'user,
+/// sinon la couleur de base à 23 % d'alpha (dégradé « fond vers le haut »).
+pub fn equaliseurs_depuis_scene(scene: &Scene) -> Vec<EqualiseurCfg> {
+    let Some(m) = scene
+        .modules
+        .as_ref()
+        .and_then(|modules| modules.equaliseur.as_ref())
+        .filter(|m| m.actif && m.largeur > 0.0 && m.hauteur > 0.0)
+    else {
+        return Vec::new();
+    };
+    let user_p = m
+        .eqCouleur
+        .as_deref()
+        .filter(|h| h.len() == 7 && h.starts_with('#'))
+        .and_then(couleur_hex);
+    let user_s = m
+        .eqCouleurFin
+        .as_deref()
+        .filter(|h| h.len() == 7 && h.starts_with('#'))
+        .and_then(couleur_hex);
+    let col_bas = user_p.unwrap_or_else(|| accent_module(scene));
+    let col_haut = match (user_p, user_s) {
+        (Some(_), Some(s)) => s,
+        _ => [col_bas[0], col_bas[1], col_bas[2], (col_bas[3] as f32 * 0.23) as u8],
+    };
+    vec![EqualiseurCfg {
+        rect: (m.x, m.y, m.largeur, m.hauteur),
+        z: Z_EQ,
+        bulles: m.eqBulles.unwrap_or(true),
+        col_bas,
+        col_haut,
+    }]
+}
+
+/// Module spots lumineux de la scène (`scene.modules.spots`).
+///
+/// Plein canvas : le rect du module n'est PAS utilisé par le DOM (le
+/// module n'a que `opacite`/`spotsVitesse`/`spotsReagir`). `Z_SPOTS` =
+/// couche la plus basse de `#stage` — sous les widgets et l'équaliseur.
+/// La réactivité lit le spectre `eq-spectrum` poussé dans `EtatEq`.
+pub fn spots_depuis_scene(scene: &Scene) -> Vec<SpotsCfg> {
+    let Some(m) = scene
+        .modules
+        .as_ref()
+        .and_then(|modules| modules.spots.as_ref())
+        .filter(|m| m.actif)
+    else {
+        return Vec::new();
+    };
+    vec![SpotsCfg {
+        z: Z_SPOTS,
+        canvas: (scene.canvasW as f32, scene.canvasH as f32),
+        intensite: m.opacite.map(|o| o.clamp(0.0, 1.0)).unwrap_or(0.8) as f32,
+        vitesse: m
+            .spotsVitesse
+            .map(|v| v.clamp(0.25, 3.0))
+            .unwrap_or(1.0) as f32,
+        reagir: m.spotsReagir.unwrap_or(true),
+    }]
+}
+
 /// Cadres de la scène : bord du canvas (si `bordActif`), un par widget,
 /// puis le cadre opt-in du module horloge (`m.cadre`, z `Z_MODULES`).
 ///
@@ -734,6 +968,18 @@ pub fn cadres_depuis_scene(scene: &Scene) -> Vec<CadreCfg> {
             .into_iter()
             .filter_map(|h| h.cadre),
     );
+    // Même motif que l'horloge : cadre opt-in du module objectifs.
+    cadres.extend(
+        objectifs_depuis_scene(scene)
+            .into_iter()
+            .filter_map(|o| o.cadre),
+    );
+    // Cadre opt-in du module musique.
+    cadres.extend(
+        musique_modules_depuis_scene(scene)
+            .into_iter()
+            .filter_map(|m| m.cadre),
+    );
     cadres
 }
 
@@ -742,10 +988,12 @@ pub fn cadres_depuis_scene(scene: &Scene) -> Vec<CadreCfg> {
 /// Aucun message ici : le buffer vit dans `FileChat`, alimenté par l'app
 /// pendant l'enregistrement (le rendu se met à jour sans reconfigurer).
 pub fn chat_depuis_scene(scene: &Scene) -> Vec<ChatCfg> {
+    // `gradientCadre(scene.cadreWidget)` : bordure/anneau des messages.
+    let couleurs = couleurs_chat(scene);
     scene
         .widgets
         .iter()
-        .filter(|w| w.widget_type == "chat" && w.largeur > 0.0 && w.hauteur > 0.0)
+        .filter(|w| !w.cachee && w.widget_type == "chat" && w.largeur > 0.0 && w.hauteur > 0.0)
         .map(|w| ChatCfg {
             rect: (w.x, w.y, w.largeur, w.hauteur),
             filtre: w
@@ -754,9 +1002,24 @@ pub fn chat_depuis_scene(scene: &Scene) -> Vec<ChatCfg> {
                 .unwrap_or_else(|| FILTRE_UNIFIE.to_string()),
             taille_police: w.taillePolice.unwrap_or(16) as f32,
             bulles: w.chatStyle.as_deref() == Some("bulles"),
+            couleurs,
             z: w.z,
         })
         .collect()
+}
+
+/// Couleurs du dégradé de bordure/anneau des messages — miroir de
+/// `gradientCadre` (diffusion.html) : cadre actif → `couleur`/`couleurFin`
+/// (défauts `#ffffff`), sinon `#e0e0e0 → #9a9a9a`.
+fn couleurs_chat(scene: &Scene) -> ([u8; 4], [u8; 4]) {
+    match scene.cadreWidget.as_ref().filter(|c| c.actif) {
+        Some(cadre) => {
+            let from = couleur_cadre(&cadre.couleur, [255, 255, 255, 255]);
+            let to = couleur_cadre(&cadre.couleurFin, from);
+            (from, to)
+        }
+        None => ([0xe0, 0xe0, 0xe0, 255], [0x9a, 0x9a, 0x9a, 255]),
+    }
 }
 
 /// Construit les titres de la scène : 4 positions du fond, puis les titres
@@ -820,6 +1083,9 @@ pub fn textes_depuis_scene(scene: &Scene) -> Vec<TexteCfg> {
     }
 
     for w in &scene.widgets {
+        if w.cachee {
+            continue;
+        }
         let couleurs = couleurs_titre(
             w.titreCouleur.as_deref(),
             w.titreCouleurFin.as_deref(),
@@ -911,6 +1177,94 @@ mod tests {
         let mut cibles = HashMap::new();
         cibles.insert("nul".to_string(), CibleCapture::Moniteur { index: 0 });
         assert!(sources_depuis_scene(&scene, &cibles).is_empty());
+    }
+
+    #[test]
+    fn fond_capture_produit_une_source_plein_canvas_prioritaire() {
+        let scene = scene(
+            r#"{
+                "canvasW": 1920, "canvasH": 1080,
+                "bgMedia": "medias/fond.png",
+                "bgCaptureCible": {"kind":"moniteur","name":"\\\\.\\DISPLAY1","index":1},
+                "widgets": [
+                    {"id":"a","type":"media","x":10,"y":20,"largeur":300,"hauteur":200,"z":0}
+                ]
+            }"#,
+        );
+        let sources = sources_depuis_scene(&scene, &HashMap::new());
+        assert_eq!(sources.len(), 1);
+        assert_eq!(sources[0].nom, FOND_CAPTURE);
+        assert_eq!(sources[0].rect, (0.0, 0.0, 1920.0, 1080.0));
+        assert_eq!(sources[0].z, i32::MIN);
+        assert_eq!(sources[0].cible, CibleCapture::Moniteur { index: 1 });
+        // Le fond média n'est plus peint : la capture le remplace.
+        assert!(medias_depuis_scene(&scene, std::path::Path::new(".")).is_empty());
+    }
+
+    #[test]
+    fn widget_avec_slides_sans_media_produit_un_carrousel() {
+        // `mediaSlides` non vide est prioritaire sur `media` (contrat
+        // carrousel) : un widget qui n'a QUE des slides doit produire un
+        // média, sinon son carrousel n'existe pas côté moteur.
+        let scene = scene(
+            r#"{"canvasW":1920,"canvasH":1080,"widgets":[
+                {"id":"a","type":"media","x":0,"y":0,"largeur":100,"hauteur":100,"z":0,
+                 "mediaSlides":[{"rel":"medias/1.jpg","nom":"1"},{"rel":"medias/2.jpg","nom":"2"}],
+                 "mediaSlidesSec":3}
+            ]}"#,
+        );
+        let medias = medias_depuis_scene(&scene, std::path::Path::new("."));
+        assert_eq!(medias.len(), 1);
+        let c = medias[0].carrousel.as_ref().expect("carrousel");
+        assert_eq!(c.slides.len(), 2);
+        assert_eq!(c.sec, 3.0);
+        assert!(medias[0].chemin.ends_with("medias/1.jpg"));
+    }
+
+    #[test]
+    fn camera_bord_produit_un_anneau_sur_forme_dediee() {
+        let avec_cadre = scene(
+            r##"{"cadreWidget":{"style":"mgstyle","strokeWidth":20,"couleur":"#123456",
+                                "couleurFin":"#abcdef","actif":true},
+                 "widgets":[
+                    {"id":"c","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":0,
+                     "cameraForme":"cercle","cameraBord":true},
+                    {"id":"sans","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":1,
+                     "cameraForme":"cercle"},
+                    {"id":"rect","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,"z":2,
+                     "cameraBord":true}
+                 ]}"##,
+        );
+        let sources = sources_depuis_scene(&avec_cadre, &HashMap::new());
+        let a = sources
+            .iter()
+            .find(|s| s.nom == "c")
+            .and_then(|s| s.anneau)
+            .expect("anneau");
+        assert_eq!(a.epaisseur, 20.0);
+        assert_eq!(a.couleur, [0x12, 0x34, 0x56, 255]);
+        assert_eq!(a.couleur_fin, [0xab, 0xcd, 0xef, 255]);
+        assert!(sources
+            .iter()
+            .find(|s| s.nom == "sans")
+            .is_some_and(|s| s.anneau.is_none()));
+        // Sans forme dédiée, le cadre de scène s'applique : pas d'anneau.
+        assert!(sources
+            .iter()
+            .find(|s| s.nom == "rect")
+            .is_some_and(|s| s.anneau.is_none()));
+
+        // Aucun cadre actif : fallback blanc→gris, épaisseur 4.
+        let sans_cadre = scene(
+            r#"{"widgets":[{"id":"c","type":"camera","x":0,"y":0,"largeur":100,"hauteur":100,
+                            "z":0,"cameraForme":"cercle","cameraBord":true}]}"#,
+        );
+        let a = sources_depuis_scene(&sans_cadre, &HashMap::new())[0]
+            .anneau
+            .expect("anneau");
+        assert_eq!(a.epaisseur, 4.0);
+        assert_eq!(a.couleur, [0xe0, 0xe0, 0xe0, 255]);
+        assert_eq!(a.couleur_fin, [0x9a, 0x9a, 0x9a, 255]);
     }
 
     #[test]
@@ -1137,15 +1491,53 @@ mod tests {
             }"##,
         );
         let cadres = cadres_depuis_scene(&scene);
-        assert_eq!(cadres.len(), 3, "bord + a + e");
+        assert_eq!(
+            cadres.len(),
+            4,
+            "bord + a + c (caméra sans forme dédiée) + e"
+        );
         assert_eq!(cadres[0].rect, (0.0, 0.0, 1360.0, 768.0));
         assert_eq!(cadres[0].z, i32::MAX, "le bord passe au-dessus de tout");
         assert_eq!(cadres[1].rect, (10.0, 20.0, 300.0, 200.0));
         assert_eq!(cadres[1].z, 2);
-        assert_eq!(cadres[2].z, 6);
+        assert_eq!(cadres[2].rect, (0.0, 0.0, 100.0, 100.0));
+        assert_eq!(cadres[2].z, 4, "caméra sans cameraForme : cadre de scène");
+        assert_eq!(cadres[3].z, 6);
         assert_eq!(cadres[1].style, StyleCadre::MgStyle);
         assert_eq!(cadres[1].couleur, [0, 0, 0, 255]);
         assert_eq!(cadres[1].couleur_fin, [0x8c, 0x00, 0xff, 255]);
+    }
+
+    #[test]
+    fn camera_sans_forme_dediee_suit_le_cadre_de_scene() {
+        // Parité `applyCadreWidget` : seule une forme dédiée (cercle/carre)
+        // remplace le cadre de scène pour la caméra.
+        let scene = scene(
+            r##"{
+                "canvasW": 1360, "canvasH": 768,
+                "cadreWidget": {"style":"mgstyle","strokeWidth":20,"couleur":"#000000",
+                                "couleurFin":"#8c00ff","gradientAngle":135,
+                                "actif":true,"bordActif":true},
+                "widgets": [
+                    {"id":"cam","type":"camera","x":10,"y":20,"largeur":300,"hauteur":200,"z":4},
+                    {"id":"cercle","type":"camera","x":400,"y":20,"largeur":100,"hauteur":100,"z":5,
+                     "cameraForme":"cercle"}
+                ]
+            }"##,
+        );
+        let sources = sources_depuis_scene(&scene, &HashMap::new());
+        let cam = sources.iter().find(|s| s.nom == "cam").expect("cam");
+        assert!(cam.cadre.is_some(), "sans forme dédiée : cadre de scène");
+        assert_eq!(cam.forme_camera, None);
+        let cercle = sources.iter().find(|s| s.nom == "cercle").expect("cercle");
+        assert!(
+            cercle.cadre.is_none(),
+            "forme dédiée : le cadre de scène ne s'applique pas"
+        );
+        assert_eq!(cercle.forme_camera, Some(FormeCamera::Cercle));
+        let cadres = cadres_depuis_scene(&scene);
+        assert!(cadres.iter().any(|c| c.rect == (10.0, 20.0, 300.0, 200.0)));
+        assert!(!cadres.iter().any(|c| c.rect == (400.0, 20.0, 100.0, 100.0)));
     }
 
     #[test]
@@ -1159,7 +1551,7 @@ mod tests {
         );
         assert!(cadres_depuis_scene(&epaisseur_nulle).is_empty());
         let non_porte = scene(
-            r##"{"cadreWidget":{"style":"cyberpunk","strokeWidth":20,"actif":true},
+            r##"{"cadreWidget":{"style":"inconnu","strokeWidth":20,"actif":true},
                  "widgets":[{"id":"a","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":0}]}"##,
         );
         assert!(cadres_depuis_scene(&non_porte).is_empty());
@@ -1303,6 +1695,7 @@ mod tests {
         assert_eq!(chats[0].filtre, "twitch");
         assert_eq!(chats[0].taille_police, 11.0);
         assert!(chats[0].bulles);
+        assert_eq!(chats[0].couleurs, ([0xe0, 0xe0, 0xe0, 255], [0x9a, 0x9a, 0x9a, 255]));
         assert_eq!(chats[0].z, 14);
     }
 
@@ -1415,6 +1808,67 @@ mod tests {
             }"#,
         );
         assert!(persps_depuis_scene(&scene).is_empty());
+    }
+
+    #[test]
+    fn persp_et_contenu_chat_input_partagent_la_cle() {
+        // H2 : le chat, l'input viewer et les trois autres contenus de widget
+        // (goal, speedrun, musique) dessinent **dans** l'offscreen du plan
+        // `perspective(d) rotateX/Y` de leur widget — la boucle de plan les y
+        // route par `groupe_de(rect, z)`. La clé doit donc être identique au
+        // bit près (comparaison `f64` exacte) entre `persps_depuis_scene` et
+        // les cfgs de contenu, qui la calculent depuis les mêmes champs.
+        let scene = scene(
+            r#"{
+                "canvasW": 1920, "canvasH": 1080,
+                "widgets": [
+                    {"id":"c","type":"chat","x":334.5,"y":180.25,"largeur":692.5,
+                     "hauteur":420.75,"z":3,"rotateX":15.0,"titreHaut":"EN DIRECT"},
+                    {"id":"i","type":"input-viewer","x":10.0,"y":20.0,"largeur":213.0,
+                     "hauteur":197.0,"z":4,"rotateY":-22.5},
+                    {"id":"g","type":"goal","x":1.5,"y":2.25,"largeur":300.5,
+                     "hauteur":90.75,"z":6,"rotateY":12.0},
+                    {"id":"s","type":"speedrun","x":7.5,"y":8.25,"largeur":400.5,
+                     "hauteur":220.75,"z":7,"rotateX":-8.0},
+                    {"id":"m","type":"musique","x":11.5,"y":12.25,"largeur":320.5,
+                     "hauteur":110.75,"z":8,"rotateY":5.0},
+                    {"id":"plat","type":"chat","x":0.0,"y":0.0,"largeur":100.0,
+                     "hauteur":100.0,"z":5}
+                ]
+            }"#,
+        );
+        let persps = persps_depuis_scene(&scene);
+        assert_eq!(persps.len(), 5, "un widget plat n'a pas de plan");
+        let chat = chat_depuis_scene(&scene);
+        let input = input_depuis_scene(&scene);
+        let goal = goals_depuis_scene(&scene);
+        let speedrun = speedruns_depuis_scene(&scene);
+        let musique = musiques_depuis_scene(&scene);
+        for (z, rect) in [
+            (chat[0].z, chat[0].rect),
+            (input[0].z, input[0].rect),
+            (goal[0].z, goal[0].rect),
+            (speedrun[0].z, speedrun[0].rect),
+            (musique[0].z, musique[0].rect),
+        ] {
+            assert!(
+                persps.iter().any(|p| p.z == z && p.rect == rect),
+                "le contenu tourné (z {z}) doit trouver son plan par (rect, z)"
+            );
+        }
+        // Le chat plat (z 5) reste hors plan : `groupe_de` rend `None`.
+        assert!(persps.iter().all(|p| p.z != 5));
+        // Titre de widget (H2c) : `.titre` vit dans `.widget`, donc tourné
+        // avec lui — `TexteCfg.cadre` porte le rect de l'hôte et `z` son z.
+        let titres = textes_depuis_scene(&scene);
+        assert_eq!(titres.len(), 1);
+        assert_eq!(titres[0].cible, CibleTitre::Widget);
+        assert!(
+            persps
+                .iter()
+                .any(|p| p.z == titres[0].z && p.rect == titres[0].cadre),
+            "le titre du widget tourné doit trouver son plan par (rect, z)"
+        );
     }
 
     #[test]

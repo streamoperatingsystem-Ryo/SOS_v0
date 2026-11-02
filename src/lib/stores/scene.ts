@@ -1024,6 +1024,7 @@ export async function commitScene(): Promise<void> {
           rot: 0,
           offsetX: 0,
           offsetY: 0,
+          visible: w.cameraCachee !== true,
         };
       }
       return {
@@ -1037,6 +1038,7 @@ export async function commitScene(): Promise<void> {
         rot: w.mediaRot ?? 0,
         offsetX: w.mediaOffsetX ?? 0,
         offsetY: w.mediaOffsetY ?? 0,
+        visible: w.cachee !== true,
       };
     });
   // Fond capture : source plein canvas (sync_trous travaille en alignment
@@ -1053,6 +1055,7 @@ export async function commitScene(): Promise<void> {
       rot: 0,
       offsetX: 0,
       offsetY: 0,
+      visible: true,
     });
   }
   if (items.length > 0) {
@@ -1612,6 +1615,23 @@ export async function setCameraCachee(id: string, cachee: boolean): Promise<void
   }
 }
 
+/// Masque/réaffiche un widget NON caméra en diffusion (bouton œil au
+/// survol — la caméra a `setCameraCachee`). Persisté dans le widget
+/// (`cachee`) : commit → snapshot WS → diffusion.html ignore le widget
+/// (zone repeinte par le fond) ; la source OBS liée (`obsSource`) est
+/// désactivée par le flag `visible` des items obsSyncTrous (même commit,
+/// jamais RemoveInput) et ré-assertée par scene_sync_captures au boot
+/// (auto-guérison, OBS offline compris).
+export async function setWidgetCachee(id: string, cachee: boolean): Promise<void> {
+  const w = get(sceneStore).widgets.find((x) => x.id === id);
+  if (!w || w.type === "camera") return; // caméra : setCameraCachee dédié.
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((x) => (x.id === id ? { ...x, cachee } : x)),
+  }));
+  await commitScene();
+}
+
 /// Pose la jacquette du jeu Twitch sur la scène courante. Ordre fixe :
 /// 1) twitch_live_poser_jacquette télécharge le JPEG dans
 ///    medias/jacquette-<gameId>.jpg (écrasé) — échec ⇒ scène intacte ;
@@ -1880,10 +1900,19 @@ export async function lierFondCapture(
   return name;
 }
 
+/// Natif (parité OBS) : lie une capture comme FOND de scène sans OBS —
+/// `bgCaptureCible`, prioritaire sur bgSlides/bgMedia côté moteur Rust.
+/// `bgObsSource` n'est pas touché : chaque mode lit le sien.
+export async function setFondCaptureCible(cible: CaptureCible): Promise<void> {
+  sceneStore.update((s) => ({ ...s, bgCaptureCible: cible }));
+  await commitScene();
+}
+
 /// Retire la capture du fond : supprime la source OBS liée (RemoveInput —
 /// pattern widget trou, pas de conflit d'accès exclusif pour fenêtre/jeu)
-/// puis clear bgObsSource + commit. Le fond média stocké (s'il existe)
-/// redevient actif.
+/// puis clear `bgObsSource` ET `bgCaptureCible` + commit (chaque mode lit le
+/// sien : retirer la capture les retire ensemble). Le fond média stocké
+/// (s'il existe) redevient actif.
 export async function retirerFondCapture(): Promise<void> {
   const src = get(sceneStore).bgObsSource;
   if (src) {
@@ -1895,7 +1924,7 @@ export async function retirerFondCapture(): Promise<void> {
       // OBS offline → on clear quand même côté scène (pattern setWidgetTrou).
     }
   }
-  sceneStore.update((s) => ({ ...s, bgObsSource: undefined }));
+  sceneStore.update((s) => ({ ...s, bgObsSource: undefined, bgCaptureCible: undefined }));
   await commitScene();
 }
 

@@ -12,7 +12,11 @@
 //!   dérivée du pseudo (`couleurDepuisNom`, `hsl(h, 70%, 65%)`).
 //!
 //! Aucune écriture disque, aucun accès réseau : les messages arrivent de
-//! l'app (abonnement `chat_tx`), jamais d'ici.
+//! l'app (abonnement `chat_tx`), jamais d'ici. Les **images** (avatars,
+//! emotes) sont des URLs distantes : le rendu ne lit qu'un fichier local du
+//! cache disque de l'app (`%APPDATA%\com.streamos.v0\medias\cache\`),
+//! dont le nom est dérivé de l'URL par [`empreinte_url`] — c'est l'app qui
+//! télécharge (`cache_images.rs`, lot G), le moteur ne connaît pas le réseau.
 
 use std::collections::VecDeque;
 
@@ -24,6 +28,18 @@ pub const MAX_CHAT: usize = 200;
 /// Filtre « toutes plateformes » (valeur par défaut de `chatFiltre`).
 pub const FILTRE_UNIFIE: &str = "unifie";
 
+/// Segment d'emote d'un message — offsets **UTF-16** (`debut` inclusif,
+/// `fin` EXCLUSIVE), exactement ceux que le DOM découpe (`String.slice`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Emote {
+    pub debut: usize,
+    pub fin: usize,
+    /// URL de l'image CDN — sert de clé du cache disque ([`empreinte_url`]).
+    pub url: String,
+    /// Texte remplacé (nom de l'emote — rendu si l'image manque).
+    pub nom: String,
+}
+
 /// Un message prêt à rendre.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MessageChat {
@@ -33,6 +49,13 @@ pub struct MessageChat {
     pub texte: String,
     /// Couleur IRCv3 du pseudo (`#rrggbb`), si la plateforme en fournit une.
     pub couleur: Option<[u8; 4]>,
+    /// Tag IRCv3 `badges` brut (`"moderator/1,subscriber/12"`) — rendu en
+    /// emoji, aucune image (miroir `parseBadges` de diffusion.html).
+    pub badges: Option<String>,
+    /// URL de l'avatar du viewer (vide = pas d'avatar, comme le DOM).
+    pub avatar: Option<String>,
+    /// Emotes du message, triées par position (le domaine les trie déjà).
+    pub emotes: Vec<Emote>,
 }
 
 impl MessageChat {
@@ -51,7 +74,23 @@ impl MessageChat {
             pseudo: pseudo.into(),
             texte: texte.into(),
             couleur: couleur.and_then(couleur_hex),
+            badges: None,
+            avatar: None,
+            emotes: Vec::new(),
         }
+    }
+
+    /// Avatars / badges / emotes — chaînables après [`Self::nouveau`].
+    pub fn avec_medias(
+        mut self,
+        badges: Option<String>,
+        avatar: Option<String>,
+        emotes: Vec<Emote>,
+    ) -> Self {
+        self.badges = badges.filter(|b| !b.trim().is_empty());
+        self.avatar = avatar.filter(|a| !a.trim().is_empty());
+        self.emotes = emotes;
+        self
     }
 
     /// Un message vide (pseudo **et** texte blancs) n'a rien à afficher.
@@ -135,6 +174,9 @@ pub struct ChatCfg {
     pub taille_police: f32,
     /// `chatStyle: "bulles"` — messages détachés, zébrés.
     pub bulles: bool,
+    /// Couleurs du dégradé de bordure/anneau (`gradientCadre` du DOM :
+    /// `cadreWidget` actif sinon `#e0e0e0 → #9a9a9a`).
+    pub couleurs: ([u8; 4], [u8; 4]),
     pub z: i32,
 }
 
@@ -147,9 +189,76 @@ impl ChatCfg {
             filtre: FILTRE_UNIFIE.to_string(),
             taille_police: 16.0,
             bulles: false,
+            couleurs: ([0xe0, 0xe0, 0xe0, 255], [0x9a, 0x9a, 0x9a, 255]),
             z,
         }
     }
+}
+
+/// Badge de chat rendu en emoji (`.badge` du DOM) — aucun fichier image.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Badge {
+    Mod,
+    Vip,
+    Sub,
+    Broadcaster,
+}
+
+impl Badge {
+    /// Emoji du badge — constantes de `BADGES_EMOJI` (diffusion.html).
+    pub fn emoji(self) -> &'static str {
+        match self {
+            Badge::Mod => "\u{1f5e1}\u{fe0f}",
+            Badge::Vip => "\u{1f48e}",
+            Badge::Sub => "\u{2b50}",
+            Badge::Broadcaster => "\u{1f451}",
+        }
+    }
+}
+
+/// Badges d'un tag IRCv3, dans l'ordre du DOM — miroir de `parseBadges`.
+///
+/// Les badges inconnus sont ignorés ; l'ordre du tag est conservé
+/// (`moderator` avant `vip` avant `subscriber` s'il est écrit ainsi).
+pub fn badges_emoji(brut: Option<&str>) -> Vec<Badge> {
+    let Some(brut) = brut else {
+        return Vec::new();
+    };
+    brut.split(',')
+        .filter_map(|partie| {
+            let nom = partie.split('/').next().unwrap_or("");
+            match nom {
+                "moderator" => Some(Badge::Mod),
+                "vip" => Some(Badge::Vip),
+                "subscriber" => Some(Badge::Sub),
+                "broadcaster" => Some(Badge::Broadcaster),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+/// FNV-1a 64 bits → 16 hex — nom du fichier de cache d'une image.
+///
+/// ⚠️ **Miroir exact** de `cache_images::empreinte` (app) : les deux
+/// implémentations doivent produire la même chaîne pour la même URL, sinon
+/// le moteur ne retrouve jamais le fichier téléchargé. Verrouillé par le
+/// même vecteur de test des deux côtés.
+pub fn empreinte_url(url: &str) -> String {
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for octet in url.as_bytes() {
+        hash ^= *octet as u64;
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{hash:016x}")
+}
+
+/// Chemin du fichier de cache d'une image (`base` = dossier de données).
+///
+/// Sans extension : WIC détecte le format au contenu (vérifié PNG / GIF /
+/// WebP) — l'app n'a donc pas à deviner l'extension du CDN.
+pub fn chemin_cache(base: &std::path::Path, url: &str) -> std::path::PathBuf {
+    base.join("medias").join("cache").join(empreinte_url(url))
 }
 
 /// Teinte déterministe d'un pseudo — miroir de `couleurDepuisNom`.
@@ -278,11 +387,71 @@ mod tests {
     }
 
     #[test]
+    fn badges_emoji_miroir_de_parse_badges() {
+        use Badge::*;
+        assert_eq!(
+            badges_emoji(Some("moderator/1,subscriber/12,vip/1")),
+            vec![Mod, Sub, Vip],
+            "ordre du tag conservé"
+        );
+        assert_eq!(badges_emoji(Some("broadcaster/1")), vec![Broadcaster]);
+        assert!(badges_emoji(Some("partner/1,premium/1")).is_empty());
+        assert!(badges_emoji(None).is_empty());
+        assert!(badges_emoji(Some("")).is_empty());
+        // Emojis exacts de `BADGES_EMOJI` (variation selector compris).
+        assert_eq!(Mod.emoji(), "\u{1f5e1}\u{fe0f}");
+        assert_eq!(Vip.emoji(), "\u{1f48e}");
+        assert_eq!(Sub.emoji(), "\u{2b50}");
+        assert_eq!(Broadcaster.emoji(), "\u{1f451}");
+    }
+
+    #[test]
+    fn empreinte_url_miroir_de_l_app_et_chemin_de_cache() {
+        // Même vecteur que `cache_images::tests::empreinte_miroir_du_crate_moteur`.
+        assert_eq!(
+            empreinte_url("https://cdn.7tv.app/emote/01FCY771D800007PQ2DF3GDTN6/2x.webp"),
+            "3d695665d84ffc9e"
+        );
+        assert_eq!(
+            empreinte_url("https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0"),
+            "0d8894bf3abf0e01"
+        );
+        assert_eq!(empreinte_url(""), "cbf29ce484222325");
+        let base = std::path::Path::new("C:/data");
+        assert_eq!(
+            chemin_cache(base, "https://cdn.7tv.app/emote/x/2x.webp"),
+            base.join("medias")
+                .join("cache")
+                .join(empreinte_url("https://cdn.7tv.app/emote/x/2x.webp"))
+        );
+    }
+
+    #[test]
+    fn medias_chainables_et_vides_ignores() {
+        let m = MessageChat::nouveau("twitch", "Ryo", "hi", None)
+            .avec_medias(
+                Some("  ".to_string()),
+                Some("https://static-cdn.jtvnw.net/a.png".to_string()),
+                vec![Emote {
+                    debut: 0,
+                    fin: 2,
+                    url: "https://cdn.7tv.app/e/2x.webp".to_string(),
+                    nom: "hi".to_string(),
+                }],
+            );
+        assert!(m.badges.is_none(), "badges blancs ignorés");
+        assert!(m.avatar.is_some());
+        assert_eq!(m.emotes.len(), 1);
+        assert_eq!(m.emotes[0].fin, 2);
+    }
+
+    #[test]
     fn chat_cfg_par_defaut() {
         let c = ChatCfg::depuis_widget((0.0, 0.0, 400.0, 200.0), 3);
         assert_eq!(c.filtre, "unifie");
         assert_eq!(c.taille_police, 16.0);
         assert!(!c.bulles);
+        assert_eq!(c.couleurs, ([0xe0, 0xe0, 0xe0, 255], [0x9a, 0x9a, 0x9a, 255]));
         assert_eq!(c.z, 3);
     }
 }

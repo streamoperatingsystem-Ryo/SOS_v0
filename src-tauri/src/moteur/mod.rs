@@ -15,12 +15,14 @@ use serde::Serialize;
 use sos_moteur_api::{
     ApercuCfg, AudioCfg, Capacites, Codec, Conteneur, Moteur, MoteurEtat, SinkCfg, SortieCfg,
 };
-use sos_moteur_natif::chat::MessageChat;
+use sos_moteur_natif::chat::{Emote, MessageChat};
 use sos_moteur_natif::input::{EtatInput, EtatManette, EtatSouris};
 use sos_moteur_natif::moteur::MoteurNatif;
 use sos_moteur_natif::texte::{
-    Communaute, GoalTwitch, MajAlerte, MajGoal, MajMusique, MajSpeedrun, PhaseSpeedrun, Piste,
-    SegmentLss,
+    url_box_art, AttenteCfg, ClipPresentation, CmdsFight, Communaute, CoupFight, FightState,
+    GoalTwitch, InfoFight, JeuRecent, JoueurFight, MajAlerte, MajBandeau, MajGoal, MajMusique,
+    MajPad, MajPresentation, MajSpeedrun, MajSplitPop, MajWelcome, ModePresentation, PadPlay, PhaseFight,
+    PhaseSpeedrun, Piste, PistePresentation, PositionBandeau, PresentationDonnees, SegmentLss,
 };
 use tauri::{AppHandle, Listener, Manager, State};
 
@@ -831,7 +833,20 @@ pub fn moteur_obs_connexion(
     registre.obs().configurer_connexion(host, port, password);
 }
 
+/// Segment d'emote tel que sérialisé par `twitch_emotes::EmoteSeg`.
+#[derive(serde::Deserialize)]
+struct EmoteBrut {
+    /// Offsets UTF-16 (`fin` EXCLUSIVE) — unités de `String.slice`.
+    debut: usize,
+    fin: usize,
+    url: String,
+    nom: String,
+}
+
 /// Message chat tel qu'il circule dans `chat_tx` (`ChatMessage` sérialisé).
+///
+/// `badges`/`avatar`/`emotes` sont **facultatifs** (YouTube/TikTok n'ont
+/// pas d'emotes, Kick n'a pas d'avatar) — le crate les rend s'ils sont là.
 #[derive(serde::Deserialize)]
 struct MessageChatBrut {
     plateforme: String,
@@ -839,6 +854,12 @@ struct MessageChatBrut {
     texte: String,
     #[serde(default)]
     color: Option<String>,
+    #[serde(default)]
+    badges: Option<String>,
+    #[serde(default)]
+    avatar: Option<String>,
+    #[serde(default)]
+    emotes: Option<Vec<EmoteBrut>>,
 }
 
 /// Frame `chat_tx` : `{ "type": "chat", "message": { … } }`.
@@ -870,12 +891,26 @@ fn decoder_frame_chat(frame: &str) -> Option<MessageChat> {
         return None;
     }
     let message = frame.message?;
-    Some(MessageChat::nouveau(
-        message.plateforme,
-        message.pseudo,
-        message.texte,
-        message.color.as_deref(),
-    ))
+    let emotes = message
+        .emotes
+        .unwrap_or_default()
+        .into_iter()
+        .map(|e| Emote {
+            debut: e.debut,
+            fin: e.fin,
+            url: e.url,
+            nom: e.nom,
+        })
+        .collect();
+    Some(
+        MessageChat::nouveau(
+            message.plateforme,
+            message.pseudo,
+            message.texte,
+            message.color.as_deref(),
+        )
+        .avec_medias(message.badges, message.avatar, emotes),
+    )
 }
 
 /// Extrait l'état d'une frame `input-viewer-etat` (30 Hz).
@@ -1373,6 +1408,685 @@ fn decoder_frame_alerte(frame: &str) -> Option<MajAlerte> {
     }
 }
 
+/// Extrait une mutation de l'overlay clip de bienvenue d'une frame
+/// `chat_tx` — `welcome-clip-play` / `welcome-clip-stop` /
+/// `welcome-clip-config` (squelette + mode dans `config`) /
+/// `position-overlay-config` (squelette seul, partagé avec les alertes —
+/// comme `applyWelcomeOverlayConfig` du DOM).
+///
+/// Même motif que [`decoder_frame_alerte`] : test par sous-chaîne, puis
+/// validation du champ `type` après désérialisation. Les médias du clip
+/// (`clip.mp4_url`, `viewer.avatar`, `viewer.banniere`, `favoris`) sont des
+/// **URLs distantes** : le moteur ne charge que des fichiers locaux → non
+/// transmis (limite assumée, `texte/welcome.rs`). Le crate moteur n'a pas
+/// serde : la désérialisation vit ici.
+fn decoder_frame_welcome(frame: &str) -> Option<MajWelcome> {
+    let interesse = frame.contains("\"type\":\"welcome-clip-play\"")
+        || frame.contains("\"type\":\"welcome-clip-stop\"")
+        || frame.contains("\"type\":\"welcome-clip-config\"")
+        || frame.contains("\"type\":\"position-overlay-config\"");
+    if !interesse {
+        return None;
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ViewerBrut {
+        #[serde(default)]
+        login: Option<String>,
+        #[serde(default)]
+        display_name: Option<String>,
+        #[serde(default)]
+        bio: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct SqueletteBrut {
+        x: f64,
+        y: f64,
+        largeur: f64,
+        hauteur: f64,
+        /// `welcome-clip-config` le porte ; `position-overlay-config` non
+        /// (le mode est alors conservé, comme `applyWelcomeOverlayConfig`).
+        #[serde(default)]
+        utiliser_squelette: Option<bool>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameWelcome {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        viewer: Option<ViewerBrut>,
+        #[serde(default)]
+        message: Option<String>,
+        #[serde(default)]
+        utiliser_squelette: Option<bool>,
+        #[serde(default)]
+        config: Option<SqueletteBrut>,
+    }
+    let frame: FrameWelcome = serde_json::from_str(frame).ok()?;
+    match frame.type_frame.as_str() {
+        "welcome-clip-play" => {
+            let viewer = frame.viewer.unwrap_or_default();
+            let nom = viewer
+                .display_name
+                .filter(|n| !n.trim().is_empty())
+                .or(viewer.login)
+                .unwrap_or_default();
+            Some(MajWelcome::Play {
+                display_name: nom,
+                bio: viewer.bio.filter(|b| !b.trim().is_empty()),
+                message: frame.message.unwrap_or_default(),
+                // Absent = squelette (défaut du domaine : `utiliser_squelette`
+                // vaut `true` dans `ConfigGlobale::default`).
+                spotlight: !frame.utiliser_squelette.unwrap_or(true),
+            })
+        }
+        "welcome-clip-stop" => Some(MajWelcome::Stop),
+        "welcome-clip-config" | "position-overlay-config" => {
+            let c = frame.config?;
+            Some(MajWelcome::Config {
+                x: c.x,
+                y: c.y,
+                largeur: c.largeur,
+                hauteur: c.hauteur,
+                spotlight: c.utiliser_squelette.map(|s| !s),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Extrait une mutation du bandeau premier message d'une frame `chat_tx` —
+/// `bandeau-premier-message-play` / `-stop` / `-config`.
+///
+/// Même motif que [`decoder_frame_alerte`] : test par sous-chaîne, puis
+/// validation du champ `type`. ⚠️ `bandeau:etat` (event Tauri) est l'état
+/// **dashboard** — ce n'est pas le canal du rendu (leçon du lot E1).
+/// L'avatar est une URL : l'app précharge son fichier de cache, le moteur ne
+/// lit que le disque.
+fn decoder_frame_bandeau(frame: &str) -> Option<MajBandeau> {
+    let interesse = frame.contains("\"type\":\"bandeau-premier-message-play\"")
+        || frame.contains("\"type\":\"bandeau-premier-message-stop\"")
+        || frame.contains("\"type\":\"bandeau-premier-message-config\"");
+    if !interesse {
+        return None;
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ViewerBrut {
+        #[serde(default)]
+        display_name: Option<String>,
+        #[serde(default)]
+        avatar: Option<String>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ConfigBrut {
+        #[serde(default)]
+        position: Option<String>,
+        #[serde(default)]
+        police: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameBandeau {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        viewer: Option<ViewerBrut>,
+        #[serde(default)]
+        message: Option<String>,
+        #[serde(default)]
+        config: Option<ConfigBrut>,
+    }
+    let frame: FrameBandeau = serde_json::from_str(frame).ok()?;
+    match frame.type_frame.as_str() {
+        "bandeau-premier-message-play" => {
+            let viewer = frame.viewer.unwrap_or_default();
+            Some(MajBandeau::Play {
+                display_name: viewer.display_name.unwrap_or_default(),
+                avatar: viewer.avatar.filter(|a| !a.trim().is_empty()),
+                message: frame.message.unwrap_or_default(),
+            })
+        }
+        "bandeau-premier-message-stop" => Some(MajBandeau::Stop),
+        "bandeau-premier-message-config" => {
+            let c = frame.config.unwrap_or_default();
+            Some(MajBandeau::Config {
+                position: match c.position.as_deref() {
+                    Some("haut") => Some(PositionBandeau::Haut),
+                    Some("bas") => Some(PositionBandeau::Bas),
+                    _ => None,
+                },
+                police: c.police,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Extrait un snapshot complet de l'arène `!fight` d'une frame `chat_tx` —
+/// **`fight-state`** (payload `combat`), émise à chaque transition et au
+/// resync (`fight-resync`).
+///
+/// ⚠️ L'event Tauri `fight:update` est l'état **dashboard** (modale + pillule)
+/// — ce n'est pas le canal du rendu (même leçon que E1→E4). Les échéances
+/// (`reste_*`) sont relatives à l'émission : `EtatFight` les décompte en
+/// local, comme le tick 250 ms du DOM.
+fn decoder_frame_fight(frame: &str) -> Option<FightState> {
+    if !frame.contains("\"type\":\"fight-state\"") {
+        return None;
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct JoueurBrut {
+        pseudo: Option<String>,
+        plateforme: Option<String>,
+        emoji: Option<String>,
+        pv: Option<u32>,
+        pv_max: Option<u32>,
+        special_utilise: Option<bool>,
+    }
+    impl JoueurBrut {
+        fn vers(&self) -> JoueurFight {
+            let d = JoueurFight::default();
+            JoueurFight {
+                pseudo: self.pseudo.clone().unwrap_or(d.pseudo),
+                plateforme: self.plateforme.clone().unwrap_or(d.plateforme),
+                emoji: self.emoji.clone().unwrap_or(d.emoji),
+                pv: self.pv.unwrap_or(d.pv),
+                pv_max: self.pv_max.unwrap_or(d.pv_max),
+                special_utilise: self.special_utilise.unwrap_or(d.special_utilise),
+            }
+        }
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct CoupBrut {
+        seq: Option<u64>,
+        acteur: Option<String>,
+        coup: Option<String>,
+        degats: Option<u32>,
+        soin: Option<u32>,
+        touche: Option<bool>,
+        critique: Option<bool>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct InfoBrut {
+        seq: Option<u64>,
+        kind: Option<String>,
+        texte: Option<String>,
+        duree_ms: Option<u64>,
+        age_ms: Option<u64>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct CmdsBrut {
+        a: Option<String>,
+        b: Option<String>,
+        c: Option<String>,
+        accept: Option<String>,
+        refuse: Option<String>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct CombatBrut {
+        phase: Option<String>,
+        ja: Option<JoueurBrut>,
+        jb: Option<JoueurBrut>,
+        defiant: Option<JoueurBrut>,
+        cible: Option<String>,
+        tour: Option<String>,
+        reste_tour_ms: Option<u64>,
+        duree_tour_ms: Option<u64>,
+        reste_match_s: Option<u64>,
+        reste_lobby_ms: Option<u64>,
+        duree_tour_s: Option<u64>,
+        duree_match_s: Option<u64>,
+        gagnant: Option<String>,
+        raison: Option<String>,
+        derniere: Option<CoupBrut>,
+        info: Option<InfoBrut>,
+        anims_reduites: Option<bool>,
+        cmds: Option<CmdsBrut>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameFight {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        combat: Option<CombatBrut>,
+    }
+    let frame: FrameFight = serde_json::from_str(frame).ok()?;
+    if frame.type_frame != "fight-state" {
+        return None;
+    }
+    let c = frame.combat.unwrap_or_default();
+    let cmds = c.cmds.unwrap_or_default();
+    let cmds = CmdsFight {
+        a: cmds.a.unwrap_or_default(),
+        b: cmds.b.unwrap_or_default(),
+        c: cmds.c.unwrap_or_default(),
+        accept: cmds.accept.unwrap_or_default(),
+        refuse: cmds.refuse.unwrap_or_default(),
+    };
+    let derniere = c.derniere.map(|d| CoupFight {
+        seq: d.seq.unwrap_or(0),
+        acteur: match d.acteur.as_deref() {
+            Some("b") => 'b',
+            _ => 'a',
+        },
+        coup: d.coup.unwrap_or_default(),
+        degats: d.degats.unwrap_or(0),
+        soin: d.soin.unwrap_or(0),
+        touche: d.touche.unwrap_or(false),
+        critique: d.critique.unwrap_or(false),
+    });
+    let phase = match c.phase.as_deref().unwrap_or("idle") {
+        "lobby" => PhaseFight::Lobby {
+            defiant: c.defiant.as_ref().map(|j| j.vers()).unwrap_or_default(),
+            cible: c.cible.filter(|v| !v.trim().is_empty()),
+            reste_lobby_ms: c.reste_lobby_ms.unwrap_or(0),
+            duree_tour_s: c.duree_tour_s.unwrap_or(15),
+            duree_match_s: c.duree_match_s.unwrap_or(180),
+            cmds,
+        },
+        "combat" => PhaseFight::Combat {
+            ja: c.ja.as_ref().map(|j| j.vers()).unwrap_or_default(),
+            jb: c.jb.as_ref().map(|j| j.vers()).unwrap_or_default(),
+            tour: match c.tour.as_deref() {
+                Some("b") => 'b',
+                _ => 'a',
+            },
+            reste_tour_ms: c.reste_tour_ms.unwrap_or(0),
+            duree_tour_ms: c.duree_tour_ms.unwrap_or(15_000),
+            reste_match_s: c.reste_match_s.unwrap_or(0),
+            derniere,
+            cmds,
+        },
+        "fin" => PhaseFight::Fin {
+            ja: c.ja.as_ref().map(|j| j.vers()).unwrap_or_default(),
+            jb: c.jb.as_ref().map(|j| j.vers()).unwrap_or_default(),
+            gagnant: match c.gagnant.as_deref() {
+                Some("a") => Some('a'),
+                Some("b") => Some('b'),
+                _ => None,
+            },
+            raison: c.raison.unwrap_or_else(|| "ko".to_string()),
+        },
+        _ => PhaseFight::Idle,
+    };
+    let info = c.info.map(|i| InfoFight {
+        seq: i.seq.unwrap_or(0),
+        kind: i.kind.unwrap_or_else(|| "info".to_string()),
+        texte: i.texte.unwrap_or_default(),
+        duree_ms: i.duree_ms.unwrap_or(2600),
+        age_ms: i.age_ms.unwrap_or(0),
+    });
+    Some(FightState {
+        phase,
+        info,
+        anims_reduites: c.anims_reduites.unwrap_or(false),
+    })
+}
+
+/// Extrait le **squelette dédié du pop de validation des splits** d'une frame
+/// `chat_tx` `splitpop-pos` — miroir de `applySplitPopOverlayConfig`
+/// (`diffusion.html`), indépendant du squelette partagé
+/// `position-overlay-config` (le pop arrive à chaque split et pouvait
+/// chevaucher les alertes).
+fn decoder_frame_splitpop(frame: &str) -> Option<MajSplitPop> {
+    if !frame.contains("\"type\":\"splitpop-pos\"") {
+        return None;
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ConfigBrut {
+        x: Option<f64>,
+        y: Option<f64>,
+        largeur: Option<f64>,
+        hauteur: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameSplitPop {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        config: Option<ConfigBrut>,
+    }
+    let frame: FrameSplitPop = serde_json::from_str(frame).ok()?;
+    if frame.type_frame != "splitpop-pos" {
+        return None;
+    }
+    let c = frame.config.unwrap_or_default();
+    let (x, y, largeur, hauteur) = sos_moteur_natif::texte::splitpop::POSITION_DEFAUT;
+    Some(MajSplitPop::Config {
+        x: c.x.unwrap_or(x),
+        y: c.y.unwrap_or(y),
+        largeur: c.largeur.unwrap_or(largeur),
+        hauteur: c.hauteur.unwrap_or(hauteur),
+    })
+}
+
+
+/// Extrait une mutation de la **présentation streamer** d'une frame `chat_tx`
+/// — `presentation-show` (payload `mode` + `donnees`), `presentation-hide` et
+/// `presentation-mode` (bascule à chaud theatrical/card).
+///
+/// ⚠️ L'event Tauri `presentation:etat` est l'état **dashboard** (favoris +
+/// contrôles live) — jamais le canal du rendu (même leçon que E1→E5). Les
+/// champs absents retombent sur les défauts du domaine : une frame partielle
+/// doit peindre le même overlay que le DOM.
+fn decoder_frame_presentation(frame: &str) -> Option<MajPresentation> {
+    let interesse = frame.contains("\"type\":\"presentation-show\"")
+        || frame.contains("\"type\":\"presentation-hide\"")
+        || frame.contains("\"type\":\"presentation-mode\"")
+        || frame.contains("\"type\":\"presentation-clip-play\"")
+        || frame.contains("\"type\":\"presentation-clip-stop\"")
+        || frame.contains("\"type\":\"presentation-audio-play\"")
+        || frame.contains("\"type\":\"presentation-audio-stop\"");
+    if !interesse {
+        return None;
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct JeuBrut {
+        id: Option<String>,
+        name: Option<String>,
+        box_art_url: Option<String>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ClipBrut {
+        id: Option<String>,
+        title: Option<String>,
+        thumbnail_url: Option<String>,
+        duration: Option<f64>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct DonneesBrut {
+        user_id: Option<String>,
+        login: Option<String>,
+        display_name: Option<String>,
+        avatar: Option<String>,
+        bio: Option<String>,
+        banniere: Option<String>,
+        broadcaster_type: Option<String>,
+        en_live: Option<bool>,
+        viewers_live: Option<u32>,
+        titre_live: Option<String>,
+        jeu_courant: Option<String>,
+        tags: Option<Vec<String>>,
+        jeux_recents: Option<Vec<JeuBrut>>,
+        clips: Option<Vec<ClipBrut>>,
+        mode: Option<String>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FramePresentation {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        mode: Option<String>,
+        #[serde(default)]
+        donnees: Option<DonneesBrut>,
+        #[serde(default)]
+        mp4_url: Option<String>,
+        #[serde(default)]
+        titre: Option<String>,
+        #[serde(default)]
+        duree_ms: Option<u64>,
+        #[serde(default)]
+        piste: Option<String>,
+        #[serde(default)]
+        src: Option<String>,
+    }
+    let frame: FramePresentation = serde_json::from_str(frame).ok()?;
+    match frame.type_frame.as_str() {
+        "presentation-show" => {
+            let d = frame.donnees.unwrap_or_default();
+            // `msg.mode` du DOM ; repli sur `donnees.mode` (même valeur, mais
+            // une frame tronquée ne doit pas changer de mode).
+            let mode = frame
+                .mode
+                .or(d.mode.clone())
+                .unwrap_or_else(|| ModePresentation::Theatrical.nom().to_string());
+            Some(MajPresentation::Show {
+                mode: ModePresentation::depuis_nom(&mode),
+                donnees: Box::new(PresentationDonnees {
+                    user_id: d.user_id.unwrap_or_default(),
+                    login: d.login.unwrap_or_default(),
+                    display_name: d.display_name.unwrap_or_default(),
+                    avatar: d.avatar.unwrap_or_default(),
+                    bio: d.bio.unwrap_or_default(),
+                    banniere: d.banniere.unwrap_or_default(),
+                    broadcaster_type: d.broadcaster_type.unwrap_or_default(),
+                    en_live: d.en_live.unwrap_or(false),
+                    viewers_live: d.viewers_live,
+                    titre_live: d.titre_live.unwrap_or_default(),
+                    jeu_courant: d.jeu_courant.unwrap_or_default(),
+                    tags: d.tags.unwrap_or_default(),
+                    jeux_recents: d
+                        .jeux_recents
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|j| JeuRecent {
+                            id: j.id.unwrap_or_default(),
+                            name: j.name.unwrap_or_default(),
+                            box_art_url: j.box_art_url.unwrap_or_default(),
+                        })
+                        .collect(),
+                    clips: d
+                        .clips
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|c| ClipPresentation {
+                            id: c.id.unwrap_or_default(),
+                            title: c.title.unwrap_or_default(),
+                            thumbnail_url: c.thumbnail_url.unwrap_or_default(),
+                            duration: c.duration.unwrap_or(0.0),
+                        })
+                        .collect(),
+                    mode,
+                }),
+            })
+        }
+        "presentation-hide" => Some(MajPresentation::Hide),
+        "presentation-mode" => Some(MajPresentation::Mode(ModePresentation::depuis_nom(
+            frame.mode.as_deref()?,
+        ))),
+        // `mp4_url` = URL **signée** distante : elle sert de clé au fichier
+        // préchargé par l'app (`medias/clips/<fnv16(url)>.mp4`), le crate ne
+        // fait aucun réseau. Vide = frame ignorée (rien à jouer).
+        "presentation-clip-play" => {
+            let mp4_url = frame.mp4_url.filter(|u| !u.trim().is_empty())?;
+            Some(MajPresentation::ClipPlay {
+                mp4_url,
+                titre: frame.titre.unwrap_or_default(),
+                duree_ms: frame.duree_ms.unwrap_or(0),
+            })
+        }
+        "presentation-clip-stop" => Some(MajPresentation::ClipStop),
+        // `src` = `medias/…` : fichier **local**, aucune sortie réseau.
+        // Piste inconnue ou `src` vide → frame ignorée (jamais de piste
+        // inventée).
+        "presentation-audio-play" => {
+            let piste = PistePresentation::depuis_nom(frame.piste.as_deref()?)?;
+            let src = frame.src.filter(|s| !s.trim().is_empty())?;
+            Some(MajPresentation::AudioPlay { piste, src })
+        }
+        "presentation-audio-stop" => {
+            let piste = frame.piste.as_deref()?;
+            if piste == "toutes" {
+                Some(MajPresentation::AudioStop(None))
+            } else {
+                Some(MajPresentation::AudioStop(Some(
+                    PistePresentation::depuis_nom(piste)?,
+                )))
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Extrait une mutation du **pad numérique** d'une frame `chat_tx` —
+/// `pad-play` (payload `pad`), `pad-stop`, et `position-overlay-config`
+/// (squelette **partagé** welcome + alertes + commandes + pad).
+///
+/// Même motif que [`decoder_frame_alerte`] : test par sous-chaîne, puis
+/// validation du champ `type`. ⚠️ Les events Tauri `pad:touche` /
+/// `pad:touche-stop` sont l'état **dashboard** (audio local + retour UI) —
+/// ce n'est pas le canal du rendu. Les chemins sont relatifs à la base
+/// (`medias/…`) : le moteur ne lit que des fichiers locaux.
+fn decoder_frame_pad(frame: &str) -> Option<MajPad> {
+    let interesse = frame.contains("\"type\":\"pad-play\"")
+        || frame.contains("\"type\":\"pad-stop\"")
+        || frame.contains("\"type\":\"position-overlay-config\"");
+    if !interesse {
+        return None;
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct PadBrut {
+        media_type: Option<String>,
+        media: Option<String>,
+        media_kind: Option<String>,
+        son: Option<String>,
+        volume: Option<f64>,
+        duree_ms: Option<u64>,
+        bounce: Option<bool>,
+        zoom: Option<bool>,
+        plein_ecran: Option<bool>,
+        transparence: Option<bool>,
+        transparence_opacite: Option<f64>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct ConfigBrut {
+        x: Option<f64>,
+        y: Option<f64>,
+        largeur: Option<f64>,
+        hauteur: Option<f64>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FramePad {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        pad: Option<PadBrut>,
+        #[serde(default)]
+        config: Option<ConfigBrut>,
+    }
+    let frame: FramePad = serde_json::from_str(frame).ok()?;
+    match frame.type_frame.as_str() {
+        "pad-play" => {
+            let p = frame.pad.unwrap_or_default();
+            let defaut = PadPlay::default();
+            Some(MajPad::Play(PadPlay {
+                media_type: p.media_type.unwrap_or(defaut.media_type),
+                media: p.media.filter(|m| !m.trim().is_empty()),
+                media_kind: p.media_kind,
+                son: p.son.filter(|s| !s.trim().is_empty()),
+                volume: p.volume.map(|v| v as f32).unwrap_or(defaut.volume),
+                duree_ms: p.duree_ms.unwrap_or(defaut.duree_ms),
+                bounce: p.bounce.unwrap_or(defaut.bounce),
+                zoom: p.zoom.unwrap_or(defaut.zoom),
+                plein_ecran: p.plein_ecran.unwrap_or(defaut.plein_ecran),
+                transparence: p.transparence.unwrap_or(defaut.transparence),
+                transparence_opacite: p
+                    .transparence_opacite
+                    .map(|v| v as f32)
+                    .unwrap_or(defaut.transparence_opacite),
+            }))
+        }
+        "pad-stop" => Some(MajPad::Stop),
+        "position-overlay-config" => {
+            let c = frame.config.unwrap_or_default();
+            let (x, y, largeur, hauteur) = sos_moteur_natif::texte::POSITION_PAD_DEFAUT;
+            Some(MajPad::Config {
+                x: c.x.unwrap_or(x),
+                y: c.y.unwrap_or(y),
+                largeur: c.largeur.unwrap_or(largeur),
+                hauteur: c.hauteur.unwrap_or(hauteur),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Extrait l'état complet de l'écran d'attente d'une frame `chat_tx` —
+/// `ecran-attente-etat` (payload `etat`, ré-émis à chaque tick 1 Hz du chrono
+/// Rust : la frame est auto-réparatrice, le moteur remplace son état).
+///
+/// ⚠️ `ecran-attente:etat` (event Tauri) est l'état **dashboard** (modale +
+/// pillule) — ce n'est pas le canal du rendu (même leçon que les lots E1/E2).
+/// Champs absents → défauts du domaine (`AttenteCfg::default`), jamais des
+/// zéros : une frame partielle doit peindre le même écran que le DOM.
+fn decoder_frame_attente(frame: &str) -> Option<AttenteCfg> {
+    if !frame.contains("\"type\":\"ecran-attente-etat\"") {
+        return None;
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct EtatBrut {
+        actif: Option<bool>,
+        en_pause: Option<bool>,
+        temps_restant: Option<u64>,
+        titre: Option<String>,
+        afficher_titre: Option<bool>,
+        son: Option<bool>,
+        volume: Option<f64>,
+        media: Option<String>,
+        media_kind: Option<String>,
+        minuteur_x: Option<f64>,
+        minuteur_y: Option<f64>,
+        minuteur_echelle: Option<f64>,
+        layout: Option<String>,
+        streamy_x: Option<f64>,
+        streamy_y: Option<f64>,
+        streamy_echelle: Option<f64>,
+        logo_x: Option<f64>,
+        logo_y: Option<f64>,
+        logo_echelle: Option<f64>,
+        muter_bureau: Option<bool>,
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameAttente {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        etat: Option<EtatBrut>,
+    }
+    let frame: FrameAttente = serde_json::from_str(frame).ok()?;
+    if frame.type_frame != "ecran-attente-etat" {
+        return None;
+    }
+    let brut = frame.etat.unwrap_or_default();
+    let defaut = AttenteCfg::default();
+    let mut cfg = defaut.clone();
+    cfg.actif = brut.actif.unwrap_or(defaut.actif);
+    cfg.en_pause = brut.en_pause.unwrap_or(defaut.en_pause);
+    cfg.temps_restant = brut.temps_restant.unwrap_or(defaut.temps_restant);
+    cfg.titre = brut.titre.unwrap_or(defaut.titre);
+    cfg.afficher_titre = brut.afficher_titre.unwrap_or(defaut.afficher_titre);
+    cfg.son = brut.son.unwrap_or(defaut.son);
+    cfg.volume = brut.volume.map(|v| v as f32).unwrap_or(defaut.volume);
+    cfg.media = brut.media.filter(|m| !m.trim().is_empty());
+    cfg.media_kind = brut.media_kind;
+    cfg.minuteur = (
+        brut.minuteur_x.unwrap_or(defaut.minuteur.0),
+        brut.minuteur_y.unwrap_or(defaut.minuteur.1),
+        brut.minuteur_echelle
+            .unwrap_or(defaut.minuteur.2)
+            .clamp(0.4, 3.0),
+    );
+    // `layout !== "minimal"` = layout « signature » (marque StreamOS).
+    cfg.signature = brut
+        .layout
+        .map(|l| l != "minimal")
+        .unwrap_or(defaut.signature);
+    cfg.streamy = (
+        brut.streamy_x.unwrap_or(defaut.streamy.0),
+        brut.streamy_y.unwrap_or(defaut.streamy.1),
+        brut.streamy_echelle
+            .unwrap_or(defaut.streamy.2)
+            .clamp(0.3, 2.0),
+    );
+    cfg.logo = (
+        brut.logo_x.unwrap_or(defaut.logo.0),
+        brut.logo_y.unwrap_or(defaut.logo.1),
+        brut.logo_echelle
+            .unwrap_or(defaut.logo.2)
+            .clamp(0.3, 2.0),
+    );
+    cfg.muter_bureau = brut.muter_bureau.unwrap_or(defaut.muter_bureau);
+    Some(cfg)
+}
+
 /// Extrait un snapshot musique du payload de l'event Tauri `musique:update`
 /// (`MusiqueState::emit_update` → `etat()` : `en_cours` + `progression`
 /// figée à l'emit — le lecteur natif l'avance en local, comme le DOM).
@@ -1461,6 +2175,47 @@ pub fn moteur_chat_message(
     ));
 }
 
+/// Applique une scène **fournie** au moteur natif (lot F — Just Chatting).
+///
+/// Le mode JC est **non destructif** : la scène persistée n'est jamais mutée,
+/// la dérivée vit en mémoire côté frontend. OBS reçoit cette copie par
+/// `scene_sync_captures` ; le moteur natif la reçoit ici, par le même chemin
+/// qu'une scène appliquée à chaud (`MoteurNatif::appliquer_scene`, application
+/// différentielle : ni session de capture ni encodeur recréés). Aucune
+/// écriture disque, aucun état métier dupliqué (règle « une seule vérité de
+/// scène »).
+#[tauri::command]
+pub fn moteur_appliquer_scene(registre: State<'_, RegistreMoteur>, scene: sos_scene::Scene) {
+    registre.natif().appliquer_scene(&scene);
+}
+
+/// Extrait les bandes d'une frame `eq-spectrum` du canal `chat_tx` —
+/// `{"type":"eq-spectrum","bandes":[24 floats 0..1]}` (equaliseur.rs :
+/// capture système/micro → FFT → spectre normalisé, ~30 Hz).
+///
+/// Même motif que [`decoder_frame_goal`] : test par sous-chaîne puis
+/// validation du `type` et du nombre de bandes — le crate moteur n'a
+/// pas serde, la désérialisation vit ici.
+fn decoder_frame_eq(frame: &str) -> Option<[f32; 24]> {
+    if !frame.contains("\"type\":\"eq-spectrum\"") {
+        return None;
+    }
+    #[derive(serde::Deserialize)]
+    struct FrameEq {
+        #[serde(rename = "type")]
+        type_frame: String,
+        #[serde(default)]
+        bandes: Vec<f32>,
+    }
+    let frame: FrameEq = serde_json::from_str(frame).ok()?;
+    if frame.type_frame != "eq-spectrum" || frame.bandes.len() != 24 {
+        return None;
+    }
+    let mut bandes = [0.0f32; 24];
+    bandes.copy_from_slice(&frame.bandes[..24]);
+    Some(bandes)
+}
+
 /// Abonne le moteur natif au flux chat de l'app (`chat_tx`).
 ///
 /// Le crate du moteur reste **sans tokio** : c'est l'app qui écoute et pousse.
@@ -1486,7 +2241,37 @@ pub fn demarrer_ecoute_chat(app: AppHandle) {
         loop {
             match rx.recv().await {
                 Ok(frame) => {
+                    // `position-overlay-config` est PARTAGÉ (welcome + alertes
+                    // + commandes + pad) : `appliquerSnapshot` du DOM
+                    // l'applique aux deux overlays. Il alimente donc les deux
+                    // états ici, avant la chaîne exclusive.
+                    if frame.contains("\"type\":\"position-overlay-config\"") {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            if let Some(maj) = decoder_frame_alerte(&frame) {
+                                registre.natif().pousser_alerte(maj);
+                            }
+                            if let Some(maj) = decoder_frame_welcome(&frame) {
+                                registre.natif().pousser_welcome(maj);
+                            }
+                            if let Some(maj) = decoder_frame_pad(&frame) {
+                                registre.natif().pousser_pad(maj);
+                            }
+                        }
+                        continue;
+                    }
                     if let Some(message) = decoder_frame_chat(&frame) {
+                        // Images du chat (avatars + emotes) : le moteur ne
+                        // lit que des fichiers locaux — l'app télécharge
+                        // ici, à la volée (lot G). `precharger` ne bloque
+                        // jamais : le 1er rendu retombe sur le texte.
+                        crate::cache_images::precharger_urls(
+                            &app,
+                            message
+                                .avatar
+                                .iter()
+                                .map(String::as_str)
+                                .chain(message.emotes.iter().map(|e| e.url.as_str())),
+                        );
                         if let Some(registre) = app.try_state::<RegistreMoteur>() {
                             registre.natif().pousser_chat(message);
                         }
@@ -1498,6 +2283,10 @@ pub fn demarrer_ecoute_chat(app: AppHandle) {
                         if let Some(registre) = app.try_state::<RegistreMoteur>() {
                             registre.natif().pousser_goal(maj);
                         }
+                    } else if let Some(maj) = decoder_frame_splitpop(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_splitpop(maj);
+                        }
                     } else if let Some(maj) = decoder_frame_speedrun(&frame) {
                         if let Some(registre) = app.try_state::<RegistreMoteur>() {
                             registre.natif().pousser_speedrun(maj);
@@ -1505,6 +2294,69 @@ pub fn demarrer_ecoute_chat(app: AppHandle) {
                     } else if let Some(maj) = decoder_frame_alerte(&frame) {
                         if let Some(registre) = app.try_state::<RegistreMoteur>() {
                             registre.natif().pousser_alerte(maj);
+                        }
+                    } else if let Some(maj) = decoder_frame_welcome(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_welcome(maj);
+                        }
+                    } else if let Some(maj) = decoder_frame_bandeau(&frame) {
+                        // Avatar du bandeau : précharge du cache disque (le
+                        // moteur ne lit que des fichiers locaux).
+                        if let MajBandeau::Play { avatar: Some(url), .. } = &maj {
+                            crate::cache_images::precharger(&app, url);
+                        }
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_bandeau(maj);
+                        }
+                    } else if let Some(cfg) = decoder_frame_attente(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_attente(cfg);
+                        }
+                    } else if let Some(maj) = decoder_frame_pad(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_pad(maj);
+                        }
+                    } else if let Some(etat) = decoder_frame_fight(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_fight(etat);
+                        }
+                    } else if let Some(maj) = decoder_frame_presentation(&frame) {
+                        // Images distantes de la présentation (bannière, avatar,
+                        // boîtes de jeux) : cache disque — le moteur ne lit que
+                        // des fichiers locaux (§13.8). Le décor retombe sur le
+                        // dégradé / l'absence d'image tant que le GET n'a pas
+                        // abouti, puis se répare seul (re-tentative 500 ms).
+                        if let MajPresentation::Show { donnees, .. } = &maj {
+                            crate::cache_images::precharger(&app, &donnees.banniere);
+                            crate::cache_images::precharger(&app, &donnees.avatar);
+                            // Les `box_art_url` Helix portent `{width}x{height}` :
+                            // même substitution que le moteur (`url_box_art`),
+                            // sinon les deux côtés n'ont pas la même empreinte.
+                            let boites: Vec<String> = donnees
+                                .jeux_recents
+                                .iter()
+                                .map(|j| url_box_art(&j.box_art_url))
+                                .collect();
+                            crate::cache_images::precharger_urls(
+                                &app,
+                                boites.iter().map(String::as_str),
+                            );
+                            // Vignettes de la grille 2×2 (même hôte que le MP4).
+                            crate::cache_images::precharger_urls(
+                                &app,
+                                donnees
+                                    .clips
+                                    .iter()
+                                    .take(4)
+                                    .map(|c| c.thumbnail_url.as_str()),
+                            );
+                        }
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_presentation(maj);
+                        }
+                    } else if let Some(bandes) = decoder_frame_eq(&frame) {
+                        if let Some(registre) = app.try_state::<RegistreMoteur>() {
+                            registre.natif().pousser_eq(bandes);
                         }
                     }
                 }
@@ -1563,14 +2415,16 @@ pub fn demarrer_veille_apercu(app: AppHandle) {
 /// servies telles quelles.
 ///
 /// Corps binaire : `[w u32 LE][h u32 LE][pts_us i64 LE][pixels RGBA]` —
-/// vide tant qu'aucune frame n'a été produite. `pts_us` permet à la page
-/// de sauter une frame déjà affichée. Réservé au mode Rust
-/// (`moteur_basculer` arrête la session en quittant le mode natif).
+/// vide tant qu'aucune frame n'a été produite, **ou** quand `depuis` est
+/// déjà le `pts_us` courant (la page n'a rien à retélécharger : le tampon
+/// n'est plus recopié ni transféré sur une scène figée). Réservé au mode
+/// Rust (`moteur_basculer` arrête la session en quittant le mode natif).
 #[tauri::command]
 pub fn moteur_apercu(
     app: AppHandle,
     registre: State<'_, RegistreMoteur>,
     scenes: State<'_, crate::scenes::ScenesState>,
+    depuis: Option<i64>,
 ) -> Result<tauri::ipc::Response, String> {
     if registre.mode() != Mode::Natif {
         return Err("l'aperçu du projecteur exige le mode Rust".to_string());
@@ -1589,18 +2443,21 @@ pub fn moteur_apercu(
         natif
             .configurer_scene(&scene, &HashMap::new(), &base)
             .map_err(|e| e.to_string())?;
+        // La composition suit la cadence d'émission réglée : à 10 fps
+        // d'aperçu, composer 30 fois par seconde ne produirait que du
+        // travail jeté (passe D2D plein canvas + copies WGC).
+        let cfg = apercu_cfg_persistee(&app);
         natif
-            .demarrer_apercu(
-                (scene.canvasW, scene.canvasH),
-                30,
-                apercu_cfg_persistee(&app),
-            )
+            .demarrer_apercu((scene.canvasW, scene.canvasH), cfg.fps.clamp(1, 60), cfg)
             .map_err(|e| e.to_string())?;
     }
     let frame = match natif.apercu() {
         Some(f) if f.valide() => f,
         _ => return Ok(tauri::ipc::Response::new(Vec::new())),
     };
+    if depuis == Some(frame.pts_us) {
+        return Ok(tauri::ipc::Response::new(Vec::new()));
+    }
     let mut corps = Vec::with_capacity(16 + frame.data.len());
     corps.extend_from_slice(&frame.largeur.to_le_bytes());
     corps.extend_from_slice(&frame.hauteur.to_le_bytes());
@@ -1683,6 +2540,627 @@ mod tests {
             decoder_frame_chat(&frame).is_some(),
             "frame non reconnue : {frame}"
         );
+    }
+
+    #[test]
+    fn decoder_chat_medias_badges_avatar_emotes() {
+        let frame = serde_json::json!({
+            "type": "chat",
+            "message": {
+                "plateforme": "twitch",
+                "pseudo": "Ryo",
+                "texte": "Kappa salut",
+                "color": "#ff0000",
+                "badges": "moderator/1,subscriber/12",
+                "avatar": "https://static-cdn.jtvnw.net/av.png",
+                "emotes": [{
+                    "debut": 0, "fin": 5,
+                    "url": "https://static-cdn.jtvnw.net/emoticons/v2/25/default/dark/2.0",
+                    "nom": "Kappa",
+                }],
+            },
+        })
+        .to_string();
+        let m = decoder_frame_chat(&frame).expect("message décodé");
+        assert_eq!(m.couleur, Some([255, 0, 0, 255]));
+        assert_eq!(m.badges.as_deref(), Some("moderator/1,subscriber/12"));
+        assert_eq!(
+            m.avatar.as_deref(),
+            Some("https://static-cdn.jtvnw.net/av.png")
+        );
+        assert_eq!(m.emotes.len(), 1);
+        assert_eq!((m.emotes[0].debut, m.emotes[0].fin), (0, 5));
+        assert_eq!(m.emotes[0].nom, "Kappa");
+    }
+
+    #[test]
+    fn decoder_chat_sans_medias_reste_valide() {
+        // Frame minimale (autres plateformes : pas de badges/emotes).
+        let frame = serde_json::json!({
+            "type": "chat",
+            "message": {"plateforme": "kick", "pseudo": "a", "texte": "b"},
+        })
+        .to_string();
+        let m = decoder_frame_chat(&frame).expect("message décodé");
+        assert!(m.badges.is_none());
+        assert!(m.avatar.is_none());
+        assert!(m.emotes.is_empty());
+    }
+
+    #[test]
+    fn decoder_bandeau_play_stop_config() {
+        let play = serde_json::json!({
+            "type": "bandeau-premier-message-play",
+            "viewer": {
+                "display_name": "Manu",
+                "avatar": "https://static-cdn.jtvnw.net/a.png",
+                "plateforme": "twitch",
+            },
+            "message": "Salut !",
+        })
+        .to_string();
+        assert_eq!(
+            decoder_frame_bandeau(&play),
+            Some(MajBandeau::Play {
+                display_name: "Manu".to_string(),
+                avatar: Some("https://static-cdn.jtvnw.net/a.png".to_string()),
+                message: "Salut !".to_string(),
+            })
+        );
+        let stop = serde_json::json!({"type": "bandeau-premier-message-stop"}).to_string();
+        assert_eq!(decoder_frame_bandeau(&stop), Some(MajBandeau::Stop));
+        let config = serde_json::json!({
+            "type": "bandeau-premier-message-config",
+            "config": {"duree_ms": 6000, "position": "haut", "police": "Anton"},
+        })
+        .to_string();
+        assert_eq!(
+            decoder_frame_bandeau(&config),
+            Some(MajBandeau::Config {
+                position: Some(PositionBandeau::Haut),
+                police: Some("Anton".to_string()),
+            })
+        );
+    }
+
+    #[test]
+    fn decoder_bandeau_ignore_les_autres_frames() {
+        for frame in [
+            r#"{"type":"chat","message":{}}"#,
+            r#"{"type":"bandeau:etat"}"#,
+            r#"{"type":"welcome-clip-play"}"#,
+            "pas du json",
+        ] {
+            assert!(decoder_frame_bandeau(frame).is_none(), "frame : {frame}");
+        }
+    }
+
+    #[test]
+    fn decoder_attente_frame_complete() {
+        let frame = serde_json::json!({
+            "type": "ecran-attente-etat",
+            "etat": {
+                "actif": true,
+                "en_pause": true,
+                "temps_restant": 3599,
+                "duree_s": 3600,
+                "titre": "On revient",
+                "afficher_titre": true,
+                "son": false,
+                "volume": 0.75,
+                "media": "medias/a.mp4",
+                "media_kind": "video",
+                "minuteur_x": 800.0,
+                "minuteur_y": 400.0,
+                "minuteur_echelle": 9.0,
+                "layout": "minimal",
+                "streamy_x": 100.0,
+                "streamy_y": 120.0,
+                "streamy_echelle": 9.0,
+                "logo_x": 900.0,
+                "logo_y": 100.0,
+                "logo_echelle": 0.5,
+                "muter_bureau": false,
+            },
+        })
+        .to_string();
+        let cfg = decoder_frame_attente(&frame).expect("frame attente reconnue");
+        assert!(cfg.actif && cfg.en_pause);
+        assert_eq!(cfg.temps_restant, 3599);
+        assert_eq!(cfg.titre, "On revient");
+        assert!(!cfg.son);
+        assert!((cfg.volume - 0.75).abs() < 1e-6);
+        assert_eq!(cfg.media.as_deref(), Some("medias/a.mp4"));
+        assert_eq!(cfg.media_kind.as_deref(), Some("video"));
+        // Bornes du domaine : échelles clampées, position libre.
+        assert_eq!(cfg.minuteur, (800.0, 400.0, 3.0));
+        assert_eq!(cfg.streamy, (100.0, 120.0, 2.0));
+        assert_eq!(cfg.logo, (900.0, 100.0, 0.5));
+        assert!(!cfg.signature, "layout minimal → pas de marque");
+        assert!(!cfg.muter_bureau);
+    }
+
+    #[test]
+    fn decoder_attente_frame_partielle_prend_les_defauts() {
+        // Une frame sans `etat` ni champ optionnel : défauts du domaine, et
+        // jamais un écran actif par accident.
+        let frame = serde_json::json!({"type": "ecran-attente-etat"}).to_string();
+        let cfg = decoder_frame_attente(&frame).expect("frame reconnue");
+        let defaut = AttenteCfg::default();
+        assert!(!cfg.actif);
+        assert_eq!(cfg.minuteur, defaut.minuteur);
+        assert_eq!(cfg.streamy, defaut.streamy);
+        assert_eq!(cfg.logo, defaut.logo);
+        assert!(cfg.signature, "layout signature par défaut");
+        assert!(cfg.muter_bureau);
+        assert_eq!(cfg.media, None);
+        // `layout: "signature"` explicite → signature aussi.
+        let frame = serde_json::json!({
+            "type": "ecran-attente-etat",
+            "etat": {"actif": true, "layout": "signature"},
+        })
+        .to_string();
+        assert!(decoder_frame_attente(&frame).expect("reconnue").signature);
+        // Média vide = aucun média (jamais un chemin vide joint à la base).
+        let frame = serde_json::json!({
+            "type": "ecran-attente-etat",
+            "etat": {"actif": true, "media": ""},
+        })
+        .to_string();
+        assert_eq!(decoder_frame_attente(&frame).expect("reconnue").media, None);
+    }
+
+    #[test]
+    fn decoder_attente_ignore_les_autres_frames() {
+        for frame in [
+            r#"{"type":"chat","message":{}}"#,
+            r#"{"type":"ecran-attente:etat","actif":true}"#,
+            r#"{"type":"bandeau-premier-message-stop"}"#,
+            "pas du json",
+        ] {
+            assert!(decoder_frame_attente(frame).is_none(), "frame : {frame}");
+        }
+    }
+
+    #[test]
+    fn decoder_pad_play_stop_et_position() {
+        let play = serde_json::json!({
+            "type": "pad-play",
+            "pad": {
+                "media_type": "video",
+                "media": "medias/a.mp4",
+                "media_kind": "video",
+                "son": "medias/son.mp3",
+                "volume": 0.35,
+                "duree_ms": 4200,
+                "bounce": true,
+                "zoom": false,
+                "plein_ecran": true,
+                "transparence": true,
+                "transparence_opacite": 0.4,
+            },
+        })
+        .to_string();
+        let Some(MajPad::Play(p)) = decoder_frame_pad(&play) else {
+            panic!("frame pad-play reconnue");
+        };
+        assert_eq!(p.media_type, "video");
+        assert_eq!(p.media.as_deref(), Some("medias/a.mp4"));
+        assert_eq!(p.media_kind.as_deref(), Some("video"));
+        assert_eq!(p.son.as_deref(), Some("medias/son.mp3"));
+        assert!((p.volume - 0.35).abs() < 1e-6);
+        assert_eq!(p.duree_ms, 4200);
+        assert!(p.bounce && !p.zoom && p.plein_ecran && p.transparence);
+        assert!((p.transparence_opacite - 0.4).abs() < 1e-6);
+
+        let stop = serde_json::json!({"type": "pad-stop"}).to_string();
+        assert_eq!(decoder_frame_pad(&stop), Some(MajPad::Stop));
+
+        // Squelette PARTAGÉ : champs absents → défauts du pad (660/60/600/120).
+        let config = serde_json::json!({
+            "type": "position-overlay-config",
+            "config": {"x": 120.0, "y": 40.0, "largeur": 480.0, "hauteur": 120.0},
+        })
+        .to_string();
+        assert_eq!(
+            decoder_frame_pad(&config),
+            Some(MajPad::Config {
+                x: 120.0,
+                y: 40.0,
+                largeur: 480.0,
+                hauteur: 120.0,
+            })
+        );
+        let partiel = serde_json::json!({
+            "type": "position-overlay-config",
+            "config": {"x": 10.0},
+        })
+        .to_string();
+        let (dx, dy, dl, dh) = sos_moteur_natif::texte::POSITION_PAD_DEFAUT;
+        assert_eq!(
+            decoder_frame_pad(&partiel),
+            Some(MajPad::Config {
+                x: 10.0,
+                y: dy,
+                largeur: dl,
+                hauteur: dh,
+            })
+        );
+        let _ = dx;
+    }
+
+    #[test]
+    fn decoder_pad_touche_audio_sans_visuel() {
+        // Touche « audio » : `media` = le son, `son` = le média (branche du
+        // domaine) ; `media_kind` absent → aucun visuel.
+        let play = serde_json::json!({
+            "type": "pad-play",
+            "pad": {
+                "media_type": "audio",
+                "media": "medias/bruit.mp3",
+                "media_kind": null,
+                "son": "medias/bruit.mp3",
+                "volume": 1.0,
+                "duree_ms": 900,
+            },
+        })
+        .to_string();
+        let Some(MajPad::Play(p)) = decoder_frame_pad(&play) else {
+            panic!("frame audio reconnue");
+        };
+        assert_eq!(p.media_type, "audio");
+        assert_eq!(p.media_kind, None);
+        assert_eq!(
+            sos_moteur_natif::texte::source_audio_pad(&p),
+            Some("medias/bruit.mp3")
+        );
+        assert_eq!(sos_moteur_natif::texte::media_affiche_pad(&p), None);
+        // Défauts : pas de plein écran, pas d'effet.
+        assert!(!p.plein_ecran && !p.bounce && !p.zoom && !p.transparence);
+        assert!((p.volume - 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn decoder_pad_ignore_les_autres_frames() {
+        for frame in [
+            r#"{"type":"chat","message":{}}"#,
+            r#"{"type":"pad:touche","code":"Numpad1"}"#,
+            r#"{"type":"pad:touche-stop","code":"Numpad1"}"#,
+            r#"{"type":"ecran-attente-etat"}"#,
+            "pas du json",
+        ] {
+            assert!(decoder_frame_pad(frame).is_none(), "frame : {frame}");
+        }
+    }
+
+    #[test]
+    fn decoder_fight_combat_lobby_et_fin() {
+        let combat = serde_json::json!({
+            "type": "fight-state",
+            "combat": {
+                "phase": "combat",
+                "ja": {"pseudo": "Manu", "plateforme": "twitch", "emoji": "🐲",
+                       "pv": 80, "pv_max": 100, "special_utilise": false},
+                "jb": {"pseudo": "Ryu", "plateforme": "kick", "emoji": "🐉",
+                       "pv": 40, "pv_max": 100, "special_utilise": true},
+                "tour": "b",
+                "reste_tour_ms": 8500,
+                "duree_tour_ms": 15000,
+                "reste_match_s": 90,
+                "derniere": {"seq": 12, "acteur": "a", "coup": "lourd",
+                             "degats": 18, "soin": 0, "touche": true, "critique": true},
+                "info": {"seq": 3, "kind": "ok", "texte": "Coup porté",
+                         "duree_ms": 2600, "age_ms": 120},
+                "anims_reduites": true,
+                "cmds": {"a": "a", "b": "b", "c": "c", "ff": "ff"},
+            },
+        })
+        .to_string();
+        let etat = decoder_frame_fight(&combat).expect("frame combat reconnue");
+        let PhaseFight::Combat {
+            ja,
+            jb,
+            tour,
+            reste_tour_ms,
+            derniere,
+            cmds,
+            ..
+        } = &etat.phase
+        else {
+            panic!("phase combat");
+        };
+        assert_eq!(ja.pseudo, "Manu");
+        assert_eq!(jb.plateforme, "kick");
+        assert!(jb.special_utilise);
+        assert_eq!(*tour, 'b');
+        assert_eq!(*reste_tour_ms, 8500);
+        let coup = derniere.as_ref().expect("dernière action");
+        assert_eq!(coup.seq, 12);
+        assert_eq!(coup.acteur, 'a');
+        assert!(coup.touche && coup.critique);
+        assert_eq!(coup.degats, 18);
+        assert_eq!(cmds.c.as_str(), "c");
+        assert!(etat.anims_reduites);
+        let info = etat.info.as_ref().expect("toast");
+        assert_eq!(info.kind, "ok");
+        assert_eq!(info.age_ms, 120);
+
+        let lobby = serde_json::json!({
+            "type": "fight-state",
+            "combat": {
+                "phase": "lobby",
+                "defiant": {"pseudo": "Manu", "emoji": "🦊"},
+                "cible": "ryu",
+                "reste_lobby_ms": 12000,
+                "duree_tour_s": 20,
+                "duree_match_s": 240,
+                "cmds": {"accept": "go", "refuse": "no"},
+            },
+        })
+        .to_string();
+        let etat = decoder_frame_fight(&lobby).expect("frame lobby reconnue");
+        let PhaseFight::Lobby {
+            defiant,
+            cible,
+            reste_lobby_ms,
+            cmds,
+            ..
+        } = &etat.phase
+        else {
+            panic!("phase lobby");
+        };
+        assert_eq!(defiant.pseudo, "Manu");
+        assert_eq!(cible.as_deref(), Some("ryu"));
+        assert_eq!(*reste_lobby_ms, 12000);
+        assert_eq!(cmds.accept.as_str(), "go");
+
+        let fin = serde_json::json!({
+            "type": "fight-state",
+            "combat": {
+                "phase": "fin",
+                "ja": {"pseudo": "Manu", "pv": 30, "pv_max": 100},
+                "jb": {"pseudo": "Ryu", "pv": 0, "pv_max": 100},
+                "gagnant": "a",
+                "raison": "temps",
+            },
+        })
+        .to_string();
+        let etat = decoder_frame_fight(&fin).expect("frame fin reconnue");
+        let PhaseFight::Fin { gagnant, raison, .. } = &etat.phase else {
+            panic!("phase fin");
+        };
+        assert_eq!(*gagnant, Some('a'));
+        assert_eq!(raison, "temps");
+
+        // `idle` : snapshot sans joueurs, arène masquée.
+        let idle = serde_json::json!({"type": "fight-state", "combat": {"phase": "idle"}})
+            .to_string();
+        assert_eq!(
+            decoder_frame_fight(&idle).map(|e| e.phase),
+            Some(PhaseFight::Idle)
+        );
+    }
+
+    #[test]
+    fn decoder_fight_ignore_les_autres_frames() {
+        for frame in [
+            r#"{"type":"chat","message":{}}"#,
+            r#"{"type":"fight:update","combat":{}}"#,
+            r#"{"type":"fight-resync"}"#,
+            r#"{"type":"pad-play","pad":{}}"#,
+            "pas du json",
+        ] {
+            assert!(decoder_frame_fight(frame).is_none(), "frame : {frame}");
+        }
+    }
+
+    #[test]
+    fn decoder_presentation_show_decode_le_payload() {
+        let frame = serde_json::json!({
+            "type": "presentation-show",
+            "mode": "card",
+            "donnees": {
+                "user_id": "42",
+                "login": "manu",
+                "display_name": "Manu",
+                "avatar": "https://static-cdn.jtvnw.net/avatar.png",
+                "bio": "Bienvenue",
+                "banniere": "https://static-cdn.jtvnw.net/banner.jpg",
+                "broadcaster_type": "affiliate",
+                "en_live": true,
+                "viewers_live": 1234,
+                "titre_live": "Speedrun MGS",
+                "jeu_courant": "Metal Gear Solid",
+                "tags": ["FR", "Speedrun"],
+                "jeux_recents": [
+                    {"id": "1", "name": "MGS", "box_art_url": "https://cdn/{width}x{height}.jpg"}
+                ],
+                "clips": [
+                    {"id": "slug", "title": "Le clip", "thumbnail_url": "https://cdn/t.jpg",
+                     "duration": 29.6, "game_id": "1"}
+                ],
+                "mode": "card",
+            },
+        })
+        .to_string();
+        let Some(MajPresentation::Show { mode, donnees }) = decoder_frame_presentation(&frame)
+        else {
+            panic!("frame presentation-show reconnue");
+        };
+        assert_eq!(mode, ModePresentation::Card);
+        assert_eq!(donnees.login, "manu");
+        assert_eq!(donnees.banniere, "https://static-cdn.jtvnw.net/banner.jpg");
+        assert!(donnees.en_live);
+        assert_eq!(donnees.viewers_live, Some(1234));
+        assert_eq!(donnees.jeu_courant, "Metal Gear Solid");
+        assert_eq!(donnees.tags, vec!["FR".to_string(), "Speedrun".to_string()]);
+        assert_eq!(donnees.jeux_recents.len(), 1);
+        assert_eq!(donnees.jeux_recents[0].name, "MGS");
+        assert_eq!(donnees.clips.len(), 1);
+        assert_eq!(donnees.clips[0].id, "slug");
+        assert!((donnees.clips[0].duration - 29.6).abs() < 1e-6);
+    }
+
+    #[test]
+    fn decoder_presentation_hide_mode_et_frames_partielles() {
+        let hide = r#"{"type":"presentation-hide"}"#;
+        assert_eq!(
+            decoder_frame_presentation(hide),
+            Some(MajPresentation::Hide)
+        );
+
+        let mode = r#"{"type":"presentation-mode","mode":"theatrical"}"#;
+        assert_eq!(
+            decoder_frame_presentation(mode),
+            Some(MajPresentation::Mode(ModePresentation::Theatrical))
+        );
+        // Mode absent → frame ignorée (aucune bascule devinée).
+        assert!(decoder_frame_presentation(r#"{"type":"presentation-mode"}"#).is_none());
+
+        // Show minimal : défauts du domaine, jamais des zéros inventés.
+        let minimal = r#"{"type":"presentation-show","donnees":{"login":"manu"}}"#;
+        let Some(MajPresentation::Show { mode, donnees }) =
+            decoder_frame_presentation(minimal)
+        else {
+            panic!("frame minimale reconnue");
+        };
+        assert_eq!(mode, ModePresentation::Theatrical, "défaut = théâtral");
+        assert_eq!(donnees.login, "manu");
+        assert!(donnees.banniere.is_empty());
+        assert!(!donnees.en_live);
+        assert!(donnees.clips.is_empty());
+    }
+
+    #[test]
+    fn decoder_presentation_audio_play_et_stop() {
+        let play = serde_json::json!({
+            "type": "presentation-audio-play",
+            "piste": "musique",
+            "src": "medias/musique.mp3",
+        })
+        .to_string();
+        assert_eq!(
+            decoder_frame_presentation(&play),
+            Some(MajPresentation::AudioPlay {
+                piste: PistePresentation::Musique,
+                src: "medias/musique.mp3".to_string(),
+            })
+        );
+
+        // `-audio-stop` : une piste, ou « toutes ».
+        assert_eq!(
+            decoder_frame_presentation(
+                r#"{"type":"presentation-audio-stop","piste":"voix"}"#
+            ),
+            Some(MajPresentation::AudioStop(Some(PistePresentation::Voix)))
+        );
+        assert_eq!(
+            decoder_frame_presentation(
+                r#"{"type":"presentation-audio-stop","piste":"toutes"}"#
+            ),
+            Some(MajPresentation::AudioStop(None))
+        );
+
+        // Piste inconnue, `src` vide ou absent : frame ignorée.
+        for frame in [
+            r#"{"type":"presentation-audio-play","piste":"basse","src":"medias/a.mp3"}"#,
+            r#"{"type":"presentation-audio-play","piste":"voix","src":"  "}"#,
+            r#"{"type":"presentation-audio-play","piste":"voix"}"#,
+            r#"{"type":"presentation-audio-stop","piste":"basse"}"#,
+        ] {
+            assert!(
+                decoder_frame_presentation(frame).is_none(),
+                "frame : {frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn decoder_presentation_ignore_les_autres_frames() {
+        for frame in [
+            r#"{"type":"chat","message":{}}"#,
+            r#"{"type":"presentation:etat","visible":true}"#,
+            "pas du json",
+        ] {
+            assert!(
+                decoder_frame_presentation(frame).is_none(),
+                "frame : {frame}"
+            );
+        }
+    }
+
+    #[test]
+    fn decoder_splitpop_pos() {
+        let frame = serde_json::json!({
+            "type": "splitpop-pos",
+            "config": {"x": 100.0, "y": 200.0, "largeur": 500.0, "hauteur": 90.0},
+        })
+        .to_string();
+        assert_eq!(
+            decoder_frame_splitpop(&frame),
+            Some(MajSplitPop::Config {
+                x: 100.0,
+                y: 200.0,
+                largeur: 500.0,
+                hauteur: 90.0,
+            })
+        );
+        // Config partielle → défauts du squelette dédié (660/60/600/120).
+        let partiel = r#"{"type":"splitpop-pos","config":{"x":10.0}}"#;
+        assert_eq!(
+            decoder_frame_splitpop(partiel),
+            Some(MajSplitPop::Config {
+                x: 10.0,
+                y: 60.0,
+                largeur: 600.0,
+                hauteur: 120.0,
+            })
+        );
+        // Le squelette PARTAGÉ ne doit pas être confondu avec le dédié.
+        for frame in [
+            r#"{"type":"position-overlay-config","config":{"x":1.0}}"#,
+            r#"{"type":"chrono2-pos","config":{"x":1.0}}"#,
+            "pas du json",
+        ] {
+            assert!(decoder_frame_splitpop(frame).is_none(), "frame : {frame}");
+        }
+    }
+
+    #[test]
+    fn decoder_presentation_clip_play_et_stop() {
+        let frame = serde_json::json!({
+            "type": "presentation-clip-play",
+            "mp4_url": "https://clips-media-assets2.twitch.tv/abc-1080.mp4?sig=x",
+            "titre": "Le clip",
+            "duree_ms": 29600,
+        })
+        .to_string();
+        let Some(MajPresentation::ClipPlay {
+            mp4_url,
+            titre,
+            duree_ms,
+        }) = decoder_frame_presentation(&frame)
+        else {
+            panic!("frame presentation-clip-play reconnue");
+        };
+        assert_eq!(mp4_url, "https://clips-media-assets2.twitch.tv/abc-1080.mp4?sig=x");
+        assert_eq!(titre, "Le clip");
+        assert_eq!(duree_ms, 29600);
+
+        assert_eq!(
+            decoder_frame_presentation(r#"{"type":"presentation-clip-stop"}"#),
+            Some(MajPresentation::ClipStop)
+        );
+        // URL absente ou vide : rien à jouer (frame ignorée).
+        for frame in [
+            r#"{"type":"presentation-clip-play","titre":"x"}"#,
+            r#"{"type":"presentation-clip-play","mp4_url":"  "}"#,
+        ] {
+            assert!(
+                decoder_frame_presentation(frame).is_none(),
+                "frame : {frame}"
+            );
+        }
     }
 
     #[test]
@@ -2200,6 +3678,122 @@ mod tests {
         assert_eq!(maj.position_ms, 0);
         assert!(maj.duree_s.is_none());
         assert!(decoder_payload_musique("pas du json").is_none());
+    }
+
+    #[test]
+    fn decoder_welcome_play_extrait_pseudo_bio_message_et_mode() {
+        let frame = serde_json::json!({
+            "type": "welcome-clip-play",
+            "viewer": {
+                "login": "manu",
+                "display_name": "Manu",
+                "avatar": "https://static-cdn.jtvnw.net/av.png",
+                "bio": "Streamer retro",
+                "banniere": "https://static-cdn.jtvnw.net/ban.png",
+            },
+            "clip": {
+                "mp4_url": "https://clips-media-assets2.twitch.tv/x.mp4",
+                "titre": "Le run",
+                "duree_ms": 30000,
+            },
+            "message": "Bienvenue !",
+            "utiliser_squelette": false,
+            "favoris": [],
+        })
+        .to_string();
+        match decoder_frame_welcome(&frame).expect("play décodé") {
+            MajWelcome::Play {
+                display_name,
+                bio,
+                message,
+                spotlight,
+            } => {
+                assert_eq!(display_name, "Manu");
+                assert_eq!(bio.as_deref(), Some("Streamer retro"));
+                assert_eq!(message, "Bienvenue !");
+                assert!(spotlight, "utiliser_squelette=false → spotlight");
+            }
+            autre => panic!("mutation inattendue : {autre:?}"),
+        }
+    }
+
+    #[test]
+    fn decoder_welcome_play_sans_mode_replie_sur_squelette_et_login() {
+        let frame = serde_json::json!({
+            "type": "welcome-clip-play",
+            "viewer": {"login": "manu", "display_name": "", "bio": ""},
+            "clip": {"mp4_url": "", "titre": "", "duree_ms": 0},
+            "message": "",
+        })
+        .to_string();
+        match decoder_frame_welcome(&frame).expect("play décodé") {
+            MajWelcome::Play {
+                display_name,
+                bio,
+                spotlight,
+                ..
+            } => {
+                assert_eq!(display_name, "manu", "repli sur login");
+                assert!(bio.is_none(), "bio vide = absente");
+                assert!(!spotlight, "mode absent → squelette");
+            }
+            autre => panic!("mutation inattendue : {autre:?}"),
+        }
+    }
+
+    #[test]
+    fn decoder_welcome_stop_et_config() {
+        let stop = serde_json::json!({"type": "welcome-clip-stop"}).to_string();
+        assert_eq!(decoder_frame_welcome(&stop), Some(MajWelcome::Stop));
+
+        // `welcome-clip-config` : squelette + mode (spotlight = !squelette).
+        let cfg = serde_json::json!({
+            "type": "welcome-clip-config",
+            "config": {
+                "x": 1480.0, "y": 580.0, "largeur": 320.0,
+                "hauteur": 352.0, "utiliser_squelette": false,
+            },
+        })
+        .to_string();
+        assert_eq!(
+            decoder_frame_welcome(&cfg),
+            Some(MajWelcome::Config {
+                x: 1480.0,
+                y: 580.0,
+                largeur: 320.0,
+                hauteur: 352.0,
+                spotlight: Some(true),
+            })
+        );
+
+        // `position-overlay-config` : squelette seul, mode conservé.
+        let pos = serde_json::json!({
+            "type": "position-overlay-config",
+            "config": {"x": 100.0, "y": 200.0, "largeur": 400.0, "hauteur": 300.0},
+        })
+        .to_string();
+        assert_eq!(
+            decoder_frame_welcome(&pos),
+            Some(MajWelcome::Config {
+                x: 100.0,
+                y: 200.0,
+                largeur: 400.0,
+                hauteur: 300.0,
+                spotlight: None,
+            })
+        );
+    }
+
+    #[test]
+    fn decoder_welcome_ignore_les_autres_frames() {
+        for frame in [
+            r#"{"type":"chat","message":{}}"#,
+            r#"{"type":"alerte-play","alerte":{"texte":"x"}}"#,
+            r#"{"type":"welcome-clip-config"}"#,
+            "pas du json",
+        ] {
+            assert!(decoder_frame_welcome(frame).is_none(), "frame : {frame}");
+        }
     }
 
     #[test]

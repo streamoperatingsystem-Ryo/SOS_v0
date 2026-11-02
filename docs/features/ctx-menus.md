@@ -49,7 +49,8 @@
   `.wbadge` / `.z-controls` / `.z-btn` dans app.css — partagée widgets
   ET modules HUD depuis 2026-10-30) : ACCÉLÉRATEURS — 1 à 3 boutons
   max, actions haute-fréquence liées à l'état visuel de la carte
-  (plan −/+, œil caméra/module).
+  (plan −/+, œil caméra/module/widget — `cachee` sur tous les
+  widgets non-caméra depuis 2026-10-31).
 
 Règles :
 

@@ -2,7 +2,7 @@
   import { onDestroy } from "svelte";
   import { get } from "svelte/store";
   import { tauri, type CaptureCible } from "../tauri";
-  import { createObsTrouFromPc, lierFondCapture, setWidgetCaptureCible } from "../stores/scene";
+  import { createObsTrouFromPc, lierFondCapture, setFondCaptureCible, setWidgetCaptureCible } from "../stores/scene";
   import { moteurEtat } from "../stores/moteur";
   import Modal from "./Modal.svelte";
   import { t } from "../stores/langue";
@@ -53,8 +53,9 @@
   onDestroy(() => (ferme = true));
 
   // Mode natif (D9) : la capture est persistée sans OBS (trou:true +
-  // captureCible, aucun appel OBS) ; la caméra n'est pas offerte (pas de
-  // variant CaptureCible). En mode OBS, chemin inchangé.
+  // captureCible, aucun appel OBS) ; la caméra n'est pas offerte ici — un
+  // widget caméra se crée comme tel (cameraDeviceId), pas comme un trou.
+  // En mode OBS, chemin inchangé.
   let natifMode = $derived($moteurEtat.mode === "natif");
 
   const cleItem = (i: Item) => i.obs_value ?? i.nom;
@@ -164,7 +165,14 @@
     error = null;
     try {
       if (mode === "fond") {
-        await lierFondCapture(kind, target);
+        if (natifMode) {
+          // Parité OBS, sans OBS : le fond capturé vit dans la scène
+          // (`bgCaptureCible`) et c'est le moteur Rust qui le rend.
+          if (!cible) throw new Error("cible de capture indisponible");
+          await setFondCaptureCible(cible);
+        } else {
+          await lierFondCapture(kind, target);
+        }
       } else {
         if (!widgetId) return;
         if (natifMode) {

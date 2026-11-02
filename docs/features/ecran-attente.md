@@ -86,6 +86,26 @@ ou créée (« SOS Audio Écran d'attente », idempotent) + `SetInputVolume` +
 par motif de nom. **Non-fatal** si OBS absent (l'overlay fonctionne quand
 même). Scène `SOS` uniquement — jamais les autres scènes de l'utilisateur.
 
+### Moteur natif (parité Rust, lot E3 — 2026-11-01)
+
+Le même état alimente les deux rendus : **aucune logique métier dupliquée**,
+seule la couche de rendu est en double.
+
+- **Canal du rendu** : frames `chat_tx` **`ecran-attente-etat`** (payload
+  `etat`), décodées par `decoder_frame_attente` (`src/moteur/mod.rs`) →
+  `pousser_attente` (`moteur.rs`) → `texte/attente.rs`, `z = 9990`. ⚠️ L'event
+  Tauri `ecran-attente:etat` reste l'état **dashboard**.
+- **`muter_bureau` est dans la frame** (ajouté au lot E3) : le mode OBS le pose
+  en RPC (`SetSceneItemEnabled false` sur les sources `desktop|bureau`), le
+  moteur natif met à 0 le gain de son **entrée loopback** de mixeur. Le DOM
+  ignore le champ.
+- Média : `medias/…` local (`cover`, vidéo en boucle, son mixé au gain
+  `son × volume`), aurore sinon ; titre dégradé, carte minuteur + cadre de
+  scène, layout `signature` (stries, Streamy, wordmark, morse) avec les PNG de
+  marque embarqués.
+- Détails, limites et écart de parité signalé (bord du canvas) :
+  `docs/features/moteur-natif.md` §61.
+
 ### Dashboard
 
 - **Aucun rendu média** dans le dashboard (consigne utilisateur) : la modale

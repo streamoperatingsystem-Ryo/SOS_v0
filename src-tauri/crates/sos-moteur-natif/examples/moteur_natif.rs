@@ -72,6 +72,7 @@ fn main() {
         z: 0,
         cadre: None,
         forme_camera: None,
+        anneau: None,
     }]) {
         eprintln!("Sources refusées : {e}");
         return;

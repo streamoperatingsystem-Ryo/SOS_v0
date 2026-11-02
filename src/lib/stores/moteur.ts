@@ -4,7 +4,7 @@
 // capacités affichées sont celles du moteur réellement actif. Les deux
 // moteurs sont branchés depuis le lot 1.4 (natif = capture/composition/
 // encodage sans OBS, audio loopback + micro muxé).
-import { writable, get } from "svelte/store";
+import { writable, derived, get } from "svelte/store";
 import {
   tauri,
   type ApercuNatifCfg,
@@ -12,7 +12,12 @@ import {
   type StreamCfgPersistee,
   type StreamDemarrerCfg,
 } from "../tauri";
-import { obsHost, obsPort, obsPassword } from "./obs";
+import { save } from "@tauri-apps/plugin-dialog";
+import { appDataDir } from "@tauri-apps/api/path";
+import { obsHost, obsPort, obsPassword, obsStatus } from "./obs";
+import { sceneStore, syncCapturesOBS } from "./scene";
+import { sortieNatifModalOpen } from "./ui";
+import { t } from "./langue";
 
 export type ModeMoteur = "obs" | "natif";
 
@@ -63,6 +68,25 @@ export const sortieNatifBusy = writable(false);
 /// Dernier fichier écrit — conservé après l'arrêt pour l'afficher.
 export const sortieNatifFichier = writable<string | null>(null);
 
+/// « schéma://autorité » = flux réseau (rtmp/rtmps/srt) ; tout le reste =
+/// chemin de fichier. La session ne porte pas de kind : la destination
+/// annoncée par `moteur_sortie_etat` est le seul discriminateur honnête.
+export function sortieEstFlux(chemin: string | null): boolean {
+  return !!chemin && /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(chemin);
+}
+
+/// Sortie native en cours, typée : flux réseau actif / fichier actif.
+/// Alimente les pastilles stream/record du dashboard ET de la barre de
+/// raccourcis — jamais croisées (un flux n'allume pas le bouton record).
+export const sortieNatifFlux = derived(
+  sortieNatif,
+  (s) => s.actif && sortieEstFlux(s.chemin),
+);
+export const sortieNatifFichierActif = derived(
+  sortieNatif,
+  (s) => s.actif && !sortieEstFlux(s.chemin),
+);
+
 /// Réglages de sortie natifs (moteur.json, bloc `sortie`) — consommés au
 /// démarrage d'un enregistrement ET d'un stream. Défauts produit tant que
 /// `chargerSortieCfg` n'a pas répondu.
@@ -103,7 +127,7 @@ export async function sauverSortieCfg(cfg: SortieNatifCfg): Promise<void> {
 /// Réglages du projecteur natif (moteur.json, bloc `apercu`) — qualité et
 /// cadence du flux réduit. Défauts produit tant que `chargerApercuCfg`
 /// n'a pas répondu.
-export const apercuCfg = writable<ApercuNatifCfg>({ largeur: 1280, fps: 30 });
+export const apercuCfg = writable<ApercuNatifCfg>({ largeur: 480, fps: 10 });
 
 /// Relit les réglages du projecteur (non-fatal : défauts conservés).
 export async function chargerApercuCfg(): Promise<void> {
@@ -193,6 +217,34 @@ export async function envoyerConnexionObs(): Promise<void> {
   }
 }
 
+/// Libère le capteur caméra d'OBS avant une bascule vers le Rust : la source
+/// dshow tient le périphérique en exclusif. `camera_sync(visible=false)`
+/// désactive les items (jamais `RemoveInput`) — la source et ses réglages
+/// restent, `syncCapturesOBS` les réactive au retour en mode OBS.
+/// Non fatal : OBS offline ou aucun widget caméra → no-op.
+async function libererCameraObs(): Promise<void> {
+  if (get(obsStatus) !== "connected") return;
+  const cam = get(sceneStore).widgets.find((w) => w.type === "camera");
+  if (!cam) return;
+  try {
+    await tauri.cameraSync(
+      get(obsHost),
+      parseInt(get(obsPort), 10) || 4455,
+      get(obsPassword),
+      null,
+      cam.x,
+      cam.y,
+      cam.largeur,
+      cam.hauteur,
+      cam.cameraFondVert === true,
+      false,
+    );
+  } catch {
+    // OBS offline / scène SOS absente : l'ouverture native échouera
+    // proprement (source omise + dégradation), jamais un crash.
+  }
+}
+
 /// Bascule de mode. `liveActif` = OBS diffuse ou enregistre : le backend
 /// refuse alors par défaut (jamais de coupure implicite), de même qu'une
 /// sortie native active. Les capacités sont relues après la bascule.
@@ -202,6 +254,15 @@ export async function basculerMoteur(cible: ModeMoteur, liveActif: boolean): Pro
     const mode = await tauri.moteurBasculer(cible, liveActif);
     moteurEtat.update((e) => ({ ...e, mode: mode === "natif" ? "natif" : "obs" }));
     await chargerEtatMoteur();
+    // Caméra : exclusivité dshow (OBS) vs Media Foundation (Rust). La
+    // libération n'a lieu qu'APRÈS une bascule acceptée (un refus ne doit
+    // pas couper la caméra OBS).
+    if (cible === "natif") {
+      await libererCameraObs();
+    } else {
+      // Retour OBS : réactive caméra + trous de la scène courante.
+      await syncCapturesOBS();
+    }
     return true;
   } catch (e) {
     moteurErreur.set(String(e));
@@ -264,4 +325,88 @@ export async function arreterEnregistrementNatif(): Promise<string | null> {
   } finally {
     sortieNatifBusy.set(false);
   }
+}
+
+/// Horodatage local `AAAA-MM-JJ_HH-MM-SS` pour le nom par défaut.
+function horodatage(): string {
+  const d = new Date();
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
+}
+
+/// Dialogue « Enregistrer sous ». Défaut dans `enregistrements/` du dossier
+/// de données de l'app (tout local) ; `null` si l'utilisateur annule.
+/// Extension et filtre suivent le conteneur persisté (bloc `sortie` de
+/// moteur.json) — relecture non fatale, les défauts restent mp4.
+async function choisirFichierSortie(): Promise<string | null> {
+  await chargerSortieCfg();
+  const conteneur = get(sortieCfg).conteneur === "mkv" ? "mkv" : "mp4";
+  const nom = `StreamOS-${horodatage()}.${conteneur}`;
+  let defaut = nom;
+  try {
+    defaut = `${await appDataDir()}/enregistrements/${nom}`;
+  } catch {
+    // Repli : le dialogue s'ouvre sur son dernier dossier connu.
+  }
+  try {
+    return await save({
+      title: get(t)("moteur.enregistrerTitre"),
+      defaultPath: defaut,
+      filters: [{ name: conteneur === "mkv" ? "Matroska" : "MP4", extensions: [conteneur] }],
+    });
+  } catch (e) {
+    moteurErreur.set(String(e));
+    return null;
+  }
+}
+
+/// Toggle « Enregistrer » en mode natif — partagé par les 3 lanceurs
+/// (carte sidebar, topbar, barre de raccourcis). Une seule sortie à la
+/// fois : un flux actif affiche un message au lieu d'être arrêté
+/// implicitement (jamais couper un live sans accord).
+export async function toggleEnregistrementNatif(): Promise<void> {
+  const s = get(sortieNatif);
+  if (s.actif) {
+    if (sortieEstFlux(s.chemin)) {
+      moteurErreur.set(get(t)("moteur.sortieOccupeeStream"));
+      return;
+    }
+    await arreterEnregistrementNatif();
+    return;
+  }
+  const chemin = await choisirFichierSortie();
+  if (chemin) await demarrerEnregistrementNatif(chemin);
+}
+
+/// Toggle « Stream » en mode natif : un flux actif est arrêté (même
+/// session qu'un enregistrement) ; sinon le démarrage reprend la config
+/// persistée du keyring. Jamais configuré → la modale « Sortie » s'ouvre
+/// pour saisir protocole + URL + clé au lieu de partir à l'aveugle.
+export async function toggleStreamNatif(): Promise<void> {
+  const s = get(sortieNatif);
+  if (s.actif) {
+    if (!sortieEstFlux(s.chemin)) {
+      moteurErreur.set(get(t)("moteur.sortieOccupeeEnregistrement"));
+      return;
+    }
+    await arreterEnregistrementNatif();
+    return;
+  }
+  await chargerStreamConfig();
+  const cfg = get(streamCfgPersistee);
+  if (!cfg) {
+    sortieNatifModalOpen.set(true);
+    return;
+  }
+  await demarrerStreamNatif({
+    protocole: cfg.protocole,
+    url: cfg.url,
+    cle: cfg.cle ?? undefined,
+    codec: cfg.codec,
+    debit_kbps: cfg.debit_kbps,
+    fps: cfg.fps,
+    preset: cfg.preset,
+    srt_passphrase: cfg.srt_passphrase ?? undefined,
+    srt_latency_ms: cfg.srt_latency_ms ?? undefined,
+  });
 }

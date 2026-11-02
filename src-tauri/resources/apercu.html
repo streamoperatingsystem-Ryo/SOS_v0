@@ -34,18 +34,88 @@
         padding: 1rem;
         pointer-events: none;
       }
+      /* Réglages du projecteur — bouton discret en haut à droite, panneau
+         au-dessus du canvas (mêmes choix que le bloc « Projecteur » de la
+         modale Sortie : 480/960/1280/canvas px × 10/15/30 fps). */
+      #reglages-btn {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        width: 28px;
+        height: 28px;
+        border: none;
+        border-radius: 6px;
+        background: rgba(30, 30, 36, 0.75);
+        color: #b8b8bf;
+        font: 15px/28px system-ui, "Segoe UI", sans-serif;
+        text-align: center;
+        cursor: pointer;
+        opacity: 0.5;
+      }
+      #reglages-btn:hover {
+        opacity: 1;
+      }
+      #reglages {
+        position: absolute;
+        top: 42px;
+        right: 8px;
+        display: flex;
+        flex-direction: column;
+        gap: 6px;
+        padding: 8px 10px;
+        border-radius: 8px;
+        background: rgba(20, 20, 26, 0.9);
+        color: #b8b8bf;
+        font: 12px system-ui, "Segoe UI", sans-serif;
+      }
+      #reglages[hidden] {
+        display: none;
+      }
+      #reglages label {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      #reglages select {
+        background: #26262e;
+        color: #e8e8ec;
+        border: 1px solid #3a3a44;
+        border-radius: 4px;
+        font: inherit;
+        padding: 2px 4px;
+      }
     </style>
   </head>
   <body>
     <canvas id="ecran"></canvas>
     <div id="statut">En attente du moteur…</div>
+    <button id="reglages-btn" title="Réglages du projecteur">⚙</button>
+    <div id="reglages" hidden>
+      <label>Qualité
+        <select id="selQualite">
+          <option value="480">480 px</option>
+          <option value="960">960 px</option>
+          <option value="1280">1280 px</option>
+          <option value="0">Canvas</option>
+        </select>
+      </label>
+      <label>IPS
+        <select id="selFps">
+          <option value="10">10</option>
+          <option value="15">15</option>
+          <option value="30">30</option>
+        </select>
+      </label>
+    </div>
     <script>
       // Projecteur natif : affiche l'aperçu réduit du moteur Rust via poll
       // IPC — la commande `moteur_apercu` démarre la session si rien ne
       // tourne (fenêtre ouverte = demande) et renvoie le dernier buffer
       // `[w u32 LE][h u32 LE][pts_us i64 LE][RGBA]` (vide = pas encore de
-      // frame). Cadence et résolution : réglages `apercu` de moteur.json,
-      // lus via `moteur_apercu_config` pour aligner le poll.
+      // frame, ou frame inchangée depuis le `pts` transmis). Cadence et
+      // résolution : réglages `apercu` de moteur.json, lus via
+      // `moteur_apercu_config` pour aligner le poll (défaut 480 px / 10 fps).
       var TAURI = window.__TAURI__;
       var ecran = document.getElementById("ecran");
       var ctx = ecran.getContext("2d");
@@ -54,7 +124,8 @@
       // letterboxé dans la fenêtre.
       var src = document.createElement("canvas");
       var sctx = src.getContext("2d");
-      var dernierPts = -1;
+      // Dernier `pts_us` affiché (`null` = rien reçu depuis le démarrage).
+      var dernierPts = null;
 
       window.addEventListener("contextmenu", function (e) { e.preventDefault(); });
 
@@ -83,18 +154,25 @@
 
       async function tick() {
         try {
-          var buf = await TAURI.core.invoke("moteur_apercu");
+          // `depuis` = dernier pts affiché : le backend ne recopie et ne
+          // transfère le tampon que si la frame a changé (scène figée = rien
+          // à télécharger). `null` = jamais rien reçu → on demande toujours.
+          var buf = await TAURI.core.invoke("moteur_apercu", { depuis: dernierPts });
           if (!buf || buf.byteLength < 16) {
-            statut.textContent = "En attente du moteur…";
+            // Vide = « rien de neuf » une fois une frame affichée ; le
+            // message d'attente ne concerne que le démarrage.
+            if (dernierPts === null) statut.textContent = "En attente du moteur…";
             return;
           }
           var dv = new DataView(buf);
           var w = dv.getUint32(0, true);
           var h = dv.getUint32(4, true);
-          var pts = dv.getBigInt64(8, true);
+          // µs exactes en Number jusqu'à 2^53 (un BigInt ne se sérialise pas
+          // dans les arguments `invoke`).
+          var pts = Number(dv.getBigInt64(8, true));
           if (w === 0 || h === 0 || buf.byteLength !== 16 + w * h * 4) return;
-          // Frame déjà affichée (poll plus rapide que l'émission, ou scène
-          // figée) : rien à renvoyer au canvas.
+          // Frame déjà affichée (le backend la filtre déjà — garde-fou si un
+          // réglage a changé entre deux polls) : rien à renvoyer au canvas.
           if (pts === dernierPts && src.width === w && src.height === h) return;
           dernierPts = pts;
           // RGBA8 direct — le moteur fait déjà le swap (ex-BGRA) en Rust.
@@ -114,17 +192,65 @@
       }
 
       // Le poll épouse la cadence d'émission réglée (10/15/30 fps) —
-      // défaut 30 ; la dedupe par pts absorbe les frames répétées.
+      // défaut 10 ; la dédup `depuis` (backend) évite tout transfert inutile.
+      var intervalle = null;
       function demarrer(intervalleMs) {
         ajuster();
         tick();
-        setInterval(tick, intervalleMs);
+        intervalle = setInterval(tick, intervalleMs);
       }
+      // Recadence le poll après un changement de réglage fps.
+      function recadencer(intervalleMs) {
+        if (intervalle) clearInterval(intervalle);
+        intervalle = setInterval(tick, intervalleMs);
+      }
+
+      // Panneau de réglages : persistés via `moteur_apercu_config_sauver`
+      // (moteur.json). Hors enregistrement, la sauvegarde arrête la session
+      // aperçu — le poll la relance sur les nouveaux réglages.
+      var reglagesBtn = document.getElementById("reglages-btn");
+      var reglages = document.getElementById("reglages");
+      var selQualite = document.getElementById("selQualite");
+      var selFps = document.getElementById("selFps");
+      reglagesBtn.addEventListener("click", function () {
+        reglages.hidden = !reglages.hidden;
+      });
+      var sauvegardeEnCours = false;
+      async function sauverReglages() {
+        if (sauvegardeEnCours) return;
+        sauvegardeEnCours = true;
+        var largeur = parseInt(selQualite.value, 10);
+        var fps = parseInt(selFps.value, 10);
+        try {
+          await TAURI.core.invoke("moteur_apercu_config_sauver", {
+            cfg: { largeur: largeur, fps: fps },
+          });
+          // La session repart de zéro : nouveau pts, nouvelle taille —
+          // la dédup ne doit pas masquer la première frame relancée.
+          dernierPts = null;
+          recadencer(Math.ceil(1000 / fps));
+        } catch (e) {
+          statut.textContent = String(e);
+        }
+        sauvegardeEnCours = false;
+      }
+      selQualite.addEventListener("change", sauverReglages);
+      selFps.addEventListener("change", sauverReglages);
 
       ajuster();
       TAURI.core.invoke("moteur_apercu_config")
         .then(function (cfg) {
-          var fps = cfg && cfg.fps >= 1 && cfg.fps <= 60 ? cfg.fps : 30;
+          var fps = cfg && cfg.fps >= 1 && cfg.fps <= 60 ? cfg.fps : 10;
+          // Pré-remplit les selects avec les réglages persistés (les listes
+          // de la page = celles du bloc « Projecteur » de la modale Sortie).
+          if (cfg) {
+            if (selQualite.querySelector('option[value="' + cfg.largeur + '"]')) {
+              selQualite.value = String(cfg.largeur);
+            }
+            if (selFps.querySelector('option[value="' + cfg.fps + '"]')) {
+              selFps.value = String(cfg.fps);
+            }
+          }
           demarrer(Math.ceil(1000 / fps));
         })
         .catch(function () { demarrer(100); });

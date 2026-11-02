@@ -276,6 +276,24 @@ impl ContexteGpu {
         })
     }
 
+    /// Contexte **partagé** sur un device existant.
+    ///
+    /// Un renderer secondaire (les overlays chargent leurs propres médias)
+    /// doit décoder sur le MÊME device que la scène : créer un second device
+    /// rendrait les textures inutilisables par le compositeur.
+    pub fn depuis_device(
+        device: windows::Win32::Graphics::Direct3D11::ID3D11Device,
+    ) -> Result<Self, ErreurGpu> {
+        let context = unsafe { device.GetImmediateContext() }
+            .map_err(|e| ErreurGpu::Dxgi(format!("contexte immédiat : {}", e.message())))?;
+        Ok(Self {
+            device,
+            context,
+            // Pas de capture : l'index d'adaptateur ne sert qu'à WGC.
+            adaptateur_index: None,
+        })
+    }
+
     pub fn device(&self) -> &windows::Win32::Graphics::Direct3D11::ID3D11Device {
         &self.device
     }

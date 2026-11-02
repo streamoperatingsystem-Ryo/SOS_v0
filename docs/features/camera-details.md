@@ -100,6 +100,12 @@ chevauchant le rect caméra clippés via clipPath SVG evenodd (#sos-cam-clip).
   cercle cam). Miroir dashboard/`svgAnneauCamera` (diffusion.html) ; la
   moitié extérieure du trait est rognée par overflow:hidden + clip-path du
   parent (règle cadres : la marge n'existe pas).
+- **Moteur natif (2026-11-01)** : `camera_forme_dediee` (`scene_sources.rs`)
+  applique la même règle — forme dédiée `cercle`/`carre` = pas de cadre de
+  scène ; `None` **ou nom inconnu** = cadre de scène (clip polygonal + trait),
+  comme `applyCadreWidget`. L'anneau `cameraBord` natif est porté (lot D2,
+  `moteur-natif.md` §55) : cercle/rect, trait borné 1.5..12, dégradé du cadre,
+  moitié extérieure rognée.
 - **Dashboard** (`Widget.svelte`) : `cameraFormeActive` → clip-path cercle
   sur `.widget-3d` + anneau dans le bloc cadre (le bloc CadreSVG est
   exclus pour une cam à forme dédiée), classe `avec-cadre` (bordure native

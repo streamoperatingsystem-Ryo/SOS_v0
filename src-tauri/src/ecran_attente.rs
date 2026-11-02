@@ -408,6 +408,10 @@ impl EcranAttenteState {
                 "afficher_titre": config.afficher_titre,
                 "son": config.son,
                 "volume": config.volume,
+                // Mute des sources « bureau » : le mode OBS le pose en RPC,
+                // le moteur natif en a besoin pour muter sa source loopback
+                // (le DOM ignore ce champ).
+                "muter_bureau": config.muter_bureau,
                 "media": config.media,
                 "media_kind": config.media_kind,
                 "minuteur_x": config.minuteur_x,

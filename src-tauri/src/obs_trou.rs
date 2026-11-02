@@ -582,10 +582,19 @@ pub struct SyncItem {
     pub offset_x: f64,
     #[serde(default)]
     pub offset_y: f64,
+    /// Item activé dans la scène OBS. false = widget masqué (`cachee` /
+    /// `cameraCachee`) → SetSceneItemEnabled false, source conservée
+    /// (jamais RemoveInput). Défaut true (compat appelants historiques).
+    #[serde(default = "default_visible_sync")]
+    pub visible: bool,
 }
 
 fn default_fit_sync() -> String {
     "etirer".to_string()
+}
+
+fn default_visible_sync() -> bool {
+    true
 }
 
 fn default_zoom_sync() -> f64 {
@@ -670,6 +679,23 @@ pub async fn sync_trous(
         let Some(item_id) = item_id else {
             continue;
         };
+
+        // État activé/masqué de l'item : widget `cachee`/`cameraCachee` →
+        // SetSceneItemEnabled false (source conservée, jamais RemoveInput —
+        // même sémantique que l'œil caméra). Le transform est posé quand
+        // même : l'item reste calé pour un réaffichage immédiat.
+        let _ = rpc(
+            &mut write,
+            &mut read,
+            "SetSceneItemEnabled",
+            &format!("sync_item_enabled_{}", item_id),
+            json!({
+                "sceneUuid": scene_uuid,
+                "sceneItemId": item_id,
+                "sceneItemEnabled": it.visible
+            }),
+        )
+        .await;
 
         // Transform OBS du trou : la capture RESTE dans le rectangle du widget.
         // boundsWidth/Height = w/h (JAMAIS w*zoom — ça déborderait du trou).
@@ -2059,6 +2085,8 @@ pub async fn sync_scene_captures(
 
         if let Some(w) = widget_by_source.get(name) {
             // Item lié à un widget de cette scène → enable + sync transform.
+            // Widget masqué (`cachee`, œil dashboard) → item désactivé mais
+            // transform posée quand même (prêt pour un réaffichage immédiat).
             let _ = rpc(
                 &mut write,
                 &mut read,
@@ -2067,7 +2095,7 @@ pub async fn sync_scene_captures(
                 json!({
                     "sceneUuid": scene_uuid,
                     "sceneItemId": item_id,
-                    "sceneItemEnabled": true
+                    "sceneItemEnabled": !w.cachee
                 }),
             )
             .await;

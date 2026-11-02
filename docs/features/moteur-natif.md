@@ -1,13 +1,15 @@
 # Moteur natif — capturer, composer et encoder sans OBS
 
-> **Feature NON IMPLÉMENTÉE dans l'app** au 2026-10-28 — le crate
-> `sos-moteur-natif` existe et est **mesuré** (§27), mais rien n'est branché à
-> l'interface. Ce fichier fixe ce qui est **décidé** et ce qui est
-> **interdit** ; le déroulé complet (mesures, matrices matérielles,
-> algorithmes) vit dans `PLAN-MOTEUR-NATIF.md` à la racine.
-> ⚠️ **Aucun chiffre de ce fichier n'est mesuré, hors §27.** Toute valeur est
-> une **cible** du plan, jamais un résultat observé. Ne pas citer ces nombres
-> comme acquis.
+> **Feature IMPLÉMENTÉE et branchée dans l'app** (mode Rust, §32+) — état au
+> 2026-11-01 : la cible est la **parité complète avec le mode OBS**. Le plan
+> de suivi lot par lot (état, prochain lot, pièges déjà payés) vit dans
+> `AGENTS.md`, section « Plan de suivi — parité moteur natif ». Ce fichier
+> fixe les contrats et le détail d'implémentation ; le déroulé complet
+> (mesures, matrices matérielles, algorithmes) vit dans
+> `PLAN-MOTEUR-NATIF.md` à la racine.
+> ⚠️ **Aucun chiffre de ce fichier n'est mesuré, hors §27/§28.** Toute autre
+> valeur est une **cible** du plan, jamais un résultat observé. Ne pas citer
+> ces nombres comme acquis.
 >
 > **Doc de feature — contrat technique.** Les règles figées (protocole
 > d'exécution, contrat vie privée, contrats caméra/cadres) restent dans
@@ -656,7 +658,7 @@ Chemin : `%APPDATA%\com.streamos.v0\moteur.json`.
   "fps": 60,
   "canvas": [1920, 1080],
   "audio": { "loopback": true, "micro": true, "offset_ms": 0 },
-  "apercu": { "largeur": 1280, "fps": 30 }
+  "apercu": { "largeur": 480, "fps": 10 }
 }
 ```
 
@@ -1009,6 +1011,11 @@ enregistrement « de scène » soit complet.
 | Encodeur | NVENC H.264, zéro-copie |
 
 ### 29.3 Limites de la tranche (assumées)
+
+> ⚠️ **Historique de la tranche 1** — dépassé par les lots T1/T5 (§40-§44) :
+> transforms, fits, lecture vidéo (pause/boucle A–B), carrousels et
+> **toutes les slides** sont désormais portés. Ne pas lire cette liste comme
+> l'état actuel.
 
 - **Fit** : `etirer` / `ajuster` (letterbox centré) / `remplir` (crop centré)
   sont appliqués (`mediaFit`, `bgFit`). Rotation, zoom, miroir et effets ne
@@ -1550,11 +1557,13 @@ Scène de référence `af09059c` (11 calques + 3 cadres de widget + bord + chat)
 
 ### 35.6 Limites (assumées)
 
-- **`animer` ignoré** : le cadre est rendu **statique**. `Capacites.cadres_animes`
-  reste `false` — jamais un rendu faux silencieux.
-- **7 styles non portés** : `arrondis`, `carre`, `cyberpunk`, `story`,
-  `hexagon`, `arena`, `tribal` ne produisent **aucun** cadre (le moteur
-  dégrade l'état au démarrage, il ne dessine pas un tracé faux).
+- **`animer`** : porté depuis le lot C1 pour les 2 styles rendus — segment
+  comète (§48) ; `Capacites.cadres_animes = true`. Les styles non portés ne
+  produisent toujours aucun cadre (dégradé au démarrage).
+- **Les 9 styles du registre sont portés** (§49 à §53) : `mgstyle`,
+  `thin-line`, `carre`, `arrondis`, `tribal`, `cyberpunk`, `story`,
+  `hexagon`, `arena`. Un style **inconnu** (scène corrompue/importée) ne
+  produit aucun cadre et est signalé au démarrage.
 - **Caméra exclue** : `widget_type == "camera"` → aucun cadre (forme dédiée
   `cameraForme` hors tranche).
 - **Titres dessinés après le bord du canvas** : dans `diffusion.html`,
@@ -1860,7 +1869,7 @@ Toolbar.onOuvrirProjecteur (natifMode)
   → page : invoke("moteur_apercu") au rythme du réglage
   → moteur::moteur_apercu        (réponse binaire, PAS de JSON)
       └─ si rien ne tourne : configurer_scene + demarrer_apercu
-  → boucle (SinkCfg::Apercu seul, 30 fps, audio None)
+  → boucle (SinkCfg::Apercu seul, fps = `apercu.fps`, audio None)
       └─ composition D2D + NV12 → Apercu (RGBA réduit, cadence réglée)
   → page : ImageData RGBA direct → canvas letterboxé
 ```
@@ -1902,9 +1911,23 @@ Le projecteur n'est plus figé à 480×270 @ 10 fps :
   copie staging (le VideoProcessor ne garantit pas R8G8B8A8 en sortie) —
   `ImageData` le consomme sans conversion, la boucle de swap JS est morte.
 - **Persistance** : bloc `apercu` de `moteur.json` (`ApercuNatifCfg`,
-  défaut **1280 px / 30 fps**), commandes `moteur_apercu_config` /
+  défaut **480 px / 10 fps**), commandes `moteur_apercu_config` /
   `moteur_apercu_config_sauver` — UI : bloc « Projecteur » de la modale
   Sortie (480 / 960 / 1280 / canvas × 10 / 15 / 30 fps).
+- **Défaut léger (2026-11-01)** : le projecteur doit rester quasi gratuit —
+  480 px à 10 fps (480×270 en 16:9), l'utilisateur peut remonter.
+  `moteur_apercu` passe **`apercu.fps` comme cadence de composition** de la
+  session « aperçu seul » (avant : `30` codés en dur, seule l'émission était
+  throttlée par `pas_apercu`) — la passe Direct2D plein canvas et les copies
+  WGC tombent donc à 10/s. Conséquence assumée : animations à 10 pas/s, ce
+  que l'émission à 10 fps rend invisible. Le **gouverneur n'est pas évalué**
+  en session aperçu seule (`encode_requis == false`) : une « dégradation »
+  y serait inventée et écrite dans les compteurs partagés avec une future
+  sortie.
+- **Dédup backend** : la commande prend `depuis: Option<i64>` (dernier
+  `pts_us` affiché par la page) et renvoie une réponse **vide sans recopier
+  le tampon** quand la frame n'a pas changé — fin des ~110 Mo/s de copies
+  IPC sur une scène figée (1280×720@30 avant ce lot).
 - **Dedupe côté page** : l'en-tête porte `pts_us` ; la page saute les
   frames déjà affichées et poll exactement au rythme réglé.
 - Réponse brute `tauri::ipc::Response` `[w u32 LE][h u32 LE][pts_us i64 LE]
@@ -1988,7 +2011,7 @@ une texture intermédiaire, puis projeté sur le canvas.
 | Sujet | Décision | Motif |
 |---|---|---|
 | Rasterisation | une texture offscreen **taille canvas** par plan (`BITMAP_OPTIONS_TARGET`, PBGRA) | `DrawBitmap` ne sait pas la perspective ; les calques y dessinent en coords canvas, comme le DOM |
-| Regroupement | clé `(rect, z)` : voile/média/capture/bordure/cadre d'un widget partagent l'offscreen | tous portés par le même `.widget` DOM ; `Chat`/`Input` exclus (limite §41.4) |
+| Regroupement | clé `(rect, z)` : voile/média/capture/contenu/titre/bordure/cadre d'un widget partagent l'offscreen | tous portés par le même `.widget` DOM ; contenus et titres ajoutés en H2 (§71) |
 | Effet | `3DPerspectiveTransform` : LINEAR + BORDER_SOFT, `depth` = `perspective(d)`, origins perspective **et** rotation = centre de la boîte | miroir `perspective(d) rotateX() rotateY()` + `transform-origin: center` |
 | `bgZoom` | `PerspCfg.zoom_ecran`, appliqué **après** projection en espace écran autour du centre ; retiré de la matrice 2D pour les entrées groupées | `scale(z)` est posé en premier sur `#bg`, hors de la perspective — même lecture qu'en T1 (§40.1) |
 | Projection | `flusher_persps(z)` quand le plan sort de son z (persps triés par z à la config) | le plan projeté se pose à son niveau de z, comme le `.widget` DOM dans son stacking context |
@@ -2029,10 +2052,9 @@ une texture intermédiaire, puis projeté sur le canvas.
 
 ### 41.4 Limites (assumées)
 
-- **Contenu chat / input-viewer d'un widget 3D reste plat** : les genres
-  `Chat`/`Input` ne sont pas regroupés dans l'offscreen (leur rendu
-  DirectWrite devrait y être re-routé). En OBS tout le `.widget` est
-  tourné — écart visible uniquement sur un widget 3D de ces types.
+- **Contenu d'un widget 3D** : **porté en H2/H2b/H2c** (§71) — les cinq
+  genres de contenu (`Chat`, `Input`, `Goal`, `Speedrun`, `Musique`) et les
+  titres de widget sont regroupés dans l'offscreen du plan comme le média.
 - Deux widgets au même `(rect, z)` fusionneraient en un seul plan — cas
   dégénéré accepté.
 - `mediaLum/Contraste/Teinte/Flou/Pixel` et `bg*` : lot T3 ; morphs : T4 ;
@@ -2262,7 +2284,11 @@ cargo test -p sos-moteur-natif                          # 137
   de même : ce sont des images).
 - Pas de seek live (`mediaTime` interactif = PlayerBar/dashboard —
   l'événement n'emprunte pas `chat_tx` ; hors périmètre T5).
-- Modules HUD (horloge, objectifs), équaliseur, spots : lots M1/M2.
+- Modules HUD : les 5 rendus sont portés (2026-10-31) — objectifs,
+  musique, équaliseur, spots + horloge existante. eq/spots = calques
+  plein écran sous les widgets (`Z_SPOTS` −2 / `Z_EQ` −1), spectre
+  poussé via `pousser_eq` (frames `eq-spectrum` du canal `chat_tx` →
+  `EtatEq`, lissage attaque/retombée du DOM).
 
 ### 44.5 Vérification
 
@@ -2396,3 +2422,1377 @@ résolution du canvas, et le fichier n'est plus figé en fMP4.
   même `Blt`) — choix utilisateur honoré, jamais de clamp muet.
 - `appliquer_scene` à chaud inchangé : la résolution se fixe au démarrage
   de la sortie, comme le codec et le débit.
+
+---
+
+## 47. Parité OBS — fond = capture native (`bgCaptureCible`, lot B, 2026-11-01)
+
+Le fond d'une scène peut être une capture **sans OBS** : `Scene.bgCaptureCible`
+(même enum `CaptureCible` que `Widget.captureCible`, `serde(default,
+skip_serializing_if)` — absent des scènes existantes, ignoré par le mode OBS).
+
+- **Priorité** : `bgCaptureCible` > `bgObsSource` (OBS) > `bgSlides` >
+  `bgMedia`. `bgObsSource` et `bgCaptureCible` peuvent coexister : chaque mode
+  lit le sien, une même scène reste valide dans les deux modes.
+- **Rendu** : `scene_sources::sources_depuis_scene` produit une source
+  `FOND_CAPTURE` (`"__fond"`), rect `(0, 0, canvasW, canvasH)`,
+  `z = i32::MIN`, sans cadre ni forme caméra. `medias_depuis_scene` cesse de
+  peindre le fond média/slides quand la capture est liée.
+- **UI** : en mode Rust, le dialogue de fond écrit `bgCaptureCible`
+  (`setFondCaptureCible`, **aucun appel OBS**) ; en mode OBS,
+  `lierFondCapture` est inchangé. « Retirer la capture » purge les deux
+  champs (et la source OBS si elle existe).
+- **Dégradation** : `bgObsSource` seul (sans `bgCaptureCible`) reste non rendu
+  en mode Rust et est **signalé** — jamais un noir muet.
+- **Vérification** : `cargo test -p sos-scene` (round-trip du champ),
+  `cargo test -p sos-moteur-natif`
+  (`fond_capture_produit_une_source_plein_canvas_prioritaire`),
+  `cargo clippy --workspace --all-targets -- -D warnings`, `npm run check`.
+
+---
+
+## 48. Cadres animés — comète `animer` (lot C1, 2026-11-01)
+
+`CadreConfig.animer` n'est plus ignoré : les deux styles rendus (`mgstyle`,
+`thin-line`) animent leur bord comme `diffusion.html`.
+
+- **Recette mirée** : `<path pathLength="100" stroke-dasharray="7 93">` +
+  `<animate attributeName="stroke-dashoffset" from="0" to="-100" dur="4s">`.
+  Conséquence : un segment de **7 % du périmètre**, un tour toutes les **4 s**,
+  dans `couleurFin`, épaisseur `max(1.2, 0.7 × strokeWidth)`, bouts ronds.
+- **Tracé** (`cadres::trace_comete`) : le chemin du **SVG du style**, pas le
+  polygone de découpe — rectangle plein cadre pour `mgstyle` (`rectPath`
+  rx=0), rectangle arrondi pour `thin-line`. Aux coins coupés de `mgstyle`,
+  la comète sort du polygone et y est rognée par la couche, comme le
+  `clip-path` du parent dans le DOM.
+- **Horloge** : `pts_us` de la boucle moteur (`temps_s = pts_us / 1e6`), jamais
+  l'heure système. Le cadre de la **carte alerte** anime aussi (même gabarit).
+- **Implémentation** : `comete_points` (pur, testé : périmètre, bouclage,
+  périodicité), `geometrie_ouverte` (figure `END_OPEN`), `style_comete`
+  (bouts ronds, créé une fois dans `DessinateurTexte`).
+- **Coût** : une géométrie créée par frame et par cadre animé — non mesuré ;
+  à optimiser (cache par phase quantifiée) si l'encodeur cesse d'être le
+  facteur limitant.
+- **Limites** : les 7 styles non portés n'ont toujours pas de cadre (lot C2) ;
+  l'animation de `carre`/`arrondis` arrivera avec leur rendu.
+
+---
+
+## 49. Cadres `carre` et `arrondis` (lot C2a, 2026-11-01)
+
+Deux styles de plus rendus, miroirs de `renderCadreInline` et
+`genererClipPathCadre` (`diffusion.html` / `registre.ts`).
+
+- **Rendu** : un seul trait au dégradé `stopsLiseres` sur la boîte
+  (`rect x=0 y=0 W×H`), épaisseur `ep`, centré sur le bord (moitié externe
+  rognée par la couche). `arrondis` = rectangle arrondi `rx = 8` (borné à
+  W/2 · H/2, comme le SVG) ; `carre` = rectangle.
+- **Découpe** : `arrondis` → rectangle arrondi `r = min(8, W/4, H/4)` ;
+  `carre` → **aucun clip** (le polygone est le rectangle, neutre).
+- **Comète** : `trace_comete` suit `rectPath` du SVG — `carre` = rectangle,
+  `arrondis` = rectangle arrondi **rx = 8 non borné** (la rognure vient du
+  clip `min(8, W/4, H/4)`, exactement comme le DOM).
+- **Vérification** : `cargo test -p sos-moteur-natif`
+  (`carre_et_arrondis_sont_portes`, `trace_comete_carre_et_arrondis`) —
+  points du clip identiques au TS (54 points, premier point `(8, 0)` pour
+  100×40 ; `(5, 0)` pour 20×20). 209 tests, clippy 0.
+- **Reste (C2b)** : aucun — les 9 styles sont portés (§49 à §53).
+
+---
+
+## 50. Cadre `tribal` (lot C2b-1, 2026-11-01)
+
+Miroir de `renderTribal` + `tribalPath` + `motifBord` (`diffusion.html`
+8727-8785, 8649-8725). Scène réelle de référence : `BAE - Feet01`
+(`93885a83`, `tribal`, trait 13, animation activée).
+
+- **Bord** : octogone à coins adoucis `tribalPath` — coins `cx = max(12,
+  round(3·ep))`, `cy = max(9, round(2.4·ep))`, bornés à `W/4`/`H/4`.
+  C'est aussi le **clip** du style.
+- **4 traits** : halo `rgba(6,6,6,0.5)` à `3.2·ep`, principal à 22 % `2.4·ep`,
+  dégradé `ep`, filet clair `0.2·ep` à 45 % — miter, clippés au bord.
+- **Motif** (`motifBord`) : par bord, une pointe centrale + 1 ou 2 griffes
+  par côté + balayures (si le bord est assez long), **remplis** au dégradé.
+  Bords trop courts : rien (condition du DOM).
+- **Équerres** de visée aux 4 coins (trait clair, bouts ronds), seulement si
+  `W > 130` et `H > 90`.
+- **Animations** : respiration du groupe `opacity 0.85 → 1 → 0.85` sur 4 s
+  (alpha du dégradé), et **nœud voyageur** (halo clair + point blanc) le long
+  du bord sur 5,5 s — dessiné dans la couche, donc rogné au bord comme le
+  `clip-path` du parent (seule la moitié intérieure du nœud est visible).
+- **Approximations assumées** : coins du bord aplatis (12 pas/quadratique,
+  comme le clip) ; le dégradé est exprimé sur le rect du cadre, pas sur le
+  viewBox élargi de la marge (écart de quelques pour cent sur les extrémités).
+- **Vérification** : `tribal_porte_et_suit_le_path`,
+  `motif_tribal_suit_la_longueur_du_bord`, `equerre_tribal_est_un_trait_ouvert`
+  — 212 tests, clippy 0.
+
+---
+
+## 51. Cadre `cyberpunk` (lot C2b-2, 2026-11-01)
+
+Miroir de `renderCyberpunk` + `getCyberpunkClipPath` (`diffusion.html`
+8024-8120). Scène réelle : `BAE - Grok01` (`9ac9d50a`, trait 20).
+
+- **Bord** : octogone à biseaux droits, `bevel = max(8, round(3.5·ep))` borné
+  à `W/4`/`H/4` — c'est le clip.
+- **4 traits** : néon `couleurFin` à 22 % (`2.6·ep`), dégradé
+  `stopsLiseres(couleur, couleurFin)` (`ep`), **liseré intérieur** à trois
+  stops (blanc 0.9 → néon 0.6 → blanc 0.9, opacité 0.85, `0.35·ep`), filet
+  blanc 40 % (`0.2·ep`).
+- **Ornements de marge non portés** : équerres de coin, circuits, code-barres
+  et pastilles sont dessinés **hors** du bord dans le DOM → rognés par le
+  `clip-path` du parent, donc **invisibles dans la référence** (même leçon
+  que mgstyle, §35.4). Les porter aurait produit du code sans effet visible.
+- **Animation** : runner lumineux (`animateMotion dur="5s"` sur le bord) —
+  halo néon + point blanc, groupe `opacity 0.95`, dans la couche (rogné au
+  bord comme le parent).
+- **Vérification** : `cyberpunk_porte_et_suit_le_biseau` (biseau 70 pour
+  trait 20 en 400×300, borné à 10 en 100×40) — 213 tests, clippy 0.
+
+---
+
+## 52. Cadre `story` (lot C2b-3, 2026-11-01)
+
+Miroir de `renderStory` + `getStoryClipPath` (`diffusion.html` 8125-8265).
+
+- **Bord festonné** en **cubiques** : `s = max(12, round(4·ep))` borné à
+  `W/4`/`H/4`. L'aplatissement cubique (12 pas, coefficients
+  `svgPathEnPoints`) est partagé par le clip et le tracé.
+- **3 traits** (jointure ronde) : néon 20 % (`2·ep`), dégradé
+  `stopsLiseres(profond, vif)` (`ep`), liseré intérieur blanc/pâle/blanc
+  (`0.3·ep`, opacité 0.7).
+- **Cœurs** : 4 cœurs de coin (`max(6, 1.5·ep)`, blanc 0.92) + petits cœurs
+  répartis sur les bords (`max(3, 0.7·ep)`, groupe 0.75, un tous les ~70 px).
+- **Volutes de coin** : double cubique dans la marge + point final — rognées
+  au bord comme le `clip-path` du parent (visibles seulement pour la partie
+  intérieure).
+- **Animation** : étincelle 4-pointes voyageuse (`animateMotion dur="7s"` sur
+  le bord, groupe 0.95). Les 3 étincelles de marge du DOM sont **hors
+  polygone** → invisibles dans la référence, non portées.
+- **Vérification** : `story_porte_et_suit_le_feston` (102 points, `s=75` en
+  400×300, `s=10` en 100×40), `formes_story_ont_le_bon_nombre_de_points` —
+  215 tests, clippy 0.
+
+---
+
+## 53. Cadres `hexagon` et `arena` (lot C2b-4, 2026-11-01)
+
+Derniers styles du registre — **parité cadres complète (9/9)**.
+
+### `hexagon`
+
+- **Bord** octogonal : `s = max(12, round(4·ep))` borné à `W/4`/`H/4`
+  (`getHexagonClipPath`).
+- **3 traits** (miter) : principal 20 % (`2.2·ep`), dégradé (`ep`), filet
+  clair 60 % (`0.3·ep`).
+- **Nœuds** aux 8 sommets (`max(1.2, 0.3·ep)`, groupe 0.85) — sur le bord,
+  donc rognés à moitié comme le parent.
+- **Cadre intérieur** inséré : `translate(0.6·ep)` +
+  `scale(1 − 1.2·ep/W, 1 − 1.2·ep/H)`, filet clair 40 %.
+- **Animation** : nœud voyageur (`animateMotion dur="6s"`).
+- **Non porté** : grappes d'alvéoles rotatives et glyphes de marge — **hors
+  polygone**, invisibles dans la référence.
+
+### `arena`
+
+- **Bord** octogonal allongé : `bx = max(16, round(4.2·ep))`,
+  `by = max(10, round(2.4·ep))`, bornés à `W/4`/`H/4`.
+- **4 traits** : canal sombre `rgba(6,10,4,0.55)` (`3.4·ep`), principal 28 %
+  (`2.6·ep`), dégradé (`ep`), filet clair 50 % (`0.2·ep`).
+- **Écho intérieur** : octogone inséré de `d = max(2.5, 1.1·ep)`, filet clair
+  75 %.
+- **Nœuds** aux 8 sommets (`max(1.3, 0.35·ep)`).
+- **Cartouches** (plaque hexagonale + barre + 2 points) à `W·0.72` en haut et
+  `W/2` en bas ; **ailerons** cerf-volant à gauche/droite — seulement si
+  `W > 4·cw` et `H > 4·wingT`.
+- **4 orbs** aux biseaux : anneau sombre + contour clair, disque en
+  **dégradé radial** (`clair → profond`, centre décalé 35 %/30 %), croix X
+  blanche (2 quadratiques). Groupe animé `opacity 1 → 0.55 → 1` (3,5 s).
+- **Animation** : nœud voyageur (`animateMotion dur="5s"`).
+- **Vérification** : `hexagon_porte_et_suit_les_pans` (`s=75` en 400×300,
+  `s=10` en 100×40), `arena_porte_et_suit_les_biseaux` (`bx=75`, `by=48` en
+  300×300) — 217 tests, clippy 0.
+
+---
+
+## 54. Correctif — carrousel d'un widget sans `media` (2026-11-01)
+
+**Symptôme** : un widget qui n'a **que** `mediaSlides` (aucun champ `media`)
+n'affichait aucun carrousel en mode Rust, alors que le DOM l'affiche.
+
+**Cause** : `medias_depuis_scene` n'incluait un widget que si `w.media` était
+`Some` — la liste `mediaSlides` (pourtant prioritaire, contrat
+`carrousel.md`) n'était jamais lue pour un widget sans média unique.
+
+**Correctif** : la source du widget est
+`mediaSlides.first()` **sinon** `media` non vide — même priorité que le fond
+(`bgSlides` > `bgMedia`). Un widget sans média mais avec des slides produit
+donc un `MediaCfg` dont le `carrousel` porte toutes les slides ; le `chemin`
+d'identité reste la première slide (le diff à chaud ne recharge pas quand la
+slide courante change).
+
+**Vérification** : `widget_avec_slides_sans_media_produit_un_carrousel` —
+218 tests, clippy 0.
+
+---
+
+## 55. Anneau caméra `cameraBord` (lot D2, 2026-11-01)
+
+Miroir de `svgAnneauCamera` + `gradientCadre` (`diffusion.html` 8885,
+`registre.ts` 151). Uniquement pour une caméra à **forme dédiée**
+(`cercle`/`carre`) : sans forme dédiée, c'est le cadre de scène qui
+s'applique (D1), il n'y a pas d'anneau.
+
+- **Géométrie** : cercle inscrit (`min(W,H)/2`) ou rectangle du widget.
+- **Trait** : `clamp(strokeWidth, 1.5, 12)` — un cadre de scène épais ne doit
+  pas engloutir un cercle caméra.
+- **Dégradé** : `stopsLiseres(couleur, couleurFin)` du cadre de scène,
+  **diagonal TL→BR** (le SVG fixe `x1 0% y1 0% x2 100% y2 100%`, il n'utilise
+  PAS `gradientAngle`). Aucun cadre actif → `#e0e0e0 → #9a9a9a`, épaisseur 4.
+- **Rognure** : la moitié extérieure du trait est invisible — couche à masque
+  géométrique (cercle) ou clip axe-aligné (rect), comme le `clip-path` du
+  parent.
+- **Données** : `SourceCfg.anneau: Option<AnneauCamera>` (`cadres.rs`), posé
+  par `anneau_camera_de` (`scene_sources.rs`) ; dessiné après la capture dans
+  la même entrée de plan (`VoieRendu::dessiner_anneau_camera`).
+- **Vérification** : `camera_bord_produit_un_anneau_sur_forme_dediee`
+  (couleurs du cadre, fallback, pas d'anneau sans bord ni sans forme dédiée) —
+  219 tests, clippy 0.
+
+---
+
+## 56. Caméra — exclusivité dshow et hot-plug (lot D3, 2026-11-01)
+
+### Bascule OBS ↔ Rust (frontend)
+
+En mode OBS, `SOS-Caméra` (dshow) tient le capteur en exclusif. Après une
+bascule **acceptée** vers le Rust, `basculerMoteur` appelle
+`camera_sync(visible = false)` : les items sont désactivés (jamais
+`RemoveInput`, contrat figé), le capteur est libéré, la source et ses
+réglages restent. Le retour en mode OBS appelle `syncCapturesOBS()` qui
+réactive caméra + trous de la scène courante. La libération n'a lieu
+**qu'après** une bascule acceptée — un refus (live en cours) ne coupe jamais
+la caméra OBS.
+
+### Hot-plug natif
+
+- `CaptureCamera::est_vivante()` : le fil MF tourne encore ? Un
+  débranchement laisse la dernière frame figée.
+- `SceneVivante::appliquer_captures` ne réutilise plus une session morte
+  (même nom + même cible) : elle est **recréée** à la prochaine application
+  de scène (mutation, changement de layout, réouverture) — auto-guérison.
+- La boucle signale une caméra débranchée **une fois par seconde**
+  (`caméra « … » débranchée : dernière image figée`), jamais un gel muet.
+
+**Reste assumé** : la reconnexion **sans** mutation de scène n'est pas
+instrumentée (le rebranchement seul ne relance pas la session) ; le prochain
+lot « robustesse » (I) peut ajouter une relance périodique si le besoin est
+réel.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (219), clippy 0,
+`npm run check` 0 erreur.
+
+---
+
+## 57. Overlay clip de bienvenue (lot E1, 2026-11-01)
+
+Miroir de `playWelcomeClip` / `stopWelcomeClip` / `applyWelcomeOverlayConfig`
+(`diffusion.html` 10389-10610) : carte transitoire `z = 9999` (§9.1).
+
+**Canal** : frames `chat_tx` — `welcome-clip-play`, `welcome-clip-stop`,
+`welcome-clip-config` (+ `position-overlay-config`, **partagé** avec les
+alertes : le pont le pousse aux deux états, comme `appliquerSnapshot`).
+⚠️ `welcome:etat` (event Tauri) est l'état **dashboard** (`QueueEtat`) : il ne
+porte ni `favoris` ni l'URL MP4 résolue au bon moment — ce n'est jamais le
+canal du rendu.
+
+| Élément | Squelette (`utiliser_squelette: true`) | Spotlight |
+|---|---|---|
+| Carte | x/y/largeur du squelette, hauteur auto | 85 % de la largeur canvas, centrée |
+| Fond | `rgba(10,10,10,0.92)`, radius 12 | `rgba(12,14,22,0.55)`, bord 1 px `rgba(255,255,255,0.14)`, radius 18 |
+| Padding / gaps | 1,5 / 0,5 cqw | 3 / 1,2 / 2,5 cqw |
+| Pseudo | `clamp(10,4 ; 3,5cqw ; 17,6)`, gras | `clamp(16 ; 3cqw ; 35,2)` |
+| CTA « Checkout and follow » | `clamp(8 ; 2,2cqw ; 11,52)`, italique, α 0,6 | `clamp(11,2 ; 1,6cqw ; 16)` |
+| Bio | 2 lignes, `clamp(8,8 ; 2,5cqw ; 13,12)`, α 0,85 | 4 lignes, `clamp(12,8 ; 1,8cqw ; 19,2)` |
+| Message | `display:none` | `clamp(12,8 ; 2,2cqw ; 22,4)`, italique, α 0,9 |
+| Titre « Streamer Twitch » | `display:none` | `clamp(14,4 ; 2,6cqw ; 27,2)`, `letter-spacing .38em`, dégradé 3 stops + barre 2 px |
+| Cadre de scène | appliqué à la carte mesurée (`appliquerCadreOverlay`) | **non** (`nettoyerCadreOverlay`) |
+
+**Phases spotlight** (horloge du play) : voile noir plein canvas `ease` 350 ms →
+carte `opacity 550 ms ease` + `translateY(26px) scale(0.94) → 1` en
+`cubic-bezier(.16,1,.3,1)`, retardées de 120 ms → **intro 3 s** (textes et
+colonne droite masqués, avatar seul) → split `flex-basis 100 % → 42 %` en
+600 ms. `welcome-clip-stop` coupe tout sans fondu (`display:none` du DOM).
+
+**Limites assumées** (parité partielle — le lot G est requis pour les lever) :
+
+- **aucun média** : `clip.mp4_url`, `viewer.avatar`, `viewer.banniere` et les
+  avatars des `favoris` sont des **URLs distantes** ; le moteur ne charge que
+  des fichiers locaux (`media::decoder_pbgra`,
+  `MFCreateSourceReaderFromURL`) → avatar absent, colonne droite (clip 16:9)
+  jamais affichée (elle attend `canplay`), fond spotlight noir, rangée des
+  favoris vide — exactement ce que le DOM montre **sans** média ;
+- **aucun son** (l'`<video>` vivait dans le navigateur OBS) ;
+- `backdrop-filter`, `box-shadow`, `drop-shadow` et `line-height` CSS non
+  portés.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (228 tests) +
+`cargo test -p streamos-v0 --lib` (223 tests), `cargo clippy` 0,
+`npm run check` 0 erreur.
+
+---
+
+## 58. Reste à faire — parité (état au 2026-11-01)
+
+**Acquis** : 9/9 styles de cadres (§49-§53), animations (§48), fond capture
+natif (§47), carrousels (§54), caméra forme/anneau/exclusivité/hot-plug
+(§55-§56), toutes les scènes acceptées (lot A), overlay clip de bienvenue
+(§57, lot E1), images et composition du chat (§59, lot G), bandeau premier
+message (§60, lot E2), écran d'attente BRB (§61, lot E3), pad numérique
+(§62, lot E4), Emoji Arena (§63, lot E5), présentation streamer — décor et
+rideaux (§64, lot E6a), carte (§65, lot E6b), clips (§66, lot E6c) et audio
+(§67, lot E6d) — **lot E6 complet** — et pop de validation des splits
+(§68, lot E7), Just Chatting (§69, lot F), puis **lot H complet** : titres
+dans l'ordre z (§70), contenus de widget + titres sous perspective (§71),
+`line-height` (§72) et contour exact (§73).
+
+### Lot E — overlays (en cours), **un overlay = un diff**
+
+| # | Overlay | Canal d'état | z (§9.1) |
+|---|---|---|---|
+| E1 | Clip de bienvenue | `chat_tx` `welcome-clip-*` + `position-overlay-config` | 9999 |
+| E2 | Bandeau 1er message | `chat_tx` `bandeau-premier-message-*` | 9998 |
+| E3 | Écran d'attente BRB | `chat_tx` **`ecran-attente-etat`** (+ `muter_bureau` ajouté à la frame) | 9990 |
+| E4 | Pad numérique | `chat_tx` **`pad-play`/`pad-stop`** + `position-overlay-config` (⚠️ `pad:touche*` = dashboard) | 9995 |
+| E5 | Emoji Arena | `chat_tx` **`fight-state`** (⚠️ `fight:update` = dashboard) | 9993 |
+| E6a | Présentation — décor + rideaux (**fait**) | `chat_tx` **`presentation-show`/`-hide`/`-mode`** | 10000, 10001, 10003 |
+| E6b | Présentation — carte (**fait**) | idem (même frame, données déjà décodées) | 10002 |
+| E6c | Présentation — clips (**fait**) | `chat_tx` `-clip-play`/`-clip-stop` | 10004 |
+| E6d | Présentation — audio (**fait**) | `chat_tx` `-audio-play`/`-audio-stop` | — |
+| E7 | Pop de validation des splits (**fait**) | dérivé de `chat_tx` **`speedrun-etat`** + `splitpop-pos` (squelette) | 9993 |
+
+Méthode : décodeur + abonnement dans `src/moteur/mod.rs` (pattern
+`decoder_frame_alerte`), `pousser_<overlay>` dans `moteur.rs`, renderer
+`texte/<overlay>.rs`, entrée de plan au z ci-dessus. Vérifier le canal réel
+avant de coder — jamais supposer (E1 a montré que `welcome:etat` n'est PAS le
+canal du rendu).
+
+**Diagnostic E6 (fait le 2026-11-01, canal vérifié dans `presentation.rs`)** :
+le rendu passe par les frames `chat_tx` `presentation-show` (payload `mode` +
+`donnees` = `PresentationDonnees`), `presentation-hide`, `presentation-mode`,
+`presentation-clip-play`/`-clip-stop`, `presentation-audio-play`/`-audio-stop`.
+⚠️ `presentation:etat` est l'event **dashboard**. **Lot E6 COMPLET** :
+**E6a** (§64), **E6b** (§65), **E6c** (§66) et **E6d** (§67).
+
+**Décision utilisateur (2026-11-01), appliquée en E6c** : `mp4_url` est une
+URL **signée distante** → **préchargement disque côté app**
+(`medias/clips/<fnv16(url)>.mp4`), le moteur ne lit qu'un fichier local
+(§13.8). L'hôte `clips-media-assets2.twitch.tv` est documenté dans le CONTRAT
+FIGÉ vie privée d'`AGENTS.md`.
+
+### Lots suivants
+
+- **F — Just Chatting (fait, §69)** : la scène dérivée (`sceneDerivee`) part
+  au moteur natif comme à OBS, par `moteur_appliquer_scene`.
+- **G — Chat images (fait, §59)** : badges emoji, logos plateforme, avatars et
+  emotes inline, bordure par message. Images = cache disque côté app.
+- **H — Finitions** : **lot H complet** — H1 (§70), H2/H2b/H2c (§71), H3
+  (§72) et H4 (§73).
+- **I — Robustesse** : canvas différent en cours de sortie, `hwnd` périmé
+  (re-résolution titre/exe), PlayerBar/seek, `capture_jeu`, relance caméra
+  sans mutation de scène.
+- **J — Fond vert sans OBS** (plus tard) : solution maison, remplace le plugin
+  OBS `background_removal`.
+
+---
+
+## 59. Chat — badges, logos, avatars et emotes (lot G, 2026-11-01)
+
+Miroir de `renderChatMsg` / `renderTexte` / `renderBadges` / `creerNoeudChat`
+(`diffusion.html` 4180-4279). Composition d'un message, dans l'ordre du DOM :
+**badges emoji** → **logo plateforme** → **pseudo** (gras + couleur IRCv3) →
+`:` (opacité 0,7) → **texte** (emotes en images inline), plus l'**avatar** rond
+à gauche.
+
+| Élément | Rendu natif |
+|---|---|
+| Badges | Emoji (mod, vip, sub, broadcaster) à `0,9em` — **aucune image** |
+| Logo | Twitch/Kick : glyphe vectoriel inline 12×12 (`goal.rs::logo_plateforme`, couleurs du DOM) ; YouTube/TikTok : `YT`/`TT` en gras coloré (sans la pastille pleine) |
+| Avatar | Bitmap 1,8 em, découpe circulaire, anneau 1 px de la couleur du cadre |
+| Emotes | Bitmap inline `height:1.5em`, largeur au ratio, `vertical-align:middle` |
+| Bordure | 1 px, **teinte médiane** du dégradé `gradientCadre` (le `border-image` 135° exact coûterait une brosse par message et par frame pour un écart invisible à 1 px) |
+| Zebra / fond | inchangés (`rgba(255,255,255,0.07)` / noir, bulles = fond uniforme) |
+
+**Objets inline DirectWrite** — `ID2D1RenderTarget::DrawTextLayout` n'appelle
+**jamais** `IDWriteInlineObject::Draw` (le `clientDrawingContext` transmis
+n'est pas la cible : vérifié par test GPU). Le chat dessine donc ses layouts
+avec un `IDWriteTextRenderer` maison (`RenduChat`), qui relaie les
+`DrawGlyphRun` (brosse = `SetDrawingEffect`, sinon blanc) et **propage sa
+cible** aux objets inline.
+
+**Images : cache disque côté app** (décision utilisateur 2026-11-01)
+
+- L'app télécharge (`cache_images.rs`, reqwest) vers
+  `<app_data>\medias\cache\<fnv16(url)>` — **sans extension** (WIC détecte
+  le format au contenu : PNG/GIF/WebP vérifiés).
+- Le nom est **dérivé de l'URL** (FNV-1a 64 bits) : aucune modification de la
+  frame `chat` n'a été nécessaire. Miroir verrouillé par le même vecteur de
+  test des deux côtés (`cache_images::empreinte` ↔ `chat::empreinte_url`).
+- **À la volée** : au premier affichage l'image manque (l'emote reste en
+  texte, l'avatar réserve sa boîte), le GET part en tâche de fond ; les
+  occurrences suivantes sont locales. Aucun blocage du chat, aucune rafale au
+  démarrage.
+- Le moteur ne connaît **pas le réseau** (invariant §13.8) : il ne lit qu'un
+  fichier local, et retente à chaque reconstruction de bloc (un fichier
+  arrivé entre-temps apparaît au message suivant).
+- Cache borné : au-delà de 1 024 fichiers, les plus anciens sont purgés au
+  démarrage.
+
+**Limites assumées** : `backdrop-filter` (verre) et `box-shadow` non portés ;
+cadre SVG **par bulle** (`decorerCadreMsg`) non porté (la bulle garde sa
+bordure unie) ; pastille pleine YouTube/TikTok simplifiée en texte coloré ;
+`border-image` remplacé par une teinte médiane.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (233, dont le test GPU
+`objet_inline_est_dessine_par_draw_text_layout`), `cargo test -p streamos-v0
+--lib` (228), clippy 0, `npm run check` 0.
+
+---
+
+## 60. Bandeau premier message (lot E2, 2026-11-01)
+
+Miroir de `playBandeauPM` / `stopBandeauPM` / `applyBandeauPMConfig` /
+`bpmResoudreCouleurs` (`diffusion.html` 11189-11420) : barre pleine largeur
+`z = 9998`, en bas (défaut) ou en haut.
+
+**Canal** : frames `chat_tx` `bandeau-premier-message-play` / `-stop` /
+`-config`. ⚠️ `bandeau:etat` (event Tauri) est l'état **dashboard** — jamais
+le canal du rendu (même leçon qu'E1).
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Fond | dégradé 90° `rgba(10,10,10,.97)` → `assombrir(primaire, 55 %)` → noir |
+| Filet | 2 px du bord intérieur, **teinte médiane** `primaire → secondaire` |
+| Ligne | 2 px, `transparent → prim 85 % → sec 95 % → prim 85 % → transparent` |
+| Pastille | `padding 5×14`, bord 1 px, `✦` 16 px + « PREMIER MESSAGE » 11 px gras, `letter-spacing .14em` |
+| Avatar | 44 px rond, bord 2 px à 60 % de la primaire (cache disque, lot G) |
+| Textes | pseudo 15 px gras (primaire), message 20 px blanc, une ligne tronquée |
+| Padding | `16px 300px 16px 40px`, `gap 18px` — la réserve de 300 px est celle de la mascotte |
+| Entrée | `opacity 0 → 1` (0,45 s `ease`) + `translateY(±100 %) → 0` (0,5 s `cubic-bezier(.16,1.08,.38,.98)`) |
+| Sortie | transitions inverses, masquage après 550 ms |
+
+**Couleurs** (`resoudre_couleurs`) : cadre actif → l'extrémité la plus
+lumineuse (rec.601) devient la primaire, l'autre la secondaire ; `couleur`
+seule → secondaire assombrie de 25 % ; aucun cadre → `#e0e0e0 / #a0a0a0`.
+
+**Limites assumées** : la **mascotte Streamy** n'est pas portée (asset de
+marque servi par `/brand/streamy-welcome.png`, hors du crate) — sa réserve de
+300 px est conservée pour que le texte se coupe au même endroit ;
+`box-shadow` et `text-shadow` non portés ; `border-image` 135° remplacé par
+une teinte médiane.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (238),
+`cargo test -p streamos-v0 --lib` (230), clippy 0, `npm run check` 0.
+
+---
+
+## 61. Écran d'attente BRB (lot E3, 2026-11-01)
+
+Miroir de `initEcranAttenteOverlay` / `majEcranAttente` / `eaCacher`
+(`diffusion.html` 13009-13318) : overlay **plein écran** `z = 9990`, au-dessus
+de la scène mais **sous** pad (9995), alertes (9997), bandeau (9998) et
+bienvenue (9999) — comportement validé du DOM.
+
+**Canal** : frames `chat_tx` de type **`ecran-attente-etat`** (payload `etat`),
+ré-émises à chaque tick 1 Hz du chrono Rust (source de vérité). La frame est
+**auto-réparatrice** : le moteur remplace son état complet à chaque frame, il
+ne tient aucune horloge métier. ⚠️ `ecran-attente:etat` (event Tauri) est
+l'état **dashboard** (modale + pillule) — jamais le canal du rendu (leçon E1).
+`muter_bureau` a été **ajouté à la frame** (1 ligne dans `ecran_attente.rs`,
+champ ignoré par le DOM) : sans lui, le moteur ne pouvait pas savoir s'il doit
+muter sa source loopback.
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Racine | `#05050a` opaque, `overflow: hidden`, `opacity 0 → 1` (0,45 s `ease`) |
+| Aurore | `linear-gradient(160deg, #06060c, #0b0b16 55 %, #06060c)` + 2 radiaux (`prim` 20 % à 20 %/18 %, `sec` 16 % à 80 %/78 %) + halo `::before` dérivant (22 s `alternate`, inset −18 %) |
+| Média | `medias/…` local, plein cadre `cover`, vidéo **en boucle** ; présent = aurore masquée |
+| Voile | `linear-gradient(180deg, noir 45 %, transparent 30 %, transparent 68 %, noir 50 %)` |
+| Titre | 84 px poids 800, `letter-spacing .04em`, `line-height 1.1`, centré, `top 7 %`, padding 0 5 %, dégradé 135° `prim → sec` sur la **boîte de l'élément** |
+| Carte | `padding 24×64`, `gap 8`, `border 2 px`, `radius 14`, `rgba(8,8,14,.88)` ; centrée sur `minuteur_x/y`, `scale(minuteur_echelle)` (0,4-3,0) |
+| Label | 20 px poids 600, `#bdbdbd`, `letter-spacing .22em`, `text-transform: uppercase` (« DÉBUT DANS » / « EN PAUSE ») |
+| Chrono | 84 px poids 800, `line-height 1`, `M:SS` ou `H:MM:SS`, dégradé 135° `color-mix(prim 82 %, blanc) → color-mix(sec 60 %, blanc)` ; pause = α 0,6 |
+| Cadre de scène | appliqué à la **carte mesurée** (`appliquerCadreOverlay`), trait à la taille non mise à l'échelle, **masque** au polygone à la taille écran |
+| Stries | 4 barres 2 px × 34 vmin aux coins (`rotate ±45°`), dégradé cyan→violet, ligne sœur 1 px, comète 4 px × 18 % sur 6 s (retards 0/1,5/3/4,5 s) |
+| Streamy | PNG embarqué, `contain` dans 300×430, flottement ±9 px / 5,5 s ; pause → `streamy-offline` |
+| Orbites | anneau 2 px (`118 %` de la largeur) + 2 arcs rotatifs (9 s / 13 s inversé) |
+| Wordmark | PNG embarqué, 480 px de large, α 0,9, centré sur `logo_x/y`, `scale(logo_echelle)` |
+| Morse | 9 segments (6 px / 22 px, haut 6, gap 9) à `bottom 1.7 %`, flashs 9,5 s, retards 0/0,7/1,4/2,4/4/5,6/7,2/7,9/8,6 s |
+
+**Phases** : `actif: true` → fondu d'entrée 0,45 s ; `actif: false` → fondu de
+sortie 0,45 s puis libération du média et du bloc (le DOM retire le `<video>`
+après 500 ms). Une frame identique ne change pas la version : la carte n'est
+re-mise en page qu'au tick du chrono (1 Hz) ou au changement de scène.
+
+**Média et audio**
+
+- Chargé par `media::charger` sur le **même device** que la scène
+  (`ContexteGpu::depuis_device`), rechargé seulement si `media|kind` change
+  (`eaMediaSig` du DOM). Vidéo : `LectureCfg { paused: false, boucle: None }`
+  = `v.loop`, et **recalage** (`MediaChargee::recaler`) : un média chargé en
+  cours de session démarrerait sinon à `temps_s` (fin de flux).
+- Le média est avancé par la **composition** (une frame d'avance), pas par la
+  boucle : il n'est pas dans le plan des médias de scène.
+- **Son** : l'anneau de la vidéo rejoint le mixeur en **queue** d'entrées
+  (`nb_entrees_scene`), gain = `son ? volume × 1000 : 0` (miroir `muted = !son`
+  + `volume` du DOM), reconstruit à chaque frame.
+- **Mute « bureau »** : `muter_bureau` met à **0 le gain de l'entrée loopback**
+  du mixeur natif (`index_loopback`, mémorisé à la création des sources) —
+  c'est l'équivalent exact du `SetSceneItemEnabled false` posé par le mode OBS
+  sur les sources `desktop|bureau`. Rétabli dès `actif: false` (comme
+  `restaurer_audio`), jamais pendant le fondu de sortie.
+
+**Assets de marque** : `src/assets/streamy/streamy-{loading,offline}.png` et
+`src/assets/logo/LogoSOSDashboardSmallSize.png` sont **embarqués**
+(`include_bytes!`, mêmes fichiers que `GET /brand/{name}` de l'app) et décodés
+depuis la mémoire (`media::decoder_pbgra_memoire`) — zéro écriture disque,
+zéro dérive d'asset.
+
+**Limites assumées**
+
+- `box-shadow` / `drop-shadow` / `text-shadow` non portés (halo des stries,
+  glow des orbites, ombre de la carte, lueur du titre et des chiffres, halo de
+  la mascotte) ;
+- arcs orbitaux : `conic-gradient` + `mask` annulaire rendus en **trait d'arc
+  uni** (une brosse Direct2D n'a pas de dégradé angulaire) ;
+- wordmark : `mix-blend-mode: screen` approché par une **alpha dérivée de la
+  luminance** (noir → transparent, pic lumineux → opaque) — additif sur fond
+  sombre, sans effet de bord ;
+- `font-variant-numeric: tabular-nums` non appliqué (chiffres proportionnels) ;
+- média illisible → aurore seule (une tentative par signature, journalisée en
+  `debug`), comme un `<img>` cassé du DOM.
+
+**Écart de parité constaté (hors périmètre E3, à arbitrer)** : le **bord du
+canvas** de la scène porte `z = i32::MAX` dans le crate (`cadres_depuis_scene`)
+alors que `#cadre-app-overlay` du DOM est à `z-index: 100` — il est donc peint
+**au-dessus** de l'écran d'attente (et de tout overlay ≥ 9990), là où le DOM le
+laisse dessous. Invisible avec les cartes E1/E2 (elles ne touchent pas le bord),
+visible ici en plein écran. Deux options : ramener le bord sous `Z_ATTENTE`
+(côté crate) ou aligner le z du DOM — **non tranché**, signalé.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (248),
+`cargo test -p streamos-v0 --lib` (233), clippy workspace 0 warning,
+`npm run check` 0 erreur. Vérification visuelle : rendu de l'overlay seul
+(harnais temporaire, supprimé) en 1280×720 — layout `signature` et `minimal`
+conformes (aurore, titre dégradé, carte minuteur + cadre de scène, stries,
+Streamy + orbites, wordmark, morse).
+
+---
+
+## 62. Pad numérique (lot E4, 2026-11-01)
+
+Miroir de `initPadOverlay` / `applyPadOverlayConfig` / `playPad` /
+`stopPad` (`diffusion.html` 12203-12411) : carte média transitoire
+`z = 9995` — sous commandes (9996), alertes (9997), bandeau (9998) et
+bienvenue (9999), au-dessus de l'écran d'attente (9990).
+
+**Canal** : frames `chat_tx` **`pad-play`** (payload `pad`) et **`pad-stop`**,
+plus la frame **partagée** `position-overlay-config` (squelette unifié
+welcome + alertes + commandes + pad). ⚠️ Les events Tauri `pad:touche` /
+`pad:touche-stop` sont l'état **dashboard** (audio local + retour UI) : ce
+n'est jamais le canal du rendu (le plan les annonçait — faux, comme E1/E2/E3).
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Racine | `(x, y)` + `largeur` du squelette, hauteur déduite du média ; `opacity 0 → 1` (0,3 s `ease`) et `scale(0.6) → 1` (0,3 s `cubic-bezier(.16,1.08,.38,.98)`) autour du centre |
+| Carte | largeur du squelette, hauteur = `largeur × ratio`, bornée à **80 %** de la hauteur canvas (`max-height: 80vh`) |
+| Média | `object-fit: contain`, `border-radius: 8px` (géométrie arrondie en masque de couche) ; image **ou** vidéo jouée **une fois** |
+| Effets | `bounce` `translateY(0 → −20 px)` 0,6 s `ease-in-out` ; `zoom` `scale(1 → 1,15)` 1,2 s — sur le média, jamais en plein écran |
+| Plein écran | racine = canvas, média `contain` 100 %×100 %, sans radius, **sans cadre**, `transform: none` ; `transparence` → opacité `transparence_opacite` sur le média seul |
+| Cadre de scène | appliqué à la carte mesurée (`appliquerCadreOverlay`), jamais en plein écran ; le polygone sert aussi de `clip-path` |
+| Sortie | `pad-stop` → transitions inverses 0,3 s, masquage à 500 ms (le DOM retire le `<video>`) |
+
+**Son** (miroir de `playPad`) : vidéo → son porté par la vidéo
+(`MediaChargee::anneau_audio`) ; image → fichier `son` séparé ; touche
+`audio` → le **média est le son**, aucun visuel. Volume = `volume` de la
+touche, **coupé dès le `pad-stop`** (le DOM met l'audio en pause).
+
+**Nouveau : lecture d'un fichier audio seul** (`media::AudioFichier`) — même
+Source Reader que les vidéos (flux audio uniquement, f32 48 kHz stéréo par le
+resampler MF), horloge identique (`avancer(temps_us)` + `decalage_us`). Le
+pompage des échantillons est factorisé (`media::pomper_audio`) et partagé avec
+`MediaChargee::avancer_audio`.
+
+**`LectureCfg::boucle_infinie`** (nouveau) : `true` = `v.loop` implicite des
+médias de scène (comportement historique) ; `false` = **une seule lecture**,
+dernière image figée en fin de flux — c'est ce que fait un `<video>` du pad
+(aucun attribut `loop`). Sans ce champ, la vidéo d'une touche bouclait
+silencieusement.
+
+**Limites assumées** : `max-height: 80vh` mesuré sur la hauteur du **canvas**
+(le viewport du DOM) ; pas de `box-shadow` (aucun texte dans cet overlay) ;
+une image illisible → rien n'est affiché (une tentative par signature,
+journalisée en `debug`), comme un `<img>` cassé.
+
+**Reste hors lot (à planifier)** : le **chrono 2** du même module
+(`chrono2-etat` + `chrono2-pos`, squelette dédié) n'est pas porté — c'est un
+overlay distinct, à traiter comme un lot à part entière.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (253),
+`cargo test -p streamos-v0 --lib` (236), clippy workspace 0 warning,
+`npm run check` 0 erreur. Vérification visuelle (harnais temporaire supprimé) :
+carte image avec cadre de scène + mode plein écran transparent.
+
+---
+
+## 63. Emoji Arena `!fight` (lot E5, 2026-11-01)
+
+Miroir de `initFightOverlay` / `majFightState` / `fightTick` /
+`fightAnimerCoup` (`diffusion.html` 2133-2550 + 12415-12845) : arène 1v1
+`z = 9993` — sous chrono 2 (9994), pad (9995), commandes (9996), alertes
+(9997), bandeau (9998) et welcome (9999), au-dessus de l'écran d'attente
+(9990).
+
+**Canal** : frames `chat_tx` **`fight-state`** (payload `combat`), snapshot
+COMPLET à chaque transition + resync (`fight-resync`). ⚠️ L'event Tauri
+`fight:update` est l'état **dashboard** (modale + pillule) — jamais le canal
+du rendu (le plan l'annonçait : faux, comme E1→E4).
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Zones | `bottom 4%`, largeur 300, `left/right 4%`, colonne centrée |
+| PV | en-tête `700 15px` (pseudo / `pv/max`) + barre 220×13, `radius 7`, fond `rgba(0,0,0,.55)`, bord 1 px `rgba(255,255,255,.28)` ; remplissage dégradé 90° vert (> 55 %), ambre (≤ 55 %), rouge (≤ 25 %) |
+| Emoji | 128 px, `line-height 1`, zone B **miroir** (`scaleX(-1)`), respiration ±5 px / 2,6 s |
+| Nom | `700 20px`, puis plateforme `11px` α 0,7 (masquée pour `bot`/`local`) |
+| Chips | zone active seulement : `⚡ !a rapide`, `💥 !b lourd`, `🩸 !c spécial` (spécial barré α 0,35 après usage), pastilles `padding 6×10`, `radius 999` |
+| Badge | « À TOI » (`800 12px`, noir sur `#ffd24b`) au-dessus de la zone active |
+| Timers | zone active 220×5 + colonne centrale 210×8, dégradé `#8b5cf6 → #d946ef`, fraction `reste_tour / duree_tour` |
+| Centre | pastille « ⚔ Au tour de X · N s » (`700 17px`, `radius 999`, fond `rgba(10,12,20,.6)`) + temps de match `M:SS` (`600 13px`, α 0,8) |
+| Bannière | lobby (emoji 72 px + titre + `!accept … ou !refuse · 3 coups · N s/tour · M min — N s`) et fin (🛑 arrêté / ⏹ inactivité / 🏆 gagnant / 🤝 égalité), `radius 16`, `max-width 70 %` |
+| Toast | racine séparée, `top 3%`, centré, `600 18px/1.35`, bord coloré `warn`/`ok`/`aide`, fondu 0,18 s, dedup par `seq` + âge vérifié |
+
+**Échéances locales** : la frame ne revient qu'aux transitions — `reste_tour_ms`,
+`reste_lobby_ms` et `reste_match_s` sont décomptés depuis l'instant de
+réception (miroir du `setInterval(fightTick, 250)`), et le bloc est re-mis en
+page quand la seconde affichée change.
+
+**Animations** (miroir de `fightAnimerCoup`) : lunge 0,5 s (40 % → ±90 px,
+×1,15), secousse du défenseur 0,4 s à +200 ms, esquive ±46 px si le coup rate,
+popup `-N` / `+N` / « raté » / « ⏳ passe… » (1,1 s, `translateY` −16 → −70 px,
+×0,6 → ×1,15), impact `.fight-fx` (💥 / 💢 / 🩸 / ✨, 0,5 s), flash d'impact
+(voile blanc 0,26 s) et secousse d'écran 0,3 s (coup lourd ou critique), KO du
+perdant (`rotate 75°`, `+28 px`, α 0,35). `anims_reduites` coupe les FX, la
+secousse d'écran et la respiration — jamais les popups.
+
+**Emojis en couleur — piège vérifié** : `ID2D1RenderTarget::DrawTextLayout`
+n'active pas les glyphes COLR/CPAL (les emojis sortaient en blanc). Il faut
+`ID2D1DeviceContext::DrawTextLayout` avec
+`D2D1_DRAW_TEXT_OPTIONS_ENABLE_COLOR_FONT` — c'est ce que fait
+`dessiner_ligne_f`. ⚠️ Et une ligne `centre: true` est centrée dans **sa boîte
+de mise en page** : l'origine de dessin doit être `centre − largeur_layout / 2`
+(même piège que la carte minuteur d'E3).
+
+**Limites assumées** : `text-shadow` / `drop-shadow` non portés ; le
+`grayscale` du KO n'est pas appliqué (rotation + α conservés) ; le flash
+d'impact remplace `brightness(2.1)` par un voile blanc ; `tabular-nums` non
+appliqué.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (261),
+`cargo test -p streamos-v0 --lib` (238), clippy workspace 0 warning,
+`npm run check` 0 erreur. Vérification visuelle (harnais temporaire supprimé) :
+combat (PV, chips, badge, timers, pastille de tour), lobby (bannière + compte à
+rebours), fin (bannière + KO du perdant) — emojis en couleur.
+
+---
+
+## 64. Présentation streamer — décor et rideaux (lot E6a, 2026-11-01)
+
+Miroir de `initPresentationOverlay` / `playPresentationShow` /
+`appliquerModePresentation` / `stopPresentation` (`diffusion.html`
+10615-11118) et du bloc CSS `.pres-*` (2600-3142). Overlay **plein écran
+autonome** (pas un widget de scène), au-dessus de toute la pile : écran
+d'attente 9990 → welcome 9999.
+
+Cette tranche porte le **décor** ; la carte (E6b), le lecteur clip (E6c) et
+les 2 pistes audio (E6d) suivent.
+
+**Canal** : frames `chat_tx` **`presentation-show`** (payload `mode` +
+`donnees`), **`presentation-hide`** et **`presentation-mode`** (bascule à
+chaud). ⚠️ L'event Tauri `presentation:etat` est l'état **dashboard**
+(favoris + contrôles live) — jamais le canal du rendu (leçon E1→E5).
+`presentation-show` n'arrive **qu'une fois** : toute la chorégraphie est une
+horloge **locale** (`debut` / `debut_chore` / `fin`), le moteur ne reçoit
+aucun tick.
+
+**Trois couches, trois entrées de plan** — `GenreCalque::Presentation` dont
+l'index porte la couche (`COUCHE_VOILE` / `COUCHE_RIDEAUX` / `COUCHE_PUBLIC`),
+ce qui laisse la carte `10002` (E6b) et le clip `10004` (E6c) s'intercaler
+sans renuméroter :
+
+| Couche | z | Contenu |
+|---|---|---|
+| Voile | 10000 | `radial-gradient` de fond + bannière `cover` + scrim, 3 orbes, sol, 3 faisceaux, 20 poussières |
+| Rideaux | 10001 | rideau gauche/droit, cantonné festonné, 2 embrasses |
+| Public | 10003 | 3 rangées de fauteuils + silhouettes — **devant** la carte (10002) |
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Voile | `radial-gradient(ellipse at 50% 42%, #1b1b38, #05050a 74%)` — taille `farthest-corner` (ellipse au ratio de la boîte passant par le coin le plus loin) ; `opacity 0 → 1` en 0,5 s `ease` **portée par une couche** (tous les enfants fondent ensemble) |
+| Bannière | `offline_image_url` Helix, `cover` plein cadre + scrim `linear-gradient(180deg, rgba(5,5,10,.55), .32 45%, .72)` ; absente = dégradé seul |
+| Orbes | `o1` 620 px `left -140 / top -160` violet, `o2` 560 px `right -120 / top 12%` rose, `o3` 520 px `left 34% / bottom -240` bleu ; `opacity .45`, cycle 14 s `ease-in-out` alterné (`translate(60,-40) scale(1.12)`), retards −5 s / −9 s |
+| Sol | bas 24 % : dégradé vertical `transparent → rgba(20,11,7,.78) 38% → #0b0503`, lueur `ellipse 62% 95% at 50% 112%`, liseré 2 px à 8 % des bords |
+| Faisceaux | `s1` 420 px `left 6%` `rotate(17deg)`, `s2` `right 6%` `rotate(-17deg)`, `s3` 520 px centré ; `top -60px`, hauteur 126 %, trapèze `47% 0, 53% 0, 100% 100%, 0 100%`, dégradé 180°, balancement ±1,4° sur 11 s (retards −4 s / −7 s), origine `50% 0` |
+| Poussière | 20 grains 2-5 px, `left 22-78 %`, `top 8-86 %`, dérive `(26,-42)` sur 8-17 s, opacité 0,12 → 0,5 → 0,22 |
+| Rideaux | 50 % de large chacun, plis `repeating-linear-gradient(90deg)` période **88 px** + ombre verticale, ourlet doré 14 px, bord intérieur 6 px `#c9a13b` ; ouverture `translateX(∓27 %) scaleX(0,5)` en 1,2 s `cubic-bezier(.4,0,.2,1)` |
+| Cantonné | `height 110px`, mêmes plis + ombre, festons `::after` : par tuile de **192 px**, cercle doré (r 104, +4 px) sous un cercle rouge (r 100), chacun clippé à sa tuile |
+| Embrasses | 290 × 30, `top 57%`, `left/right -55px`, `rotate(∓24deg)`, rayon 15 ; `translateY(-16px) → 0` et `opacity 0 → 1` en 0,4 s **après 0,75 s** |
+| Public | conteneur 240 px (`overflow: hidden`), 3 rangées `bottom 118 / 16 / -26`, fauteuils 88×74 / 116×94 / aucun (gros têtes floues), ~15 % de fauteuils vides, tête = ellipse + épaules (demi-ellipse 1,64 × largeur), balancement ±1,5° + `translateY(-2px)` sur 4-7,5 s |
+| Fauteuil | `border-radius: 46% 46% 8% 8% / 32% 32% 5% 5%` → **géométrie** à deux rayons par coin (un `D2D1_ROUNDED_RECT` n'a qu'un rayon) |
+
+**Chorégraphie** (miroir du CSS) : voile 0,5 s ; théâtral = valance et public
+0,6 s, rideaux 1,2 s **après le double `requestAnimationFrame`** du DOM
+(~33 ms), embrasses après 0,75 s ; sortie = tout se referme, masquage à
+**1 250 ms** (théâtral) / **500 ms** (card) — le DOM retire les nœuds à ce
+moment-là. Un `show` reçu pendant le fondu de sortie repart des phases
+**courantes** (`depart`), jamais du noir. Une bascule `presentation-mode`
+rejoue la chorégraphie (`debut_chore` remis à zéro) **sans** re-fondre le
+voile (`debut` conservé) ; un `show` de même mode ne rejoue rien (le DOM
+ajoute et retire les classes dans la même frame).
+
+**Mode `card`** : **le voile et tout son décor restent affichés** (le code du
+DOM fait `presVoileEl.style.display = "block"` + `.visible`) ; seuls rideaux,
+cantonné, embrasses et public disparaissent. Le commentaire CSS « sans voile
+complet » est faux — c'est le **code** qui fait foi.
+
+**Tirage déterministe** : `Math.random()` (20 poussières + places du public)
+est remplacé par un xorshift à graine fixe (`GRAINE_DECOR`) : le décor est
+stable d'une session à l'autre, mais pas identique au tirage du DOM
+(irreproductible par nature). Le public suit le **1920 codé en dur** du DOM
+(`for (x = offset; x < 1920; …)`) : sur un canvas plus large, les rangées
+s'arrêtent à 1 920 px comme dans la diffusion.
+
+**Bannière et cache disque** : le crate ne fait aucun réseau (§13.8) — l'app
+précharge l'URL dans `medias/cache/` (`cache_images.rs`, lot G) et le moteur
+lit `image_cache(url)`. Tant que le fichier manque, le décor retombe sur le
+dégradé seul, puis se répare seul : **re-tentative toutes les 500 ms**
+(`pres_banniere_tentative`), l'équivalent natif du `<img>` qui se charge en
+asynchrone.
+
+**Limites assumées** : `filter: blur()` non porté (orbes = disque à dégradé
+radial, opaque jusqu'à `r − 90 px` et transparent à `r + 90 px` ; faisceaux à
+bord net ; poussière non adoucie) ; `box-shadow` / `inset` des rideaux, du
+cantonné et des fauteuils non portés (même limite qu'E3) ; les cuspides entre
+festons du cantonné sont **conformes au CSS** (le dégradé radial atteint le
+bord de tuile à ~60 % d'alpha, il ne faut pas les « corriger »).
+
+**Piège payé** : le fauteuil sortait en « M » (creux au milieu) —
+`D2D1_ARC_SEGMENT` avec `D2D1_SWEEP_DIRECTION_CLOCKWISE` + `ARC_SIZE_SMALL`
+sur des extrémités distantes de 90° **anti-horaires** force D2D à tracer les
+270° restants (vers l'intérieur). Un contour parcouru bas → droite → haut →
+gauche (y vers le bas) est anti-horaire : les quatre coins sont
+`D2D1_SWEEP_DIRECTION_COUNTER_CLOCKWISE`.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (273),
+`cargo test -p streamos-v0 --lib` (241), clippy workspace 0 warning,
+`npm run check` 0 erreur. Vérification visuelle (harnais temporaire supprimé,
+1280×720) : théâtral à mi-ouverture (rideaux froncés + bord doré + ourlet +
+embrasses), théâtral ouvert (ouverture ~11,5 % par côté, public et cantonné en
+place) et mode `card` (voile + 3 faisceaux + orbes + poussière + sol, sans
+rideaux ni public).
+
+---
+
+## 65. Présentation streamer — carte (lot E6b, 2026-11-01)
+
+Miroir de `.pres-root` / `.pres-carte` / `.pres-col-gauche` /
+`.pres-col-droite` et de leurs enfants (`diffusion.html` 2907-3070) + du
+remplissage `playPresentationShow` (10891-10950). Couche `z 10002` — **sous**
+le public (10003), **au-dessus** des rideaux (10001).
+
+**Canal** : aucune frame nouvelle. La carte lit `PresentationDonnees` déjà
+décodé par E6a (`presentation-show`) ; le canal est vérifié depuis E6a.
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Racine | `inset 0`, `display: flex`, `align-items: center`, `justify-content: center` — la carte est centrée dans le canvas |
+| Carte | `display: flex`, `gap 56px`, `max-width 73%` ; entrée `opacity 0 → 1` (0,55 s `ease`) et `translateY(26px) scale(.94) → none` (0,55 s `cubic-bezier(.2,.9,.3,1.15)`), **retard 0,65 s** — la carte apparaît pendant l'ouverture des rideaux |
+| Carte (card) | `flex-direction: column`, `gap 22px`, `max-width 760px`, textes centrés, **retard 0 s** |
+| Colonne gauche | `gap 14px`, `max-width 460px`, centrée : avatar → nom → `@login` → badges → bio → jeu → lien |
+| Avatar | 190 px (150 en card), cercle : image `cover` clippée, `border 5px` blanc 90 %, anneau `box-shadow: 0 0 0 6px` violet 55 % (**sans flou → porté comme trait**) |
+| Nom | `800 54px/1.05` (42 px en card), blanc, centré |
+| Login | `600 24px/1.2`, blanc 65 % |
+| Badge | `PARTNER` / `AFFILIATE` seulement, `700 18px/1`, `padding 8×16`, `radius 999`, dégradé `135deg` (`#772ce8→#9146ff` / `#1f6feb→#3b82f6`) |
+| Bio | `400 23px/1.45`, blanc 88 %, **rognée à 5 lignes** |
+| Jeu | `Joue à : <jeu>`, `700 22px/1.2`, `#ffd77a` |
+| Lien | `twitch.tv/<login>`, `600 20px/1`, blanc 55 %, `letter-spacing .04em` |
+| Colonne droite | `gap 18px`, `max-width 620px` ; `align-items: center` en card |
+| EN DIRECT | pastille `800 22px/1`, `padding 10×18`, `radius 10`, fond `#e91916`, pastille blanche 12 px + `gap 12` ; `align-self: flex-start` (centrée en card) ; texte `EN DIRECT · <viewers>` |
+| Titre live | `600 22px/1.35`, blanc 80 %, largeur de colonne |
+| Jeux récents | rangée `gap 12px`, boîte `96×128` (`radius 10`, `cover`) + nom `600 15px/1.2` blanc 75 %, centré, **2 lignes max** |
+
+**Dimensionnement des colonnes** (`repartition_colonnes`, `flex` résolu à la
+main) : chaque colonne prend la largeur **naturelle** de son contenu
+(mesurée sans retour à la ligne), bornée par son `max-width` (460 / 620) ;
+en théâtral, si `gauche + 56 + droite` dépasse la largeur de la carte
+(73 % du canvas), les deux sont réduites **proportionnellement** — c'est
+exactement ce que fait `flex-shrink: 1` avec des bases de contenu. En mode
+`card` les colonnes sont empilées et bornées par 760 px. La carte est ensuite
+centrée dans le canvas ; en théâtral chaque colonne est centrée verticalement
+(`align-items: center`).
+
+**Images** : avatar et boîtes de jeux sont des URLs distantes
+(`static-cdn.jtvnw.net`) → **cache disque de l'app** (`image_cache`, lot G),
+préchargées par le pont sur la frame `presentation-show`. Le crate ne fait
+aucun réseau (§13.8). ⚠️ Les `box_art_url` Helix portent des placeholders
+`{width}x{height}` : `url_box_art` (crate) les remplace par `96x128` et l'app
+appelle **la même fonction** pour précharger — une seule vérité, donc aucune
+dérive d'empreinte possible. Tant que le fichier manque, l'élément est omis
+puis re-testé toutes les 500 ms (`pres_images_tentative`).
+
+**La grille de clips 2×2 de la carte n'est PAS dans cette tranche** : ses
+vignettes vivent sur `clips-media-assets2.twitch.tv`, un hôte absent du
+contrat vie privée d'`AGENTS.md`. Elle part avec **E6c** (lecteur clip
+`z 10004`), en même temps que l'hôte sera documenté.
+
+**Limites assumées** : `text-shadow` des textes non porté (même limite qu'E3) ;
+`-webkit-line-clamp` de la bio et des noms de jeux = **rognage** à N lignes,
+sans ellipse ; `word-break: break-word` du nom non appliqué (DirectWrite
+coupe aux espaces) ; ombre portée de la carte, halo des badges et ombre des
+boîtes non portés (seul l'anneau de l'avatar, sans flou, est rendu) ;
+`aspect-ratio` / `grid` des clips → E6c.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (280),
+`cargo test -p streamos-v0 --lib` (241), clippy workspace 0 warning,
+`npm run check` 0 erreur. Vérification visuelle (harnais temporaire supprimé,
+1280×720, cache disque local) : théâtral (avatar rond + anneau, nom, `@login`,
+badge AFFILIATE dégradé, bio 5 lignes, jeu, lien, `EN DIRECT · 1 234`, titre
+sur 2 lignes, 2 boîtes de jeux + noms) et mode `card` (colonnes empilées,
+tout centré).
+
+---
+
+## 66. Présentation streamer — clips (lot E6c, 2026-11-01)
+
+Miroir de `.pres-clips` / `.pres-clip` (CSS 3071-3111) + `playPresentationShow`
+(10952-10972) pour la **grille 2×2**, et de `.pres-clip-root` (3112-3142) +
+`presentationClipPlay` / `presentationClipStop` (11121-11147) pour le
+**lecteur plein écran** `z 10004`.
+
+**Canal** : frames `chat_tx` **`presentation-clip-play`** (payload `mp4_url`,
+`titre`, `duree_ms`) et **`presentation-clip-stop`** (émise aussi par le
+`onended` du DOM en fin de clip). `presentation-show` et `presentation-hide`
+**coupent** le clip (`playPresentationShow` / `stopPresentation`).
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Grille | `.pres-clips` : 2 colonnes, `gap 12px`, 4 premiers clips ; cellule `aspect-ratio 16/9`, `radius 12`, `overflow: hidden` |
+| Vignette | `thumbnail_url`, `object-fit: cover`, fond `rgba(255,255,255,.06)` tant que le fichier n'est pas en cache |
+| Durée | `Math.round(duration) + "s"`, `700 15px/1`, pastille noire 75 %, `padding 4×8`, `radius 6`, à 8 px du coin bas-droit |
+| Titre | `600 15px/1.3`, bandeau `linear-gradient(180deg, transparent, rgba(0,0,0,.85))`, `padding 18px 10px 8px`, **`nowrap` + ellipse** |
+| Lecteur | voile `rgba(0,0,0,.9)` plein canvas ; vidéo à sa taille intrinsèque bornée à **88 % × 82 %** (jamais agrandie), centrée, `radius 14` |
+| Titre du lecteur | `700 30px/1.3`, `top 44px`, `left/right 8%`, centré, **`nowrap` + ellipse** |
+
+**Préchargement disque (décision utilisateur du 2026-11-01)** : `mp4_url` est
+une URL **signée** Twitch — le crate ne fait aucun réseau (§13.8). L'app
+télécharge le MP4 dans **`medias/clips/<fnv16(url)>.mp4`**
+(`cache_clips.rs`, écriture atomique, purge au-delà de 8 fichiers, 256 Mio
+max) **au clic « jouer un clip »**, puis émet la frame. Le moteur calcule le
+même chemin (`presentation::chemin_clip`, même `empreinte_url`) et lit un
+**fichier local**. Tant qu'il manque, le lecteur affiche le voile + le titre
+(« buffering ») et re-tente toutes les 500 ms — la signature peut expirer côté
+Twitch sans conséquence, le fichier reste lisible.
+
+**Nouvel hôte réseau** : `clips-media-assets2.twitch.tv` (vignettes + MP4),
+documenté dans le CONTRAT FIGÉ vie privée d'`AGENTS.md` **avant** implémentation
+(règle du contrat).
+
+**Fin de clip** : `duree_ms` (portée par la frame) → retour à la carte, comme
+`onended` ; `duree_ms: 0` = inconnue → le clip reste jusqu'au `-clip-stop`.
+Le **son du clip** rejoint le mixeur (anneau du média, gain 1000, 0 dès la fin)
+— le DOM ne le coupe qu'en `PREVIEW`, notion absente du moteur.
+
+**Écart assumé** : le DOM place la pastille de durée **avant** le titre, donc
+sous son bandeau dégradé, et laisse le titre courir dessous — les deux
+deviennent illisibles sur un titre long. Le moteur peint la pastille
+**au-dessus** et rogne le titre **avant** elle (largeur réservée au layout).
+
+**Piège payé** : `DWRITE_WORD_WRAPPING_NO_WRAP` **ne rogne pas** au layout —
+DirectWrite laisse le texte déborder (le titre passait sous la pastille de
+durée). Il faut `SetTrimming` + `CreateEllipsisTrimmingSign` (miroir de
+`text-overflow: ellipsis`).
+
+**Limites assumées** : `box-shadow` de la cellule et ombre de la vidéo non
+portés ; la grille prend **toujours** la largeur de la colonne (en mode `card`
+le `align-items: center` du DOM laisse la largeur d'une grille
+`repeat(2, 1fr)` indéterminée) ; vignette manquante = fond translucide seul.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (283),
+`cargo test -p streamos-v0 --lib` (244), clippy workspace 0 warning,
+`npm run check` 0 erreur. Vérification visuelle (harnais temporaire supprimé,
+1280×720, cache disque + MP4 local) : grille 2×2 (vignettes, durées `30s` /
+`14s`, titres tronqués à l'ellipse) et lecteur plein écran (voile 90 %, vidéo
+centrée arrondie, titre 30 px).
+
+---
+
+## 67. Présentation streamer — audio (lot E6d, 2026-11-01)
+
+Miroir de `presentationAudioPlay` / `presentationAudioStop`
+(`diffusion.html` 11151-11171). Dernière tranche du lot E6.
+
+**Canal** : frames `chat_tx` **`presentation-audio-play`** (payload `piste`,
+`src`) et **`presentation-audio-stop`** (payload `piste` = `voix` | `musique` |
+`toutes`). `presentation-show` et `presentation-hide` arrêtent **toutes** les
+pistes (`presentationAudioStop("toutes")` dans `playPresentationShow` /
+`stopPresentation`).
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Pistes | 2 fixes : `voix` (one-shot, `audio.loop = false`) et `musique` (boucle, `audio.loop = true`) |
+| Source | `src` = `medias/…` → **fichier local** (`base.join(src)`), aucun réseau |
+| Lecture | `media::AudioFichier` (lot E4, Source Reader audio seul) — `ouvrir(chemin, temps_us)` puis `avancer(temps_us)` à chaque frame |
+| Boucle | `musique` : le fichier est **réouvert** en fin de flux (équivalent de `loop`) ; `voix` s'arrête au bout |
+| Mixage | une entrée par piste en **queue** du mixeur (`entrees.push`), gain 1000 tant que la piste est active, 0 sinon |
+| Arrêt | `-audio-stop` d'une piste → `pause()` + `currentTime = 0` (l'anneau est libéré) ; `toutes` → les deux |
+
+**Dégradations assumées** : `muted`/`PREVIEW` du DOM n'existent pas côté
+moteur (le son sort toujours) ; le fichier est rouvert à chaque boucle
+(~0 ms sur un MP3 de quelques Mo, aucune coupure audible) ; une piste
+illisible est **omise** une fois (journalisée en `debug`), jamais réessayée
+en boucle — comme le pad (E4).
+
+**Vérification** : `cargo test -p sos-moteur-natif` (286),
+`cargo test -p streamos-v0 --lib` (245), clippy workspace 0 warning,
+`npm run check` 0 erreur. La piste est **chargée et avancée** en conditions
+réelles (harnais temporaire : `AudioFichier::ouvrir` réussit sur un WAV,
+aucune ligne « piste ignorée »). ⚠️ **Pas de vérification audio de bout en
+bout possible sur cette machine** : le harnais avec loopback se fige dans
+`Apercu::lire` — voir l'encart ci-dessous, **reproduit sans la présentation**.
+
+> ✅ **RÉSOLU le 2026-11-02 (lot I-a, §74)** — la cause n'était pas
+> `Apercu::lire` mais l'écriture du **pipe audio** (voir §74). Après
+> correction, le même harnais tient 890 composites en 15 s (≈59,9 fps, 0
+> dégradation) et le MP4 garde ses deux flux. Le diagnostic ci-dessous est
+> conservé pour l'historique.
+>
+> ⚠️ **BUG PRÉ-EXISTANT (diagnostic d'origine, 2026-11-01)** : avec
+> `audio_live` **et** l'aperçu actif (`ApercuCfg::default()`), le thread de
+> composition se figeait au bout de quelques secondes — `composites` cessait
+> d'augmenter et `arreter()` ne rendait jamais la main. Reproduit avec
+> `examples/audio_scene.rs` **sans aucune présentation** (388 composites puis
+> gel à 8 s). La localisation réelle : `PipeAudio::ecrire` (pipe nommé vers
+> FFmpeg), pas `Apercu::lire` — voir §74.
+
+---
+
+## 68. Pop de validation des splits (lot E7, 2026-11-01)
+
+Miroir de `.splitpop-root` / `.splitpop-carte` (`diffusion.html` 1150-1310) et
+de `srPopSplit` / `splitPopCacher` / `applySplitPopOverlayConfig`
+(6415-6620 + 6870-6990). `z 9993` — sous le pad (9995), les alertes (9997) et
+le bandeau (9998), au-dessus des modules HUD (9000).
+
+**Canal** : le **contenu** ne vient pas d'une frame dédiée — le pop est dérivé
+des **mêmes** mutations que le widget speedrun (frames `chat_tx`
+`speedrun-etat` → `MajSpeedrun`), lues **avant** application
+(`EtatSpeedrun::pop_pour`, miroir de `srPointEtatFranchi`). Seule la
+**position** arrive par la frame **`splitpop-pos`** (squelette dédié
+`position_splitpop.json`, défaut 660/60/600/120) — jamais par
+`position-overlay-config` (squelette partagé welcome/alertes/commandes/pad).
+
+| Élément | Valeur (DOM → natif) |
+|---|---|
+| Racine | `(x, y)` + `largeur × hauteur` du squelette, `flex` centré ; `opacity 0 → 1` et `scale(0.6 → 1)` en 0,3 s `cubic-bezier(.16,1.08,.38,.98)` |
+| Police de base | `em = max(18, round(hauteur × 0,4))` px — tout le reste est en `em` |
+| Badge | « SPLIT n » (`n = index + 1`), 0,3em poids 800, `letter-spacing .28em`, `padding .24em .8em .24em 1.08em`, pastille `color-mix(couleur 26%, rgba(0,0,0,.72))` + bord `color-mix(couleur 75%, transparent)`, rayon 999 |
+| Hero | Delta (`+1.23` / `−0.45`) en **Anton** 1,5em, `skewX(-5deg)`, couleur = `srCouleurAhead` (ok) / `srCouleurBehind` (ko) |
+| Mot | `GAGNÉ` / `PERDU` sous le hero (0,3em, 800, `letter-spacing .5em`) ; **sans delta** → `VALIDÉ` / `SKIP` devient le hero (0,85em Anton, `.14em`, couleur du résultat) |
+| Impact | `scale(.15) rotate(-9deg)` → `1.22 rotate(2.5deg)` (55 %) → `0.95 rotate(-1deg)` (78 %) → `1` en 0,5 s `cubic-bezier(.22,1.32,.36,1)` |
+| Aura | `::before` `inset -0.5em -1.1em`, halo sombre + teinte du résultat |
+| Durée | `srPointsDureePop` (défaut 2 s, min 1) puis fondu 0,3 s, nœud retiré à +350 ms |
+| Re-pop | à 2 s puis 4 s si `durée > t + 0,6 s` — `scale 1 → 1,12 rotate(-1.5deg) → 0,97 → 1` en 0,45 s |
+| Dédup | même signature (`split:n:cumul` / `skip:n`) à moins de **1,5 s** = même event (plusieurs widgets speedrun) |
+| Coupe | `started` / `reset` / `goto` / `stopped` / `disconnected` cachent le pop |
+
+**Options du widget** (`srVoirPoints`, `srPointsDureePop`,
+`srCouleurAhead`/`Behind`) : portées par `SpeedrunCfg` (lot E7, deux champs
+ajoutés) et lues au moment du push.
+
+**Limites assumées** : `filter: blur(2px)` de l'aura et `box-shadow` de la
+pastille non portés ; le `flash` (`brightness(2.1) saturate(1.6)` sur le hero)
+est approché par un **éclaircissement** vers le blanc (65 % max) sur les 45 %
+premiers ; `text-shadow`/`drop-shadow` non portés (E3).
+
+**Son du pop (`srPointsSon`) — porté le 2026-11-02** : `SpeedrunCfg` porte
+`points_son` + `points_son_volume` (fichier **local** `medias/…`, aucun
+réseau) ; la frame `MajSplitPop::Afficher` les transporte ;
+`EtatSplitPop::son()` rend `(chemin, volume, son_version)` — la version
+change à **chaque pop accepté** (pas sur un doublon), le rendu rouvre alors
+le fichier (`AudioFichier::ouvrir` à `temps_s`, équivalent du `new Audio` du
+DOM, un par pop) et l'avance à chaque frame ; le mixeur y ajoute une entrée
+de gain `volume × 1000` (0 hors pop). Fichier illisible = pop muet, jamais
+fatal (politique du pad / E6d).
+
+⚠️ **Implémenté et testé unitairement, pas encore vérifié de bout en bout** :
+le harnais audio + widget speedrun se fige encore (voir §74, gel n° 2), et il
+se fige **sans** le son aussi — le son du pop n'est donc pas en cause.
+
+**Piège payé** : une ligne `DWRITE_TEXT_ALIGNMENT_CENTER` est centrée dans
+**sa boîte de mise en page** (4096 px) → tout le texte du pop partait 2 000 px
+à droite, hors écran (même piège qu'E3). `LEADING` + centrage manuel
+(`x = centre − largeur / 2`) pour le hero et le mot, `padding-left` pour le
+badge.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (293),
+`cargo test -p streamos-v0 --lib` (246), clippy workspace 0 warning,
+`npm run check` 0 erreur. Vérification visuelle (harnais temporaire supprimé,
+1280×720) : badge « SPLIT 8 », hero `-12.34` en vert, mot `GAGNÉ`.
+
+---
+
+## 69. Just Chatting côté moteur natif (lot F, 2026-11-01)
+
+Miroir de `syncObsJC` (`src/lib/stores/justChatting.ts`) : en mode JC, seuls
+la caméra et le(s) chat(s) restent visibles, repositionnés aux rects du layout
+JC (formule Rust, fractions 0-1 → × canvas réel).
+
+**Le problème** : la scène dérivée (`sceneDerivee`, copie **en mémoire** —
+caméra + chats aux rects JC, autres widgets absents, `bgObsSource` vidé,
+modules HUD vidés) n'était poussée qu'à **OBS** (`scene_sync_captures`). Le
+moteur natif continuait d'afficher la scène complète : un trou
+`destination-out` non percé laisse la capture de fond plein canvas visible.
+
+**Correctif** : commande Tauri **`moteur_appliquer_scene(scene)`** — applique
+une scène **fournie** au moteur natif par le même chemin qu'une scène à chaud
+(`MoteurNatif::appliquer_scene`, application **différentielle** : ni session de
+capture ni encodeur recréés). Aucune écriture disque, aucune scène persistée
+mutée, aucun état métier dupliqué (règle « une seule vérité de scène »).
+
+`justChatting.ts` pousse la **même** copie aux deux rendus :
+- `setJustChatting(true)` → `syncObsJC()` + `syncNatifJC(derivee)` ;
+- `setJustChatting(false)` → `syncNatifJC(scene réelle)` (le moteur reprend la
+  scène jamais mutée) ;
+- hook `registerApresSyncCaptures` (changement de scène/preset/reconnexion
+  pendant JC) → la dérivée de la **nouvelle** scène part aussi au moteur.
+
+Non fatal : hors session, l'application ne fait que préparer la suivante
+(`appliquer_scene` est idempotent hors enregistrement).
+
+**Vérification** : `cargo test -p sos-moteur-natif` (293),
+`cargo test -p streamos-v0 --lib` (246), clippy workspace 0 warning,
+`npm run check` 0 erreur (la commande est un passe-plat de 1 ligne ; la
+dérivation `sceneDerivee` et l'application différentielle sont déjà couvertes
+par les lots A/B).
+
+---
+
+## 70. Titres de widget dans l'ordre z (lot H1, 2026-11-01)
+
+**Le problème** : tous les titres (`TexteCfg`) étaient peints dans une **passe
+finale**, après la boucle du plan — donc au-dessus de **toute** la pile :
+overlays (attente 9990, pad 9995, alertes 9997, bandeau 9998, bienvenue 9999,
+présentation 10000+), cadres et bordure. Un titre de widget apparaissait
+par-dessus une alerte ou un écran d'attente, là où le DOM le laisse dans son
+widget.
+
+**Correctif** : nouveau `GenreCalque::Titre`, inséré dans l'ordre du plan
+**entre le contenu et la bordure** (`Boite…Musique` → `Titre` → `Bordure` →
+`Cadre`) et une entrée par titre de **widget** à son `z` :
+
+```
+for (i, texte) in voie.textes.iter().enumerate() {
+    if texte.cible == CibleTitre::Widget {
+        plan.push((texte.z, GenreCalque::Titre, i));
+    }
+}
+```
+
+Le titre passe donc au-dessus du contenu de **son** widget (média, capture,
+chat…), sous sa bordure puis son cadre — et sous tout overlay de `z`
+supérieur, comme `.titre` dans `.widget` (`.cadre-overlay` a `z-index: 5`).
+
+⚠️ **Les titres de FOND (`bgTitre*`) restent dans la passe finale** : leur `z`
+vaut `i32::MIN + 1` (sous le média de fond) ; les mettre dans le plan les
+aurait fait disparaître derrière le fond. Leur ordre d'avant est conservé.
+
+**Vérification** : `cargo test -p sos-moteur-natif` (293),
+`cargo test -p streamos-v0 --lib` (246), clippy workspace 0 warning,
+`npm run check` 0 erreur. Vérification **par construction** (entrée de plan +
+position dans l'ordre d'égalité `z`), pas de harnais visuel pour ce diff.
+
+**Reste du lot H** (à découper, non fait ici) :
+- **H2 / H2b / H2c — contenus de widget et titres sous perspective** :
+  **faits le 2026-11-02** (§71).
+- **H3 — `line-height`** : **fait le 2026-11-02** (§72).
+- **H4 — contour exact** : **fait le 2026-11-02** (§73) — tracé réel des
+  glyphes, repli sur l'approximation pour les polices simulées.
+
+---
+
+## 71. Contenus de widget sous perspective (lots H2 / H2b / H2c, 2026-11-02)
+
+**Le problème** : `GenreCalque::Chat`, `Input`, `Goal`, `Speedrun`, `Musique`
+et `Titre` tombaient dans la branche `None` de la boucle de plan. Un widget
+sous `perspective(d) rotateX/Y` gardait donc sa boîte (voile, média de fond,
+bordure, cadre) **projetée**, mais son **contenu plat**, peint par-dessus le
+trapèze. En OBS tout le `.widget` est tourné : `applyWidgetStyle` pose le
+`transform` sur `.widget` (`diffusion.html` 4560) et toutes les branches de
+contenu l'appellent — `.chat-body`, les touches, le compteur goal, le timer,
+le lecteur musique et `.titre` sont des **enfants**.
+
+**Correctif** : trois lignes, les cinq genres de contenu passent par
+`groupe_de(rect, z)` comme le média — plus le titre de widget (H2c).
+
+```rust
+GenreCalque::Chat => voie.groupe_de(voie.chats[*index].rect, *z),
+GenreCalque::Input => voie.groupe_de(voie.inputs[*index].rect, *z),
+GenreCalque::Goal => voie.groupe_de(voie.goals[*index].rect, *z),
+GenreCalque::Speedrun => voie.groupe_de(voie.speedruns[*index].rect, *z),
+GenreCalque::Musique => voie.groupe_de(voie.musiques[*index].rect, *z),
+GenreCalque::Titre => voie.groupe_de(voie.textes[*index].cadre, *z),
+```
+
+Rien d'autre n'a bougé : `cible_pour` redirige déjà le dessin.
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Redirection du texte | **aucune** : `cible_rt` est `cible.cast::<ID2D1RenderTarget>()` du **même** `ID2D1DeviceContext` (`texte/mod.rs`, `nouveau`) | `DrawTextLayout`, `PushAxisAlignedClip` et `PushLayer` passés par `cible_rt` suivent le `SetTarget` courant — c'est déjà le chemin de `dessiner_media`. Aucun offscreen « de contenu », aucun blit intermédiaire |
+| Clé de regroupement | `(rect, z)` du widget | `persps_depuis_scene` et `ChatCfg`/`InputCfg`/`GoalCfg`/`SpeedrunCfg`/`MusiqueCfg` la calculent des **mêmes** champs (`w.x/y/largeur/hauteur`, `w.z`) — comparaison `f64` exacte, verrouillée par test |
+| Clé d'un **titre** | `(TexteCfg.cadre, TexteCfg.z)` | `textes_depuis_scene` pose `cadre = (w.x, w.y, w.largeur, w.hauteur)` et `z = w.z` : le rect sert d'**ancre** du placement hors widget (`haut`/`bas`/`gauche`/`droite`) et se trouve être exactement la clé du plan. Aucun champ ajouté |
+| Anticrénelage | inchangé (`D2D1_TEXT_ANTIALIAS_MODE_DEFAULT`) | ClearType sur le canvas opaque, repli grayscale automatique sur l'offscreen prémultiplié (vérifié au rendu : aucun liseré sombre) |
+| Ordre dans le plan | inchangé | `Chat`/`Input`/`Goal`/`Speedrun`/`Musique` puis `Titre` sont déclarés entre `Capture` et `Bordure`/`Cadre` : le contenu passe sur le voile et le média de fond, le titre sur son contenu, sous le cadre |
+
+**Reste hors plan à perspective** — **plus rien** côté scène : les cinq
+contenus de widget (chat, input viewer, goal, speedrun, musique) et les titres
+de widget sont routés. Les modules HUD (`Horloge`, `Objectifs`,
+`MusiqueModule`, `Equaliseur`, `Spots`) et les overlays restent hors plan,
+**légitimement** : `#modules-root`, `.alerte-root`, `.pad-root`… sont hors
+`.widget` dans le DOM (aucun `transform` 3D ne les porte).
+
+**Vérification** : deux harnais temporaires (supprimés) en 1360×768, widgets
+plats à gauche (référence) et `rotateY 38,25` à droite.
+1. **chat** — deux widgets sur le **même** buffer : pseudo, `:`, texte,
+   bulles et bordures du widget de droite sont **dans** le trapèze (bord
+   droit qui recule, texte qui rétrécit avec la profondeur) ;
+2. **titre** — `titreHaut` sur chacun : « TITRE TOURNE » suit le trapèze
+   (incliné, à son bord haut), « TITRE PLAT » reste droit.
+
+`goal`/`speedrun`/`musique` ne sont vérifiés que **par la clé** (même
+mécanisme, même `cible_rt`, test `persp_et_contenu_chat_input_partagent_la_cle`) :
+leur contenu exige un état live poussé par l'app pour produire des pixels.
+`cargo test -p sos-moteur-natif` (298), `cargo test -p streamos-v0 --lib`
+(246), clippy workspace 0, `npm run check` 0.
+
+**Bug pré-existant corrigé dans la même passe (lot G)**
+`construire_bloc` poussait un `ID2D1SolidColorBrush` dans `_inline:
+Vec<IDWriteInlineObject>` (puce, `texte/chat.rs` ~714 ; séparateur `:` ~761).
+Le `cast()` rendait `E_NOINTERFACE` → **tout** message avec pseudo mettait le
+moteur en `Erreur("chat : texte (système) : séparateur inline …")`, zéro
+composite, sink FFmpeg mort (« Output file does not contain any stream »).
+Les deux `push` sont supprimés (les brosses sont déjà retenues par
+`SetDrawingEffect`) ; un commentaire sur `_inline` interdit de les
+réintroduire. Vérifié au rendu (`examples/chat_scene.rs` : 4 messages
+d'historique + 4 en direct, pseudos colorés, logos Twitch/Kick, accents).
+⚠️ Écart **corrigé** depuis (2026-11-02) : le DOM espace `.pseudo` et
+`.separateur` de `margin-right: 2px` ; le moteur pose un espacement **de fin**
+de 2 px (`SetCharacterSpacing(0, 2, 0, …)`) sur le dernier caractère du
+pseudo et sur le `:` — un trailing sur toute la plage espacerait chaque
+lettre du pseudo.
+
+---
+
+## 72. `line-height` et marges des titres (lot H3, 2026-11-02)
+
+**Le problème** : `rendre` mesurait le titre avec la hauteur de ligne
+**naturelle** de la police (~1,2-1,35 em) alors que `.widget-titre` et
+`.bg-titre` portent `line-height: 1.1`. Trois écarts qui grandissent avec
+`titreTaille` :
+
+1. **boîte trop haute** — `metriques.height` au lieu de `1,1 × taille` ;
+2. **glyphes non centrés** dans la boîte de ligne : le CSS répartit le
+   *half-leading* au-dessus et au-dessous, DirectWrite empile ascent puis
+   descent ;
+3. **placement** : `placement` positionnait la **texture** (qui inclut la
+   marge de contour `debord`), donc le titre visible était décalé de
+   `debord` (≈3 px) vers l'extérieur, et les titres de widget n'avaient pas
+   les `margin-*: ±2px` du DOM.
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Interligne | `SetLineSpacing(UNIFORM, 1,1 × taille, baseline)` sur le **layout** | miroir exact de `line-height: 1.1` ; le format est partagé avec d'autres titres |
+| Baseline | `(interligne − hauteur_naturelle) / 2 + baseline_naturel` (`GetLineMetrics`) | reproduit le *half-leading* CSS ; à interligne = naturel, la valeur est inchangée |
+| Boîte vs texture | `CacheTexte.largeur/hauteur` = **boîte CSS** ; la texture est plus grande de `marge = (contour, contour + débord)` | `placement` doit positionner la boîte CSS, pas le bitmap ; le débord (`line-height` plus court que la police) empêche le rognage des glyphes |
+| Dessin | `DrawBitmap` dans `place.rect` **élargi** de `marge` | la boîte CSS tombe pile sur `place.rect`, contour compris |
+| Marges | `MARGE_TITRE_WIDGET = 2.0` (`margin-*: ±2px` de `applyTitreWidget`) | les titres de widget n'étaient pas écartés du bord |
+
+**Vérification** : `titre_mesure_la_boite_de_ligne_css` (test **GPU**, 24 / 40
+/ 96 px) vérifie `hauteur == 1,1 × taille` à 0,01 px près et la présence de
+la marge ; tests purs de `placement` étendus aux quatre positions de widget.
+Harnais temporaire (supprimé) : 4 titres de widget + 4 titres de fond sur une
+scène 1360×768 — aucun glyphe rogné, titres de widget à 2 px de leur boîte,
+titres de fond à 8 px.
+`cargo test -p sos-moteur-natif` (298), `cargo test -p streamos-v0 --lib`
+(246), clippy workspace 0, `npm run check` 0.
+
+**Limite assumée** : `text-align: center` ne joue que si la boîte de mise en
+page est celle de l'élément — ici la texture est mesurée à la largeur du
+texte, donc le centrage est sans objet (le titre est déjà à sa largeur).
+
+---
+
+## 73. Contour exact par géométrie de glyphes (lot H4, 2026-11-02)
+
+**Le problème** : le contour d'un titre (`-webkit-text-stroke` du DOM) était
+une **approximation** par 16 passes de `DrawTextLayout` décalées en couronne —
+halo irrégulier, double alpha aux recouvrements, artefact en « soleil » sur les
+traits fins, et écart croissant avec `contourEpaisseur`.
+
+**Correctif** : le contour est désormais le **tracé réel** des glyphes.
+
+1. `IDWriteTextLayout` n'expose aucune géométrie → un `IDWriteTextRenderer`
+   maison (`CollecteContours`) intercepte `DrawGlyphRun` et appelle
+   `IDWriteFontFace::GetGlyphRunOutline(emSize, indices, advances, offsets…)`
+   dans une `ID2D1PathGeometry` par run ;
+2. chaque contour est translaté à son origine de ligne de base
+   (`CreateTransformedGeometry` + `translation(baselineX, baselineY)`),
+   puis à l'origine de la texture (`marge`) au moment du `Widen` ;
+3. `ID2D1Geometry::Widen(epaisseur, …)` donne le trait **centré** (comme
+   `-webkit-text-stroke`), rempli avec la brosse du contour ;
+4. le **remplissage** reste `DrawTextLayout` (dégradé, soulignement, objets
+   inline) : `paint-order: stroke fill` est donc respecté tel quel.
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Repli | police **simulée** (gras/oblique synthétique) → 16 passes | `GetGlyphRunOutline` rend le contour **non embelli** : le tracé serait plus fin que le glyphe rendu. Les 20 familles embarquées n'ont qu'une graisse, donc tout `titreGras`/`titreItalique` reste sur l'approximation |
+| Détection | `IDWriteFontFace::GetSimulations() != 0` dans le renderer | signal fiable, pas de comparaison de graisse |
+| Jointure | `Widen` avec le style par défaut (miter) | même famille que le tracé CSS ; `flatteningTolerance` 0,25 px |
+| Coût | 1 collecte par **rendu** de titre (cache par contenu+style) | jamais par frame |
+
+**Vérification** : `contour_exact_sauf_police_simulee` (test **GPU**) —
+une police réelle donne des contours non vides, une police simulée (`gras`)
+rend `None` (repli). Harnais temporaire (supprimé) : trois titres 64-72 px à
+contour 6 px — halo régulier sur les deux tracés exacts, comportement
+inchangé sur le gras simulé, aucun glyphe rogné.
+`cargo test -p sos-moteur-natif` (298), `cargo test -p streamos-v0 --lib`
+(246), clippy workspace 0, `npm run check` 0.
+
+---
+
+## 74. Gel de composition — pipe audio non bloquant (lot I-a, 2026-11-02)
+
+**Symptôme** : avec `audio_live` (loopback ou micro), la composition se
+figeait définitivement après quelques secondes — `composites` bloqué à 388,
+`arreter()` sans effet, `etat` toujours `Actif`, aucune dégradation.
+
+**Localisation** (instrumentation temporaire, marqueurs retirés depuis) :
+
+```
+boucle apres attendre t=390
+mix avant t=390            ← mixeur.produire()
+mix apres t=390
+   ... 10 s de rien (le harnais continue de s'afficher) ...
+debut avant t=390          ← voie.debut()
+```
+
+Le seul appel bloquant entre `mix apres` et `debut avant` est
+**`PipeAudio::ecrire`** (`WriteFile` sur le pipe nommé qui porte le PCM vers
+FFmpeg). Le diagnostic d'origine (« gel dans `Apercu::lire` ») était faux :
+l'aperçu n'était qu'un ralentisseur qui rendait l'interblocage visible.
+
+**Cause** : le pipe était créé en `PIPE_WAIT`. FFmpeg cesse de drainer le
+pipe audio quand il attend de la vidéo ; la composition, bloquée dans
+`WriteFile`, ne lui envoie plus de vidéo → **interblocage** à deux flux.
+
+**Correctif** (`output/ffmpeg.rs`) :
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Mode du pipe | `SetNamedPipeHandleState(PIPE_NOWAIT)` sur le **handle serveur**, juste après `CreateNamedPipeW` (création laissée en `PIPE_WAIT`, le client FFmpeg garde ses lectures bloquantes) | `WriteFile` rend la main immédiatement, quel que soit l'état de FFmpeg |
+| Tampon plein | `ERROR_PIPE_LISTENING` / `ERROR_PIPE_NOT_CONNECTED` / `ERROR_NO_DATA` / `ERROR_BUSY` ou `n == 0` → **bloc sauté** (`Ok`) | trou audio borné (≈5 ms) plutôt qu'un gel du flux entier ; politique déjà appliquée au démarrage (`ERROR_PIPE_LISTENING`) |
+| Échec du mode | `SetNamedPipeHandleState` refusé → `log::warn` et comportement d'avant | jamais fatal, la sortie fonctionne |
+| ⚠️ Comparaison | `HRESULT::from_win32(code)` — **jamais** `code` nu | `0x8007_00E7 ≠ 231` : comparer le code Win32 laissait passer `ERROR_PIPE_LISTENING` en erreur fatale |
+
+**Vérification** : `examples/audio_scene.rs` (loopback, 15 s) — avant :
+388 composites puis gel ; après : **890 composites**, `degradation=None`,
+`Fin — état Inactif`, et `ffmpeg -i` confirme **les deux flux** (H.264
+1360×768 @ 59,91 fps, 14,85 s + AAC 48 kHz stéréo).
+`cargo test -p sos-moteur-natif` (298), `cargo test -p streamos-v0 --lib`
+(246), clippy workspace 0, `npm run check` 0.
+
+**Reste assumé** : l'écriture du **stdin vidéo** (`FfmpegSink`) reste
+bloquante — si FFmpeg cessait de lire la vidéo, le même interblocage serait
+possible ; non reproduit, la vidéo étant le flux qui débloque l'autre.
+
+---
+
+## 75. Gel n° 2 — `audio_live` + pop de split (lot I-b, 2026-11-02, **levé**)
+
+Second gel, distinct de celui du §74 (corrigé), trouvé en vérifiant le son du
+pop. **Il n'est pas causé par le son du pop** : le déclencheur réel est le
+**débit vidéo des premières secondes**, pas le pop.
+
+**Repro** (harnais `examples/gel_ib.rs`, supprimé) : scène 1360×768 avec un
+widget `speedrun`, `AudioCfg { loopback: true }`, split poussé à t = 2 s.
+
+| Variante | Résultat (avant correctif) |
+|---|---|
+| audio + widget speedrun + pop | **gel** — 143 composites, **0 o écrits** |
+| audio + widget speedrun, sans pop | passe (352 composites, 43 Ko) |
+| **sans** audio (`audio: None`) | passe (352 composites) |
+| `examples/audio_scene.rs` (audio, **sans** widget speedrun) | passe (§74) |
+
+**Localisation** (`SOS_FFMPEG_DEBUG` = `-loglevel debug -debug_ts` + compteurs
+d'écriture, instrumentation retirée depuis). La dernière ligne de FFmpeg est
+`[s16le] Before avformat_find_stream_info() pos: 0` et le fichier de sortie
+n'est **jamais créé** : FFmpeg n'atteint pas `avformat_write_header`, le muxeur
+n'a jamais tourné. Côté composition, la trace est sans ambiguïté :
+`sink : écriture de 1157 o bloquée 3.1506259s (cumul 74055 o)` — le stdin
+vidéo absorbe **74 055 o** puis bloque, et `pousser` rend l'erreur à +3 s.
+
+**Correctif appliqué (I-b) — le gel devient un échec borné** :
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| Fil d'écriture | un fil par `FfmpegSink` possède le stdin ; `pousser` empile dans une `sync_channel` de 8 paquets (~0,13 s à 60 fps) | la composition ne touche plus jamais `WriteFile` |
+| Échéance | `try_send` en boucle, **3 s** maximum, puis `Err("FFmpeg ne draine plus (sortie figee)")` | `send_timeout` est instable (`std_internals`) ; un FFmpeg figé devient une dégradation explicite, jamais un gel muet |
+| Fin de vie | `fermer` : drop du `Sender` + `join` (flush + EOF) ; `Drop`/`couper` : drop + `kill` | `wait()` seul pouvait attendre un FFmpeg figé au teardown |
+| Cause d'arrêt | `"toutes les sorties ont échoué — <cause>"` | l'erreur du sink était perdue, l'arrêt était muet |
+
+**Cause** — `avformat_find_stream_info` sur l'entrée PCM lit **819 200 o =
+4,27 s de PCM au rythme réel** (défaut `max_analyze_duration` : 5 s) **sans
+lire stdin**. Pendant cette fenêtre la composition remplit le tampon du stdin
+(≈ 64 Ko de pipe OS + 8 paquets) et se bloque ; bloquée, elle n'alimente plus
+le pipe audio → l'analyse ne peut jamais atteindre ses 819 200 o →
+**interblocage définitif**. Le pop ne fait qu'ajouter du débit (première frame
+IDR de 9 685 o, ~86 kbps) et franchir le seuil du tampon : sans pop, 36 Ko
+sont poussés sur la même fenêtre et ça tient.
+
+Ce que ça réfute, mesuré et non supposé : **pas d'interleave** (le muxeur n'a
+jamais démarré, `Output #0` absent), **pas de famine audio** (après connexion,
+tous les blocs PCM sont écrits, aucun saut), et la piste « pipe audio plein à
++1,37 s » est **fausse** — c'est le **stdin vidéo** qui sature, jamais le pipe
+audio.
+
+**Correctif** (`output/ffmpeg.rs`) : le format PCM est entièrement spécifié par
+`-f/-ar/-ac`, donc `-analyzeduration 1` + `-probesize 32` sur l'entrée audio.
+La fenêtre tombe de 819 200 o (4,27 s) à **16 384 o (~0,09 s)**.
+
+**Vérification** : les quatre variantes du harnais passent (472 composites en
+8 s, fichiers de 73 à 186 Ko), la variante qui gelait produit H.264 1360×768
+@ 59,84 fps + **AAC 48 kHz stéréo 193 kbps** ; `audio_scene` 10 s → 590
+composites, `degradation=None`, deux flux, 9,87 s. `cargo clippy --workspace
+--all-targets` 0 warning, `cargo test --workspace` (299 + 246 + 12 + 9).
+
+**Reste assumé** :
+
+| Sujet | Mesure | Suite |
+|---|---|---|
+| Marge à haut débit | fenêtre résiduelle ~0,09 s ≈ 64 Ko à 6 000 kbps, soit exactement le tampon du stdin vidéo → marge **nulle** sur une scène très chargée au démarrage | exprimer `FILE_ECRITURE` en **octets** plutôt qu'en paquets |
+| Décalage audio au démarrage | les blocs PCM écrits avant le `CreateFile` du client sont sautés (~50 blocs ≈ 190 Ko ≈ **1 s**) ; si l'audio FFmpeg démarre à PTS 0, le son serait ~1 s en avance sur l'image — **hypothèse non vérifiée** | test : son connu à t = 0, puis écart image/son |
+
+**État** : `srPointsSon` est **implémenté** (contrat + rendu + mixeur, test
+unitaire `son_du_pop_une_version_par_pop_et_gain_suivi`) et le harnais
+pop + audio termine désormais avec une piste AAC pleine. Le **son** du pop
+lui-même reste **non vérifié à l'oreille** : la scène du harnais n'avait pas de
+`srPointsSon`. `examples/audio_scene.rs` reste la référence qui passe.

@@ -1,7 +1,7 @@
 <script lang="ts">
   import { createWidget, createChatWidget, createCameraWidget, createInputViewerWidget, createSpeedrunWidget, createGoalWidget, createMusiqueWidget, sceneStore, syncCapturesOBS } from "../stores/scene";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsMoniteurs, chargerMoniteursObs, ouvrirProjecteurPreview, rafraichirOutputs } from "../stores/obs";
-  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs, sortieNatif, sortieNatifBusy, sortieNatifFichier, sortieCfg, rafraichirSortieNatif, demarrerEnregistrementNatif, arreterEnregistrementNatif, chargerSortieCfg } from "../stores/moteur";
+  import { moteurEtat, moteurErreur, chargerEtatMoteur, basculerMoteur, envoyerConnexionObs, sortieNatif, sortieNatifBusy, sortieNatifFichier, sortieNatifFlux, sortieNatifFichierActif, sortieEstFlux, sortieCfg, rafraichirSortieNatif, toggleEnregistrementNatif, toggleStreamNatif, chargerSortieCfg } from "../stores/moteur";
   import { openSection, toggleSection, carteEditionCible, cadreModalOpen, interactionModalOpen, moderationModalOpen, consoModalOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, planningModalOpen, statistiquesModalOpen, obsWebSocketModalOpen, confirmObsOutputOpen, sortieNatifModalOpen } from "../stores/ui";
   import { jcActif, toggleJustChatting } from "../stores/justChatting";
   import { connexions, connecterTwitch, deconnecterTwitch, twitchErreur } from "../stores/chat";
@@ -18,8 +18,6 @@
   import { get } from "svelte/store";
   import { onMount } from "svelte";
   import { listen } from "@tauri-apps/api/event";
-  import { appDataDir } from "@tauri-apps/api/path";
-  import { save } from "@tauri-apps/plugin-dialog";
   import { openUrl } from "@tauri-apps/plugin-opener";
   import icoWidgets from "../../assets/ico/Widget.png";
   import icoModules from "../../assets/ico/Modules.png";
@@ -38,10 +36,13 @@
   let error = $derived($obsError);
   let streaming = $derived($obsStreaming);
   let recording = $derived($obsRecording);
-  // Mode natif : le bouton « Enregistrer » route vers la sortie native.
-  // La pastille et le libellé suivent le moteur réellement actif.
+  // Mode natif : les boutons « Stream » / « Enregistrer » routent vers la
+  // sortie native (une seule sortie à la fois — flux réseau OU fichier).
+  // Les pastilles et libellés suivent le moteur réellement actif et le TYPE
+  // de sortie : un flux allume Stream, un fichier allume Enregistrer.
   let natifMode = $derived($moteurEtat.mode === "natif");
-  let enregistre = $derived(natifMode ? $sortieNatif.actif : recording);
+  let enregistre = $derived(natifMode ? $sortieNatifFichierActif : recording);
+  let streamActif = $derived(natifMode ? $sortieNatifFlux : streaming);
   let open = $derived($openSection);
   let cx = $derived($connexions);
   let twitchErr = $derived($twitchErreur);
@@ -90,59 +91,25 @@
     await syncCapturesOBS();
   }
 
-  // Sorties OBS : confirmation avant set (démarrer ET arrêter) — la modale
-  // ConfirmObsOutputModal relit l'état réel puis appelle setStreamObs/
-  // setRecordObs. obsStreamBusy/obsRecordBusy (stores/obs) grisent pendant
-  // le RPC.
-  function onToggleStream() {
+  // Sorties : OBS passe par la confirmation (ConfirmObsOutputModal relit
+  // l'état réel puis appelle setStreamObs/setRecordObs) ; le mode natif
+  // passe par les toggles mutualisés de stores/moteur (partagés avec la
+  // topbar et la barre de raccourcis).
+  async function onToggleStream() {
+    if (natifMode) {
+      await toggleStreamNatif();
+      return;
+    }
     confirmObsOutputOpen.set("stream");
   }
   /// Enregistrement : OBS ou natif selon le mode actif. En natif, l'utilisateur
   /// choisit le fichier (dialogue) puis le backend démarre hors du thread UI.
   async function onToggleRecord() {
     if (natifMode) {
-      if ($sortieNatif.actif) {
-        await arreterEnregistrementNatif();
-        return;
-      }
-      const chemin = await choisirFichierSortie();
-      if (chemin) await demarrerEnregistrementNatif(chemin);
+      await toggleEnregistrementNatif();
       return;
     }
     confirmObsOutputOpen.set("record");
-  }
-
-  /// Horodatage local `AAAA-MM-JJ_HH-MM-SS` pour le nom par défaut.
-  function horodatage(): string {
-    const d = new Date();
-    const p = (n: number) => String(n).padStart(2, "0");
-    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}-${p(d.getSeconds())}`;
-  }
-
-  /// Dialogue « Enregistrer sous ». Défaut dans `enregistrements/` du dossier
-  /// de données de l'app (tout local) ; `null` si l'utilisateur annule.
-  /// Extension et filtre suivent le conteneur persisté (bloc `sortie` de
-  /// moteur.json) — relecture non fatale, les défauts restent mp4.
-  async function choisirFichierSortie(): Promise<string | null> {
-    await chargerSortieCfg();
-    const conteneur = $sortieCfg.conteneur === "mkv" ? "mkv" : "mp4";
-    const nom = `StreamOS-${horodatage()}.${conteneur}`;
-    let defaut = nom;
-    try {
-      defaut = `${await appDataDir()}/enregistrements/${nom}`;
-    } catch {
-      // Repli : le dialogue s'ouvre sur son dernier dossier connu.
-    }
-    try {
-      return await save({
-        title: get(t)("moteur.enregistrerTitre"),
-        defaultPath: defaut,
-        filters: [{ name: conteneur === "mkv" ? "Matroska" : "MP4", extensions: [conteneur] }],
-      });
-    } catch (e) {
-      moteurErreur.set(String(e));
-      return null;
-    }
   }
 
   // Resync des libellés stream/record à l'ouverture de la section OBS :
@@ -490,10 +457,12 @@
   <!-- ============ GROUPE : CONNEXIONS ============ -->
   <div class="groupe-label">{$t("toolbar.groupeConnexions")}</div>
 
-  <!-- Section OBS : carte noir/doré portée par la .section quand elle est
-       ouverte — même mécanisme que les sections Widgets / Cadre & fond /
-       Réglages. Les couleurs d'état de l'en-tête (rouge/vert) restent
-       sémantiques et priment sur la teinte de la carte. -->
+  <!-- Section « OBS & Rust » : carte noir/doré portée par la .section quand
+       elle est ouverte — même mécanisme que les sections Widgets /
+       Cadre & fond / Réglages. Les couleurs d'état de l'en-tête (rouge/vert)
+       restent sémantiques et priment sur la teinte de la carte. Le contenu
+       est découpé en 4 sous-blocs .obs-bloc : Moteur → Connexion OBS →
+       Sorties → Options avancées. -->
   <div
     class="section sec-obs"
     class:carte-edition={open === "obs"}
@@ -510,62 +479,17 @@
       onclick={() => toggleSection("obs")}
     >
       <img class="ico" src={icoObs} alt="" />
-      <span>OBS</span>
+      <span>{$t("toolbar.obsRust")}</span>
       <span class="chevron">›</span>
     </button>
     {#if open === "obs"}
       <div class="content">
-        <input bind:value={$obsHost} placeholder={$t("toolbar.hote")} spellcheck="false" />
-        <input bind:value={$obsPort} placeholder={$t("toolbar.port")} spellcheck="false" />
-        <input
-          bind:value={$obsPassword}
-          type="password"
-          placeholder={$t("toolbar.motDePasse")}
-          spellcheck="false"
-        />
-        <button
-          class="action"
-          onclick={onConnect}
-          disabled={status === "connecting"}
-        >
-          {status === "connecting" ? $t("toolbar.connexionEnCours") : $t("commun.connecter")}
-        </button>
-        <!-- Sorties OBS : toggles stream + record. La pastille verte (.dot.on)
-             reflète outputActive lu au connect / après chaque toggle. -->
-        <button
-          class="action output-btn"
-          class:actif={streaming}
-          onclick={onToggleStream}
-          disabled={status !== "connected" || $obsStreamBusy}
-        >
-          <span class="dot" class:on={streaming}></span>
-          {streaming ? $t("toolbar.streamStop") : $t("toolbar.streamStart")}
-        </button>
-        <button
-          class="action output-btn"
-          class:actif={enregistre}
-          onclick={onToggleRecord}
-          disabled={(!natifMode && status !== "connected") || $obsRecordBusy || $sortieNatifBusy}
-        >
-          <span class="dot" class:on={enregistre}></span>
-          {enregistre ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
-        </button>
-        <span
-          class="obs-status"
-          class:erreur={status === "error"}
-          class:ok={status === "connected"}
-        >
-          {#if status === "connected"}
-            OBS OK
-          {:else if status === "error"}
-            {error}
-          {/if}
-        </span>
-        <!-- Moteur de diffusion (lot 1.5) : OBS ou natif. Le backend refuse
+        <!-- Bloc 1 — Moteur de diffusion : le choix OBS/Rust conditionne tout
+             le reste de la carte, il ouvre donc le contenu. Le backend refuse
              la bascule si un live OBS ou une sortie native tourne (jamais de
              coupure implicite). -->
-        <div class="moteur-bloc">
-          <span class="moteur-titre">{$t("moteur.titre")}</span>
+        <div class="obs-bloc">
+          <span class="obs-bloc-titre">{$t("moteur.titre")}</span>
           <div class="moteur-seg">
             <button
               class="action moteur-btn"
@@ -593,6 +517,72 @@
               {/each}
             </ul>
           {/if}
+          {#if $moteurErreur}
+            <p class="hint moteur-erreur">{$moteurErreur}</p>
+          {/if}
+        </div>
+        <!-- Bloc 2 — Connexion OBS : statut en tête du bloc (l'état se lit
+             avant les champs), hôte + port côte à côte. Estompé en mode Rust :
+             le pilotage OBS reste possible mais n'est plus le chemin actif. -->
+        <div class="obs-bloc" class:estompe={natifMode}>
+          <span class="obs-bloc-titre">{$t("obsCarte.connexion")}</span>
+          <span
+            class="obs-status"
+            class:erreur={status === "error"}
+            class:ok={status === "connected"}
+          >
+            {#if status === "connected"}
+              {$t("obsWs.connexion.ok")}
+            {:else if status === "connecting"}
+              {$t("obsWs.connexion.enCours")}
+            {:else if status === "error"}
+              {error}
+            {:else}
+              {$t("obsWs.connexion.hs")}
+            {/if}
+          </span>
+          <div class="obs-champs">
+            <input bind:value={$obsHost} placeholder={$t("toolbar.hote")} spellcheck="false" />
+            <input class="port" bind:value={$obsPort} placeholder={$t("toolbar.port")} spellcheck="false" />
+          </div>
+          <input
+            bind:value={$obsPassword}
+            type="password"
+            placeholder={$t("toolbar.motDePasse")}
+            spellcheck="false"
+          />
+          <button
+            class="action"
+            onclick={onConnect}
+            disabled={status === "connecting"}
+          >
+            {status === "connecting" ? $t("toolbar.connexionEnCours") : $t("commun.connecter")}
+          </button>
+        </div>
+        <!-- Bloc 3 — Sorties : toggles stream + record. La pastille verte
+             (.dot.on) reflète outputActive lu au connect / après chaque
+             toggle. En mode Rust, l'enregistrement passe par la sortie
+             native et son résumé de réglages s'affiche ici. -->
+        <div class="obs-bloc">
+          <span class="obs-bloc-titre">{$t("obsCarte.sorties")}</span>
+          <button
+            class="action output-btn"
+            class:actif={streamActif}
+            onclick={onToggleStream}
+            disabled={natifMode ? $sortieNatifBusy : status !== "connected" || $obsStreamBusy}
+          >
+            <span class="dot" class:on={streamActif}></span>
+            {streamActif ? $t("toolbar.streamStop") : $t("toolbar.streamStart")}
+          </button>
+          <button
+            class="action output-btn"
+            class:actif={enregistre}
+            onclick={onToggleRecord}
+            disabled={(!natifMode && status !== "connected") || $obsRecordBusy || $sortieNatifBusy}
+          >
+            <span class="dot" class:on={enregistre}></span>
+            {enregistre ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
+          </button>
           {#if natifMode}
             <!-- Résumé des réglages de sortie persistés (moteur.json) —
                  réglables dans la modale « Sortie ». -->
@@ -610,7 +600,7 @@
                 <p class="hint">{$t("moteur.sortieEncodeur", { encodeur: $sortieNatif.encodeur })}</p>
               {/if}
               {#if $sortieNatif.chemin}
-                <p class="hint moteur-chemin">{$t("moteur.sortieFichier", { chemin: $sortieNatif.chemin })}</p>
+                <p class="hint moteur-chemin">{$t(sortieEstFlux($sortieNatif.chemin) ? "moteur.sortieFlux" : "moteur.sortieFichier", { chemin: $sortieNatif.chemin })}</p>
               {/if}
             {:else if $sortieNatifFichier && !$sortieNatif.erreur}
               <p class="hint moteur-chemin">{$t("moteur.sortieFichier", { chemin: $sortieNatifFichier })}</p>
@@ -622,21 +612,19 @@
               <p class="hint moteur-erreur">{$sortieNatif.erreur}</p>
             {/if}
           {/if}
-          {#if $moteurErreur}
-            <p class="hint moteur-erreur">{$moteurErreur}</p>
-          {/if}
         </div>
-        <!-- Fenêtre « Connexion OBS » (WebSocket) : inventaire de ce qui
-             transite par le canal + options — pour les curieux, l'utilisateur
-             non technique n'y va jamais. -->
-        <button class="action" onclick={() => obsWebSocketModalOpen.set(true)}>
-          {$t("obsWs.ouvrir")}
-        </button>
-        <!-- Lien de téléchargement officiel (navigateur système) — discret,
-             pied de la carte OBS. -->
-        <button class="lien-dl" onclick={onTelechargerObs} title={OBS_DOWNLOAD_URL}>
-          {$t("toolbar.obsTelecharger")} ↗
-        </button>
+        <!-- Bloc 4 — Options avancées : inventaire du canal WebSocket (pour
+             les curieux, l'utilisateur non technique n'y va jamais) + lien de
+             téléchargement officiel (navigateur système). -->
+        <div class="obs-bloc">
+          <span class="obs-bloc-titre">{$t("obsCarte.options")}</span>
+          <button class="action" onclick={() => obsWebSocketModalOpen.set(true)}>
+            {$t("obsWs.ouvrir")}
+          </button>
+          <button class="lien-dl" onclick={onTelechargerObs} title={OBS_DOWNLOAD_URL}>
+            {$t("toolbar.obsTelecharger")} ↗
+          </button>
+        </div>
       </div>
     {/if}
   </div>
@@ -1088,20 +1076,43 @@
   .sec-planning     { --accent-crochet: var(--crochet-indigo); }
   .sec-statistiques { --accent-crochet: var(--crochet-teal); }
   .sec-obs          { --accent-carte: var(--carte-dore);     --accent-crochet: var(--crochet-dore); }
-  /* Bloc « Moteur » (lot 1.5) : compact, à l'intérieur de la carte OBS. */
-  .moteur-bloc {
+  /* Sous-blocs de la carte « OBS & Rust » (Moteur / Connexion / Sorties /
+     Options) : petit titre en capitales espacées + filet haut — structure la
+     carte sans ajouter de carte imbriquée. */
+  .obs-bloc {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
     padding-top: 0.45rem;
     border-top: 1px solid var(--bordure-ui);
   }
-  .moteur-titre {
+  .obs-bloc:first-child {
+    padding-top: 0;
+    border-top: none;
+  }
+  .obs-bloc-titre {
     font-size: 0.66rem;
     font-weight: 600;
     letter-spacing: 0.06em;
     text-transform: uppercase;
     opacity: 0.6;
+  }
+  /* Connexion OBS estompée en mode Rust : reste lisible et remplissable,
+     visuellement secondaire. */
+  .obs-bloc.estompe {
+    opacity: 0.45;
+  }
+  /* Hôte + port côte à côte : le port reste étroit, l'hôte prend le reste. */
+  .obs-champs {
+    display: flex;
+    gap: 0.35rem;
+  }
+  .obs-champs input {
+    min-width: 0;
+    flex: 1;
+  }
+  .obs-champs .port {
+    flex: 0 0 4.5rem;
   }
   .moteur-seg {
     display: flex;

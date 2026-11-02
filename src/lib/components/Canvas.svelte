@@ -9,7 +9,7 @@
     resetMediaEffets, resetMorphsWidget, importMedia, clearWidgetMedia,
     setWidgetTrou, deleteObsTrouSource, transformerEnFlottant,
     transformerEnWidget, mettreWidgetPlan, widgetPleinEcran, setCameraCachee,
-    setModule, setModuleActif,
+    setWidgetCachee, setModule, setModuleActif,
   } from "../stores/scene";
   import {
     setCarteEdition, titreFondModalOpen, titreModalOpen, confirmDeleteWidget,
@@ -441,6 +441,13 @@
     const cachee = ctxWidget?.cameraCachee === true;
     fermerFondMenu();
     await setCameraCachee(id, !cachee);
+  }
+  // Œil widget NON caméra (`cachee`) — même action que le badge de
+  // survol, même lecture d'état avant fermeture du menu.
+  async function ctxWgCachee(id: string) {
+    const cachee = ctxWidget?.cachee === true;
+    fermerFondMenu();
+    await setWidgetCachee(id, !cachee);
   }
   async function ctxWgPleinEcran(id: string) { fermerFondMenu(); await widgetPleinEcran(id); }
   async function ctxWgResetTransfo(id: string) { fermerFondMenu(); await resetMediaTransformation(id); }
@@ -1066,6 +1073,9 @@
            exclue : plage réservée z=5000 (mettreWidgetPlan est no-op dessus). -->
       <button class="ctx-item" role="menuitem" onclick={() => ctxWgDevant(ctxWidget!.id)}>{$t("carteEdition.premierPlan")}</button>
       <button class="ctx-item" role="menuitem" onclick={() => ctxWgDerriere(ctxWidget!.id)}>{$t("carteEdition.arrierePlan")}</button>
+      <!-- Œil widget (même action que le badge de survol — règle
+           « 3 surfaces » : aucune action exclusive au badge). -->
+      <button class="ctx-item" role="menuitem" onclick={() => ctxWgCachee(ctxWidget!.id)}>{ctxWidget?.cachee === true ? $t("commun.afficher") : $t("commun.masquer")}</button>
     {/if}
     <div class="ctx-sep" role="separator"></div>
     {#if wgHasMedia}

@@ -13,13 +13,19 @@ use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::thread::JoinHandle;
+
 use windows::core::PCWSTR;
-use windows::Win32::Foundation::{CloseHandle, ERROR_PIPE_LISTENING, HANDLE};
+use windows::Win32::Foundation::{
+    CloseHandle, ERROR_BUSY, ERROR_NO_DATA, ERROR_PIPE_LISTENING, ERROR_PIPE_NOT_CONNECTED, HANDLE,
+};
 use windows::Win32::Storage::FileSystem::{
     WriteFile, FILE_FLAG_FIRST_PIPE_INSTANCE, PIPE_ACCESS_OUTBOUND,
 };
 use windows::Win32::System::Pipes::{
-    CreateNamedPipeW, PIPE_REJECT_REMOTE_CLIENTS, PIPE_TYPE_BYTE, PIPE_WAIT,
+    CreateNamedPipeW, SetNamedPipeHandleState, PIPE_NOWAIT, PIPE_REJECT_REMOTE_CLIENTS,
+    PIPE_TYPE_BYTE, PIPE_WAIT,
 };
 
 use super::{Conteneur, ErreurSortie, Sink};
@@ -78,7 +84,12 @@ fn nom_demuxer(codec: Codec) -> &'static str {
 /// Muxeur piloté par un processus FFmpeg (stdin = bitstream H.264).
 pub struct FfmpegSink {
     enfant: Child,
+    /// Stdin direct — `None` dès que le fil d'écriture le possède.
     entree: Option<ChildStdin>,
+    /// Fil d'écriture du bitstream : la composition **ne bloque jamais** sur
+    /// le stdin (un FFmpeg qui ne draine plus devient une dégradation
+    /// explicite, jamais un gel de la boucle).
+    ecrivain: Option<(SyncSender<Vec<u8>>, JoinHandle<()>)>,
     octets: u64,
     paquets: u64,
     ferme: bool,
@@ -90,6 +101,14 @@ pub struct FfmpegSink {
     /// clé qu'elle contient). Vide pour un sink fichier.
     secrets: Vec<String>,
 }
+
+/// Délai maximal d'attente d'une écriture avant de considérer la sortie
+/// **figée** (FFmpeg ne draine plus). Généreux : un pic d'encodage de 2 s se
+/// résorbe, au-delà la sortie est perdue de toute façon.
+const DELAI_ECRITURE: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// Profondeur de la file d'écriture, en paquets (~0,13 s à 60 fps).
+const FILE_ECRITURE: usize = 8;
 
 impl FfmpegSink {
     /// Démarre le sidecar. `ffmpeg` à `None` → résolution par `chemin_sidecar`.
@@ -254,6 +273,17 @@ impl FfmpegSink {
                 TAUX_CIBLE.to_string(),
                 "-ac".into(),
                 CANAUX_CIBLE.to_string(),
+                // ⚠️ **Fenêtre d'analyse supprimée** (gel n° 2, §75) : le
+                // format est entièrement spécifié par `-f/-ar/-ac`, donc
+                // `avformat_find_stream_info` n'a rien à deviner. Sans cette
+                // option il lit ~4,3 s de PCM (819 200 o, défaut 5 s) **au
+                // rythme réel et sans lire stdin** — le tampon du stdin vidéo
+                // (~74 Ko) déborde, la composition se bloque et n'alimente
+                // plus le pipe audio : interblocage définitif.
+                "-analyzeduration".into(),
+                "1".into(),
+                "-probesize".into(),
+                "32".into(),
                 "-i".into(),
                 pipe.to_string(),
                 "-map".into(),
@@ -335,15 +365,62 @@ impl FfmpegSink {
                 });
         }
 
-        Ok(Self {
+        let mut sink = Self {
             enfant,
             entree,
+            ecrivain: None,
             octets: 0,
             paquets: 0,
             ferme: false,
             stderr: stderr_partage,
             secrets,
-        })
+        };
+        sink.demarrer_ecrivain();
+        Ok(sink)
+    }
+
+    /// Démarre le fil qui possède le stdin : la boucle de composition ne fait
+    /// plus qu'empiler des paquets dans une file **bornée**.
+    ///
+    /// ⚠️ **Pourquoi** (§75) : un `WriteFile` sur le stdin de FFmpeg bloque
+    /// dès que FFmpeg cesse de le drainer (il attend alors de l'audio) — la
+    /// composition, bloquée, ne produit plus de vidéo : interblocage à deux
+    /// flux. Mesuré : `pousser` bloquait 1,5 s, puis définitivement.
+    fn demarrer_ecrivain(&mut self) {
+        let Some(mut entree) = self.entree.take() else {
+            return;
+        };
+        let (tx, rx) = sync_channel::<Vec<u8>>(FILE_ECRITURE);
+        let fil = std::thread::Builder::new()
+            .name("sos-ffmpeg-ecrivain".to_string())
+            .spawn(move || {
+                // Sort de la boucle si le pipe casse ; `flush` + drop =
+                // EOF pour FFmpeg.
+                while let Ok(bloc) = rx.recv() {
+                    if entree.write_all(&bloc).is_err() {
+                        break;
+                    }
+                }
+                let _ = entree.flush();
+            });
+        match fil {
+            Ok(fil) => self.ecrivain = Some((tx, fil)),
+            Err(e) => {
+                // Fil impossible (OOM) : on garde l'écriture directe — le
+                // risque de blocage revient, mais la sortie fonctionne.
+                log::warn!("sink : fil d'écriture indisponible ({e})");
+                self.ecrivain = None;
+            }
+        }
+    }
+
+    /// Ferme la file et attend que le fil ait tout écrit (EOF pour FFmpeg).
+    fn arreter_ecrivain(&mut self) {
+        if let Some((tx, fil)) = self.ecrivain.take() {
+            drop(tx);
+            let _ = fil.join();
+        }
+        drop(self.entree.take());
     }
 
     pub fn octets(&self) -> u64 {
@@ -392,6 +469,11 @@ impl FfmpegSink {
     /// Le conteneur reste lisible jusqu'au dernier fragment complet.
     pub fn couper(&mut self) -> Result<(), ErreurSortie> {
         self.ferme = true;
+        // Le fil peut être bloqué sur un FFmpeg figé : on tue d'abord, il
+        // sortira sur l'erreur d'écriture.
+        if let Some((tx, _)) = self.ecrivain.take() {
+            drop(tx);
+        }
         drop(self.entree.take());
         self.enfant
             .kill()
@@ -403,14 +485,40 @@ impl FfmpegSink {
 
 impl Sink for FfmpegSink {
     fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurMoteur> {
-        let entree = self
-            .entree
-            .as_mut()
-            .ok_or_else(|| ErreurSortie::Processus("stdin deja ferme".into()))
-            .map_err(ErreurMoteur::from)?;
-        entree
-            .write_all(&paquet.data)
-            .map_err(|e| self.erreur_processus(format!("ecriture : {e}")))?;
+        if let Some((tx, _)) = self.ecrivain.as_ref() {
+            // File bornée + échéance : jamais de blocage indéfini de la
+            // composition (voir `demarrer_ecrivain`). `send_timeout` est
+            // instable → `try_send` + attente courte bornée.
+            let debut = std::time::Instant::now();
+            let mut bloc = Some(paquet.data.clone());
+            while let Some(data) = bloc.take() {
+                match tx.try_send(data) {
+                    Ok(()) => break,
+                    Err(TrySendError::Full(data)) => {
+                        if debut.elapsed() >= DELAI_ECRITURE {
+                            return Err(self.erreur_processus(
+                                "ecriture : FFmpeg ne draine plus (sortie figee)".to_string(),
+                            ));
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(2));
+                        bloc = Some(data);
+                    }
+                    Err(TrySendError::Disconnected(_)) => {
+                        return Err(self
+                            .erreur_processus("ecriture : fil d'ecriture arrete".to_string()))
+                    }
+                }
+            }
+        } else {
+            let entree = self
+                .entree
+                .as_mut()
+                .ok_or_else(|| ErreurSortie::Processus("stdin deja ferme".into()))
+                .map_err(ErreurMoteur::from)?;
+            entree
+                .write_all(&paquet.data)
+                .map_err(|e| self.erreur_processus(format!("ecriture : {e}")))?;
+        }
         self.octets += paquet.data.len() as u64;
         self.paquets += 1;
         Ok(())
@@ -418,7 +526,7 @@ impl Sink for FfmpegSink {
 
     fn fermer(&mut self) -> Result<(), ErreurMoteur> {
         self.ferme = true;
-        drop(self.entree.take());
+        self.arreter_ecrivain();
         let statut = self
             .enfant
             .wait()
@@ -435,8 +543,13 @@ impl Drop for FfmpegSink {
         if self.ferme {
             return;
         }
-        // Best effort : EOF puis attente (finalise le conteneur).
+        // Best effort : on coupe la file puis on **tue** — `wait()` seul
+        // pourrait attendre un FFmpeg figé (le chemin propre est `fermer`).
+        if let Some((tx, _)) = self.ecrivain.take() {
+            drop(tx);
+        }
         drop(self.entree.take());
+        let _ = self.enfant.kill();
         let _ = self.enfant.wait();
     }
 }
@@ -481,6 +594,18 @@ impl PipeAudio {
                 windows::core::Error::from_win32().message()
             )));
         }
+        // ⚠️ **Écriture non bloquante** (gel de composition, §67) : en mode
+        // `PIPE_WAIT`, un `WriteFile` sur ce pipe attend que FFmpeg le draine.
+        // FFmpeg cesse de le lire quand il attend de la vidéo — et la
+        // composition, bloquée ici, ne lui en envoie plus : interblocage
+        // définitif (reproduit : 389 composites puis gel). En `PIPE_NOWAIT`,
+        // un tampon plein rend la main immédiatement et le bloc est **sauté**
+        // (trou audio borné) — jamais le flux entier.
+        let mode = PIPE_NOWAIT;
+        if let Err(e) = unsafe { SetNamedPipeHandleState(handle, Some(&mode), None, None) } {
+            // Non fatal : on garde le mode bloquant (comportement d'avant).
+            log::warn!("pipe {chemin} : mode non bloquant refusé ({e})");
+        }
         Ok(Self {
             handle,
             nom: chemin.to_string(),
@@ -491,8 +616,13 @@ impl PipeAudio {
     /// `CreateFile` (les ~ms entre le spawn et l'ouverture de l'entrée 1),
     /// `WriteFile` reçoit `ERROR_PIPE_LISTENING` : le bloc est sauté —
     /// trou bref au pire, jamais d'attente ni de casse de la voie live.
-    /// Ensuite il ne bloque que si FFmpeg stagne en lecture — même risque
-    /// que l'écriture sur le stdin vidéo, déjà acceptée.
+    ///
+    /// Le pipe est en `PIPE_NOWAIT` (voir `creer`) : si FFmpeg stagne en
+    /// lecture, le tampon plein rend la main et le bloc est **sauté** —
+    /// `ERROR_PIPE_NOT_CONNECTED` / `ERROR_NO_DATA` / `ERROR_BUSY` ou une
+    /// écriture nulle. C'est un trou audio borné, jamais un gel de la
+    /// composition (le flux vidéo continue d'alimenter FFmpeg, qui reprend
+    /// la lecture de l'audio dès qu'il peut).
     /// Pas de `ConnectNamedPipe` : il **bloquerait** tant qu'aucun client
     /// n'est là, et la connexion est faite côté client par FFmpeg.
     pub fn ecrire(&mut self, octets: &[u8]) -> Result<(), ErreurSortie> {
@@ -507,7 +637,18 @@ impl PipeAudio {
                     None,
                 )
             } {
-                if e.code() == windows::core::HRESULT::from_win32(ERROR_PIPE_LISTENING.0) {
+                // Pas de client / tampon plein : bloc sauté, jamais d'attente.
+                // ⚠️ Comparer des `HRESULT` (`HRESULT_FROM_WIN32`), jamais le
+                // code Win32 nu : `0x8007_00E7` ≠ `231`.
+                if [
+                    ERROR_PIPE_LISTENING,
+                    ERROR_PIPE_NOT_CONNECTED,
+                    ERROR_NO_DATA,
+                    ERROR_BUSY,
+                ]
+                .iter()
+                .any(|code| e.code() == windows::core::HRESULT::from_win32(code.0))
+                {
                     return Ok(());
                 }
                 return Err(ErreurSortie::Processus(format!(
@@ -517,10 +658,8 @@ impl PipeAudio {
                 )));
             }
             if n == 0 {
-                return Err(ErreurSortie::Processus(format!(
-                    "pipe audio {} : rien écrit",
-                    self.nom
-                )));
+                // `PIPE_NOWAIT` sans place : rien écrit, bloc sauté.
+                return Ok(());
             }
             ecrits += n as usize;
         }

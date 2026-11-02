@@ -56,8 +56,14 @@ use crate::output::ffmpeg::{FfmpegSink, FormatReseau};
 use crate::preview::Apercu;
 use crate::scene_sources::BoiteCfg;
 use crate::texte::{
-    DessinateurTexte, EtatAlertes, EtatGoals, EtatMusique, EtatSpeedrun, GoalCfg, HorlogeCfg,
-    MajAlerte, MajGoal, MajMusique, MajSpeedrun, MusiqueCfg, SpeedrunCfg, TexteCfg, Z_ALERTES,
+    AttenteCfg, DessinateurTexte, EtatAlertes, EtatAttente, EtatBandeau, EtatFight, EtatGoals,
+    EtatMusique, EtatPad, EtatPresentation, EtatSpeedrun, EtatWelcome, FightState, GoalCfg,
+    HorlogeCfg, EqualiseurCfg, EtatEq, MajAlerte, MajBandeau, MajGoal, MajMusique, MajPad,
+    MajPresentation, MajSpeedrun, MajWelcome, MusiqueCfg, MusiqueModuleCfg, ObjectifCfg,
+    SpeedrunCfg, SpotsCfg, TexteCfg, Z_ALERTES, Z_ATTENTE, Z_BANDEAU, Z_FIGHT, Z_PAD,
+    Z_PRES_CARTE, Z_PRES_CLIP, Z_PRES_PUBLIC, Z_PRES_RIDEAUX, Z_PRES_VOILE, Z_WELCOME,
+    COUCHE_CARTE, COUCHE_CLIP, COUCHE_PUBLIC, COUCHE_RIDEAUX, COUCHE_VOILE, EtatSplitPop,
+    MajSplitPop, PistePresentation, Z_SPLITPOP,
 };
 
 /// Ce que le moteur capture.
@@ -98,6 +104,8 @@ pub struct SourceCfg {
     pub cadre: Option<CadreCfg>,
     /// Forme dédiée d'un widget caméra (`None` pour toute autre source).
     pub forme_camera: Option<FormeCamera>,
+    /// Anneau `cameraBord` d'une forme dédiée (`None` = pas d'anneau).
+    pub anneau: Option<crate::cadres::AnneauCamera>,
 }
 
 impl SourceCfg {
@@ -148,6 +156,17 @@ pub struct MoteurNatif {
     inputs: Mutex<Vec<InputCfg>>,
     /// Modules horloge de la scène (`scene.modules.horloge` actif).
     horloges: Mutex<Vec<HorlogeCfg>>,
+    /// Modules objectifs de la scène (`scene.modules.objectifs` actif).
+    objectifs: Mutex<Vec<ObjectifCfg>>,
+    /// Modules musique de la scène (`scene.modules.musique` actif).
+    musiques_module: Mutex<Vec<MusiqueModuleCfg>>,
+    /// Modules équaliseur de la scène (`scene.modules.equaliseur` actif).
+    equaliseurs: Mutex<Vec<EqualiseurCfg>>,
+    /// Modules spots lumineux de la scène (`scene.modules.spots` actif).
+    spots: Mutex<Vec<SpotsCfg>>,
+    /// État live du spectre `eq-spectrum` : l'app pousse pendant la
+    /// session (canal `chat_tx`), l'équaliseur et les spots le lisent.
+    eq_etat: Arc<Mutex<EtatEq>>,
     /// Widgets `type: "goal"` de la scène (compteur + cible + barre).
     goals: Mutex<Vec<GoalCfg>>,
     /// État vivant des compteurs goal : l'app le pousse pendant
@@ -177,6 +196,41 @@ pub struct MoteurNatif {
     /// (`appliquerCadreOverlay` : le style du `cadreWidget` actif est
     /// appliqué à la taille de la carte — rect nul, mesuré au rendu).
     cadre_overlay_alerte: Mutex<Option<CadreCfg>>,
+    /// État vivant de l'overlay clip de bienvenue : l'app le pousse pendant
+    /// l'enregistrement (frames `welcome-clip-play` / `-stop` / `-config` /
+    /// `position-overlay-config` du canal `chat_tx`) — transitoire, jamais
+    /// porté par la scène.
+    welcome_etat: Arc<Mutex<EtatWelcome>>,
+    /// Gabarit du cadre de la carte bienvenue (style du `cadreWidget` de la
+    /// scène, rect nul — mesuré au rendu ; le spotlight ne l'applique pas).
+    cadre_overlay_welcome: Mutex<Option<CadreCfg>>,
+    /// État vivant du bandeau premier message (frames
+    /// `bandeau-premier-message-*` du canal `chat_tx`).
+    bandeau_etat: Arc<Mutex<EtatBandeau>>,
+    /// Couleurs `(primaire, secondaire)` du bandeau, résolues depuis le
+    /// cadre de la scène (`bpmResoudreCouleurs`).
+    bandeau_couleurs: Mutex<([u8; 4], [u8; 4])>,
+    /// État vivant de l'écran d'attente (frames `ecran-attente-etat` du canal
+    /// `chat_tx`) — transitoire, jamais porté par la scène.
+    attente_etat: Arc<Mutex<EtatAttente>>,
+    /// Gabarit du cadre de la carte minuteur (style du `cadreWidget` de la
+    /// scène, rect nul — mesuré au rendu, à la taille de la carte).
+    cadre_overlay_attente: Mutex<Option<CadreCfg>>,
+    /// État vivant du pad numérique (frames `pad-play` / `pad-stop` /
+    /// `position-overlay-config` du canal `chat_tx`).
+    pad_etat: Arc<Mutex<EtatPad>>,
+    /// Gabarit du cadre de la carte pad (style de la scène, rect nul).
+    cadre_overlay_pad: Mutex<Option<CadreCfg>>,
+    /// État vivant de l'arène `!fight` (frames `fight-state` du canal
+    /// `chat_tx`) — transitoire, jamais porté par la scène.
+    fight_etat: Arc<Mutex<EtatFight>>,
+    /// État vivant du pop de validation des splits (dérivé des frames
+    /// `speedrun-etat` + squelette `splitpop-pos`).
+    splitpop_etat: Arc<Mutex<EtatSplitPop>>,
+    /// État vivant de la présentation streamer (frames `presentation-show` /
+    /// `-hide` / `-mode` du canal `chat_tx`) — transitoire, jamais portée par
+    /// la scène. La carte (E6b), le clip (E6c) et l'audio (E6d) la complètent.
+    presentation_etat: Arc<Mutex<EtatPresentation>>,
     /// État vivant des touches : l'app le pousse pendant l'enregistrement.
     input: Arc<Mutex<FileInput>>,
     /// Boîtes à voile (`.widget`) : fond + bordure, hors `sansCadre`,
@@ -221,6 +275,11 @@ impl Default for MoteurNatif {
     }
 }
 
+/// Vrai si un lot de configuration est vide (`Mutex<Vec<T>>`).
+fn lot_vide<T>(lot: &Mutex<Vec<T>>) -> bool {
+    lot.lock().unwrap_or_else(|e| e.into_inner()).is_empty()
+}
+
 impl MoteurNatif {
     pub fn nouveau() -> Self {
         Self {
@@ -232,6 +291,11 @@ impl MoteurNatif {
             chats: Mutex::new(Vec::new()),
             inputs: Mutex::new(Vec::new()),
             horloges: Mutex::new(Vec::new()),
+            objectifs: Mutex::new(Vec::new()),
+            musiques_module: Mutex::new(Vec::new()),
+            equaliseurs: Mutex::new(Vec::new()),
+            spots: Mutex::new(Vec::new()),
+            eq_etat: Arc::new(Mutex::new(EtatEq::nouveau())),
             goals: Mutex::new(Vec::new()),
             goals_etat: Arc::new(Mutex::new(EtatGoals::nouveau())),
             speedruns: Mutex::new(Vec::new()),
@@ -240,6 +304,17 @@ impl MoteurNatif {
             musiques_etat: Arc::new(Mutex::new(EtatMusique::nouveau())),
             alertes_etat: Arc::new(Mutex::new(EtatAlertes::nouveau())),
             cadre_overlay_alerte: Mutex::new(None),
+            welcome_etat: Arc::new(Mutex::new(EtatWelcome::nouveau())),
+            cadre_overlay_welcome: Mutex::new(None),
+            bandeau_etat: Arc::new(Mutex::new(EtatBandeau::nouveau())),
+            bandeau_couleurs: Mutex::new(crate::texte::COULEURS_BANDEAU_DEFAUT),
+            attente_etat: Arc::new(Mutex::new(EtatAttente::nouveau())),
+            cadre_overlay_attente: Mutex::new(None),
+            pad_etat: Arc::new(Mutex::new(EtatPad::nouveau())),
+            cadre_overlay_pad: Mutex::new(None),
+            fight_etat: Arc::new(Mutex::new(EtatFight::nouveau())),
+            splitpop_etat: Arc::new(Mutex::new(EtatSplitPop::nouveau())),
+            presentation_etat: Arc::new(Mutex::new(EtatPresentation::nouveau())),
             input: Arc::new(Mutex::new(FileInput::nouveau())),
             boites: Mutex::new(Vec::new()),
             chat: Arc::new(Mutex::new(FileChat::nouveau())),
@@ -405,6 +480,87 @@ impl MoteurNatif {
             .clone()
     }
 
+    /// Remplace les modules objectifs (rect, titre, lignes, cadre opt-in).
+    pub fn configurer_objectifs(&self, objectifs: Vec<ObjectifCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.objectifs.lock().unwrap_or_else(|e| e.into_inner()) = objectifs;
+        Ok(())
+    }
+
+    /// Modules objectifs configurés (diagnostic / tests).
+    pub fn objectifs(&self) -> Vec<ObjectifCfg> {
+        self.objectifs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Remplace les modules musique (rect, options, cadre opt-in).
+    pub fn configurer_musiques_module(
+        &self,
+        musiques: Vec<MusiqueModuleCfg>,
+    ) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.musiques_module.lock().unwrap_or_else(|e| e.into_inner()) = musiques;
+        Ok(())
+    }
+
+    /// Modules musique configurés (diagnostic / tests).
+    pub fn musiques_module(&self) -> Vec<MusiqueModuleCfg> {
+        self.musiques_module
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Remplace les modules équaliseur (rect, options couleurs/bulles).
+    pub fn configurer_equaliseurs(&self, eqs: Vec<EqualiseurCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.equaliseurs.lock().unwrap_or_else(|e| e.into_inner()) = eqs;
+        Ok(())
+    }
+
+    /// Modules équaliseur configurés (diagnostic / tests).
+    pub fn equaliseurs(&self) -> Vec<EqualiseurCfg> {
+        self.equaliseurs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Remplace les modules spots (options intensité/vitesse/réactivité).
+    pub fn configurer_spots(&self, spots: Vec<SpotsCfg>) -> Result<(), ErreurMoteur> {
+        if self.en_cours() {
+            return Err(ErreurMoteur::DejaActif(SortieKind::Enregistrement));
+        }
+        *self.spots.lock().unwrap_or_else(|e| e.into_inner()) = spots;
+        Ok(())
+    }
+
+    /// Modules spots configurés (diagnostic / tests).
+    pub fn spots(&self) -> Vec<SpotsCfg> {
+        self.spots
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
+    /// Pousse une frame `eq-spectrum` (24 bandes 0..1, ~30 Hz, canal
+    /// `chat_tx`). **Jamais refusé pendant une session**, comme
+    /// `pousser_goal` : le spectre arrive après le démarrage.
+    pub fn pousser_eq(&self, bandes: [f32; 24]) {
+        self.eq_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pousser(bandes);
+    }
+
     /// Remplace les widgets goal (rect, plateforme/métrique/cible ou goalId).
     pub fn configurer_goals(&self, goals: Vec<GoalCfg>) -> Result<(), ErreurMoteur> {
         if self.en_cours() {
@@ -466,10 +622,61 @@ impl MoteurNatif {
     /// c'est le canal par lequel l'état du splitter arrive après le
     /// démarrage.
     pub fn pousser_speedrun(&self, maj: MajSpeedrun) {
+        // Le pop de validation lit l'état AVANT la mutation (segments/PB) et
+        // la mutation elle-même (`srPopSplit` du DOM). Verrous pris un par un,
+        // jamais imbriqués (règle Mutex) : cfg → état → pop → état.
+        let pop = {
+            let cfgs = self.speedruns.lock().unwrap_or_else(|e| e.into_inner());
+            let etat = self
+                .speedruns_etat
+                .lock()
+                .unwrap_or_else(|e| e.into_inner());
+            cfgs.first().and_then(|cfg| {
+                etat.pop_pour(&maj, cfg).map(|pop| {
+                    (
+                        pop,
+                        cfg.couleur_ahead,
+                        cfg.couleur_behind,
+                        cfg.points_duree_pop,
+                        cfg.points_son.clone(),
+                        cfg.points_son_volume,
+                    )
+                })
+            })
+        };
+        if let Some((pop, ahead, behind, duree, son, volume)) = pop {
+            self.splitpop_etat
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .appliquer(MajSplitPop::Afficher {
+                    pop,
+                    couleur_ahead: ahead,
+                    couleur_behind: behind,
+                    duree_s: duree,
+                    son,
+                    volume,
+                });
+        }
         self.speedruns_etat
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .appliquer(maj);
+    }
+
+    /// Pousse une mutation du pop de validation (frame `splitpop-pos`).
+    pub fn pousser_splitpop(&self, maj: MajSplitPop) {
+        self.splitpop_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj);
+    }
+
+    /// Version de l'état pop de validation (diagnostic / tests).
+    pub fn splitpop_version(&self) -> u64 {
+        self.splitpop_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
     }
 
     /// Version de l'état speedrun (diagnostic / tests).
@@ -539,6 +746,118 @@ impl MoteurNatif {
     /// Version de l'état alerte (diagnostic / tests).
     pub fn alertes_version(&self) -> u64 {
         self.alertes_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Pousse une mutation de l'overlay clip de bienvenue (frames
+    /// `welcome-clip-play` / `welcome-clip-stop` / `welcome-clip-config` et
+    /// `position-overlay-config` du canal `chat_tx`).
+    ///
+    /// **Jamais refusé pendant un enregistrement**, comme `pousser_alerte` :
+    /// c'est le canal par lequel les clips arrivent après le démarrage.
+    pub fn pousser_welcome(&self, maj: MajWelcome) {
+        self.welcome_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj);
+    }
+
+    /// Version de l'état bienvenue (diagnostic / tests).
+    pub fn welcome_version(&self) -> u64 {
+        self.welcome_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Pousse une mutation du bandeau premier message (frames
+    /// `bandeau-premier-message-play` / `-stop` / `-config` du canal
+    /// `chat_tx`). Jamais refusé pendant un enregistrement.
+    pub fn pousser_bandeau(&self, maj: MajBandeau) {
+        self.bandeau_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj);
+    }
+
+    /// Version de l'état bandeau (diagnostic / tests).
+    pub fn bandeau_version(&self) -> u64 {
+        self.bandeau_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Pousse l'état complet de l'écran d'attente (frame `chat_tx`
+    /// `ecran-attente-etat`, ré-émise à chaque tick du chrono). **Jamais
+    /// refusé pendant un enregistrement**, comme les autres overlays.
+    pub fn pousser_attente(&self, cfg: AttenteCfg) {
+        self.attente_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(cfg);
+    }
+
+    /// Version de l'état écran d'attente (diagnostic / tests).
+    pub fn attente_version(&self) -> u64 {
+        self.attente_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Pousse une mutation du pad numérique (frames `chat_tx` `pad-play` /
+    /// `pad-stop` / `position-overlay-config`). **Jamais refusé pendant un
+    /// enregistrement**, comme les autres overlays.
+    pub fn pousser_pad(&self, maj: MajPad) {
+        self.pad_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj);
+    }
+
+    /// Version de l'état pad (diagnostic / tests).
+    pub fn pad_version(&self) -> u64 {
+        self.pad_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Pousse un snapshot complet de l'arène `!fight` (frame `chat_tx`
+    /// `fight-state`, re-émise à chaque transition et au resync).
+    /// **Jamais refusé pendant un enregistrement**.
+    pub fn pousser_fight(&self, etat: FightState) {
+        self.fight_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(etat);
+    }
+
+    /// Version de l'état `!fight` (diagnostic / tests).
+    pub fn fight_version(&self) -> u64 {
+        self.fight_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .version()
+    }
+
+    /// Pousse une mutation de la présentation streamer (frames `chat_tx`
+    /// `presentation-show` / `-hide` / `-mode`). **Jamais refusé pendant un
+    /// enregistrement**, comme les autres overlays : la présentation est une
+    /// prise de scène manuelle, elle arrive après le démarrage.
+    pub fn pousser_presentation(&self, maj: MajPresentation) {
+        self.presentation_etat
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .appliquer(maj);
+    }
+
+    /// Version de l'état présentation (diagnostic / tests).
+    pub fn presentation_version(&self) -> u64 {
+        self.presentation_etat
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .version()
@@ -634,6 +953,14 @@ impl MoteurNatif {
                 ));
             }
         }
+        // Fond = capture OBS (`bgObsSource`) : concept du mode OBS, pas rendu
+        // par le moteur natif — la zone reste noire. Signalé plutôt que de
+        // laisser un enregistrement noir muet. Un fond capturé natif
+        // (`bgCaptureCible`, prioritaire) rend la capture : aucun signal.
+        if scene.bgObsSource.is_some() && scene.bgCaptureCible.is_none() {
+            self.compteurs
+                .degrader("fond « capture OBS » non rendu en mode Rust".to_string());
+        }
         LotScene {
             sources: crate::scene_sources::sources_depuis_scene(scene, cibles),
             medias: crate::scene_sources::medias_depuis_scene(scene, base),
@@ -643,11 +970,19 @@ impl MoteurNatif {
             boites: crate::scene_sources::boites_depuis_scene(scene),
             inputs: crate::scene_sources::input_depuis_scene(scene),
             horloges: crate::scene_sources::horloges_depuis_scene(scene),
+            objectifs: crate::scene_sources::objectifs_depuis_scene(scene),
+            musiques_module: crate::scene_sources::musique_modules_depuis_scene(scene),
+            equaliseurs: crate::scene_sources::equaliseurs_depuis_scene(scene),
+            spots: crate::scene_sources::spots_depuis_scene(scene),
             goals: crate::scene_sources::goals_depuis_scene(scene),
             speedruns: crate::scene_sources::speedruns_depuis_scene(scene),
             musiques: crate::scene_sources::musiques_depuis_scene(scene),
             persps: crate::scene_sources::persps_depuis_scene(scene),
-            cadre_overlay_alerte: cadre_overlay_alerte(scene),
+            cadre_overlay_alerte: cadre_overlay(scene, Z_ALERTES),
+            cadre_overlay_welcome: cadre_overlay(scene, Z_WELCOME),
+            cadre_overlay_attente: cadre_overlay(scene, Z_ATTENTE),
+            cadre_overlay_pad: cadre_overlay(scene, Z_PAD),
+            bandeau_couleurs: bandeau_couleurs(scene),
         }
     }
 
@@ -662,6 +997,11 @@ impl MoteurNatif {
         *self.boites.lock().unwrap_or_else(|e| e.into_inner()) = lot.boites.clone();
         *self.inputs.lock().unwrap_or_else(|e| e.into_inner()) = lot.inputs.clone();
         *self.horloges.lock().unwrap_or_else(|e| e.into_inner()) = lot.horloges.clone();
+        *self.objectifs.lock().unwrap_or_else(|e| e.into_inner()) = lot.objectifs.clone();
+        *self.musiques_module.lock().unwrap_or_else(|e| e.into_inner()) =
+            lot.musiques_module.clone();
+        *self.equaliseurs.lock().unwrap_or_else(|e| e.into_inner()) = lot.equaliseurs.clone();
+        *self.spots.lock().unwrap_or_else(|e| e.into_inner()) = lot.spots.clone();
         *self.goals.lock().unwrap_or_else(|e| e.into_inner()) = lot.goals.clone();
         *self.speedruns.lock().unwrap_or_else(|e| e.into_inner()) = lot.speedruns.clone();
         *self.musiques.lock().unwrap_or_else(|e| e.into_inner()) = lot.musiques.clone();
@@ -670,6 +1010,22 @@ impl MoteurNatif {
             .cadre_overlay_alerte
             .lock()
             .unwrap_or_else(|e| e.into_inner()) = lot.cadre_overlay_alerte.clone();
+        *self
+            .cadre_overlay_welcome
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = lot.cadre_overlay_welcome.clone();
+        *self
+            .cadre_overlay_attente
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = lot.cadre_overlay_attente.clone();
+        *self
+            .cadre_overlay_pad
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = lot.cadre_overlay_pad.clone();
+        *self
+            .bandeau_couleurs
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = lot.bandeau_couleurs;
     }
 
     /// Photographie des compteurs (diagnostic, lot 2.9).
@@ -710,6 +1066,10 @@ impl MoteurNatif {
             boites: self.boites(),
             inputs: self.inputs(),
             horloges: self.horloges(),
+            objectifs: self.objectifs(),
+            musiques_module: self.musiques_module(),
+            equaliseurs: self.equaliseurs(),
+            spots: self.spots(),
             goals: self.goals(),
             speedruns: self.speedruns(),
             musiques: self.musiques(),
@@ -719,18 +1079,77 @@ impl MoteurNatif {
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
             canvas: *self.canvas.lock().unwrap_or_else(|e| e.into_inner()),
+            base: self.base.lock().unwrap_or_else(|e| e.into_inner()).clone(),
             chat: Arc::clone(&self.chat),
             input: Arc::clone(&self.input),
             goals_etat: Arc::clone(&self.goals_etat),
             speedruns_etat: Arc::clone(&self.speedruns_etat),
             musiques_etat: Arc::clone(&self.musiques_etat),
+            eq_etat: Arc::clone(&self.eq_etat),
             alertes_etat: Arc::clone(&self.alertes_etat),
             cadre_overlay_alerte: self
                 .cadre_overlay_alerte
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
                 .clone(),
+            welcome_etat: Arc::clone(&self.welcome_etat),
+            cadre_overlay_welcome: self
+                .cadre_overlay_welcome
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            bandeau_etat: Arc::clone(&self.bandeau_etat),
+            bandeau_couleurs: *self
+                .bandeau_couleurs
+                .lock()
+                .unwrap_or_else(|e| e.into_inner()),
+            attente_etat: Arc::clone(&self.attente_etat),
+            cadre_overlay_attente: self
+                .cadre_overlay_attente
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            pad_etat: Arc::clone(&self.pad_etat),
+            cadre_overlay_pad: self
+                .cadre_overlay_pad
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .clone(),
+            fight_etat: Arc::clone(&self.fight_etat),
+            splitpop_etat: Arc::clone(&self.splitpop_etat),
+            presentation_etat: Arc::clone(&self.presentation_etat),
         }
+    }
+
+    /// Rien n'a **jamais** été configuré sur ce moteur : erreur de
+    /// programmation, jamais un jugement sur une scène utilisateur. Une scène
+    /// **vide** est légitime et démarre (parité OBS : on enregistre du noir).
+    fn jamais_configure(&self) -> bool {
+        let base_vide = self
+            .base
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_os_str()
+            .is_empty();
+        let canvas_nul = *self.canvas.lock().unwrap_or_else(|e| e.into_inner()) == (0, 0);
+        base_vide
+            && canvas_nul
+            && lot_vide(&self.sources)
+            && lot_vide(&self.medias)
+            && lot_vide(&self.persps)
+            && lot_vide(&self.textes)
+            && lot_vide(&self.cadres)
+            && lot_vide(&self.chats)
+            && lot_vide(&self.boites)
+            && lot_vide(&self.inputs)
+            && lot_vide(&self.horloges)
+            && lot_vide(&self.objectifs)
+            && lot_vide(&self.musiques_module)
+            && lot_vide(&self.equaliseurs)
+            && lot_vide(&self.spots)
+            && lot_vide(&self.goals)
+            && lot_vide(&self.speedruns)
+            && lot_vide(&self.musiques)
     }
 
     /// Démarre la session « aperçu seul » (projecteur natif).
@@ -872,7 +1291,9 @@ impl Moteur for MoteurNatif {
             camera: true,
             fond_vert: false,
             masque_shader: false,
-            cadres_animes: false,
+            // Comète `animer` portée sur les 2 styles rendus (lot C1) ; les
+            // styles non portés ne produisent aucun cadre (dégradé).
+            cadres_animes: true,
             // Loopback + micro muxés en AAC dans le fichier (P3 audio).
             audio: true,
             audio_par_app: false,
@@ -969,22 +1390,15 @@ impl Moteur for MoteurNatif {
         // démarrage de sortie — l'enregistrement alimente ensuite l'aperçu.
         self.arreter_apercu();
 
-        let scene = self.scene_chargee();
-        if scene.sources.is_empty()
-            && scene.medias.is_empty()
-            && scene.textes.is_empty()
-            && scene.chats.is_empty()
-            && scene.inputs.is_empty()
-            && scene.horloges.is_empty()
-            && scene.goals.is_empty()
-            && scene.speedruns.is_empty()
-            && scene.musiques.is_empty()
-        {
+        // Parité OBS : une scène **vide** est une scène valide (on enregistre
+        // du noir). Seul un moteur jamais configuré est refusé — erreur de
+        // programmation, pas un jugement sur le contenu.
+        if self.jamais_configure() {
             return Err(ErreurMoteur::Configuration(
-                "aucune source, média, texte, chat, input-viewer, goal, horloge, speedrun ni musique configuré"
-                    .to_string(),
+                "aucune scène appliquée au moteur".to_string(),
             ));
         }
+        let scene = self.scene_chargee();
         for source in &scene.sources {
             source.valider()?;
         }
@@ -1076,12 +1490,24 @@ struct LotScene {
     boites: Vec<BoiteCfg>,
     inputs: Vec<InputCfg>,
     horloges: Vec<HorlogeCfg>,
+    objectifs: Vec<ObjectifCfg>,
+    musiques_module: Vec<MusiqueModuleCfg>,
+    equaliseurs: Vec<EqualiseurCfg>,
+    spots: Vec<SpotsCfg>,
     goals: Vec<GoalCfg>,
     speedruns: Vec<SpeedrunCfg>,
     musiques: Vec<MusiqueCfg>,
     persps: Vec<PerspCfg>,
     /// Gabarit du cadre de la carte alerte (style de la scène, rect nul).
     cadre_overlay_alerte: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte bienvenue (style de la scène, rect nul).
+    cadre_overlay_welcome: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte minuteur de l'écran d'attente.
+    cadre_overlay_attente: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte pad.
+    cadre_overlay_pad: Option<CadreCfg>,
+    /// Couleurs `(primaire, secondaire)` du bandeau.
+    bandeau_couleurs: ([u8; 4], [u8; 4]),
 }
 
 /// Contenu figé d'une session d'enregistrement (captures, médias, textes,
@@ -1096,6 +1522,10 @@ struct SceneChargee {
     inputs: Vec<InputCfg>,
     /// Modules horloge de la scène (config + options, z `Z_MODULES`).
     horloges: Vec<HorlogeCfg>,
+    objectifs: Vec<ObjectifCfg>,
+    musiques_module: Vec<MusiqueModuleCfg>,
+    equaliseurs: Vec<EqualiseurCfg>,
+    spots: Vec<SpotsCfg>,
     /// Widgets goal de la scène (z du widget, cadre à l'échelle bulle).
     goals: Vec<GoalCfg>,
     /// Widgets speedrun de la scène (z du widget, cadre de scène).
@@ -1107,6 +1537,9 @@ struct SceneChargee {
     /// Canvas de la scène d'origine — comparé au canvas de la session à
     /// l'application à chaud (mismatch = dégradation, jamais de resize).
     canvas: (u32, u32),
+    /// Dossier de données — base des chemins de cache des images du chat
+    /// (avatars + emotes, lot G). Vide tant qu'aucune scène n'est configurée.
+    base: PathBuf,
     /// Buffer vivant : l'app y pousse pendant la session.
     chat: Arc<Mutex<FileChat>>,
     /// État vivant des touches : l'app y pousse pendant la session.
@@ -1117,11 +1550,36 @@ struct SceneChargee {
     speedruns_etat: Arc<Mutex<EtatSpeedrun>>,
     /// État vivant du lecteur musique : l'app y pousse pendant la session.
     musiques_etat: Arc<Mutex<EtatMusique>>,
+    /// État vivant du spectre eq : l'app y pousse pendant la session.
+    eq_etat: Arc<Mutex<EtatEq>>,
     /// État vivant de l'overlay alerte : l'app y pousse pendant la
     /// session — transitoire, jamais par la scène.
     alertes_etat: Arc<Mutex<EtatAlertes>>,
+    /// État vivant de l'overlay clip de bienvenue : l'app y pousse
+    /// pendant la session — transitoire, jamais par la scène.
+    welcome_etat: Arc<Mutex<EtatWelcome>>,
     /// Gabarit du cadre de la carte alerte (style de la scène, rect nul).
     cadre_overlay_alerte: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte bienvenue (style de la scène, rect nul).
+    cadre_overlay_welcome: Option<CadreCfg>,
+    /// État vivant du bandeau premier message (frames `bandeau-*`).
+    bandeau_etat: Arc<Mutex<EtatBandeau>>,
+    /// Couleurs du bandeau premier message (`bpmResoudreCouleurs`).
+    bandeau_couleurs: ([u8; 4], [u8; 4]),
+    /// État vivant de l'écran d'attente (frames `ecran-attente-etat`).
+    attente_etat: Arc<Mutex<EtatAttente>>,
+    /// Gabarit du cadre de la carte minuteur (style de la scène, rect nul).
+    cadre_overlay_attente: Option<CadreCfg>,
+    /// État vivant du pad numérique (frames `pad-play` / `pad-stop`).
+    pad_etat: Arc<Mutex<EtatPad>>,
+    /// Gabarit du cadre de la carte pad (style de la scène, rect nul).
+    cadre_overlay_pad: Option<CadreCfg>,
+    /// État vivant de l'arène `!fight` (frames `fight-state`).
+    fight_etat: Arc<Mutex<EtatFight>>,
+    /// État vivant de la présentation streamer (frames `presentation-*`).
+    presentation_etat: Arc<Mutex<EtatPresentation>>,
+    /// État vivant du pop de validation des splits.
+    splitpop_etat: Arc<Mutex<EtatSplitPop>>,
 }
 
 /// Session de capture d'une source : WGC (moniteur/fenêtre) ou Media
@@ -1133,6 +1591,15 @@ enum SessionCapture {
 }
 
 impl SessionCapture {
+    /// Session encore vivante ? Une caméra débranchée garde sa dernière
+    /// frame : il faut la recréer (et le dire) au lieu de la réutiliser.
+    fn est_vivante(&self) -> bool {
+        match self {
+            SessionCapture::Wgc(_) => true,
+            SessionCapture::Camera(s) => s.est_vivante(),
+        }
+    }
+
     /// Taille de la source capturée, en pixels.
     fn taille(&self) -> (u32, u32) {
         match self {
@@ -1227,12 +1694,19 @@ impl SceneVivante {
             boites,
             inputs,
             horloges,
+            objectifs,
+            musiques_module,
+            equaliseurs,
+            spots,
             goals,
             speedruns,
             musiques,
             persps,
             canvas: canvas_scene,
             cadre_overlay_alerte,
+            cadre_overlay_welcome,
+            cadre_overlay_attente,
+            cadre_overlay_pad,
             ..
         } = nouvelle;
         // Le canvas est figé à la création de la session (textures, NV12) :
@@ -1254,11 +1728,18 @@ impl SceneVivante {
                 boites,
                 inputs,
                 horloges,
+                objectifs,
+                musiques_module,
+                equaliseurs,
+                spots,
                 goals,
                 speedruns,
                 musiques,
                 persps,
                 cadre_overlay_alerte,
+                cadre_overlay_welcome,
+                cadre_overlay_attente,
+                cadre_overlay_pad,
             },
         ) {
             compteurs.degrader(format!("application scène : {e}"));
@@ -1290,7 +1771,7 @@ impl SceneVivante {
             let (capture, bitmap) = match position {
                 // Même cible : session WGC, texture et bitmap conservées —
                 // seules la géométrie et le cadre sont ré-appliqués.
-                Some(i) if pool[i].0.cfg.cible == src.cible => {
+                Some(i) if pool[i].0.cfg.cible == src.cible && pool[i].0.session.est_vivante() => {
                     let (mut c, b) = pool.remove(i);
                     c.cfg = src.clone();
                     (c, b)
@@ -1563,6 +2044,18 @@ fn construire_plan(vivante: &SceneVivante, voie: &VoieRendu) -> Vec<(i32, GenreC
     for (i, cfg_horloge) in voie.horloges.iter().enumerate() {
         plan.push((cfg_horloge.z, GenreCalque::Horloge, i));
     }
+    for (i, cfg_obj) in voie.objectifs.iter().enumerate() {
+        plan.push((cfg_obj.z, GenreCalque::Objectifs, i));
+    }
+    for (i, cfg_mu) in voie.musiques_module.iter().enumerate() {
+        plan.push((cfg_mu.z, GenreCalque::MusiqueModule, i));
+    }
+    for (i, cfg_eq) in voie.equaliseurs.iter().enumerate() {
+        plan.push((cfg_eq.z, GenreCalque::Equaliseur, i));
+    }
+    for (i, cfg_sp) in voie.spots.iter().enumerate() {
+        plan.push((cfg_sp.z, GenreCalque::Spots, i));
+    }
     for (i, cfg_goal) in voie.goals.iter().enumerate() {
         plan.push((cfg_goal.z, GenreCalque::Goal, i));
     }
@@ -1572,23 +2065,61 @@ fn construire_plan(vivante: &SceneVivante, voie: &VoieRendu) -> Vec<(i32, GenreC
     for (i, cfg_mu) in voie.musiques.iter().enumerate() {
         plan.push((cfg_mu.z, GenreCalque::Musique, i));
     }
+    // Titres de WIDGET : une entrée par titre, à SON z — un titre de widget
+    // n'est plus peint au-dessus de toute la pile (il passait par-dessus les
+    // overlays et les cadres). Les titres de FOND (`bgTitre*`, z = i32::MIN+1)
+    // restent dans la passe finale : dans le plan ils passeraient sous le
+    // média de fond.
+    for (i, texte) in voie.textes.iter().enumerate() {
+        if texte.cible == crate::texte::CibleTitre::Widget {
+            plan.push((texte.z, GenreCalque::Titre, i));
+        }
+    }
     for (i, cadre) in voie.cadres.iter().enumerate() {
         plan.push((cadre.z, GenreCalque::Cadre, i));
     }
+    // Écran d'attente (`.ecran-attente-root`, z 9990) : plein écran, sous
+    // tous les overlays éphémères (pad/alertes/bandeau/bienvenue).
+    plan.push((Z_ATTENTE, GenreCalque::Attente, 0));
+    // Arène Emoji Arena (`#fight-root`, z 9993) : scène de fond sous le
+    // chrono 2 (9994), le pad (9995) et les overlays automatiques.
+    plan.push((Z_FIGHT, GenreCalque::Fight, 0));
+    // Pad numérique (`.pad-root`, z 9995) : carte média transitoire, sous
+    // les commandes/alertes/bandeau/bienvenue.
+    // Pop de validation des splits (`.splitpop-root`, z 9993) — sous le pad.
+    plan.push((Z_SPLITPOP, GenreCalque::SplitPop, 0));
+    plan.push((Z_PAD, GenreCalque::Pad, 0));
     // Overlay alerte (`.alerte-root`, z 9997) : une seule carte
     // transitoire, peinte à son z entre les calques de scène et le bord.
     plan.push((Z_ALERTES, GenreCalque::Alerte, 0));
+    // Overlay clip de bienvenue (`.welcome-clip-root`, z 9999) : voile +
+    // carte transitoires, peints à leur z au-dessus de tout le reste.
+    plan.push((Z_WELCOME, GenreCalque::Welcome, 0));
+    // Bandeau premier message (`.bandeau-pm-root`, z 9998).
+    plan.push((Z_BANDEAU, GenreCalque::Bandeau, 0));
+    // Présentation streamer (`.pres-*`, z 10000+) : quatre couches, dans
+    // l'ordre du DOM — voile + décor (10000), rideaux + cantonné + embrasses
+    // (10001), carte (10002), public (10003, **devant** la carte). Le lecteur
+    // clip (10004, tranche E6c) s'intercalera.
+    plan.push((Z_PRES_VOILE, GenreCalque::Presentation, COUCHE_VOILE));
+    plan.push((Z_PRES_RIDEAUX, GenreCalque::Presentation, COUCHE_RIDEAUX));
+    plan.push((Z_PRES_CARTE, GenreCalque::Presentation, COUCHE_CARTE));
+    plan.push((Z_PRES_PUBLIC, GenreCalque::Presentation, COUCHE_PUBLIC));
+    // Lecteur clip (`.pres-clip-root`, z 10004) : au-dessus de tout, public
+    // compris.
+    plan.push((Z_PRES_CLIP, GenreCalque::Presentation, COUCHE_CLIP));
     plan.sort_by_key(|(z, genre, _)| (*z, *genre));
     plan
 }
 
-/// Gabarit du cadre de la carte alerte — miroir `appliquerCadreOverlay`
-/// (diffusion.html) : la carte prend le style du `cadreWidget` actif à SA
+/// Gabarit du cadre d'une carte overlay (alerte `Z_ALERTES`, bienvenue
+/// `Z_WELCOME`) — miroir `appliquerCadreOverlay` (diffusion.html) : la carte
+/// prend le style du `cadreWidget` actif à SA
 /// propre taille (le `rect` est posé par le bloc de rendu, mesuré sur la
 /// carte). `None` = cadre inactif ou style non porté (les 2 styles du
 /// lot — le signal `degrader` est déjà émis par `lot_scene`, comme pour
 /// les widgets).
-fn cadre_overlay_alerte(scene: &sos_scene::Scene) -> Option<CadreCfg> {
+fn cadre_overlay(scene: &sos_scene::Scene, z: i32) -> Option<CadreCfg> {
     let cadre = scene
         .cadreWidget
         .as_ref()
@@ -1604,8 +2135,29 @@ fn cadre_overlay_alerte(scene: &sos_scene::Scene) -> Option<CadreCfg> {
         couleur,
         couleur_fin,
         gradient_angle: cadre.gradientAngle,
-        z: Z_ALERTES,
+        z,
+        animer: cadre.animer,
     })
+}
+
+/// Couleurs `(primaire, secondaire)` du bandeau — miroir
+/// `bpmResoudreCouleurs` (diffusion.html) : cadre actif → l'extrémité la
+/// plus lumineuse devient la primaire, l'autre la secondaire ; `couleur`
+/// seule → secondaire assombrie de 25 % ; aucun cadre → noir & blanc.
+fn bandeau_couleurs(scene: &sos_scene::Scene) -> ([u8; 4], [u8; 4]) {
+    let defaut = crate::texte::COULEURS_BANDEAU_DEFAUT;
+    let Some(cadre) = scene.cadreWidget.as_ref().filter(|c| c.actif) else {
+        return defaut;
+    };
+    let c1 = crate::cadres::couleur_hex(&cadre.couleur);
+    let c2 = crate::cadres::couleur_hex(&cadre.couleurFin);
+    match (c1, c2) {
+        (Some(a), Some(b)) => crate::texte::resoudre_couleurs(Some((a, b))),
+        (Some(a), None) => (a, crate::texte::assombrir(a, 0.25)),
+        // `bpmResoudreCouleurs` ne retient que `couleur` : une `couleurFin`
+        // seule (couleur invalide) retombe sur le thème par défaut.
+        _ => defaut,
+    }
 }
 
 /// Couleur de cadre validée comme `genererSVG` : `#rrggbb` exact, sinon
@@ -1673,18 +2225,35 @@ fn boucle(
         boites,
         inputs,
         horloges,
+        objectifs,
+        musiques_module,
+        equaliseurs,
+        spots,
         goals,
         speedruns,
         musiques,
         persps,
         canvas: _,
+        base,
         chat,
         input,
         goals_etat,
         speedruns_etat,
         musiques_etat,
+        eq_etat,
         alertes_etat,
         cadre_overlay_alerte,
+        welcome_etat,
+        cadre_overlay_welcome,
+        bandeau_etat,
+        bandeau_couleurs,
+        attente_etat,
+        cadre_overlay_attente,
+        pad_etat,
+        cadre_overlay_pad,
+        fight_etat,
+        presentation_etat,
+        splitpop_etat,
     } = scene;
     let (cw, ch) = cfg.canvas;
     let fps = cfg.fps;
@@ -1708,7 +2277,13 @@ fn boucle(
 
     let mut captures: Vec<CaptureActive> = Vec::with_capacity(sources.len());
     for source in &sources {
-        captures.push(creer_capture(source, &moniteurs, &contexte)?);
+        // Même sémantique qu'`appliquer` : une cible périmée (hwnd d'une
+        // session passée, moniteur débranché) dégrade la session au lieu de
+        // la tuer — les autres captures et le reste de la scène vivent.
+        match creer_capture(source, &moniteurs, &contexte) {
+            Ok(capture) => captures.push(capture),
+            Err(e) => compteurs.degrader(e),
+        }
     }
 
     let mut medias: Vec<MediaChargee> = Vec::with_capacity(medias_cfg.len());
@@ -1729,6 +2304,7 @@ fn boucle(
         ch,
         (ow, oh),
         fps,
+        &base,
         ContenuRendu {
             textes: textes_cfg,
             cadres,
@@ -1736,11 +2312,20 @@ fn boucle(
             boites,
             inputs,
             horloges,
+            objectifs,
+            musiques_module,
+            equaliseurs,
+            spots,
             goals,
             speedruns,
             musiques,
             persps,
             cadre_overlay_alerte,
+            cadre_overlay_welcome,
+            // Copie : la boucle garde le gabarit pour le dessin (la voie est
+            // empruntée en `&mut` au moment du calque).
+            cadre_overlay_attente: cadre_overlay_attente.clone(),
+            cadre_overlay_pad: cadre_overlay_pad.clone(),
         },
     )
     .map_err(|e| format!("rendu : {e}"))?;
@@ -1989,6 +2574,11 @@ fn boucle(
     let mut captures_audio: Vec<crate::audio::piste::CapturePiste> = Vec::new();
     let mut sources_live: Vec<crate::audio::live::SourceLive> = Vec::new();
     let mut mixeur = crate::audio::live::MixeurLocal::nouveau();
+    // Entrée loopback (« desktop audio ») du mixeur — cible du mute de
+    // l'écran d'attente, équivalent natif du `SetSceneItemEnabled false`
+    // posé par le mode OBS sur les sources `desktop|bureau`.
+    let mut index_loopback: Option<usize> = None;
+    let mut gain_loopback_milliemes: u32 = 0;
     if let Some(audio) = audio_demande {
         if audio_live {
             for (sens, actif, gain, nom) in [
@@ -2013,6 +2603,10 @@ fn boucle(
                         // Aligne le son sur la première frame : on attend le
                         // premier paquet réel (buffer WASAPI de 200 ms).
                         let _ = source.attendre_demarrage(Duration::from_millis(400));
+                        if sens == crate::audio::Sens::Sortie {
+                            index_loopback = Some(mixeur.entrees().len());
+                            gain_loopback_milliemes = gain;
+                        }
                         mixeur.entrees().push(crate::audio::live::EntreeMix {
                             anneau: source.anneau(),
                             gain_milliemes: gain,
@@ -2057,8 +2651,12 @@ fn boucle(
     // empilés après et reconstruits à chaque `appliquer_scene` — une vidéo
     // ajoutée à chaud rejoint le mix (contrat « appliquer à chaud »).
     let nb_entrees_fixes = mixeur.entrees().len();
+    // Entrées de scène (fixes + médias) : tout ce qui est ajouté après est
+    // reconstruit à la frame (média de l'écran d'attente).
+    let mut nb_entrees_scene = nb_entrees_fixes;
     if audio_live {
         rafraichir_entrees_media(&mut mixeur, &vivante.medias, nb_entrees_fixes);
+        nb_entrees_scene = mixeur.entrees().len();
         // Zéro du flux : purge le pré-roll WASAPI (le buffer de 200 ms rempli
         // pendant l'alignement n'est pas de l'audio « t = 0 »).
         mixeur.demarrer();
@@ -2066,12 +2664,16 @@ fn boucle(
 
     let debut = Instant::now();
     let mut dernier_echantillon = Instant::now();
+    let mut dernier_controle_camera = Instant::now();
     let mut octets_fenetre: u64 = 0;
     let mut erreur_sortie: Option<String> = None;
 
     while !arret.load(Ordering::Relaxed) {
         horloge.attendre();
         let pts_us = debut.elapsed().as_micros() as i64;
+        // Horloge du flux en secondes : seule source de temps du rendu
+        // (comète `animer` des cadres). Jamais l'heure système.
+        let temps_s = pts_us as f64 / 1e6;
 
         // Application à chaud : la scène la plus récente déposée par
         // `appliquer_scene` remplace la composition — différentiel : les
@@ -2094,6 +2696,7 @@ fn boucle(
             // ses échantillons arrivent au prochain `avancer_audio`.
             if audio_live {
                 rafraichir_entrees_media(&mut mixeur, &vivante.medias, nb_entrees_fixes);
+                nb_entrees_scene = mixeur.entrees().len();
             }
         }
         let SceneVivante {
@@ -2125,6 +2728,79 @@ fn boucle(
         // poussées dans chaque pipe (interleaving A/V dans le conteneur).
         // Un pipe cassé est retiré — `muxer_audio` réparera à l'arrêt.
         if audio_live {
+            // Écran d'attente : son du média BRB + mute de la source
+            // « bureau ». Un seul verrou, deux lectures (règle Mutex).
+            let (mute_bureau, gain_attente) = {
+                let etat = attente_etat.lock().unwrap_or_else(|e| e.into_inner());
+                (etat.mute_bureau(), etat.gain_media_milliemes())
+            };
+            // Volume du pad : coupé dès le `pad-stop` (le DOM met l'audio en
+            // pause), sinon `volume` de la touche.
+            let gain_pad = {
+                let etat = pad_etat.lock().unwrap_or_else(|e| e.into_inner());
+                etat.gain_audio_milliemes()
+            };
+            let entrees = mixeur.entrees();
+            entrees.truncate(nb_entrees_scene);
+            if let Some(anneau) = voie.anneau_audio_attente() {
+                entrees.push(crate::audio::live::EntreeMix {
+                    anneau,
+                    gain_milliemes: gain_attente,
+                });
+            }
+            if let Some(anneau) = voie.anneau_audio_pad() {
+                entrees.push(crate::audio::live::EntreeMix {
+                    anneau,
+                    gain_milliemes: gain_pad,
+                });
+            }
+            // Son du clip de la présentation (le DOM ne le coupe qu'en
+            // PREVIEW, notion absente du moteur) : 0 dès qu'il est fini.
+            let gain_presentation = {
+                let etat = presentation_etat.lock().unwrap_or_else(|e| e.into_inner());
+                etat.gain_clip_milliemes()
+            };
+            if let Some(anneau) = voie.anneau_audio_clip() {
+                entrees.push(crate::audio::live::EntreeMix {
+                    anneau,
+                    gain_milliemes: gain_presentation,
+                });
+            }
+            // Pistes `voix` (one-shot) et `musique` (boucle) de la
+            // présentation — fichiers locaux, gain 1000 tant qu'elles jouent.
+            for piste in PistePresentation::TOUTES {
+                let gain = {
+                    let etat = presentation_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    etat.gain_piste_milliemes(piste)
+                };
+                if let Some(anneau) = voie.anneau_audio_piste(piste) {
+                    entrees.push(crate::audio::live::EntreeMix {
+                        anneau,
+                        gain_milliemes: gain,
+                    });
+                }
+            }
+            // Son du pop de validation des splits (`srPointsSon`) — une
+            // entrée, gain du pop (0 hors pop) ; fichier local `medias/…`.
+            let gain_pop = {
+                let etat = splitpop_etat.lock().unwrap_or_else(|e| e.into_inner());
+                etat.gain_son_milliemes()
+            };
+            if let Some(anneau) = voie.anneau_audio_pop() {
+                entrees.push(crate::audio::live::EntreeMix {
+                    anneau,
+                    gain_milliemes: gain_pop,
+                });
+            }
+            if let Some(index) = index_loopback {
+                if let Some(entree) = entrees.get_mut(index) {
+                    entree.gain_milliemes = if mute_bureau {
+                        0
+                    } else {
+                        gain_loopback_milliemes
+                    };
+                }
+            }
             let pcm = mixeur.produire();
             if !pcm.is_empty() {
                 let mut i = 0;
@@ -2148,6 +2824,19 @@ fn boucle(
                 compteurs.capture();
             }
         }
+        // Caméra débranchée : le fil de capture est mort, la dernière frame
+        // resterait figée — signalé une fois par seconde, jamais silencieux.
+        if dernier_controle_camera.elapsed() >= Duration::from_secs(1) {
+            dernier_controle_camera = Instant::now();
+            if let Some(capture) = captures.iter().find(|c| {
+                matches!(c.cfg.cible, CibleCapture::Camera { .. }) && !c.session.est_vivante()
+            }) {
+                compteurs.degrader(format!(
+                    "caméra « {} » débranchée : dernière image figée",
+                    capture.cfg.nom
+                ));
+            }
+        }
 
         // **Une seule passe Direct2D par frame** : le canvas est remis au noir,
         // puis chaque entrée du plan est peinte dans l'ordre z. Aucun
@@ -2158,9 +2847,9 @@ fn boucle(
         voie.effacer_persps();
         for (z, genre, index) in plan.iter() {
             // Plans à perspective (`perspective(d) rotateX/Y`, lot T2) : les
-            // calques du plan (voile/média/capture/bordure/cadre — pas le
-            // contenu chat/input, limite §41) dessinent dans l'offscreen du
-            // groupe, projeté sur le canvas quand le plan sort de son z.
+            // calques du plan (voile/média/capture/contenu/bordure/cadre)
+            // dessinent dans l'offscreen du groupe, projeté sur le canvas
+            // quand le plan sort de son z.
             voie.flusher_persps(*z)?;
             let gid = match genre {
                 GenreCalque::Boite | GenreCalque::Bordure => {
@@ -2169,16 +2858,40 @@ fn boucle(
                 GenreCalque::Media => voie.groupe_de(medias[*index].rect, *z),
                 GenreCalque::Capture => voie.groupe_de(captures[*index].cfg.rect, *z),
                 GenreCalque::Cadre => voie.groupe_de(voie.cadres[*index].rect, *z),
-                // HUD et contenus directs : jamais dans un plan à
-                // perspective (`#modules-root` et `.alerte-root` sont hors
-                // `.widget`).
-                GenreCalque::Chat
-                | GenreCalque::Input
-                | GenreCalque::Horloge
-                | GenreCalque::Goal
-                | GenreCalque::Speedrun
-                | GenreCalque::Musique
-                | GenreCalque::Alerte => None,
+                // Contenu d'un widget tourné (H2) : chat, input viewer et les
+                // trois autres contenus de widget (goal, speedrun, musique)
+                // dessinent **dans** l'offscreen du plan. `cible_rt` est une
+                // vue `ID2D1RenderTarget` du même `ID2D1DeviceContext`
+                // (`texte/mod.rs`, `cible.cast()`) : le `SetTarget` de
+                // `cible_pour` les redirige aussi, sans blit intermédiaire. La
+                // clé `(rect, z)` est celle du widget — `persps_depuis_scene`
+                // et les cfgs de contenu la calculent des mêmes champs.
+                GenreCalque::Chat => voie.groupe_de(voie.chats[*index].rect, *z),
+                GenreCalque::Input => voie.groupe_de(voie.inputs[*index].rect, *z),
+                GenreCalque::Goal => voie.groupe_de(voie.goals[*index].rect, *z),
+                GenreCalque::Speedrun => voie.groupe_de(voie.speedruns[*index].rect, *z),
+                GenreCalque::Musique => voie.groupe_de(voie.musiques[*index].rect, *z),
+                // Titre de widget (H2c) : `.titre` est un enfant de `.widget`,
+                // donc tourné avec lui. `TexteCfg.cadre` porte le rect du
+                // widget hôte (le titre est placé **hors** de ce rect) et son
+                // `z` est celui du widget : la clé est déjà exacte. Les titres
+                // de FOND ne sont pas dans le plan (H1).
+                GenreCalque::Titre => voie.groupe_de(voie.textes[*index].cadre, *z),
+                // HUD et overlays : jamais dans un plan à perspective
+                // (`#modules-root` et `.alerte-root` sont hors `.widget`).
+                GenreCalque::Horloge
+                | GenreCalque::Objectifs
+                | GenreCalque::MusiqueModule
+                | GenreCalque::Equaliseur
+                | GenreCalque::Spots
+                | GenreCalque::Attente
+                | GenreCalque::Fight
+                | GenreCalque::SplitPop
+                | GenreCalque::Pad
+                | GenreCalque::Alerte
+                | GenreCalque::Welcome
+                | GenreCalque::Bandeau
+                | GenreCalque::Presentation => None,
             };
             voie.cible_pour(gid);
             match genre {
@@ -2329,6 +3042,14 @@ fn boucle(
                         },
                     )
                     .map_err(|e| format!("capture : {e}"))?;
+                    // Anneau `cameraBord` de la forme dédiée, rogné à la forme.
+                    if capture.cfg.anneau.is_some() {
+                        voie.dessiner_anneau_camera(
+                            &capture.cfg,
+                            cercles_capture[*index].as_ref(),
+                        )
+                        .map_err(|e| format!("anneau caméra : {e}"))?;
+                    }
                 }
                 GenreCalque::Chat => {
                     let file = chat.lock().unwrap_or_else(|e| e.into_inner());
@@ -2348,6 +3069,34 @@ fn boucle(
                 GenreCalque::Horloge => voie
                     .dessiner_horloge(*index)
                     .map_err(|e| format!("horloge : {e}"))?,
+                GenreCalque::Objectifs => {
+                    let etat = goals_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_objectifs(*index, &etat)
+                        .map_err(|e| format!("objectifs : {e}"))?;
+                }
+                GenreCalque::MusiqueModule => {
+                    // Verrou court : l'état vit hors de la scène (events
+                    // `musique:update`), comme le widget musique.
+                    let etat = musiques_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_musique_module(*index, &etat)
+                        .map_err(|e| format!("module musique : {e}"))?;
+                }
+                GenreCalque::Equaliseur => {
+                    // Verrou court : spectre `eq-spectrum` ~30 Hz poussé
+                    // pendant la session ; le lissage attaque/retombée
+                    // mute l'état à la frame (`tick`).
+                    let mut etat = eq_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_equaliseur(*index, &mut etat)
+                        .map_err(|e| format!("équaliseur : {e}"))?;
+                }
+                GenreCalque::Spots => {
+                    let energie = eq_etat
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .energie_cible();
+                    voie.dessiner_spots(*index, energie)
+                        .map_err(|e| format!("spots : {e}"))?;
+                }
                 GenreCalque::Goal => {
                     let etat = goals_etat.lock().unwrap_or_else(|e| e.into_inner());
                     voie.dessiner_goal(*index, &etat)
@@ -2369,20 +3118,79 @@ fn boucle(
                     voie.dessiner_musique(*index, &etat)
                         .map_err(|e| format!("musique : {e}"))?;
                 }
+                GenreCalque::Attente => {
+                    // Verrou court : état hors scène (frames
+                    // `ecran-attente-etat` du canal `chat_tx`). Même
+                    // résolution de couleurs que le bandeau.
+                    let etat = attente_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_attente(
+                        &etat,
+                        bandeau_couleurs,
+                        cadre_overlay_attente.as_ref(),
+                        (cw, ch),
+                        temps_s,
+                    )
+                    .map_err(|e| format!("attente : {e}"))?;
+                }
+                GenreCalque::Fight => {
+                    // Verrou court : état hors scène (frames `fight-state`).
+                    let etat = fight_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_fight(&etat, (cw, ch), temps_s)
+                        .map_err(|e| format!("fight : {e}"))?;
+                }
+                GenreCalque::SplitPop => {
+                    // Verrou court : état hors scène (dérivé des frames
+                    // `speedrun-etat`, position `splitpop-pos`).
+                    let etat = splitpop_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_splitpop(&etat, (cw, ch), temps_s)
+                        .map_err(|e| format!("splitpop : {e}"))?;
+                }
+                GenreCalque::Pad => {
+                    // Verrou court : état hors scène (frames `pad-play` /
+                    // `pad-stop` / `position-overlay-config` de `chat_tx`).
+                    let etat = pad_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_pad(&etat, cadre_overlay_pad.as_ref(), (cw, ch), temps_s)
+                        .map_err(|e| format!("pad : {e}"))?;
+                }
                 GenreCalque::Alerte => {
                     // Verrou court : l'état vit hors de la scène (frames
                     // `alerte-*` du canal `chat_tx`), jamais de
                     // reconfiguration pour un play. Aucune alerte en cours
                     // = no-op.
                     let etat = alertes_etat.lock().unwrap_or_else(|e| e.into_inner());
-                    voie.dessiner_alerte(&etat, ch)
+                    voie.dessiner_alerte(&etat, ch, temps_s)
                         .map_err(|e| format!("alerte : {e}"))?;
                 }
+                GenreCalque::Welcome => {
+                    // Verrou court : l'état vit hors de la scène (frames
+                    // `welcome-clip-*` du canal `chat_tx`). Aucun clip en
+                    // cours = no-op.
+                    let etat = welcome_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_welcome(&etat, (cw, ch), temps_s)
+                        .map_err(|e| format!("bienvenue : {e}"))?;
+                }
+                GenreCalque::Bandeau => {
+                    // Verrou court : état hors scène (frames
+                    // `bandeau-premier-message-*`).
+                    let etat = bandeau_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_bandeau(&etat, bandeau_couleurs, (cw, ch))
+                        .map_err(|e| format!("bandeau : {e}"))?;
+                }
+                GenreCalque::Presentation => {
+                    // Verrou court : état hors scène (frames `presentation-*`
+                    // du canal `chat_tx`). `*index` = couche du décor.
+                    let etat = presentation_etat.lock().unwrap_or_else(|e| e.into_inner());
+                    voie.dessiner_presentation(&etat, *index, (cw, ch), temps_s)
+                        .map_err(|e| format!("présentation : {e}"))?;
+                }
+                GenreCalque::Titre => voie
+                    .dessiner_titre(*index)
+                    .map_err(|e| format!("titre : {e}"))?,
                 GenreCalque::Bordure => voie
                     .dessiner_bordure_boite(*index)
                     .map_err(|e| format!("bordure : {e}"))?,
                 GenreCalque::Cadre => voie
-                    .dessiner_cadre(*index)
+                    .dessiner_cadre(*index, temps_s)
                     .map_err(|e| format!("cadre : {e}"))?,
             }
         }
@@ -2449,7 +3257,11 @@ fn boucle(
                 }
             }
             if sinks.is_empty() {
-                return Err("toutes les sorties ont échoué".to_string());
+                // Garder la cause : sans elle, un arrêt de sortie est muet.
+                return Err(match erreur_sortie {
+                    Some(ref m) => format!("toutes les sorties ont échoué — {m}"),
+                    None => "toutes les sorties ont échoué".to_string(),
+                });
             }
         }
 
@@ -2473,17 +3285,24 @@ fn boucle(
             compteurs.maj_latence(horloge.retard_max().as_millis() as u32);
             octets_fenetre = 0;
 
-            let mesures = Mesures {
-                fps_cible: fps,
-                fps_reel: horloge.fps_effectif(),
-                drops: instantane.frames_perdues,
-                file_encode: instantane.file_encode,
-                latence_ms: instantane.latence_ms,
-                resolution: (ow, oh),
-            };
-            let decision = gouverneur.evaluer(&mesures);
-            if decision.action != Action::Rien {
-                compteurs.degrader(decision.to_string());
+            // Session « aperçu seul » (`SinkCfg::Apercu` uniquement) : aucun
+            // encodeur, aucune sortie — une décision du gouverneur y serait
+            // une dégradation **inventée**, écrite dans les compteurs
+            // partagés avec une future sortie (contrat §16.7 : aucune valeur
+            // fabriquée). Le gouverneur ne s'applique qu'aux sorties encodées.
+            if encode_requis {
+                let mesures = Mesures {
+                    fps_cible: fps,
+                    fps_reel: horloge.fps_effectif(),
+                    drops: instantane.frames_perdues,
+                    file_encode: instantane.file_encode,
+                    latence_ms: instantane.latence_ms,
+                    resolution: (ow, oh),
+                };
+                let decision = gouverneur.evaluer(&mesures);
+                if decision.action != Action::Rien {
+                    compteurs.degrader(decision.to_string());
+                }
             }
             if matches!(encodeur, Some(EncodeurActif::Mft(_))) {
                 let mut diag = encodeur_partage.lock().unwrap_or_else(|e| e.into_inner());
@@ -2664,6 +3483,10 @@ struct VoieRendu {
     inputs: Vec<InputCfg>,
     /// Modules horloge (z `Z_MODULES`, `#modules-root`).
     horloges: Vec<HorlogeCfg>,
+    objectifs: Vec<ObjectifCfg>,
+    musiques_module: Vec<MusiqueModuleCfg>,
+    equaliseurs: Vec<EqualiseurCfg>,
+    spots: Vec<SpotsCfg>,
     /// Widgets goal (z du widget, cadre à l'échelle bulle).
     goals: Vec<GoalCfg>,
     /// Widgets speedrun (z du widget, cadre de scène).
@@ -2678,6 +3501,12 @@ struct VoieRendu {
     /// Index du polygone du cadre opt-in de chaque module horloge
     /// (`None` = `m.cadre` absent → aucune découpe).
     index_cadre_horloge: Vec<Option<usize>>,
+    /// Index du polygone du cadre opt-in de chaque module objectifs
+    /// (`None` = `m.cadre` absent → aucune découpe).
+    index_cadre_objectifs: Vec<Option<usize>>,
+    /// Index du polygone du cadre opt-in de chaque module musique
+    /// (`None` = `m.cadre` absent → aucune découpe).
+    index_cadre_musique_module: Vec<Option<usize>>,
     /// Index du polygone du cadre à l'échelle bulle de chaque widget goal
     /// (`None` = pas de cadre → contenu rogné au rect seul).
     index_cadre_goal: Vec<Option<usize>>,
@@ -2693,6 +3522,12 @@ struct VoieRendu {
     /// Gabarit du cadre de la carte alerte (style de la scène, rect nul —
     /// mesuré à la taille de la carte par le bloc de rendu).
     cadre_overlay_alerte: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte bienvenue (idem, squelette seulement).
+    cadre_overlay_welcome: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte minuteur (idem, mesuré sur la carte).
+    cadre_overlay_attente: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte pad (idem, mesuré sur la carte).
+    cadre_overlay_pad: Option<CadreCfg>,
 }
 
 /// Contenu dessiné par la voie de rendu (figé au démarrage de la sortie,
@@ -2705,6 +3540,10 @@ struct ContenuRendu {
     inputs: Vec<InputCfg>,
     /// Modules horloge (z `Z_MODULES`, `#modules-root`).
     horloges: Vec<HorlogeCfg>,
+    objectifs: Vec<ObjectifCfg>,
+    musiques_module: Vec<MusiqueModuleCfg>,
+    equaliseurs: Vec<EqualiseurCfg>,
+    spots: Vec<SpotsCfg>,
     /// Widgets goal (z du widget, cadre à l'échelle bulle).
     goals: Vec<GoalCfg>,
     /// Widgets speedrun (z du widget, cadre de scène).
@@ -2715,6 +3554,12 @@ struct ContenuRendu {
     persps: Vec<PerspCfg>,
     /// Gabarit du cadre de la carte alerte (style de la scène, rect nul).
     cadre_overlay_alerte: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte bienvenue (style de la scène, rect nul).
+    cadre_overlay_welcome: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte minuteur (style de la scène, rect nul).
+    cadre_overlay_attente: Option<CadreCfg>,
+    /// Gabarit du cadre de la carte pad (style de la scène, rect nul).
+    cadre_overlay_pad: Option<CadreCfg>,
 }
 
 impl VoieRendu {
@@ -2724,6 +3569,7 @@ impl VoieRendu {
         hauteur: u32,
         sortie: (u32, u32),
         fps: u32,
+        base: &std::path::Path,
         contenu: ContenuRendu,
     ) -> Result<Self, String> {
         let ContenuRendu {
@@ -2733,11 +3579,18 @@ impl VoieRendu {
             boites,
             inputs,
             horloges,
+            objectifs,
+            musiques_module,
+            equaliseurs,
+            spots,
             goals,
             speedruns,
             musiques,
             persps,
             cadre_overlay_alerte,
+            cadre_overlay_welcome,
+            cadre_overlay_attente,
+            cadre_overlay_pad,
         } = contenu;
         let desc = DescTexture::new(Format::Bgra8, largeur, hauteur)
             .map_err(|e| format!("canvas : {e}"))?;
@@ -2750,6 +3603,8 @@ impl VoieRendu {
         let nv12 = convertisseur.creer_cible().map_err(|e| e.to_string())?;
         let mut dessinateur =
             DessinateurTexte::nouveau(contexte, &canvas).map_err(|e| e.to_string())?;
+        // Base des images du chat (cache disque de l'app) — posée une fois.
+        dessinateur.definir_base(base);
         dessinateur
             .configurer_persps(contexte, largeur, hauteur, &persps)
             .map_err(|e| e.to_string())?;
@@ -2774,6 +3629,22 @@ impl VoieRendu {
             .iter()
             .map(|h| {
                 h.cadre
+                    .as_ref()
+                    .and_then(|cadre| cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        let index_cadre_objectifs = objectifs
+            .iter()
+            .map(|o| {
+                o.cadre
+                    .as_ref()
+                    .and_then(|cadre| cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        let index_cadre_musique_module = musiques_module
+            .iter()
+            .map(|m| {
+                m.cadre
                     .as_ref()
                     .and_then(|cadre| cadres.iter().position(|c| c == cadre))
             })
@@ -2813,17 +3684,26 @@ impl VoieRendu {
             boites,
             inputs,
             horloges,
+            objectifs,
+            musiques_module,
+            equaliseurs,
+            spots,
             goals,
             speedruns,
             musiques,
             geometries,
             index_cadre_boite,
             index_cadre_horloge,
+            index_cadre_objectifs,
+            index_cadre_musique_module,
             index_cadre_goal,
             index_cadre_speedrun,
             index_cadre_musique,
             persps_cfg: persps,
             cadre_overlay_alerte,
+            cadre_overlay_welcome,
+            cadre_overlay_attente,
+            cadre_overlay_pad,
         })
     }
 
@@ -2845,11 +3725,18 @@ impl VoieRendu {
             boites,
             inputs,
             horloges,
+            objectifs,
+            musiques_module,
+            equaliseurs,
+            spots,
             goals,
             speedruns,
             musiques,
             persps,
             cadre_overlay_alerte,
+            cadre_overlay_welcome,
+            cadre_overlay_attente,
+            cadre_overlay_pad,
         } = contenu;
         if persps != self.persps_cfg {
             self.dessinateur
@@ -2874,6 +3761,22 @@ impl VoieRendu {
             .map(|boite| {
                 boite
                     .cadre
+                    .as_ref()
+                    .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        self.index_cadre_objectifs = objectifs
+            .iter()
+            .map(|o| {
+                o.cadre
+                    .as_ref()
+                    .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
+            })
+            .collect();
+        self.index_cadre_musique_module = musiques_module
+            .iter()
+            .map(|m| {
+                m.cadre
                     .as_ref()
                     .and_then(|cadre| self.cadres.iter().position(|c| c == cadre))
             })
@@ -2915,10 +3818,17 @@ impl VoieRendu {
         self.boites = boites;
         self.inputs = inputs;
         self.horloges = horloges;
+        self.objectifs = objectifs;
+        self.musiques_module = musiques_module;
+        self.equaliseurs = equaliseurs;
+        self.spots = spots;
         self.goals = goals;
         self.speedruns = speedruns;
         self.musiques = musiques;
         self.cadre_overlay_alerte = cadre_overlay_alerte;
+        self.cadre_overlay_welcome = cadre_overlay_welcome;
+        self.cadre_overlay_attente = cadre_overlay_attente;
+        self.cadre_overlay_pad = cadre_overlay_pad;
         Ok(())
     }
 
@@ -2935,9 +3845,27 @@ impl VoieRendu {
         self.dessinateur.effacer([0, 0, 0, 255]);
     }
 
+    /// Titres de **fond** (`bgTitre*`) — passe finale, comme avant : leur `z`
+    /// (`i32::MIN + 1`) les place sous le média de fond si on les mettait
+    /// dans le plan.
     fn dessiner_textes_passe(&mut self) -> Result<(), String> {
+        let fonds: Vec<crate::texte::TexteCfg> = self
+            .textes
+            .iter()
+            .filter(|t| t.cible == crate::texte::CibleTitre::Fond)
+            .cloned()
+            .collect();
         self.dessinateur
-            .dessiner_textes(&self.textes)
+            .dessiner_textes(&fonds)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Un titre de widget, à son `z` dans le plan (dans la passe ouverte —
+    /// jamais de `BeginDraw`/`EndDraw` ici).
+    fn dessiner_titre(&mut self, index: usize) -> Result<(), String> {
+        let texte = self.textes[index].clone();
+        self.dessinateur
+            .dessiner_textes(std::slice::from_ref(&texte))
             .map_err(|e| e.to_string())
     }
 
@@ -2954,9 +3882,20 @@ impl VoieRendu {
             .map_err(|e| e.to_string())
     }
 
-    fn dessiner_cadre(&mut self, index: usize) -> Result<(), String> {
+    fn dessiner_cadre(&mut self, index: usize, temps_s: f64) -> Result<(), String> {
         self.dessinateur
-            .dessiner_cadre(&self.cadres[index], &self.geometries[index])
+            .dessiner_cadre(&self.cadres[index], &self.geometries[index], temps_s)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Anneau `cameraBord` de la forme caméra dédiée (clip cercle ou rect).
+    fn dessiner_anneau_camera(
+        &mut self,
+        cfg: &SourceCfg,
+        clip: Option<&ID2D1PathGeometry>,
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_anneau_camera(cfg, clip)
             .map_err(|e| e.to_string())
     }
 
@@ -2967,6 +3906,41 @@ impl VoieRendu {
         let clip = self.index_cadre_horloge[index].map(|i| &self.geometries[i]);
         self.dessinateur
             .dessiner_horloge(&self.horloges[index], clip)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Module objectifs (`#modules-root`, z `Z_MODULES`) — voile + titre +
+    /// lignes live (`EtatGoals`), clippés au polygone du cadre opt-in.
+    fn dessiner_objectifs(&mut self, index: usize, etat: &EtatGoals) -> Result<(), String> {
+        let clip = self.index_cadre_objectifs[index].map(|i| &self.geometries[i]);
+        self.dessinateur
+            .dessiner_objectifs(&self.objectifs[index], etat, clip)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Module musique (`#modules-root`, z `Z_MODULES`) — carte lecteur +
+    /// bloc temps live (`EtatMusique`), clippés au polygone du cadre
+    /// opt-in.
+    fn dessiner_musique_module(&mut self, index: usize, etat: &EtatMusique) -> Result<(), String> {
+        let clip = self.index_cadre_musique_module[index].map(|i| &self.geometries[i]);
+        self.dessinateur
+            .dessiner_musique_module(&self.musiques_module[index], etat, clip)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Module équaliseur (`#eq-root`, z `Z_EQ`) — barres néon + bulles,
+    /// couche plein écran SOUS les widgets, sans clip.
+    fn dessiner_equaliseur(&mut self, index: usize, etat: &mut EtatEq) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_equaliseur(&self.equaliseurs[index], etat)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Module spots (`#spots-canvas`, z `Z_SPOTS`) — faisceaux additifs
+    /// plein écran, couche la plus basse de la scène.
+    fn dessiner_spots(&mut self, index: usize, energie: f32) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_spots(&self.spots[index], energie)
             .map_err(|e| e.to_string())
     }
 
@@ -3005,10 +3979,154 @@ impl VoieRendu {
     /// de scène est appliqué à la taille de la carte
     /// (`appliquerCadreOverlay`). `canvas_h` sert au `max-height:60vh` du
     /// média. Aucune alerte en cours = no-op.
-    fn dessiner_alerte(&mut self, etat: &EtatAlertes, canvas_h: u32) -> Result<(), String> {
+    fn dessiner_alerte(
+        &mut self,
+        etat: &EtatAlertes,
+        canvas_h: u32,
+        temps_s: f64,
+    ) -> Result<(), String> {
         self.dessinateur
-            .dessiner_alerte(etat, self.cadre_overlay_alerte.as_ref(), canvas_h)
+            .dessiner_alerte(etat, self.cadre_overlay_alerte.as_ref(), canvas_h, temps_s)
             .map_err(|e| e.to_string())
+    }
+
+    /// Overlay clip de bienvenue (`.welcome-clip-root`, z `Z_WELCOME`) —
+    /// voile + carte transitoires alimentées par `chat_tx`, jamais par la
+    /// scène ; le gabarit du cadre de scène s'applique à la taille de la
+    /// carte en mode squelette (`appliquerCadreOverlay`). `canvas` sert au
+    /// spotlight (carte 85 %, centrage) et au voile plein écran. Aucun clip
+    /// en cours = no-op.
+    fn dessiner_welcome(
+        &mut self,
+        etat: &EtatWelcome,
+        canvas: (u32, u32),
+        temps_s: f64,
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_welcome(etat, self.cadre_overlay_welcome.as_ref(), canvas, temps_s)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Bandeau premier message (`.bandeau-pm-root`, z `Z_BANDEAU`) — barre
+    /// pleine largeur alimentée par `chat_tx`, jamais par la scène.
+    fn dessiner_bandeau(
+        &mut self,
+        etat: &EtatBandeau,
+        couleurs: ([u8; 4], [u8; 4]),
+        canvas: (u32, u32),
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_bandeau(etat, couleurs, canvas)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Écran d'attente (`.ecran-attente-root`, z `Z_ATTENTE`) — plein écran
+    /// alimenté par `chat_tx`, jamais par la scène. `cadre` = gabarit du cadre
+    /// de scène appliqué à la carte minuteur mesurée (`appliquerCadreOverlay`).
+    fn dessiner_attente(
+        &mut self,
+        etat: &EtatAttente,
+        couleurs: ([u8; 4], [u8; 4]),
+        cadre: Option<&CadreCfg>,
+        canvas: (u32, u32),
+        temps_s: f64,
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_attente(etat, couleurs, cadre, canvas, temps_s)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Arène `!fight` (`#fight-root`, z `Z_FIGHT`) — plein canvas, alimentée
+    /// par `chat_tx` ; les échéances sont décomptées par `EtatFight`.
+    fn dessiner_fight(
+        &mut self,
+        etat: &EtatFight,
+        canvas: (u32, u32),
+        temps_s: f64,
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_fight(etat, canvas, temps_s)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Pad numérique (`.pad-root`, z `Z_PAD`) — carte média transitoire
+    /// alimentée par `chat_tx` ; `cadre` = gabarit du cadre de scène posé sur
+    /// la carte mesurée (jamais en plein écran).
+    fn dessiner_pad(
+        &mut self,
+        etat: &EtatPad,
+        cadre: Option<&CadreCfg>,
+        canvas: (u32, u32),
+        temps_s: f64,
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_pad(etat, cadre, canvas, temps_s)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Anneau audio du pad (vidéo ou fichier séparé) — gain = volume de la
+    /// touche, 0 dès le `pad-stop`.
+    fn anneau_audio_pad(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::audio::live::AnneauAudio>>> {
+        self.dessinateur.anneau_audio_pad()
+    }
+
+    /// Présentation streamer (`.pres-*`, z `Z_PRES_*`) — `couche` = voile
+    /// (10000), rideaux + cantonné + embrasses (10001) ou public (10003).
+    fn dessiner_presentation(
+        &mut self,
+        etat: &EtatPresentation,
+        couche: usize,
+        canvas: (u32, u32),
+        temps_s: f64,
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_presentation(etat, couche, canvas, temps_s)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Pop de validation des splits (`.splitpop-root`, z `Z_SPLITPOP`).
+    fn dessiner_splitpop(
+        &mut self,
+        etat: &EtatSplitPop,
+        canvas: (u32, u32),
+        temps_s: f64,
+    ) -> Result<(), String> {
+        self.dessinateur
+            .dessiner_splitpop(etat, canvas, temps_s)
+            .map_err(|e| e.to_string())
+    }
+
+    /// Anneau audio du clip de la présentation (lecteur plein écran) — gain
+    /// 1000 pendant la lecture, 0 dès qu'il est fini.
+    fn anneau_audio_clip(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::audio::live::AnneauAudio>>> {
+        self.dessinateur.anneau_audio_clip()
+    }
+
+    /// Anneau audio du son du pop de validation (`srPointsSon`).
+    fn anneau_audio_pop(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::audio::live::AnneauAudio>>> {
+        self.dessinateur.anneau_audio_pop()
+    }
+
+    /// Anneau audio d'une piste de la présentation (`voix` / `musique`).
+    fn anneau_audio_piste(
+        &self,
+        piste: PistePresentation,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::audio::live::AnneauAudio>>> {
+        self.dessinateur.anneau_audio_piste(piste)
+    }
+
+    /// Anneau audio du média de l'écran d'attente (le mixeur y puise le son
+    /// du fond BRB, gain `son × volume`).
+    fn anneau_audio_attente(
+        &self,
+    ) -> Option<std::sync::Arc<std::sync::Mutex<crate::audio::live::AnneauAudio>>> {
+        self.dessinateur.anneau_audio_attente()
     }
 
     /// Widget input-viewer (clavier/numpad/souris/manette) avec l'état courant.
@@ -3239,10 +4357,27 @@ enum GenreCalque {
     Chat,
     Input,
     Horloge,
+    Objectifs,
+    MusiqueModule,
+    Equaliseur,
+    Spots,
     Goal,
     Speedrun,
     Musique,
+    Attente,
+    Fight,
+    SplitPop,
+    Pad,
     Alerte,
+    Welcome,
+    Bandeau,
+    /// Présentation streamer — trois entrées (voile, rideaux, public), l'index
+    /// porte la **couche** (`COUCHE_*` du module `texte::presentation`).
+    Presentation,
+    /// Titre d'un widget (ou de fond) — **dans** le plan, à son `z` : il passe
+    /// au-dessus du contenu de son widget et sous la bordure puis le cadre
+    /// (`.titre` du DOM vit dans `.widget`, `.cadre-overlay` a `z-index: 5`).
+    Titre,
     Bordure,
     Cadre,
 }
@@ -3370,6 +4505,7 @@ mod tests {
             z: 0,
             cadre: None,
             forme_camera: None,
+            anneau: None,
         }
     }
 
@@ -3451,18 +4587,42 @@ mod tests {
     }
 
     #[test]
-    fn demarrer_sans_source_refuse() {
+    fn demarrer_sans_scene_refuse() {
         let moteur = MoteurNatif::nouveau();
-        assert!(matches!(
-            moteur.demarrer_sortie(cfg_fichier()),
-            Err(ErreurMoteur::Configuration(_))
-        ));
+        match moteur.demarrer_sortie(cfg_fichier()) {
+            Err(ErreurMoteur::Configuration(m)) => {
+                assert!(m.contains("aucune scène"), "{m}")
+            }
+            autre => panic!("attendu Configuration(aucune scène), reçu {autre:?}"),
+        }
+    }
+
+    #[test]
+    fn scene_vide_configuree_n_est_pas_refusee() {
+        // Parité OBS : une scène vide est légitime (enregistrement noir).
+        let moteur = MoteurNatif::nouveau();
+        assert!(moteur.jamais_configure());
+        let scene: sos_scene::Scene =
+            serde_json::from_str(r#"{"canvasW":1920,"canvasH":1080,"widgets":[]}"#)
+                .expect("scène");
+        moteur
+            .configurer_scene(
+                &scene,
+                &std::collections::HashMap::new(),
+                std::path::Path::new("."),
+            )
+            .expect("configurer_scene");
+        assert!(!moteur.jamais_configure());
+        // Chemin des harnais (sources seules, sans scène complète).
+        let harnais = MoteurNatif::nouveau();
+        harnais.configurer_sources(vec![source()]).expect("sources");
+        assert!(!harnais.jamais_configure());
     }
 
     #[test]
     fn rtmp_srt_acceptes_mais_schema_valide() {
-        // Sink réseau accepté : avec une URL valide, le refus vient de la
-        // scène vide (aucune source) — preuve que la validation des sinks
+        // Sink réseau accepté : avec une URL valide, le refus vient du moteur
+        // non configuré (aucune scène) — preuve que la validation des sinks
         // est passée (le rejet `Indisponible` aurait primé avant ce lot).
         let moteur = MoteurNatif::nouveau();
         let mut cfg = cfg_fichier();
@@ -3470,8 +4630,8 @@ mod tests {
             url: "rtmp://live.example/app".to_string(),
         }];
         match moteur.demarrer_sortie(cfg) {
-            Err(ErreurMoteur::Configuration(m)) => assert!(m.contains("aucune source"), "{m}"),
-            autre => panic!("attendu Configuration(aucune source), reçu {autre:?}"),
+            Err(ErreurMoteur::Configuration(m)) => assert!(m.contains("aucune scène"), "{m}"),
+            autre => panic!("attendu Configuration(aucune scène), reçu {autre:?}"),
         }
 
         let moteur = MoteurNatif::nouveau();
@@ -3480,8 +4640,8 @@ mod tests {
             url: "srt://live.example:9000".to_string(),
         }];
         match moteur.demarrer_sortie(cfg) {
-            Err(ErreurMoteur::Configuration(m)) => assert!(m.contains("aucune source"), "{m}"),
-            autre => panic!("attendu Configuration(aucune source), reçu {autre:?}"),
+            Err(ErreurMoteur::Configuration(m)) => assert!(m.contains("aucune scène"), "{m}"),
+            autre => panic!("attendu Configuration(aucune scène), reçu {autre:?}"),
         }
 
         // Schémas inattendus : refusés avant tout contact GPU.
@@ -3586,7 +4746,7 @@ mod tests {
     #[test]
     fn style_de_cadre_non_porte_est_signale() {
         let scene: sos_scene::Scene = serde_json::from_str(
-            r##"{"cadreWidget":{"style":"cyberpunk","strokeWidth":20,"actif":true},
+            r##"{"cadreWidget":{"style":"inconnu","strokeWidth":20,"actif":true},
                  "widgets":[{"id":"a","type":"media","x":0,"y":0,"largeur":10,"hauteur":10,"z":0}]}"##,
         )
         .expect("scène");
@@ -3599,7 +4759,7 @@ mod tests {
             moteur
                 .instantane()
                 .raison_degradation
-                .is_some_and(|r| r.contains("cyberpunk")),
+                .is_some_and(|r| r.contains("inconnu")),
             "un style non porté doit être signalé, jamais silencieux"
         );
     }

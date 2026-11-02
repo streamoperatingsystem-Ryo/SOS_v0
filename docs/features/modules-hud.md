@@ -80,6 +80,19 @@
   `majModulesObjectifs` est appelée depuis les sinks `viewers` /
   `communaute` / `goal-twitch` (valeurs patchées in-place via
   `ligneEls`, jamais de re-render).
+- **Moteur natif** (2026-10-31 — les 5 modules portés, projecteur
+  Rust) : `horloges_depuis_scene` (existant) +
+  `objectifs_depuis_scene` / `musique_modules_depuis_scene` /
+  `equaliseurs_depuis_scene` / `spots_depuis_scene` dans
+  `scene_sources.rs` ; rendus `texte/objectifs.rs`,
+  `texte/musique_module.rs`, `texte/eq.rs`, `texte/spots.rs`.
+  objectifs/musique = calques `Z_MODULES` (9000, clip + cadre opt-in,
+  état `EtatGoals`/`EtatMusique`) ; équaliseur/spots = couches plein
+  écran SOUS les widgets (`Z_EQ` −1 / `Z_SPOTS` −2, sans clip — eq :
+  24 barres dégradées + bulles, `EtatEq` lissage 14 s/4,5 s ; spots :
+  2 faisceaux additifs, palette cyclique, réaction spectre). Canal
+  live `eq-spectrum` : `chat_tx` → `decoder_frame_eq` →
+  `MoteurNatif::pousser_eq` (`src/moteur/mod.rs`).
 - **i18n** : `modules.*` + `toolbar.modules*` dans les 8 locales
   (rendu diffusion non traduit — labels objectifs viennent du
   module, `goalTwitchLabel`/`goalMetriqueLabel` restent FR comme

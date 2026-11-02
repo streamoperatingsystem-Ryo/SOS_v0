@@ -49,9 +49,9 @@
   let gainLb = $state(100); // %
   let gainMic = $state(100); // %
 
-  // Projecteur natif (aperçu réduit)
-  let projLargeur = $state(1280);
-  let projFps = $state(30);
+  // Projecteur natif (aperçu réduit) — défaut léger : 480 px à 10 fps.
+  let projLargeur = $state(480);
+  let projFps = $state(10);
 
   // Stream
   let protocole = $state("rtmp");
@@ -95,8 +95,8 @@
     gainMic = Math.round(s.gain_micro / 10);
     await chargerApercuCfg();
     const a = $apercuCfg;
-    projLargeur = PROJ_LARGEURS.includes(a.largeur) ? a.largeur : 1280;
-    projFps = PROJ_FPS_CHOIX.includes(a.fps) ? a.fps : 30;
+    projLargeur = PROJ_LARGEURS.includes(a.largeur) ? a.largeur : 480;
+    projFps = PROJ_FPS_CHOIX.includes(a.fps) ? a.fps : 10;
     await chargerStreamConfig();
     const st = $streamCfgPersistee;
     if (st) {

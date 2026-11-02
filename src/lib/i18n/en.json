@@ -76,7 +76,7 @@
   "obsWs": {
     "ouvrir": "WebSocket & options",
     "titre": "OBS connection — the WebSocket",
-    "hint": "Everything that travels over the OBS channel, for the curious. Nothing essential: the basics live in the OBS section.",
+    "hint": "Everything that travels over the OBS channel, for the curious. Nothing essential: the basics live in the OBS & Rust section.",
     "blocCestQuoi": "What is a WebSocket?",
     "intro": {
       "p1": "A WebSocket is a bidirectional communication channel opened once between two programs: either side can talk whenever it wants, without recreating the connection for every message. Born in 2011 for web browsers (RFC 6455), it became the standard way to drive software remotely.",
@@ -122,7 +122,7 @@
       },
       "direct": {
         "nom": "Stream and recording",
-        "desc": "The Start/Stop buttons of the OBS section drive both outputs; their state is re-read on every action."
+        "desc": "The Start/Stop buttons of the OBS & Rust section drive both outputs; their state is re-read on every action."
       },
       "projecteur": {
         "nom": "Preview projector",
@@ -140,7 +140,7 @@
     "blocReglages": "Settings",
     "reglages": {
       "autoConnect": "Automatically connect to OBS at startup",
-      "autoConnectDesc": "Uncheck to connect OBS only manually, from the OBS section.",
+      "autoConnectDesc": "Uncheck to connect OBS only manually, from the OBS & Rust section.",
       "fermerProj": "Close OBS projectors on connection",
       "fermerProjDesc": "OBS reopens projector windows from the previous session; StreamOS closes them by default.",
       "muterBureau": "Mute desktop audio during the BRB screen",
@@ -153,6 +153,11 @@
       "l3": "The equalizer: computed from Windows audio — obs-websocket exposes no audio levels.",
       "l4": "Capture thumbnails, hardware detection and closing projector windows: Windows APIs."
     }
+  },
+  "obsCarte": {
+    "connexion": "OBS connection",
+    "sorties": "Outputs",
+    "options": "Advanced options"
   },
   "scenes": {
     "creationRefusee": "Scene creation denied: {erreur}",
@@ -617,9 +622,10 @@
     "previewOuvrir": "Open projector",
     "previewOuvert": "Projector opened on the chosen screen",
     "previewHint": "Click the miniature or the button = OBS preview projector on the chosen screen. Camera and OBS captures are not shown in the miniature (rendered by OBS, not by the page).",
-    "previewObsHint": "Connect OBS (OBS section) to open the projector.",
+    "previewObsHint": "Connect OBS (OBS & Rust section) to open the projector.",
     "previewOuvertNatif": "Native projector opened",
     "previewNatifHint": "The button opens the native projector: a detached window of the Rust render (quality adjustable in Output), move or maximize it freely.",
+    "obsRust": "OBS & Rust",
     "hote": "Host",
     "port": "Port",
     "motDePasse": "Password",
@@ -721,7 +727,7 @@
     }
   },
   "app": {
-    "obsTitle": "OBS WebSocket (see OBS section of the sidebar)",
+    "obsTitle": "OBS WebSocket (see OBS & Rust section of the sidebar)",
     "obsConnexion": "OBS (connecting…)",
     "obsNonConnecte": "OBS (not connected)",
     "diffusionTitle": "Local broadcast server (consumed by OBS as a browser source)",
@@ -734,7 +740,7 @@
     "attente": "Waiting",
     "chrono2": "Timer",
     "chrono2Title": "Timer 2 running — click to open Live Interactions (Numeric pad tab)",
-    "obsDabord": "Connect OBS first (OBS section of the sidebar)",
+    "obsDabord": "Connect OBS first (OBS & Rust section of the sidebar)",
     "streamStop": "Stop streaming",
     "streamStart": "Start streaming",
     "arreterApp": "Stop the application",
@@ -1481,14 +1487,14 @@
         "titre": "First step",
         "p1": "**Three settings** are all it takes to be stream-ready.",
         "e1": "In OBS: Tools menu → **WebSocket Server Settings** → enable the server and note the port (**4455** by default) and the password.",
-        "e2": "Here, in the sidebar's **OBS** section: enter the port and the password, then **Connect**.",
+        "e2": "Here, in the sidebar's **OBS & Rust** section: enter the port and the password, then **Connect**.",
         "e3": "On first launch, pick a **scene template**: everything is already laid out for you.",
         "e4": "Connect your **chat**: Twitch and YouTube ask for a code to validate online; Kick and TikTok connect with just a username.",
         "note": "Scene templates remain available anytime via the \"**+ Scene**\" button at the top."
       },
       "obs": {
         "titre": "Connecting OBS, step by step",
-        "p1": "The sidebar's **OBS** section changes color by itself: **red**, StreamOS can't see OBS; **green**, everything is in place.",
+        "p1": "The sidebar's **OBS & Rust** section changes color by itself: **red**, StreamOS can't see OBS; **green**, everything is in place.",
         "l1": "\"**OBS is unreachable**\": OBS isn't open, or its WebSocket server is off. Open OBS, then Tools → **WebSocket Server Settings** → check \"Enable WebSocket server\".",
         "l2": "\"**Password missing or invalid**\": in that same window, click \"**Show Connect Info**\", copy the password and paste it here.",
         "l3": "The **Host** field keeps its default value as long as OBS runs on the same computer.",
@@ -1519,12 +1525,12 @@
         "titre": "The sidebar, top to bottom",
         "p1": "Everything is driven from the **left panel**, organized into **six groups**. Only one section opens at a time; the other entries are simple buttons that open a window.",
         "l1": "**My scene**: **Widgets** (media, chat, camera, input viewer, speedrun, goal, music), **HUD modules** (clock, now playing, stream goals) and **Frame & background** (SVG frames, background image).",
-        "l2": "**Connections**: **OBS** (connection, stream, recording) then **Platforms** (Twitch, YouTube, Kick, TikTok — a green dot per connected platform).",
+        "l2": "**Connections**: **OBS & Rust** (connection, stream, recording) then **Platforms** (Twitch, YouTube, Kick, TikTok — a green dot per connected platform).",
         "l3": "**Live**: **Preview** (what your viewers see), **Waiting screen** and **Just Chatting**.",
         "l4": "**Interactions**: alerts, welcome clips, commands and soundboard, presentation, music requested by chat.",
         "l5": "**My channel**: **Moderation** (roles, bans, live controls), Twitch **Schedule** and audience **Statistics**.",
         "l6": "At the very bottom, **App**: **Settings** (dashboard background, window, shortcuts bar), **Performance** (app usage) and the **Streamer's guide** (this book).",
-        "note": "Each open section takes its card's color: blue for Widgets, green for Platforms, gold for OBS…"
+        "note": "Each open section takes its card's color: blue for Widgets, green for Platforms, gold for OBS & Rust…"
       },
       "scenes": {
         "titre": "Your scenes",
@@ -1671,6 +1677,9 @@
     "sortieEtat": "{kbps} kb/s · {drops} dropped frames",
     "sortieEncodeur": "Encoder: {encodeur}",
     "sortieFichier": "File: {chemin}",
+    "sortieFlux": "Stream: {chemin}",
+    "sortieOccupeeStream": "A stream is running — stop it before recording.",
+    "sortieOccupeeEnregistrement": "A recording is running — stop it before streaming.",
     "cap": {
       "capture_ecran": "Screen capture",
       "capture_fenetre": "Window capture",

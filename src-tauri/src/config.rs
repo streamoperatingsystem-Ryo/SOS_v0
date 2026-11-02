@@ -229,14 +229,14 @@ pub struct ApercuNatifCfg {
 }
 
 fn apercu_largeur_defaut() -> u32 {
-    1280
+    480
 }
 fn apercu_fps_defaut() -> u32 {
-    30
+    10
 }
 
 impl Default for ApercuNatifCfg {
-    /// Défaut produit : 1280 px à 30 fps — miroir de `ApercuCfg::default`
+    /// Défaut produit : 480 px à 10 fps — miroir de `ApercuCfg::default`
     /// (sos-moteur-api) ; les deux doivent rester alignés.
     fn default() -> Self {
         Self {

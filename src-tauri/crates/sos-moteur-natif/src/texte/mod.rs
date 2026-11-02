@@ -19,26 +19,28 @@
 //!   `IDWriteInMemoryFontFileLoader` — aucune police téléchargée, aucun
 //!   fichier écrit sur disque (CONTRAT FIGÉ vie privée respecté).
 //!
-//! Limite assumée de la tranche : le **contour** est une approximation par
-//! passes décalées (16 directions) et non un vrai trait de géométrie
-//! (`IDWriteFontFace::GetGlyphRunOutline`). Le rendu est correct à la taille
-//! canvas mais pas identique au pixel près à `-webkit-text-stroke`.
+//! Le **contour** est le tracé réel des glyphes (`GetGlyphRunOutline` +
+//! `Widen`, lot H4) ; une police **simulée** (gras/oblique synthétique — les
+//! familles embarquées n'ont qu'une graisse) n'a pas ce tracé et retombe sur
+//! l'approximation par 16 passes décalées, plus proche du glyphe embelli.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
-use windows::core::{Interface, PCWSTR};
+use windows::core::{implement, Interface, IUnknown, PCWSTR};
 use windows::Foundation::Numerics::Matrix3x2;
-use windows::Win32::Foundation::RECT;
+use windows::Win32::Foundation::{BOOL, RECT};
 use windows::Win32::Graphics::Direct2D::Common::{
     D2D1_ALPHA_MODE_IGNORE, D2D1_ALPHA_MODE_PREMULTIPLIED, D2D1_COLOR_F,
     D2D1_GRADIENT_STOP, D2D1_PIXEL_FORMAT, D2D_POINT_2F, D2D_RECT_F,
 };
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Bitmap1, ID2D1Brush, ID2D1Device, ID2D1DeviceContext, ID2D1Effect,
-    ID2D1Factory1, ID2D1GradientStopCollection,
+    ID2D1Factory1, ID2D1GradientStopCollection, ID2D1Geometry,
     ID2D1LinearGradientBrush, ID2D1PathGeometry, ID2D1RenderTarget,
-    ID2D1StrokeStyle,
     D2D1_BITMAP_OPTIONS_CANNOT_DRAW,
     D2D1_BITMAP_OPTIONS_TARGET, D2D1_BITMAP_PROPERTIES1,
     D2D1_DEVICE_CONTEXT_OPTIONS_NONE, D2D1_DRAW_TEXT_OPTIONS_NONE,
@@ -49,10 +51,13 @@ use windows::Win32::Graphics::Direct2D::{
 };
 use windows::Win32::Graphics::DirectWrite::{
     DWriteCreateFactory, IDWriteFactory5, IDWriteFontCollection, IDWriteFontCollection1,
-    IDWriteTextFormat, IDWriteTextLayout1, DWRITE_FACTORY_TYPE_SHARED,
+    IDWriteInlineObject, IDWritePixelSnapping_Impl, IDWriteTextFormat,
+    IDWriteTextLayout1, IDWriteTextRenderer, IDWriteTextRenderer_Impl, DWRITE_FACTORY_TYPE_SHARED,
     DWRITE_FONT_STRETCH_NORMAL, DWRITE_FONT_STYLE_ITALIC, DWRITE_FONT_STYLE_NORMAL,
-    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_TEXT_METRICS,
-    DWRITE_TEXT_RANGE, DWRITE_WORD_WRAPPING_NO_WRAP,
+    DWRITE_FONT_WEIGHT_BOLD, DWRITE_FONT_WEIGHT_NORMAL, DWRITE_GLYPH_RUN,
+    DWRITE_GLYPH_RUN_DESCRIPTION, DWRITE_LINE_METRICS, DWRITE_LINE_SPACING_METHOD_UNIFORM,
+    DWRITE_MATRIX, DWRITE_MEASURING_MODE, DWRITE_STRIKETHROUGH, DWRITE_TEXT_METRICS,
+    DWRITE_TEXT_RANGE, DWRITE_UNDERLINE, DWRITE_WORD_WRAPPING_NO_WRAP,
 };
 use windows::Win32::Graphics::Dxgi::Common::DXGI_FORMAT_B8G8R8A8_UNORM;
 use windows::Win32::Graphics::Dxgi::IDXGISurface;
@@ -62,20 +67,45 @@ use crate::cadres::{CadreCfg, ErreurCadre};
 use crate::gpu::{ContexteGpu, DescTexture, Format};
 
 mod alertes;
+mod attente;
+mod bandeau;
 mod chat;
+mod eq;
+mod fight;
 mod goal;
 mod horloge;
 mod input;
 pub mod media;
 mod musique;
+mod musique_module;
+mod objectifs;
+mod pad;
 mod persp;
+mod presentation;
 mod speedrun;
+pub mod splitpop;
+mod spots;
 mod viewers;
+mod welcome;
 
 use alertes::BlocAlerte;
 pub use alertes::{EtatAlertes, MajAlerte, Z_ALERTES};
+use attente::{Asset, AssetMarque, BlocAttente};
+pub use attente::{AttenteCfg, EtatAttente, Z_ATTENTE};
+use bandeau::BlocBandeau;
+pub use bandeau::{
+    assombrir, resoudre_couleurs, EtatBandeau, MajBandeau, PositionBandeau, Z_BANDEAU,
+};
+/// Couleurs du bandeau quand aucun cadre n'est actif (`BPM_COULEURS_DEFAUT`).
+pub const COULEURS_BANDEAU_DEFAUT: ([u8; 4], [u8; 4]) = bandeau::COULEURS_DEFAUT;
 use chat::BlocChat;
 pub use chat::{geometrie_chat, ChatGeometrie};
+use eq::BullesEq;
+pub use eq::{EqualiseurCfg, EtatEq, NB_BANDES_EQ, Z_EQ, Z_SPOTS};
+use fight::BlocFight;
+pub use fight::{
+    CmdsFight, CoupFight, EtatFight, FightState, InfoFight, JoueurFight, PhaseFight, Z_FIGHT,
+};
 use goal::{BlocsGoal, LogosGoal};
 pub use goal::{Communaute, EtatGoals, GoalCfg, GoalTwitch, MajGoal};
 use horloge::BlocsHorloge;
@@ -83,8 +113,29 @@ pub use horloge::{accent_module, opacite_module, taille_module, HorlogeCfg, Z_MO
 pub use media::{TraceMedia, TraceMorphe, TracePixel};
 use musique::BlocsMusique;
 pub use musique::{EtatMusique, MajMusique, ModeMusique, MusiqueCfg, Piste};
+use musique_module::BlocsMusiqueModule;
+pub use musique_module::MusiqueModuleCfg;
+use objectifs::BlocsObjectifs;
+pub use objectifs::{ObjectifCfg, ObjectifLigneCfg};
+use pad::BlocPad;
+pub use pad::{
+    media_affiche as media_affiche_pad, source_audio as source_audio_pad, EtatPad, MajPad,
+    PadPlay, POSITION_DEFAUT as POSITION_PAD_DEFAUT, Z_PAD,
+};
 use persp::PlanPersp;
+use splitpop::BlocSplitPop;
+use presentation::{BlocCarte, BlocPresentation};
+pub use presentation::{
+    chemin_clip, formater_viewers, url_box_art, ClipEnCours, ClipPresentation, EtatPresentation,
+    JeuRecent, MajPresentation, ModePresentation, PistePresentation, PresentationDonnees,
+    COUCHE_CARTE, COUCHE_CLIP, COUCHE_PUBLIC, COUCHE_RIDEAUX, COUCHE_VOILE, Z_PRES_CARTE,
+    Z_PRES_CLIP, Z_PRES_PUBLIC, Z_PRES_RIDEAUX, Z_PRES_VOILE,
+};
 use speedrun::BlocsSpeedrun;
+pub use splitpop::{EtatSplitPop, MajSplitPop, PopSplit, Z_SPLITPOP};
+pub use spots::SpotsCfg;
+use welcome::BlocWelcome;
+pub use welcome::{EtatWelcome, MajWelcome, Z_WELCOME};
 pub use speedrun::{
     EtatSpeedrun, MajSpeedrun, MethodeTemps, ModeDelta, ModeTemps, PhaseSpeedrun,
     PrecisionTemps, SegmentLss, SpeedrunCfg,
@@ -93,6 +144,13 @@ use viewers::BlocsViewers;
 
 /// Écart aux bords, en px canvas — valeur de `diffusion.html` (`.bg-titre`).
 pub const MARGE_TITRE: f32 = 8.0;
+
+/// Écart entre un titre de widget et son widget — `margin-top/bottom/left/
+/// right: 2px` de `applyTitreWidget` (diffusion.html 9068-9101).
+pub const MARGE_TITRE_WIDGET: f32 = 2.0;
+
+/// `line-height` des titres — `.widget-titre` et `.bg-titre` (CSS).
+pub const INTERLIGNE_TITRE: f32 = 1.1;
 
 /// Une police embarquée : (id CSS/`fonts.ts`, famille OpenType, woff2).
 ///
@@ -240,7 +298,10 @@ pub struct Placement {
 /// Calcule la destination d'un titre de taille rendue `tw × th`.
 ///
 /// Reproduit `applyTitreFond` / `applyTitreWidget` (diffusion.html) :
-/// fond = 8 px **à l'intérieur** du rect de l'hôte, widget = **hors** du rect.
+/// fond = 8 px **à l'intérieur** du rect de l'hôte, widget = **hors** du rect
+/// avec l'écart `MARGE_TITRE_WIDGET` (2 px) de `applyTitreWidget`. `tw × th`
+/// est la **boîte CSS** du titre (largeur du texte × `line-height` 1,1),
+/// jamais la texture (voir [`CacheTexte::marge`]).
 /// Les positions latérales tournent le texte de 90° (sens horaire, comme
 /// `writing-mode: vertical-rl`).
 pub fn placement(t: &TexteCfg, tw: f32, th: f32) -> Placement {
@@ -253,10 +314,16 @@ pub fn placement(t: &TexteCfg, tw: f32, th: f32) -> Placement {
         (CibleTitre::Fond, PositionTitre::Bas) => (centre_x, y + h - MARGE_TITRE - th, false),
         (CibleTitre::Fond, PositionTitre::Gauche) => (x + MARGE_TITRE, centre_y, true),
         (CibleTitre::Fond, PositionTitre::Droite) => (x + w - MARGE_TITRE - th, centre_y, true),
-        (CibleTitre::Widget, PositionTitre::Haut) => (centre_x, y - th, false),
-        (CibleTitre::Widget, PositionTitre::Bas) => (centre_x, y + h, false),
-        (CibleTitre::Widget, PositionTitre::Gauche) => (x - th, centre_y, true),
-        (CibleTitre::Widget, PositionTitre::Droite) => (x + w, centre_y, true),
+        (CibleTitre::Widget, PositionTitre::Haut) => {
+            (centre_x, y - MARGE_TITRE_WIDGET - th, false)
+        }
+        (CibleTitre::Widget, PositionTitre::Bas) => (centre_x, y + h + MARGE_TITRE_WIDGET, false),
+        (CibleTitre::Widget, PositionTitre::Gauche) => {
+            (x - MARGE_TITRE_WIDGET - th, centre_y, true)
+        }
+        (CibleTitre::Widget, PositionTitre::Droite) => {
+            (x + w + MARGE_TITRE_WIDGET, centre_y, true)
+        }
     };
     if !vertical {
         return Placement {
@@ -378,17 +445,164 @@ struct CacheTexte {
     /// référence (`ID2D1Bitmap1` ne la possède pas).
     _texture: windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
     bitmap: windows::Win32::Graphics::Direct2D::ID2D1Bitmap1,
+    /// Boîte **CSS** du titre (largeur du texte × hauteur de ligne) — c'est
+    /// elle que `placement` positionne, pas la texture.
     largeur: f32,
     hauteur: f32,
+    /// Marge de la texture autour de la boîte CSS : (contour, contour +
+    /// débord des glyphes hors de la boîte de ligne). Le dessin élargit le
+    /// rect de destination d'autant pour que la boîte CSS tombe pile.
+    marge: (f32, f32),
 }
 
-/// Dessinateur du canvas BGRA — nom historique : il porte désormais les
-/// **titres**, les **cadres** (`cadres::dessiner`), les **médias découpés au
-/// polygone** et le **chat** multi-lignes.
+/// État partagé de la collecte — le renderer est consommé par `Draw`, ses
+/// champs ne sont plus lisibles ensuite : ils vivent ici.
+#[derive(Default)]
+struct EtatContours {
+    /// Un contour par run, déjà translaté à son origine.
+    runs: Vec<ID2D1Geometry>,
+    /// Au moins un run simulé : le tracé exact est faux, on abandonne.
+    simule: bool,
+}
+
+#[implement(IDWriteTextRenderer)]
+struct CollecteContours {
+    d2d: ID2D1Factory1,
+    etat: Rc<RefCell<EtatContours>>,
+}
+
+impl IDWritePixelSnapping_Impl for CollecteContours_Impl {
+    fn IsPixelSnappingDisabled(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+    ) -> windows::core::Result<BOOL> {
+        Ok(BOOL(1))
+    }
+
+    fn GetCurrentTransform(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        transform: *mut DWRITE_MATRIX,
+    ) -> windows::core::Result<()> {
+        unsafe {
+            *transform = DWRITE_MATRIX {
+                m11: 1.0,
+                m12: 0.0,
+                m21: 0.0,
+                m22: 1.0,
+                dx: 0.0,
+                dy: 0.0,
+            };
+        }
+        Ok(())
+    }
+
+    fn GetPixelsPerDip(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+    ) -> windows::core::Result<f32> {
+        Ok(1.0)
+    }
+}
+
+impl IDWriteTextRenderer_Impl for CollecteContours_Impl {
+    fn DrawGlyphRun(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        baselineoriginx: f32,
+        baselineoriginy: f32,
+        _measuringmode: DWRITE_MEASURING_MODE,
+        glyphrun: *const DWRITE_GLYPH_RUN,
+        _glyphrundescription: *const DWRITE_GLYPH_RUN_DESCRIPTION,
+        _clientdrawingeffect: Option<&IUnknown>,
+    ) -> windows::core::Result<()> {
+        let run = unsafe { &*glyphrun };
+        let Some(face) = run.fontFace.as_ref() else {
+            self.etat.borrow_mut().simule = true;
+            return Ok(());
+        };
+        if unsafe { face.GetSimulations() }.0 != 0 {
+            self.etat.borrow_mut().simule = true;
+            return Ok(());
+        }
+        let geo = unsafe { self.d2d.CreatePathGeometry() }?;
+        {
+            let sink = unsafe { geo.Open() }?;
+            let offsets = if run.glyphOffsets.is_null() {
+                None
+            } else {
+                Some(run.glyphOffsets)
+            };
+            unsafe {
+                face.GetGlyphRunOutline(
+                    run.fontEmSize,
+                    run.glyphIndices,
+                    Some(run.glyphAdvances),
+                    offsets,
+                    run.glyphCount,
+                    run.isSideways,
+                    BOOL::from(run.bidiLevel & 1 == 1),
+                    &sink,
+                )?
+            };
+            unsafe { sink.Close()? };
+        }
+        let translation = Matrix3x2::translation(baselineoriginx, baselineoriginy);
+        let deplacee = unsafe { self.d2d.CreateTransformedGeometry(&geo, &translation)? };
+        self.etat.borrow_mut().runs.push(deplacee.cast()?);
+        Ok(())
+    }
+
+    fn DrawUnderline(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        _baselineoriginx: f32,
+        _baselineoriginy: f32,
+        _underline: *const DWRITE_UNDERLINE,
+        _clientdrawingeffect: Option<&IUnknown>,
+    ) -> windows::core::Result<()> {
+        // Le remplissage reste `DrawTextLayout` : le soulignement y est déjà.
+        Ok(())
+    }
+
+    fn DrawStrikethrough(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        _baselineoriginx: f32,
+        _baselineoriginy: f32,
+        _strikethrough: *const DWRITE_STRIKETHROUGH,
+        _clientdrawingeffect: Option<&IUnknown>,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+
+    fn DrawInlineObject(
+        &self,
+        _clientdrawingcontext: *const std::ffi::c_void,
+        _originx: f32,
+        _originy: f32,
+        _inlineobject: Option<&IDWriteInlineObject>,
+        _issideways: BOOL,
+        _isrighttoleft: BOOL,
+        _clientdrawingeffect: Option<&IUnknown>,
+    ) -> windows::core::Result<()> {
+        Ok(())
+    }
+}
+
+
 ///
 /// Un seul `ID2D1DeviceContext` et une seule cible : chaque appel de dessin
 /// est encadré par `debut`/`fin` **par le moteur**, qui peut ainsi insérer des
 /// `VideoProcessorBlt` bornés entre deux segments (ordre z exact).
+/// Image décodée prête à dessiner : texture (elle possède la bitmap),
+/// vue Direct2D et taille source en px.
+pub(super) type BitmapChat = (
+    windows::Win32::Graphics::Direct3D11::ID3D11Texture2D,
+    ID2D1Bitmap1,
+    (f32, f32),
+);
+
 pub struct DessinateurTexte {
     dwrite: IDWriteFactory5,
     device: ID2D1Device,
@@ -409,8 +623,8 @@ pub struct DessinateurTexte {
     /// vivre aussi longtemps que la collection.
     _donnees_polices: Vec<Vec<u8>>,
     device_d3d: windows::Win32::Graphics::Direct3D11::ID3D11Device,
-    /// Trait des cadres (miter, limite 4) — créé une fois.
-    style_trait: ID2D1StrokeStyle,
+    /// Traits des cadres (cadre + comète `animer`) — créés une fois.
+    styles: crate::cadres::StylesTrait,
     cache: HashMap<u64, CacheTexte>,
     /// Bitmaps Direct2D des médias, clé = (pointeur de la texture, alpha).
     /// L'entrée conserve la texture : `ID2D1Bitmap1` ne la possède pas.
@@ -430,6 +644,12 @@ pub struct DessinateurTexte {
     /// page (`cle_bloc`) — le texte change au tick seconde, formats et
     /// layouts vivent dans le bloc.
     blocs_horloge: BlocsHorloge,
+    blocs_objectifs: BlocsObjectifs,
+    blocs_musique_module: BlocsMusiqueModule,
+    /// Pool de bulles du module équaliseur (spawn/mort à la frame).
+    bulles_eq: BullesEq,
+    /// Base de temps du balayage des spots (création de la voie).
+    debut_spots: std::time::Instant,
     /// Lignes mises en page des widgets goal, clé = (id, hauteur,
     /// plateforme) — le contenu vit dans `EtatGoals`, poussé par l'app.
     blocs_goal: BlocsGoal,
@@ -445,11 +665,91 @@ pub struct DessinateurTexte {
     /// (id, hauteur, mode) — le contenu vit dans `EtatMusique`, poussé par
     /// l'app (events Tauri `musique:update`).
     blocs_musique: BlocsMusique,
+    /// Dossier de données (`medias/` y est relatif) — posé par la voie de
+    /// rendu, base des chemins de cache des images du chat (avatars +
+    /// emotes, `%APPDATA%\com.streamos.v0\medias\cache\`).
+    base: PathBuf,
+    /// Images du chat décodées, clé = chemin de cache. Seuls les **succès**
+    /// sont mémorisés : un fichier encore absent est re-testé à chaque
+    /// reconstruction de bloc (téléchargement à la volée, lot G).
+    images_chat: HashMap<PathBuf, BitmapChat>,
     /// Cache de la carte alerte en cours (une seule, contrat domaine) —
     /// re-mesurée à chaque play / repositionnement (clé `cle_alerte`), le
     /// contenu vit dans `EtatAlertes`, poussé par l'app (frames
     /// `alerte-*` / `position-overlay-config` du canal `chat_tx`).
     bloc_alerte: Option<BlocAlerte>,
+    /// Cache de la carte bienvenue en cours (une seule, contrat domaine) —
+    /// re-mesurée à chaque play / repositionnement (clé `cle_welcome`), le
+    /// contenu vit dans `EtatWelcome`, poussé par l'app (frames
+    /// `welcome-clip-*` / `position-overlay-config` du canal `chat_tx`).
+    bloc_welcome: Option<BlocWelcome>,
+    /// Cache de la barre « premier message » (une seule) — re-mesurée à
+    /// chaque play / config (clé `cle_bandeau`).
+    bloc_bandeau: Option<BlocBandeau>,
+    /// Cache de la carte minuteur de l'écran d'attente (une seule) —
+    /// re-mesurée à chaque tick du chrono (clé `cle_attente`), le contenu
+    /// vit dans `EtatAttente`, poussé par l'app (frames `ecran-attente-etat`
+    /// du canal `chat_tx`).
+    bloc_attente: Option<BlocAttente>,
+    /// Média du fond de l'écran d'attente (image ou vidéo en boucle) —
+    /// rechargé seulement si `media|kind` change (`eaMediaSig` du DOM).
+    attente_media: Option<crate::media::MediaChargee>,
+    attente_media_rel: Option<String>,
+    attente_media_kind: Option<String>,
+    /// Assets de marque du layout « signature » (Streamy ×2, wordmark),
+    /// décodés une fois depuis les PNG embarqués.
+    assets_attente: HashMap<AssetMarque, Asset>,
+    /// Contexte GPU **partagé** avec la scène : les overlays qui portent un
+    /// média (écran d'attente) décodent sur le même device.
+    contexte: ContexteGpu,
+    /// Cache du cadre de la carte pad (une seule) — re-mesurée au play et au
+    /// repositionnement (clé `cle_pad`).
+    bloc_pad: Option<BlocPad>,
+    /// Image/vidéo du pad (jouée une fois) — rechargée si `media|kind` change.
+    pad_media: Option<crate::media::MediaChargee>,
+    pad_media_rel: Option<String>,
+    pad_media_kind: Option<String>,
+    /// Son séparé du pad (image, ou touche « audio » sans visuel).
+    pad_audio: Option<crate::media::AudioFichier>,
+    pad_audio_rel: Option<String>,
+    /// Géométries et tirage déterministe du décor de la présentation
+    /// streamer (trapèzes des spots, fauteuils, places, poussière) —
+    /// reconstruits quand la version de l'overlay ou le canvas change.
+    bloc_presentation: Option<BlocPresentation>,
+    /// Carte de la présentation (tranche E6b) : colonnes mises en page et
+    /// liste d'éléments à peindre, reconstruites au changement de version.
+    bloc_carte: Option<BlocCarte>,
+    /// Dernière tentative de lecture d'une image distante de la présentation
+    /// (bannière, avatar, boîtes de jeux, vignettes de clips) — re-tentative
+    /// 500 ms tant que le téléchargement de l'app n'a pas abouti.
+    pres_images_tentative: HashMap<String, std::time::Instant>,
+    /// Vidéo du lecteur clip (fichier **local** préchargé par l'app,
+    /// `medias/clips/<fnv16(url)>.mp4`) — jamais de réseau (§13.8).
+    pres_clip_media: Option<crate::media::MediaChargee>,
+    pres_clip_url: Option<String>,
+    /// Dernière tentative de lecture du fichier du clip (re-tentative 500 ms
+    /// tant que l'app n'a pas fini de télécharger).
+    pres_clip_tentative: Option<std::time::Instant>,
+    /// Titre du lecteur clip mis en page : (clé, ligne, x, y).
+    bloc_clip: Option<(u64, presentation::LigneC, f32, f32)>,
+    /// Lignes mises en page du pop de validation des splits (badge, hero, mot).
+    bloc_splitpop: Option<BlocSplitPop>,
+    /// Son du pop de validation (`srPointsSon`) — rouvert à chaque pop,
+    /// avancé à chaque frame, jamais de réseau (fichier `medias/…`).
+    splitpop_audio: Option<crate::media::AudioFichier>,
+    /// Chemin relatif du son chargé (diagnostic).
+    splitpop_audio_rel: Option<String>,
+    /// Dernière version de son déjà jouée (`EtatSplitPop::son_version`).
+    splitpop_son_vu: u64,
+    /// Les 2 pistes audio de la présentation (`voix`, `musique`) — fichiers
+    /// **locaux** `medias/…`, indexés par `PistePresentation::index`.
+    pres_audios: [Option<crate::media::AudioFichier>; 2],
+    /// Signature du fichier chargé par piste (`medias/…`) — évite de rouvrir
+    /// le Source Reader à chaque frame.
+    pres_audio_rel: [Option<String>; 2],
+    /// Cache de l'arène `!fight` — re-mise en page quand la version change ou
+    /// que la seconde affichée change (échéances décomptées en local).
+    bloc_fight: Option<BlocFight>,
     /// Formats de libellés input-viewer, clé = (taille en dixièmes, gras).
     formats_input: HashMap<(u32, bool), IDWriteTextFormat>,
     /// Plans à perspective : offscreen intermédiaire + effet de projection,
@@ -539,8 +839,12 @@ impl DessinateurTexte {
         let collection: IDWriteFontCollection = collection
             .cast()
             .map_err(|e| ErreurTexte::Systeme(format!("IDWriteFontCollection : {}", e.message())))?;
-        let style_trait = crate::cadres::style_trait(&d2d)
-            .map_err(|e| ErreurTexte::Systeme(e.to_string()))?;
+        let styles = crate::cadres::StylesTrait {
+            cadre: crate::cadres::style_trait(&d2d)
+                .map_err(|e| ErreurTexte::Systeme(e.to_string()))?,
+            comete: crate::cadres::style_comete(&d2d)
+                .map_err(|e| ErreurTexte::Systeme(e.to_string()))?,
+        };
         Ok(Self {
             dwrite,
             device,
@@ -551,17 +855,52 @@ impl DessinateurTexte {
             collection,
             _donnees_polices: donnees,
             device_d3d: contexte.device().clone(),
-            style_trait,
+            styles,
             cache: HashMap::new(),
             bitmaps: HashMap::new(),
             blocs: HashMap::new(),
             blocs_viewers: HashMap::new(),
             blocs_horloge: HashMap::new(),
+            blocs_objectifs: HashMap::new(),
+            blocs_musique_module: HashMap::new(),
+            bulles_eq: Vec::new(),
+            debut_spots: std::time::Instant::now(),
             blocs_goal: HashMap::new(),
             logos_goal: HashMap::new(),
             blocs_speedrun: HashMap::new(),
             blocs_musique: HashMap::new(),
             bloc_alerte: None,
+            bloc_welcome: None,
+            bloc_bandeau: None,
+            bloc_attente: None,
+            attente_media: None,
+            attente_media_rel: None,
+            attente_media_kind: None,
+            assets_attente: HashMap::new(),
+            contexte: ContexteGpu::depuis_device(contexte.device().clone())
+                .map_err(|e| ErreurTexte::Gpu(format!("contexte partagé : {e}")))?,
+            bloc_pad: None,
+            pad_media: None,
+            pad_media_rel: None,
+            pad_media_kind: None,
+            pad_audio: None,
+            pad_audio_rel: None,
+            bloc_presentation: None,
+            bloc_carte: None,
+            pres_images_tentative: HashMap::new(),
+            pres_clip_media: None,
+            pres_clip_url: None,
+            pres_clip_tentative: None,
+            bloc_clip: None,
+            bloc_splitpop: None,
+            splitpop_audio: None,
+            splitpop_audio_rel: None,
+            splitpop_son_vu: 0,
+            pres_audios: [None, None],
+            pres_audio_rel: [None, None],
+            bloc_fight: None,
+            base: PathBuf::new(),
+            images_chat: HashMap::new(),
             formats_input: HashMap::new(),
             persps: Vec::new(),
             effets: HashMap::new(),
@@ -570,6 +909,62 @@ impl DessinateurTexte {
             morphes: HashMap::new(),
             sorties_morph: HashMap::new(),
         })
+    }
+
+    /// Dossier de données — base des chemins de cache des images du chat.
+    pub fn definir_base(&mut self, base: &Path) {
+        self.base = base.to_path_buf();
+    }
+
+    /// Décode un fichier image (WIC) en bitmap Direct2D.
+    ///
+    /// `None` si le fichier manque ou est illisible — jamais fatal : le
+    /// rendu retombe sur le texte (emote) ou sur l'espace vide (avatar).
+    pub(super) fn bitmap_fichier(&mut self, chemin: &Path) -> Option<BitmapChat> {
+        let (w, h, pixels, alpha) = match crate::media::decoder_pbgra(chemin) {
+            Ok(d) if d.0 > 0 && d.1 > 0 => d,
+            Ok(_) => return None,
+            Err(e) => {
+                log::debug!("chat : image {} ignorée ({e})", chemin.display());
+                return None;
+            }
+        };
+        let desc = DescTexture::new(Format::Bgra8, w, h).ok()?;
+        let texture = self.contexte_texture(&desc).ok()?;
+        let ressource: windows::Win32::Graphics::Direct3D11::ID3D11Resource =
+            texture.cast().ok()?;
+        let contexte = unsafe { self.device_d3d.GetImmediateContext() }.ok()?;
+        unsafe {
+            contexte.UpdateSubresource(
+                Some(&ressource),
+                0,
+                None,
+                pixels.as_ptr() as *const std::ffi::c_void,
+                w * 4,
+                0,
+            );
+        }
+        let bitmap = self.bitmap_media(&texture, alpha).ok()?;
+        Some((texture, bitmap, (w as f32, h as f32)))
+    }
+
+    /// Image du chat (avatar ou emote) — cache par chemin de cache.
+    ///
+    /// Le fichier est écrit par l'app (`cache_images.rs`, téléchargement à
+    /// la volée) : tant qu'il manque, `None` et le rendu garde le texte.
+    pub(super) fn image_cache(&mut self, url: &str) -> Option<BitmapChat> {
+        let chemin = crate::chat::chemin_cache(&self.base, url);
+        if let Some(deja) = self.images_chat.get(&chemin) {
+            return Some(deja.clone());
+        }
+        // Fichier pas encore téléchargé : ne rien mémoriser (le prochain
+        // rebuild du bloc retentera — le chat se répare tout seul).
+        if !chemin.is_file() {
+            return None;
+        }
+        let charge = self.bitmap_fichier(&chemin)?;
+        self.images_chat.insert(chemin, charge.clone());
+        Some(charge)
     }
 
     /// Nombre de titres en cache (diagnostic / tests).
@@ -633,6 +1028,15 @@ impl DessinateurTexte {
             let Some(entree) = self.cache.get(cle) else {
                 continue;
             };
+            // La texture déborde la boîte CSS (contour + glyphes hors de la
+            // ligne) : on élargit la destination d'autant pour que la boîte
+            // CSS tombe exactement sur `place.rect`.
+            let dst = D2D_RECT_F {
+                left: place.rect.left - entree.marge.0,
+                top: place.rect.top - entree.marge.1,
+                right: place.rect.right + entree.marge.0,
+                bottom: place.rect.bottom + entree.marge.1,
+            };
             unsafe {
                 if let Some(centre) = place.rotation {
                     // ⚠️ `Matrix3x2::rotation` passe par `D2D1MakeRotateMatrix`,
@@ -643,7 +1047,7 @@ impl DessinateurTexte {
                 }
                 self.cible_rt.DrawBitmap(
                     &entree.bitmap,
-                    Some(&place.rect),
+                    Some(&dst),
                     1.0,
                     D2D1_BITMAP_INTERPOLATION_MODE_LINEAR,
                     None,
@@ -672,13 +1076,49 @@ impl DessinateurTexte {
     }
 
     /// Peint un cadre (clip au polygone, 2 styles) — dans une passe ouverte.
+    /// `temps_s` = horloge du flux (comète `animer`).
     pub fn dessiner_cadre(
         &mut self,
         cfg: &CadreCfg,
         geo: &ID2D1PathGeometry,
+        temps_s: f64,
     ) -> Result<(), ErreurTexte> {
-        crate::cadres::dessiner(&self.d2d, &self.ctx, &self.cible_rt, geo, cfg, &self.style_trait)
-            .map_err(|e: ErreurCadre| ErreurTexte::Systeme(e.to_string()))
+        crate::cadres::dessiner(
+            &self.d2d,
+            &self.ctx,
+            &self.cible_rt,
+            geo,
+            cfg,
+            &self.styles,
+            temps_s,
+        )
+        .map_err(|e: ErreurCadre| ErreurTexte::Systeme(e.to_string()))
+    }
+
+    /// Anneau `cameraBord` d'une forme caméra dédiée — dans une passe ouverte.
+    /// `clip` = polygone du cercle (`None` = rect `carre`, clip axe-aligné).
+    pub fn dessiner_anneau_camera(
+        &mut self,
+        cfg: &crate::moteur::SourceCfg,
+        clip: Option<&ID2D1PathGeometry>,
+    ) -> Result<(), ErreurTexte> {
+        let Some(anneau) = cfg.anneau.as_ref() else {
+            return Ok(());
+        };
+        let forme = crate::cadres::AnneauRendu {
+            rect: cfg.rect,
+            cercle: matches!(cfg.forme_camera, Some(crate::moteur::FormeCamera::Cercle)),
+            clip,
+        };
+        crate::cadres::dessiner_anneau_camera(
+            &self.d2d,
+            &self.ctx,
+            &self.cible_rt,
+            &forme,
+            anneau,
+            &self.styles.cadre,
+        )
+        .map_err(|e| ErreurTexte::Systeme(e.to_string()))
     }
 
     /// Voile d'un widget, selon son type (surcharges CSS de `.widget`).
@@ -855,6 +1295,30 @@ impl DessinateurTexte {
             .map_err(|e| ErreurTexte::Systeme(format!("ID2D1Brush : {}", e.message())))
     }
 
+    /// Contours des glyphes d'un layout — `None` si une police est
+    /// **simulée** (gras/oblique synthétique d'une famille à une seule
+    /// graisse) : `GetGlyphRunOutline` rend alors le contour non embelli et
+    /// le tracé serait faux. L'appelant retombe sur l'approximation.
+    fn contours_glyphes(
+        &self,
+        layout: &windows::Win32::Graphics::DirectWrite::IDWriteTextLayout,
+    ) -> Result<Option<Vec<ID2D1Geometry>>, ErreurTexte> {
+        let etat = Rc::new(RefCell::new(EtatContours::default()));
+        let renderer: IDWriteTextRenderer = CollecteContours {
+            d2d: self.d2d.clone(),
+            etat: etat.clone(),
+        }
+        .into();
+        unsafe { layout.Draw(None, &renderer, 0.0, 0.0) }
+            .map_err(|e| ErreurTexte::Systeme(format!("contours du titre : {}", e.message())))?;
+        let e = etat.borrow();
+        Ok(if e.simule || e.runs.is_empty() {
+            None
+        } else {
+            Some(e.runs.clone())
+        })
+    }
+
     /// Rend un titre dans une texture BGRA transparente (une seule fois).
     fn rendre(&mut self, texte: &TexteCfg) -> Result<CacheTexte, ErreurTexte> {
         let format = self.format(&texte.style)?;
@@ -888,16 +1352,47 @@ impl DessinateurTexte {
                 .map_err(|e| ErreurTexte::Systeme(format!("SetUnderline : {}", e.message())))?;
         }
 
+        // `line-height: 1.1` du DOM (`.widget-titre` / `.bg-titre`) : sans
+        // cela DirectWrite mesure la hauteur **naturelle** de la police
+        // (~1,2-1,35 em) — la boîte du titre, donc son placement, dérive avec
+        // `titreTaille`. `UNIFORM` + un baseline « demi-interligne » reproduit
+        // la répartition CSS : le glyphe est centré dans la boîte de ligne
+        // (half-leading au-dessus et au-dessous).
+        let interligne = INTERLIGNE_TITRE * texte.style.taille;
+        let mut ligne = [DWRITE_LINE_METRICS::default()];
+        let mut nb_lignes = 0u32;
+        unsafe { layout.GetLineMetrics(Some(&mut ligne), &mut nb_lignes) }
+            .map_err(|e| ErreurTexte::Systeme(format!("GetLineMetrics : {}", e.message())))?;
+        let naturelle = ligne[0].height;
+        let demi_interligne = (interligne - naturelle) / 2.0;
+        unsafe {
+            layout.SetLineSpacing(
+                DWRITE_LINE_SPACING_METHOD_UNIFORM,
+                interligne,
+                demi_interligne + ligne[0].baseline,
+            )
+        }
+        .map_err(|e| ErreurTexte::Systeme(format!("SetLineSpacing : {}", e.message())))?;
+
         let mut metriques = DWRITE_TEXT_METRICS::default();
         unsafe { layout.GetMetrics(&mut metriques) }
             .map_err(|e| ErreurTexte::Systeme(format!("GetMetrics : {}", e.message())))?;
 
-        // Marge interne : le contour déborde des glyphes.
+        // Boîte **CSS** du titre : largeur du texte × `line-height` (1,1 em).
+        // C'est elle que le DOM positionne (`.widget-titre`/`.bg-titre`) —
+        // la texture est plus grande pour le contour et, quand l'interligne
+        // est plus court que la hauteur naturelle de la police, pour le
+        // débord des glyphes (le CSS les laisse sortir de la boîte de ligne).
+        let largeur = metriques.width.max(1.0);
+        let hauteur = metriques.height.max(1.0);
         let debord = (texte.style.contour_epaisseur * 0.5).ceil() + 2.0;
-        let largeur = (metriques.width.ceil() + 2.0 * debord).max(1.0);
-        let hauteur = (metriques.height.ceil() + 2.0 * debord).max(1.0);
+        let marge = (debord, debord + (-demi_interligne).max(0.0));
+        let (l_tex, h_tex) = (
+            (largeur + 2.0 * marge.0).ceil().max(1.0),
+            (hauteur + 2.0 * marge.1).ceil().max(1.0),
+        );
 
-        let desc = DescTexture::new(Format::Bgra8, largeur as u32, hauteur as u32)
+        let desc = DescTexture::new(Format::Bgra8, l_tex as u32, h_tex as u32)
             .map_err(|e| ErreurTexte::Gpu(e.to_string()))?;
         let texture = self
             .contexte_texture(&desc)
@@ -936,26 +1431,65 @@ impl DessinateurTexte {
         };
         unsafe { rt.Clear(Some(&transparent)) };
 
-        // Contour : passes décalées (approximation documentée).
+        // Contour (`-webkit-text-stroke`, `paint-order: stroke fill`) : tracé
+        // **exact** des glyphes — `GetGlyphRunOutline` + `Widen` (trait centré,
+        // comme le CSS) — quand la police n'est pas simulée. Une police
+        // synthétique (gras/oblique d'une famille à une seule graisse) n'a pas
+        // ce tracé : on garde alors l'approximation par 16 passes décalées.
         if texte.style.contour_epaisseur > 0.0 {
             let couleur = couleur_d2d(texte.style.contour_couleur);
             let brosse = unsafe { rt.CreateSolidColorBrush(&couleur, None) }
                 .map_err(|e| ErreurTexte::Systeme(format!("brosse contour : {}", e.message())))?;
-            let rayon = (texte.style.contour_epaisseur * 0.5).max(0.5);
-            for (dx, dy) in couronne(rayon) {
-                let origine = D2D_POINT_2F {
-                    x: debord + dx,
-                    y: debord + dy,
-                };
-                unsafe { rt.DrawTextLayout(origine, &layout, &brosse, D2D1_DRAW_TEXT_OPTIONS_NONE) };
+            let contours = self.contours_glyphes(&layout)?;
+            if let Some(runs) = contours {
+                // La géométrie est en coordonnées du layout : `Widen` la
+                // translate à l'origine de la texture (`marge`).
+                let translation = Matrix3x2::translation(marge.0, marge.1);
+                for geo in &runs {
+                    let trace = unsafe { self.d2d.CreatePathGeometry() }.map_err(|e| {
+                        ErreurTexte::Systeme(format!("géométrie contour : {}", e.message()))
+                    })?;
+                    {
+                        let sink = unsafe { trace.Open() }.map_err(|e| {
+                            ErreurTexte::Systeme(format!("sink contour : {}", e.message()))
+                        })?;
+                        unsafe {
+                            geo.Widen(
+                                texte.style.contour_epaisseur,
+                                None,
+                                Some(&translation),
+                                0.25,
+                                &sink,
+                            )
+                        }
+                        .map_err(|e| {
+                            ErreurTexte::Systeme(format!("widen contour : {}", e.message()))
+                        })?;
+                        unsafe { sink.Close() }.map_err(|e| {
+                            ErreurTexte::Systeme(format!("sink contour (close) : {}", e.message()))
+                        })?;
+                    }
+                    unsafe { rt.FillGeometry(&trace, &brosse, None) };
+                }
+            } else {
+                let rayon = (texte.style.contour_epaisseur * 0.5).max(0.5);
+                for (dx, dy) in couronne(rayon) {
+                    let origine = D2D_POINT_2F {
+                        x: marge.0 + dx,
+                        y: marge.1 + dy,
+                    };
+                    unsafe {
+                        rt.DrawTextLayout(origine, &layout, &brosse, D2D1_DRAW_TEXT_OPTIONS_NONE)
+                    };
+                }
             }
         }
 
         // Remplissage : dégradé 135° (haut-gauche → bas-droite), comme le CSS.
-        let brosse = self.brosse_degrade(&rt, &texte.style, largeur, hauteur)?;
+        let brosse = self.brosse_degrade(&rt, &texte.style, l_tex, h_tex)?;
         let origine = D2D_POINT_2F {
-            x: debord,
-            y: debord,
+            x: marge.0,
+            y: marge.1,
         };
         unsafe { rt.DrawTextLayout(origine, &layout, &brosse, D2D1_DRAW_TEXT_OPTIONS_NONE) };
 
@@ -967,6 +1501,7 @@ impl DessinateurTexte {
             bitmap,
             largeur,
             hauteur,
+            marge,
         })
     }
 
@@ -1221,7 +1756,8 @@ mod tests {
         let mut t = texte(PositionTitre::Haut, CibleTitre::Widget);
         t.cadre = (100.0, 200.0, 400.0, 300.0);
         let p = placement(&t, 150.0, 24.0);
-        assert_eq!(p.rect.bottom, 200.0);
+        // `margin-top: -2px` du DOM : le bas de la boîte est 2 px au-dessus.
+        assert_eq!(p.rect.bottom, 200.0 - MARGE_TITRE_WIDGET);
         assert_eq!(p.rect.left, 100.0 + (400.0 - 150.0) / 2.0);
     }
 
@@ -1231,9 +1767,96 @@ mod tests {
         t.cadre = (100.0, 200.0, 400.0, 300.0);
         let p = placement(&t, 150.0, 24.0);
         let centre = p.rotation.expect("titre latéral tourné");
-        // Boîte tournée de 24 px de large, collée au bord droit du widget.
-        assert_eq!(centre.x, 500.0 + 12.0);
+        // Boîte tournée de 24 px de large, à 2 px du bord droit du widget
+        // (`margin-left: 2px`).
+        assert_eq!(centre.x, 500.0 + MARGE_TITRE_WIDGET + 12.0);
         assert_eq!(centre.y, 200.0 + (300.0 - 24.0) / 2.0 + 75.0);
+    }
+
+    #[test]
+    fn titre_widget_bas_et_gauche_portent_la_marge_de_2_px() {
+        let mut bas = texte(PositionTitre::Bas, CibleTitre::Widget);
+        bas.cadre = (100.0, 200.0, 400.0, 300.0);
+        let p = placement(&bas, 150.0, 24.0);
+        assert_eq!(p.rect.top, 500.0 + MARGE_TITRE_WIDGET);
+
+        let mut gauche = texte(PositionTitre::Gauche, CibleTitre::Widget);
+        gauche.cadre = (100.0, 200.0, 400.0, 300.0);
+        let p = placement(&gauche, 150.0, 24.0);
+        let centre = p.rotation.expect("titre latéral tourné");
+        // Bord droit de la boîte tournée = `x - 2`.
+        assert_eq!(centre.x + 12.0, 100.0 - MARGE_TITRE_WIDGET);
+    }
+
+    #[test]
+    fn interligne_des_titres_est_le_line_height_du_dom() {
+        // `.widget-titre` / `.bg-titre` : `line-height: 1.1`.
+        assert_eq!(INTERLIGNE_TITRE, 1.1);
+        assert!((INTERLIGNE_TITRE * 24.0 - 26.4).abs() < 1e-4);
+    }
+
+    /// Le contour exact n'est possible que sans police simulée : une famille
+    /// embarquée n'a qu'une graisse, donc `titreGras` retombe sur
+    /// l'approximation par passes décalées. Test GPU : ignoré sans device.
+    #[test]
+    fn contour_exact_sauf_police_simulee() {
+        let Ok(contexte) = ContexteGpu::creer(None) else {
+            eprintln!("texte : pas de device D3D11, test ignoré");
+            return;
+        };
+        let canvas = contexte
+            .creer_texture(&DescTexture::new(Format::Bgra8, 64, 64).expect("desc"))
+            .expect("canvas");
+        let mut dessinateur = DessinateurTexte::nouveau(&contexte, &canvas).expect("dessinateur");
+        let contenu: Vec<u16> = "Aa".encode_utf16().collect();
+        let layout_pour = |d: &mut DessinateurTexte, gras: bool| {
+            let style = StyleTexte {
+                taille: 32.0,
+                gras,
+                ..StyleTexte::default()
+            };
+            let format = d.format(&style).expect("format");
+            unsafe { d.dwrite.CreateTextLayout(&contenu, &format, 512.0, 256.0) }.expect("layout")
+        };
+
+        let normal = layout_pour(&mut dessinateur, false);
+        let contours = dessinateur.contours_glyphes(&normal).expect("contours");
+        let contours = contours.expect("une police réelle doit donner un tracé exact");
+        assert!(!contours.is_empty(), "au moins un run");
+
+        let gras = layout_pour(&mut dessinateur, true);
+        assert!(
+            dessinateur.contours_glyphes(&gras).expect("contours").is_none(),
+            "une police simulée (gras synthétique) doit retomber sur l'approximation"
+        );
+    }
+
+    /// La boîte mesurée d'un titre est celle du CSS (largeur du texte ×
+    /// `line-height: 1.1`), pas la hauteur naturelle de la police — sinon le
+    /// placement dérive avec `titreTaille`. Test GPU : ignoré sans device.
+    #[test]
+    fn titre_mesure_la_boite_de_ligne_css() {
+        let Ok(contexte) = ContexteGpu::creer(None) else {
+            eprintln!("texte : pas de device D3D11, test ignoré");
+            return;
+        };
+        let canvas = contexte
+            .creer_texture(&DescTexture::new(Format::Bgra8, 64, 64).expect("desc"))
+            .expect("canvas");
+        let mut dessinateur = DessinateurTexte::nouveau(&contexte, &canvas).expect("dessinateur");
+        for taille in [24.0_f32, 40.0, 96.0] {
+            let mut t = texte(PositionTitre::Haut, CibleTitre::Widget);
+            t.style.taille = taille;
+            let cache = dessinateur.rendre(&t).expect("rendu du titre");
+            assert!(
+                (cache.hauteur - INTERLIGNE_TITRE * taille).abs() < 0.01,
+                "taille {taille} : hauteur {} au lieu de {}",
+                cache.hauteur,
+                INTERLIGNE_TITRE * taille
+            );
+            // La texture garde une marge pour le contour (boîte CSS intacte).
+            assert!(cache.marge.0 >= 1.0 && cache.marge.1 >= cache.marge.0);
+        }
     }
 
     #[test]

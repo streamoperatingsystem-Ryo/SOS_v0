@@ -204,7 +204,7 @@
     {
       icone: masque ? "🚫" : "👁",
       titre: $t(masque ? "commun.afficher" : "commun.masquer"),
-      onclick: () => void setModuleActif(id, !masque),
+      onclick: () => void setModuleActif(id, masque),
     },
   ]);
 

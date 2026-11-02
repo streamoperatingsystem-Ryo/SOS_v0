@@ -370,6 +370,7 @@ impl DessinateurTexte {
         etat: &EtatAlertes,
         cadre: Option<&CadreCfg>,
         canvas_h: u32,
+        temps_s: f64,
     ) -> Result<(), ErreurTexte> {
         let Some(rendu) = etat.rendu() else {
             return Ok(());
@@ -522,7 +523,7 @@ impl DessinateurTexte {
             }
             // Trait du cadre au-dessus (`.cadre-overlay`, z 5 dans la carte).
             if let Some((cfg, geo)) = &cadre_geo {
-                self.dessiner_cadre(cfg, geo)?;
+                self.dessiner_cadre(cfg, geo, temps_s)?;
             }
             Ok(())
         })();
@@ -849,6 +850,7 @@ mod tests {
             couleur_fin: [0x8b, 0x5c, 0xf6, 255],
             gradient_angle: 135.0,
             z: Z_ALERTES,
+            animer: false,
         };
         assert_ne!(a, cle_alerte(1, pos, Some(&cadre), 1080), "cadre");
     }

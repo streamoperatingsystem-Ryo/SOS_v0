@@ -133,6 +133,16 @@ pub struct CaptureCamera {
 }
 
 impl CaptureCamera {
+    /// Le fil de capture tourne-t-il encore ? `false` = caméra débranchée ou
+    /// flux terminé : la dernière frame resterait figée (à signaler).
+    pub fn est_vivante(&self) -> bool {
+        self.fil
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .as_ref()
+            .is_some_and(|f| !f.is_finished())
+    }
+
     /// Démarre la capture sur son propre contexte GPU (adaptateur par
     /// défaut) — commodité de harnais.
     pub fn demarrer(device: Option<&str>) -> Result<Self, ErreurCapture> {

@@ -4,7 +4,7 @@
 //! Le processeur vidéo ne garantit pas R8G8B8A8 en sortie : le tampon rendu
 //! est swappé B↔R pendant la copie (RGBA8 prêt pour `ImageData`, aucune
 //! conversion côté page). Cadence et résolution sont réglables
-//! (`ApercuCfg`) — défaut 1280 px à 30 fps.
+//! (`ApercuCfg`) — défaut 480 px à 10 fps.
 
 use std::fmt;
 use std::mem::ManuallyDrop;

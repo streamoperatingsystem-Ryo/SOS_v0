@@ -312,6 +312,10 @@ pub struct LectureCfg {
     /// que la position atteint B. `None` = boucle native complète
     /// (`v.loop = !paused && !ab`).
     pub boucle: Option<(f64, f64)>,
+    /// `v.loop` du DOM quand aucune boucle A–B n'est posée : `true` pour les
+    /// médias de scène (`loop` implicite) ; `false` pour un média d'overlay
+    /// joué **une fois** (pad numérique — dernière image figée en fin de flux).
+    pub boucle_infinie: bool,
 }
 
 /// Carrousel d'images (`mediaSlides`/`bgSlides` non vide) — la liste est
@@ -520,6 +524,8 @@ struct VideoLecteur {
     /// Boucle A–B en µs (`mediaLoopA/B` × 1e6) : reseek à A dès que la
     /// position affichée atteint B.
     boucle: Option<(i64, i64)>,
+    /// `v.loop` sans boucle A–B — `false` = une seule lecture (pad).
+    boucle_infinie: bool,
     /// PTS vidéo de la dernière frame affichée ; −1 = aucune frame montrée.
     position_us: i64,
     /// Décalage horloge moteur → horloge vidéo : un seek à `p` au temps
@@ -600,6 +606,19 @@ impl MediaChargee {
             .map(|a| Arc::clone(&a.anneau))
     }
 
+    /// Recale la vidéo sur l'horloge moteur : sa première frame devient due
+    /// à `temps_us`.
+    ///
+    /// Un média de scène est chargé au démarrage (`decalage_us = 0`) ; un
+    /// média chargé **en cours de session** (écran d'attente, overlay)
+    /// sauterait sinon à `temps_us` — donc à la fin du flux.
+    pub fn recaler(&mut self, temps_us: i64) -> Result<(), ErreurMedia> {
+        match self.video.as_mut() {
+            Some(video) => video.seeker(0, temps_us),
+            None => Ok(()),
+        }
+    }
+
     /// Avance le flux **audio** de la vidéo : pousse dans l'anneau tous les
     /// échantillons dus jusqu'à `temps_us − decalage + MARGE_AUDIO_US`
     /// (même horloge que [`avancer`] — `SetCurrentPosition` recale les deux
@@ -620,66 +639,7 @@ impl MediaChargee {
         let Some(audio) = video.audio.as_mut() else {
             return Ok(());
         };
-        let mut lus = 0u32;
-        while lus < LIMITE_AUDIO_PAR_APPEL && !audio.fin {
-            let (sample, pts_us) = match audio.en_attente.take() {
-                Some(attente) => attente,
-                None => {
-                    let mut flags = 0u32;
-                    let mut sample: Option<IMFSample> = None;
-                    unsafe {
-                        video.reader.ReadSample(
-                            MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
-                            0,
-                            None,
-                            Some(&mut flags),
-                            None,
-                            Some(&mut sample),
-                        )
-                    }
-                    .map_err(|e| {
-                        ErreurMedia::Decodage(format!("ReadSample audio : {}", e.message()))
-                    })?;
-                    if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
-                        audio.fin = true;
-                        return Ok(());
-                    }
-                    let Some(sample) = sample else {
-                        return Ok(());
-                    };
-                    let pts_us = unsafe { sample.GetSampleTime() }.unwrap_or(0) / 10;
-                    (sample, pts_us)
-                }
-            };
-            // Échantillon futur : conservé jusqu'à son échéance.
-            if pts_us > horizon {
-                audio.en_attente = Some((sample, pts_us));
-                return Ok(());
-            }
-            let buffer = unsafe { sample.ConvertToContiguousBuffer() }
-                .map_err(|e| ErreurMedia::Decodage(format!("buffer audio : {}", e.message())))?;
-            let mut ptr: *mut u8 = std::ptr::null_mut();
-            let mut longueur = 0u32;
-            unsafe { buffer.Lock(&mut ptr, None, Some(&mut longueur)) }
-                .map_err(|e| ErreurMedia::Decodage(format!("Lock audio : {}", e.message())))?;
-            // f32 entrelacé ; l'alignement du Lock n'est pas garanti →
-            // lecture octet par octet, jamais de cast de pointeur.
-            let echantillons: Vec<f32> = unsafe {
-                std::slice::from_raw_parts(ptr, longueur as usize)
-            }
-            .chunks_exact(4)
-            .map(|o| f32::from_le_bytes([o[0], o[1], o[2], o[3]]))
-            .collect();
-            unsafe { buffer.Unlock() }
-                .map_err(|e| ErreurMedia::Decodage(format!("Unlock audio : {}", e.message())))?;
-            audio
-                .anneau
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .pousser(&echantillons);
-            lus += 1;
-        }
-        Ok(())
+        pomper_audio(&video.reader, audio, horizon)
     }
 
     /// Taille de la slide `index` (carrousel) — ou du média hors carrousel.
@@ -753,7 +713,10 @@ impl MediaChargee {
                         }
                         match video.boucle {
                             Some((a, _)) => video.seeker(a, temps_us)?,
-                            None if !video.paused => video.seeker(0, temps_us)?,
+                            None if !video.paused && video.boucle_infinie => {
+                                video.seeker(0, temps_us)?
+                            }
+                            // Une seule lecture : dernière image figée.
                             _ => return Ok(()),
                         }
                         seek_fait = true;
@@ -780,6 +743,137 @@ impl MediaChargee {
                 return Ok(());
             }
         }
+    }
+}
+
+/// Pompe les échantillons audio **dus** jusqu'à `horizon` (µs) dans l'anneau
+/// de `audio` — partagé par les vidéos ([`MediaChargee::avancer_audio`]) et
+/// les fichiers audio seuls ([`AudioFichier`]).
+///
+/// Un échantillon futur est conservé (`en_attente`) : le Source Reader ne sait
+/// pas le remettre. Fin de flux → `fin = true`, plus rien n'est lu.
+fn pomper_audio(
+    reader: &IMFSourceReader,
+    audio: &mut AudioMedia,
+    horizon: i64,
+) -> Result<(), ErreurMedia> {
+    let mut lus = 0u32;
+    while lus < LIMITE_AUDIO_PAR_APPEL && !audio.fin {
+        let (sample, pts_us) = match audio.en_attente.take() {
+            Some(attente) => attente,
+            None => {
+                let mut flags = 0u32;
+                let mut sample: Option<IMFSample> = None;
+                unsafe {
+                    reader.ReadSample(
+                        MF_SOURCE_READER_FIRST_AUDIO_STREAM.0 as u32,
+                        0,
+                        None,
+                        Some(&mut flags),
+                        None,
+                        Some(&mut sample),
+                    )
+                }
+                .map_err(|e| {
+                    ErreurMedia::Decodage(format!("ReadSample audio : {}", e.message()))
+                })?;
+                if flags & MF_SOURCE_READERF_ENDOFSTREAM.0 as u32 != 0 {
+                    audio.fin = true;
+                    return Ok(());
+                }
+                let Some(sample) = sample else {
+                    return Ok(());
+                };
+                let pts_us = unsafe { sample.GetSampleTime() }.unwrap_or(0) / 10;
+                (sample, pts_us)
+            }
+        };
+        // Échantillon futur : conservé jusqu'à son échéance.
+        if pts_us > horizon {
+            audio.en_attente = Some((sample, pts_us));
+            return Ok(());
+        }
+        let buffer = unsafe { sample.ConvertToContiguousBuffer() }
+            .map_err(|e| ErreurMedia::Decodage(format!("buffer audio : {}", e.message())))?;
+        let mut ptr: *mut u8 = std::ptr::null_mut();
+        let mut longueur = 0u32;
+        unsafe { buffer.Lock(&mut ptr, None, Some(&mut longueur)) }
+            .map_err(|e| ErreurMedia::Decodage(format!("Lock audio : {}", e.message())))?;
+        // f32 entrelacé ; l'alignement du Lock n'est pas garanti →
+        // lecture octet par octet, jamais de cast de pointeur.
+        let echantillons: Vec<f32> = unsafe { std::slice::from_raw_parts(ptr, longueur as usize) }
+            .chunks_exact(4)
+            .map(|o| f32::from_le_bytes([o[0], o[1], o[2], o[3]]))
+            .collect();
+        unsafe { buffer.Unlock() }
+            .map_err(|e| ErreurMedia::Decodage(format!("Unlock audio : {}", e.message())))?;
+        audio
+            .anneau
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .pousser(&echantillons);
+        lus += 1;
+    }
+    Ok(())
+}
+
+/// Lecture d'un **fichier audio seul** (pad numérique : son d'une image, ou
+/// touche « audio » sans visuel) — même Source Reader que les vidéos, flux
+/// audio uniquement, converti par MF en f32 48 kHz stéréo (format du mixeur).
+///
+/// Même horloge que les médias : `avancer(temps_us)` pousse les échantillons
+/// dus depuis l'ouverture (le DOM joue le son une fois, sans boucle).
+pub struct AudioFichier {
+    reader: IMFSourceReader,
+    audio: AudioMedia,
+    /// `temps_us` moteur au moment de l'ouverture — les PTS repartent de 0.
+    decalage_us: i64,
+}
+
+impl AudioFichier {
+    /// Ouvre le fichier au temps moteur `temps_us` (première frame due là).
+    pub fn ouvrir(chemin: &Path, temps_us: i64) -> Result<Self, ErreurMedia> {
+        crate::encode::detect::initialiser();
+        let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+        unsafe {
+            let reader = MFCreateSourceReaderFromURL(&HSTRING::from(chemin.as_os_str()), None)
+                .map_err(|e| {
+                    ErreurMedia::Decodage(format!(
+                        "ouverture audio {} : {}",
+                        chemin.display(),
+                        e.message()
+                    ))
+                })?;
+            // Aucune piste audio exploitable = fichier inutilisable pour le mix.
+            let audio = configurer_audio_video(&reader).ok_or_else(|| {
+                ErreurMedia::Decodage(format!("aucune piste audio : {}", chemin.display()))
+            })?;
+            Ok(Self {
+                reader,
+                audio,
+                decalage_us: temps_us,
+            })
+        }
+    }
+
+    /// Anneau du flux (le mixeur y puise, gain = volume de la touche).
+    pub fn anneau_audio(&self) -> Arc<Mutex<AnneauAudio>> {
+        Arc::clone(&self.audio.anneau)
+    }
+
+    /// Avance le flux : pousse les échantillons dus jusqu'à
+    /// `temps_us − decalage + MARGE`.
+    pub fn avancer(&mut self, temps_us: i64) -> Result<(), ErreurMedia> {
+        if self.audio.fin {
+            return Ok(());
+        }
+        let horizon = temps_us - self.decalage_us + MARGE_AUDIO_US;
+        pomper_audio(&self.reader, &mut self.audio, horizon)
+    }
+
+    /// Fin du flux atteinte (le pad peut lâcher le lecteur).
+    pub fn est_termine(&self) -> bool {
+        self.audio.fin
     }
 }
 
@@ -1102,6 +1196,7 @@ fn charger_video(contexte: &ContexteGpu, cfg: &MediaCfg) -> Result<MediaChargee,
                     .lecture
                     .boucle
                     .map(|(a, b)| ((a * 1e6) as i64, (b * 1e6) as i64)),
+                boucle_infinie: cfg.lecture.boucle_infinie,
                 position_us: -1,
                 decalage_us: 0,
             }),
@@ -1225,6 +1320,64 @@ pub(crate) fn decoder_pbgra(chemin: &Path) -> Result<(u32, u32, Vec<u8>, bool), 
     }
 }
 
+/// Décode un PNG **depuis la mémoire** en PBGRA — même contrat que
+/// [`decoder_pbgra`], sans fichier.
+///
+/// Sert aux assets de marque embarqués du layout « signature » de
+/// l'écran d'attente (`include_bytes!` : Streamy, wordmark) : le moteur
+/// n'écrit rien sur disque pour un asset qu'il possède déjà.
+pub(crate) fn decoder_pbgra_memoire(
+    octets: &[u8],
+) -> Result<(u32, u32, Vec<u8>, bool), ErreurMedia> {
+    let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+    unsafe {
+        let factory: IWICImagingFactory =
+            CoCreateInstance(&CLSID_WICImagingFactory, None, CLSCTX_INPROC_SERVER)
+                .map_err(|e| ErreurMedia::Decodage(format!("WIC factory : {}", e.message())))?;
+        let flux = factory
+            .CreateStream()
+            .map_err(|e| ErreurMedia::Decodage(format!("flux WIC : {}", e.message())))?;
+        flux.InitializeFromMemory(octets)
+            .map_err(|e| ErreurMedia::Decodage(format!("mémoire WIC : {}", e.message())))?;
+        let decodeur = factory
+            .CreateDecoderFromStream(&flux, std::ptr::null(), WICDecodeMetadataCacheOnLoad)
+            .map_err(|e| ErreurMedia::Decodage(format!("décodage mémoire : {}", e.message())))?;
+        let cadre = decodeur
+            .GetFrame(0)
+            .map_err(|e| ErreurMedia::Decodage(format!("frame 0 : {}", e.message())))?;
+        let convertisseur = factory
+            .CreateFormatConverter()
+            .map_err(|e| ErreurMedia::Decodage(format!("convertisseur : {}", e.message())))?;
+        convertisseur
+            .Initialize(
+                &cadre,
+                &GUID_WICPixelFormat32bppPBGRA,
+                WICBitmapDitherTypeNone,
+                None,
+                0.0,
+                WICBitmapPaletteTypeCustom,
+            )
+            .map_err(|e| ErreurMedia::Decodage(format!("conversion PBGRA : {}", e.message())))?;
+        let mut largeur = 0u32;
+        let mut hauteur = 0u32;
+        convertisseur
+            .GetSize(&mut largeur, &mut hauteur)
+            .map_err(|e| ErreurMedia::Decodage(format!("taille : {}", e.message())))?;
+        let pas = largeur
+            .checked_mul(4)
+            .ok_or_else(|| ErreurMedia::Decodage("largeur débordante".to_string()))?;
+        let taille = (pas as usize)
+            .checked_mul(hauteur as usize)
+            .ok_or_else(|| ErreurMedia::Decodage("image trop grande".to_string()))?;
+        let mut pixels = vec![0u8; taille];
+        convertisseur
+            .CopyPixels(std::ptr::null(), pas, &mut pixels)
+            .map_err(|e| ErreurMedia::Decodage(format!("pixels : {}", e.message())))?;
+        let alpha = pixels.chunks_exact(4).any(|p| p[3] != 255);
+        Ok((largeur, hauteur, pixels, alpha))
+    }
+}
+
 /// Crée la texture et téléverse les pixels (une seule fois).
 fn televerser(
     contexte: &ContexteGpu,
@@ -1273,6 +1426,7 @@ mod tests {
             lecture: LectureCfg {
                 paused: true,
                 boucle: None,
+                boucle_infinie: true,
             },
             carrousel: None,
         };

@@ -5,7 +5,7 @@
   import { loadScenesIndex, loadCurrentScene, exportScene, exportToutZip, importScene, importToutZip } from "./lib/stores/scenes";
   import { confirmDeleteWidget, cadreModalOpen, interactionModalOpen, moderationModalOpen, planningModalOpen, statistiquesModalOpen, titreFondModalOpen, speedrunConfigModalOpen, speedrunLayoutModalOpen, presetsModalOpen, consoModalOpen, openSectionExplicit, dupliquerSceneModalOpen, confirmOuvrirSceneModalOpen, confirmObsOutputOpen, ecranAttenteModalOpen, guideLivreOpen, modulesModalOpen, obsWebSocketModalOpen, sortieNatifModalOpen } from "./lib/stores/ui";
   import { obsConnect, obsStatus, obsError, obsHost, obsPort, obsPassword, obsStreaming, obsRecording, obsStreamBusy, obsRecordBusy, obsAutoConnect, rafraichirOutputs, obsBootDeclenche } from "./lib/stores/obs";
-  import { moteurEtat, moteurErreur, basculerMoteur } from "./lib/stores/moteur";
+  import { moteurEtat, moteurErreur, basculerMoteur, sortieNatif, sortieNatifBusy, sortieNatifFlux, sortieNatifFichierActif, sortieEstFlux, toggleStreamNatif, toggleEnregistrementNatif } from "./lib/stores/moteur";
   import { initChat, twitchDevice, twitchLogin, youtubeDevice, youtubeLogin, kickSlug, tiktokUsername, connexions, connecterTwitch, deconnecterTwitch } from "./lib/stores/chat";
   import { initTwitchLive } from "./lib/stores/twitchLive";
   import { initPlanning } from "./lib/stores/planning";
@@ -94,12 +94,18 @@
   // .tb-obs (icône + stream/record) à place FIXE — ses contrôles doivent
   // rester prévisibles, et l'état .err rouge garde sa visibilité à gauche.
   let obsOn = $derived(obsSt === "connected");
-  // Mode moteur (OBS ↔ natif) : boutons topbar + contour de fenêtre.
+  // Mode moteur (OBS ↔ natif) : boutons topbar + nuage de fond.
   // L'état vient du registre Rust (chargé par Toolbar.onMount), jamais
   // d'une supposition locale ; l'erreur de bascule refusée (live actif)
   // remonte dans le title du groupe.
   let modeMoteur = $derived($moteurEtat.mode);
   let natifDispo = $derived($moteurEtat.natif_disponible);
+  // Sorties vues par les boutons topbar : OBS ou natif selon le moteur actif.
+  // En natif, le TYPE de sortie tranche la pastille (flux = stream,
+  // fichier = record) — jamais les deux à la fois.
+  let natifMode = $derived(modeMoteur === "natif");
+  let streamActif = $derived(natifMode ? $sortieNatifFlux : obsStream);
+  let recordActif = $derived(natifMode ? $sortieNatifFichierActif : obsRecord);
   let moteurErr = $derived($moteurErreur);
   let nbPlats = $derived(
     (cx.twitch ? 1 : 0) +
@@ -288,11 +294,14 @@
         }
         break;
       case "obs-stream":
-        // Confirmation d'abord (dashboard) — la modale appelle le toggle.
-        confirmObsOutputOpen.set("stream");
+        // OBS : confirmation d'abord (dashboard) — la modale appelle le
+        // toggle. Natif : toggle mutualisé (config keyring ou modale Sortie).
+        if (get(moteurEtat).mode === "natif") await toggleStreamNatif();
+        else confirmObsOutputOpen.set("stream");
         break;
       case "obs-record":
-        confirmObsOutputOpen.set("record");
+        if (get(moteurEtat).mode === "natif") await toggleEnregistrementNatif();
+        else confirmObsOutputOpen.set("record");
         break;
       case "modale-interactions": interactionModalOpen.set(true); break;
       case "modale-moderation": moderationModalOpen.set(true); break;
@@ -317,15 +326,18 @@
   // créée après le dernier changement d'état).
   function pushRaccourcisConnexions() {
     const c = get(connexions);
+    // Pastilles stream/record : moteur réellement actif. En natif, le type
+    // de sortie tranche (flux réseau = stream, fichier = record).
+    const natif = get(moteurEtat).mode === "natif";
+    const s = get(sortieNatif);
     void emitTo("raccourcis", "raccourcis:connexions", {
       twitch: c.twitch,
       youtube: c.youtube,
       kick: c.kick,
       tiktok: c.tiktok,
       obs: get(obsStatus) === "connected",
-      // Sorties OBS : pastilles stream/record de la barre (data-plat homonymes).
-      stream: get(obsStreaming),
-      record: get(obsRecording),
+      stream: natif ? s.actif && sortieEstFlux(s.chemin) : get(obsStreaming),
+      record: natif ? s.actif && !sortieEstFlux(s.chemin) : get(obsRecording),
       // Écran d'attente : pastille du bouton BRB (vert = chrono en cours).
       attente: get(ecranAttenteStore)?.actif ?? false,
       // Just Chatting : pastille du bouton (vert = overlay actif).
@@ -341,18 +353,29 @@
     void obsRecord;
     void eaActif;
     void jcOn;
+    void $sortieNatif;
+    void modeMoteur;
     pushRaccourcisConnexions();
   });
 
-  // ===== Boutons topbar : sorties OBS (stream / record) =====
-  // Confirmation avant set (démarrer ET arrêter) — la modale
+  // ===== Boutons topbar : sorties (stream / record) =====
+  // OBS : confirmation avant set (démarrer ET arrêter) — la modale
   // ConfirmObsOutputModal relit l'état réel puis appelle setStreamObs/
   // setRecordObs. obsStreamBusy/obsRecordBusy (stores/obs) grisent pendant
-  // le RPC.
-  function onToggleStreamTop() {
+  // le RPC. Natif : toggles mutualisés de stores/moteur (mêmes fonctions
+  // que la carte sidebar et la barre de raccourcis).
+  async function onToggleStreamTop() {
+    if (natifMode) {
+      await toggleStreamNatif();
+      return;
+    }
     confirmObsOutputOpen.set("stream");
   }
-  function onToggleRecordTop() {
+  async function onToggleRecordTop() {
+    if (natifMode) {
+      await toggleEnregistrementNatif();
+      return;
+    }
     confirmObsOutputOpen.set("record");
   }
 
@@ -664,6 +687,9 @@
     {#if fondSidebarUrl}
       <div class="fond-image" style="background-image: url('{fondSidebarUrl}')"></div>
     {/if}
+    <!-- Nuage moteur : masse statique teintée par le mode actif, posée
+         au-dessus de l'image de fond éventuelle (recette --nuage-moteur). -->
+    <div class="nuage-moteur"></div>
     <div class="orb orb-droite"></div>
     <div class="orb orb-gauche-a"></div>
     <div class="orb orb-gauche-b"></div>
@@ -743,7 +769,7 @@
     {/if}
     <!-- Groupe mode moteur : bascule OBS ↔ Rust visible en permanence.
          Le bouton actif porte la couleur du mode (orange natif / bleu OBS),
-         reprise par le contour de fenêtre (main.mode-*). -->
+         reprise par le nuage de fond (main.mode-* → --moteur-couleur). -->
     <div class="tb-groupe tb-moteur" title={moteurErr ?? $t("moteur.titre")}>
       <button
         class="mode-btn mode-natif-btn"
@@ -775,32 +801,33 @@
       >
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="#e8e8e8" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7a5 5 0 0 1 4.3 2.5M16.8 14a5 5 0 0 1-4.8 3M7.2 14a5 5 0 0 1-.2-4.3"/></svg>
       </button>
-      <!-- Sorties OBS : stream + record (vert = prêt à démarrer, rouge = actif) -->
+      <!-- Sorties : stream + record (vert = prêt à démarrer, rouge = actif)
+           — OBS ou natif selon le moteur actif. -->
       <button
         class="output-btn"
-        class:actif={obsStream}
+        class:actif={streamActif}
         onclick={onToggleStreamTop}
-        disabled={!obsOn || $obsStreamBusy}
-        title={!obsOn
+        disabled={natifMode ? $sortieNatifBusy : !obsOn || $obsStreamBusy}
+        title={!natifMode && !obsOn
           ? $t("app.obsDabord")
-          : obsStream
+          : streamActif
             ? $t("app.streamStop")
             : $t("app.streamStart")}
-        aria-label={obsStream ? $t("app.streamStop") : $t("app.streamStart")}
+        aria-label={streamActif ? $t("app.streamStop") : $t("app.streamStart")}
       >
         <svg class="ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4.93 19.07a10 10 0 0 1 0-14.14"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/><path d="M7.76 16.24a6 6 0 0 1 0-8.49"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><circle cx="12" cy="12" r="1.5" fill="currentColor" stroke="none"/></svg>
       </button>
       <button
         class="output-btn"
-        class:actif={obsRecord}
+        class:actif={recordActif}
         onclick={onToggleRecordTop}
-        disabled={!obsOn || $obsRecordBusy}
-        title={!obsOn
+        disabled={natifMode ? $sortieNatifBusy : !obsOn || $obsRecordBusy}
+        title={!natifMode && !obsOn
           ? $t("app.obsDabord")
-          : obsRecord
+          : recordActif
             ? $t("commun.arreterEnregistrement")
             : $t("commun.demarrerEnregistrement")}
-        aria-label={obsRecord ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
+        aria-label={recordActif ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
       >
         <svg class="ico" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="7" fill="none" stroke="currentColor" stroke-width="1.8"/><circle cx="12" cy="12" r="3.5" fill="#f43f5e"/></svg>
       </button>
@@ -1108,20 +1135,35 @@
     display: flex;
     flex-direction: column;
     height: 100%;
-    /* relative : ancre du liseré pointillé ::after (modes moteur). */
-    position: relative;
     /* Garde-fou anti scroll horizontal : le clip vit sur main (pas sur
        header) pour ne pas rogner les dropdowns du header (Langue,
        Vos scènes) qui débordent verticalement de la barre. */
     overflow: clip;
+    /* Nuage moteur — masse statique teintée par le mode actif (orange
+       Rust / bleu OBS) : radial-gradients qui s'éteignent d'eux-mêmes
+       (transparent 70-80 %), aucun filtre ni animation. Masse principale
+       le long de la colonne gauche + bande haute — les seules zones de
+       chrome que le canvas opaque laisse transparentes. Consommé par
+       .nuage-moteur (dans .fond-decor) et par main.fond-dash (au-dessus
+       du voile, pour que le mode reste lisible sur l'image de fond). */
+    --nuage-moteur:
+      radial-gradient(30% 26% at 16% 4%, color-mix(in srgb, var(--moteur-couleur) 34%, transparent), transparent 74%),
+      radial-gradient(44% 52% at 8% 44%, color-mix(in srgb, var(--moteur-couleur) 40%, transparent), transparent 72%),
+      radial-gradient(26% 24% at 14% 62%, color-mix(in srgb, var(--moteur-couleur) 30%, transparent), transparent 76%),
+      radial-gradient(38% 34% at 0% 96%, color-mix(in srgb, var(--moteur-couleur) 42%, transparent), transparent 70%),
+      radial-gradient(50% 44% at 34% 86%, color-mix(in srgb, var(--moteur-couleur) 20%, transparent), transparent 78%),
+      radial-gradient(44% 42% at 54% 30%, color-mix(in srgb, var(--moteur-couleur) 12%, transparent), transparent 80%);
   }
-  /* Fond image du chrome (bouton « Fond du dashboard ») : image + voile
-     sombre empilés sur TOUT le main — le chrome transparent (header,
-     sidebar, DropBar, marges autour du canvas) la laisse transparaître,
-     le .canvas opaque la recouvre. Le voile (--fond à 55 %) garde la
-     lisibilité du texte, même esprit que .fond-image::after (app.css). */
+  /* Fond image du chrome (bouton « Fond du dashboard ») : nuage moteur +
+     voile sombre + image empilés sur TOUT le main — le chrome transparent
+     (header, sidebar, DropBar, marges autour du canvas) laisse tout
+     transparaître, le .canvas opaque le recouvre. Le nuage est EN PREMIER
+     (peint au-dessus) pour que la couleur du mode reste lisible sur
+     l'image ; le voile (--fond à 55 %) garde la lisibilité du texte,
+     même esprit que .fond-image::after (app.css). */
   main.fond-dash {
     background-image:
+      var(--nuage-moteur),
       linear-gradient(
         color-mix(in srgb, var(--fond) 55%, transparent),
         color-mix(in srgb, var(--fond) 55%, transparent)
@@ -1130,40 +1172,23 @@
     background-size: cover;
     background-position: center;
   }
-  /* Contour de fenêtre = mode moteur actif : orange en natif, bleu en OBS.
-     La bordure OS de la fenêtre Tauri n'est pas stylable → liseré pointillé
-     en retrait via un pseudo-élément (une outline ne permet pas de retirer
-     un côté). Le clip-path découpe le milieu du flanc gauche — la sidebar
-     porte déjà sa charge visuelle — en conservant les angles (montants de
-     16 px en haut et en bas). Couleurs = rôles --moteur-* (glace.css). */
+  /* Couleur d'identité du mode moteur actif : orange en natif, bleu en OBS.
+     Plus aucun contour de fenêtre (liseré pointillé supprimé le 2026-11-02,
+     remplacé par le nuage de fond) : elle alimente --nuage-moteur et les
+     boutons mode. Couleurs = rôles --moteur-* (glace.css). */
   main.mode-natif {
     --moteur-couleur: var(--moteur-natif);
   }
   main.mode-obs {
     --moteur-couleur: var(--moteur-obs);
   }
-  main.mode-natif::after,
-  main.mode-obs::after {
-    content: "";
+  /* Nuage moteur — calque du décor (hérite du z-index -1 de .fond-decor,
+     donc SOUS tout le contenu), posé après l'image de fond utilisateur
+     pour rester visible dessus. */
+  .fond-decor .nuage-moteur {
     position: absolute;
-    inset: 4px;
-    border: 2px dashed var(--moteur-couleur);
-    pointer-events: none;
-    /* Au-dessus des couches internes du canvas (≤1), loin sous les
-       overlays (menus 9999, modales 10000). */
-    z-index: 5;
-    /* Notch de 4 px de profond entre 16 px du haut et 16 px du bas :
-       haut/droite/bas entiers, seuls les angles gauches subsistent. */
-    clip-path: polygon(
-      0 0,
-      100% 0,
-      100% 100%,
-      0 100%,
-      0 calc(100% - 16px),
-      4px calc(100% - 16px),
-      4px 16px,
-      0 16px
-    );
+    inset: 0;
+    background: var(--nuage-moteur);
   }
   header {
     flex-shrink: 0;
@@ -1261,7 +1286,7 @@
   /* Groupe mode moteur : deux boutons soudés dans un même liseré (même
      structure que .tb-obs). Le bouton actif porte la couleur du mode —
      orange natif (--moteur-natif) / bleu OBS (--moteur-obs) — la
-     même que le contour de fenêtre ; l'inactif reste neutre. */
+     même que le nuage de fond ; l'inactif reste neutre. */
   .tb-moteur {
     gap: 0.25rem;
     padding: 0.15rem;

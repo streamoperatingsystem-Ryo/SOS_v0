@@ -55,12 +55,18 @@
   dernier recours) — variantes `.haut`/`.bas`/`.droite`/`.gauche`/`.dedans`,
   `transform-origin` du coin collé + `flex-direction:column` sur les
   côtés. État épinglé : prop `visible` → `.z-controls.visible`.
-- **Boutons −/+** : 2 boutons sur tout widget non-caméra (prop `boutons`
-  de BadgeSurvol), `disabled` aux extrémités de la bande non-caméra (un
-  widget à égalité de z peut encore bouger). Caméra : pas de −/+ (z=5000
-  figé) — œil seul épinglé via `visible` quand `cameraCachee` (détails
-  `docs/features/camera-details.md`). Modules : œil seul aussi — pas de
-  z-order module.
+- **Boutons −/+ + œil** : 3 boutons sur tout widget non-caméra (prop
+  `boutons` de BadgeSurvol) — `disabled` −/+ aux extrémités de la bande
+  non-caméra (un widget à égalité de z peut encore bouger). **Œil
+  masquer/réafficher** (`cachee`, persisté comme `cameraCachee`,
+  2026-10-31) : masqué = ignoré en diffusion (zone repeinte par le
+  fond) et en natif (aucune source/boîte/texte), `obsSource` OBS
+  désactivée (`SetSceneItemEnabled`, jamais supprimée) ; fantôme
+  `.widget.cachee` 0,35 + œil 🚫 épinglé via `visible`. Caméra : pas
+  de −/+ (z=5000 figé) — œil seul épinglé via `visible` quand
+  `cameraCachee` (détails `docs/features/camera-details.md` — la
+  caméra garde son flag dédié, `cachee` est aux autres widgets).
+  Modules : œil seul aussi — pas de z-order module.
 - **Poignées de resize** (`SelectionOverlay.svelte`, monté dans
   `Canvas.svelte` après la boucle des widgets, prop `widgetSelectionne`)
   : overlay transparent plaqué sur le rect du widget sélectionné,
@@ -81,4 +87,6 @@
   — action → ferme le menu (pattern établi, pas de disabled dans `.ctx-item`).
   Caméra : entrée œil « Masquer/Réafficher la caméra » (`cameraCachee`) à
   la place des −/+ ; « Dupliquer » masqué (`dupliquerWidget` refuse, no-op
-  silencieux sinon — singleton figé).
+  silencieux sinon — singleton figé). Non-caméra : entrée œil
+  « Masquer/Afficher » (`cachee`, `commun.masquer`/`commun.afficher`)
+  après les −/+ — même action que le badge (règle des 3 surfaces).

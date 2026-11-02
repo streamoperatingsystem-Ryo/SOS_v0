@@ -132,6 +132,16 @@ impl Gouverneur {
         }
 
         let action = match self.etape {
+            // À 15 fps et moins, `(fps / 2).max(15)` ne réduit rien (10 → 15
+            // augmenterait) : l'étape FPS est sans objet, on passe direct à la
+            // résolution.
+            Etape::Rien if mesures.fps_cible <= 15 => {
+                self.etape = Etape::Resolution;
+                Action::ReduireResolution {
+                    de: mesures.resolution,
+                    vers: Self::resolution_reduite(mesures.resolution),
+                }
+            }
             Etape::Rien => {
                 self.etape = Etape::Fps;
                 Action::ReduireFps {
@@ -241,6 +251,32 @@ mod tests {
 
         let d4 = g.evaluer(&mesures);
         assert_eq!(d4.action, Action::Saturation);
+    }
+
+    #[test]
+    fn pas_de_reduction_fps_sous_quinze() {
+        // 10 fps : « réduire » à 15 serait une augmentation — l'étape FPS est
+        // sautée, la première décision porte sur la résolution.
+        let mut g = Gouverneur::avec_cooldown(Duration::ZERO);
+        let mesures = Mesures {
+            fps_cible: 10,
+            fps_reel: 10.0,
+            drops: 1,
+            file_encode: 0,
+            latence_ms: 10,
+            resolution: (1360, 768),
+        };
+        let d1 = g.evaluer(&mesures);
+        assert_eq!(
+            d1.action,
+            Action::ReduireResolution {
+                de: (1360, 768),
+                vers: (906, 512)
+            }
+        );
+        assert_eq!(d1.raison, Raison::Drops);
+        // La suite de l'ordre reste intacte.
+        assert_eq!(g.evaluer(&mesures).action, Action::ReduirePreset);
     }
 
     #[test]

@@ -351,6 +351,16 @@ pub struct Widget {
     /// appliqué (comportement historique, toutes anciennes scènes).
     #[serde(default)]
     pub sansCadre: bool,
+    /// Widget masqué en diffusion (bouton œil au survol, widgets NON
+    /// caméra — la caméra a son propre flag `cameraCachee`) : le widget est
+    /// ignoré partout en diffusion (pas de div, pas de trou destination-out,
+    /// pas de cadre — la zone est repeinte par le fond de scène) ET dans le
+    /// moteur natif (aucune source/boîte produite) ; sa source OBS liée
+    /// (`obsSource`) est désactivée (SetSceneItemEnabled false, jamais
+    /// RemoveInput — comme cameraCachee). Persisté : ré-appliqué par
+    /// scene_sync_captures.
+    #[serde(default)]
+    pub cachee: bool,
     /// Nom de la source OBS liée au trou (None = pas de source OBS).
     /// Convention : "SOS-Trou-<id8>". Quand Some → commitScene sync la
     /// transform OBS (position + taille = widget x/y/largeur/hauteur).
@@ -868,6 +878,12 @@ pub struct Scene {
     /// apparaît). Retirer la capture restaure le média stocké.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bgObsSource: Option<String>,
+    /// Cible de capture du FOND pour le moteur natif (mode Rust). Prioritaire
+    /// sur `bgSlides`/`bgMedia` ; `bgObsSource` reste le chemin du mode OBS —
+    /// les deux peuvent coexister, chaque mode lit le sien. Absent des scènes
+    /// existantes (rétro-compat) ; ignoré par le mode OBS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bgCaptureCible: Option<CaptureCible>,
     /// Cadre unifié de la scène : appliqué à CHAQUE widget (clip-path +
     /// overlay SVG) ET au bord extérieur du canvas. None = aucun cadre.
     /// (Un seul système depuis 2026-09-26 — avant, le bord avait son propre
@@ -998,6 +1014,7 @@ impl Default for Scene {
             bgLoopA: None,
             bgLoopB: None,
             bgObsSource: None,
+            bgCaptureCible: None,
             // Cadre par défaut à la naissance : MGStyle noir/violet actif
             // (choix produit — une nouvelle sauvegarde sans cadre choisi
             // obtient le cadre marque). Les vieilles sauvegardes ne sont
@@ -1158,6 +1175,29 @@ mod tests {
         assert!(w.captureCible.is_none());
         let v = serde_json::to_value(&w).expect("widget -> json");
         assert!(v.get("captureCible").is_none());
+    }
+
+    #[test]
+    fn bg_capture_cible_absente_par_defaut_et_round_trip() {
+        // Fond = capture native : absent par défaut (rétro-compat des scènes
+        // existantes), relu tel quel quand il est présent.
+        let v = serde_json::to_value(Scene::default()).expect("scene -> json");
+        assert!(v.get("bgCaptureCible").is_none());
+
+        let json = r#"{"widgets":[],"canvasW":1920,"canvasH":1080,
+            "bgCaptureCible":{"kind":"fenetre","hwnd":42,"title":"Jeu","exe":"jeu.exe"}}"#;
+        let s: Scene = serde_json::from_str(json).expect("scène");
+        assert_eq!(
+            s.bgCaptureCible,
+            Some(CaptureCible::Fenetre {
+                hwnd: 42,
+                title: Some("Jeu".to_string()),
+                exe: Some("jeu.exe".to_string()),
+            })
+        );
+        let v = serde_json::to_value(&s).expect("scene -> json");
+        assert_eq!(v["bgCaptureCible"]["kind"], "fenetre");
+        assert_eq!(v["bgCaptureCible"]["hwnd"], 42);
     }
 
     #[test]

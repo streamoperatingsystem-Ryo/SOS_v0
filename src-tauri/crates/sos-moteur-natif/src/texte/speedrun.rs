@@ -477,6 +477,52 @@ impl EtatSpeedrun {
     }
 
     /// Compteur monotone (diagnostic / tests).
+    /// Pop de validation déclenché par une mutation (`srPopSplit` du DOM).
+    ///
+    /// Miroir de `srPointEtatFranchi` : delta **cumulé** vs le PB cumulé du
+    /// segment ; sans PB, le split est validé sans delta. `splitSkipped` =
+    /// rouge sans delta. Les autres events ne poppent pas.
+    pub fn pop_pour(&self, maj: &MajSpeedrun, cfg: &SpeedrunCfg) -> Option<super::splitpop::PopSplit> {
+        if !cfg.voir_points {
+            return None;
+        }
+        match maj {
+            MajSpeedrun::Split {
+                cumul: Some(cumul),
+                index: Some(index),
+                ..
+            } if *index > 0 => {
+                let j = (*index - 1) as usize;
+                let cumul_s = parse_time(cumul);
+                let (ok, delta) = match pb_cumul(&self.segments, j) {
+                    Some(pb) => {
+                        let d = cumul_s - pb;
+                        (
+                            d <= 0.0,
+                            format_delta(d, cfg.delta_prec, cfg.delta_drop),
+                        )
+                    }
+                    None => (true, String::new()),
+                };
+                Some(super::splitpop::PopSplit {
+                    index: *index - 1,
+                    ok,
+                    delta,
+                    signature: format!("split:{index}:{cumul}"),
+                })
+            }
+            MajSpeedrun::SplitSkipped { index: Some(index) } if *index > 0 => {
+                Some(super::splitpop::PopSplit {
+                    index: *index - 1,
+                    ok: false,
+                    delta: String::new(),
+                    signature: format!("skip:{index}"),
+                })
+            }
+            _ => None,
+        }
+    }
+
     pub fn version(&self) -> u64 {
         self.version
     }
@@ -637,6 +683,15 @@ pub struct SpeedrunCfg {
     pub seg_bord_rayon: f32,
     /// `srNbLignes` — fenêtre de lignes visibles (0 = toutes).
     pub nb_lignes: u32,
+    /// `srVoirPoints !== false` — pop de validation à chaque split.
+    pub voir_points: bool,
+    /// `srPointsDureePop || 2` — durée d'affichage du pop, en secondes.
+    pub points_duree_pop: u32,
+    /// `srPointsSon` — son joué à **chaque** pop de validation
+    /// (`medias/…`, fichier local : le crate ne fait aucun réseau).
+    pub points_son: Option<String>,
+    /// `srPointsSonVolume` (défaut 1,0) — gain du son du pop.
+    pub points_son_volume: f32,
     /// `srScrollAuto !== false` — scroll centré sur le split actif.
     pub scroll_auto: bool,
     /// `srHauteurLigne` — min-height des lignes en px (0 = auto).
@@ -2415,6 +2470,10 @@ mod tests {
             mode_delta: ModeDelta::Cumul,
             delta_prec: PrecisionTemps::Dixieme,
             delta_drop: true,
+            voir_points: true,
+            points_duree_pop: 2,
+            points_son: None,
+            points_son_volume: 1.0,
             timer_prec: PrecisionTemps::Centieme,
             timer_methode: MethodeTemps::Auto,
             seg_bord_ep: 1.0,

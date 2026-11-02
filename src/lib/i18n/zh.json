@@ -76,7 +76,7 @@
   "obsWs": {
     "ouvrir": "WebSocket 与选项",
     "titre": "OBS 连接 —— WebSocket",
-    "hint": "通过 OBS 通道传输的一切——供有兴趣者查阅。都不是必需的：基本设置在 OBS 分区中完成。",
+    "hint": "通过 OBS 通道传输的一切——供有兴趣者查阅。都不是必需的：基本设置在 OBS & Rust 分区中完成。",
     "blocCestQuoi": "什么是 WebSocket？",
     "intro": {
       "p1": "WebSocket 是两个程序之间只需打开一次的双向通信通道：双方可以随时发送消息，无需为每条消息重新建立连接。它于 2011 年为网页浏览器而生（RFC 6455），如今已成为远程控制软件的标准方式。",
@@ -122,7 +122,7 @@
       },
       "direct": {
         "nom": "直播与录制",
-        "desc": "OBS 分区的开始/停止按钮控制两个输出；每次操作都会重新读取其状态。"
+        "desc": "OBS & Rust 分区的开始/停止按钮控制两个输出；每次操作都会重新读取其状态。"
       },
       "projecteur": {
         "nom": "预览投影",
@@ -140,7 +140,7 @@
     "blocReglages": "设置",
     "reglages": {
       "autoConnect": "启动时自动连接 OBS",
-      "autoConnectDesc": "取消勾选后，仅在 OBS 分区中手动连接 OBS。",
+      "autoConnectDesc": "取消勾选后，仅在 OBS & Rust 分区中手动连接 OBS。",
       "fermerProj": "连接时关闭 OBS 投影",
       "fermerProjDesc": "OBS 会重新打开上次的投影窗口；StreamOS 默认将其关闭。",
       "muterBureau": "待机画面期间关闭桌面声音",
@@ -153,6 +153,11 @@
       "l3": "均衡器：根据 Windows 音频计算——obs-websocket 不提供任何音量数据。",
       "l4": "捕获缩略图、硬件检测和投影窗口的关闭：Windows API。"
     }
+  },
+  "obsCarte": {
+    "connexion": "OBS 连接",
+    "sorties": "输出",
+    "options": "高级选项"
   },
   "scenes": {
     "creationRefusee": "场景创建被拒绝：{erreur}",
@@ -617,9 +622,10 @@
     "previewOuvrir": "打开投影器",
     "previewOuvert": "投影器已在所选屏幕上打开",
     "previewHint": "点击缩略图或按钮 = 在所选屏幕上打开 OBS 预览投影器。摄像头和 OBS 捕获不会显示在缩略图中（由 OBS 渲染，而非页面）。",
-    "previewObsHint": "连接 OBS（OBS 部分）即可打开投影器。",
+    "previewObsHint": "连接 OBS（OBS & Rust 部分）即可打开投影器。",
     "previewOuvertNatif": "原生投影器已打开",
     "previewNatifHint": "该按钮打开原生投影器：Rust 渲染的独立窗口（画质可在“输出”中调节），可随意移动或最大化。",
+    "obsRust": "OBS & Rust",
     "hote": "主机",
     "port": "端口",
     "motDePasse": "密码",
@@ -721,7 +727,7 @@
     }
   },
   "app": {
-    "obsTitle": "OBS WebSocket（见侧边栏 OBS 部分）",
+    "obsTitle": "OBS WebSocket（见侧边栏 OBS & Rust 部分）",
     "obsConnexion": "OBS（连接中…）",
     "obsNonConnecte": "OBS（未连接）",
     "diffusionTitle": "本地直播服务器（由 OBS 作为浏览器源使用）",
@@ -734,7 +740,7 @@
     "attente": "等待",
     "chrono2": "计时器",
     "chrono2Title": "计时器 2 运行中 — 点击打开直播互动（数字键盘标签页）",
-    "obsDabord": "请先连接 OBS（侧边栏 OBS 部分）",
+    "obsDabord": "请先连接 OBS（侧边栏 OBS & Rust 部分）",
     "streamStop": "停止直播",
     "streamStart": "开始直播",
     "arreterApp": "停止应用",
@@ -1481,14 +1487,14 @@
         "titre": "第一步",
         "p1": "只需**三个设置**即可准备好开播。",
         "e1": "在 OBS 中：工具菜单 → **WebSocket Server Settings** → 启用服务器，记下端口（默认 **4455**）和密码。",
-        "e2": "在这里，侧边栏的 **OBS** 部分：输入端口和密码，然后点击**连接**。",
+        "e2": "在这里，侧边栏的 **OBS & Rust** 部分：输入端口和密码，然后点击**连接**。",
         "e3": "首次启动时，选择一个**场景模板**：一切已为您布置好。",
         "e4": "连接您的**聊天**：Twitch 和 YouTube 需要在线验证一个代码；Kick 和 TikTok 只需用户名即可连接。",
         "note": "场景模板随时可通过顶部的“**+ 场景**”按钮再次选择。"
       },
       "obs": {
         "titre": "一步步连接 OBS",
-        "p1": "侧边栏的 **OBS** 区会自动变色：**红色**表示 StreamOS 看不到 OBS；**绿色**表示一切就绪。",
+        "p1": "侧边栏的 **OBS & Rust** 区会自动变色：**红色**表示 StreamOS 看不到 OBS；**绿色**表示一切就绪。",
         "l1": "「**无法连接 OBS**」：OBS 未打开，或其 WebSocket 服务器已关闭。打开 OBS，然后 工具 → **WebSocket 服务器设置** → 勾选「Enable WebSocket server」。",
         "l2": "「**密码缺失或无效**」：在同一窗口中点击「**显示连接信息**」，复制密码并粘贴到这里。",
         "l3": "只要 OBS 在同一台电脑上运行，**主机**字段保持默认即可。",
@@ -1519,12 +1525,12 @@
         "titre": "侧边栏自上而下",
         "p1": "一切都从**左侧面板**控制，分为**六个组**。同一时间只展开一个分区；其他条目只是打开窗口的普通按钮。",
         "l1": "**我的场景**：**小组件**（媒体、聊天、摄像头、输入显示、速通、目标、音乐）、**HUD 模块**（时钟、正在播放、直播目标）和**边框与背景**（SVG 边框、背景图）。",
-        "l2": "**连接**：**OBS**（连接、直播、录制），然后是**平台**（Twitch、YouTube、Kick、TikTok——每个已连接平台一个绿点）。",
+        "l2": "**连接**：**OBS & Rust**（连接、直播、录制），然后是**平台**（Twitch、YouTube、Kick、TikTok——每个已连接平台一个绿点）。",
         "l3": "**直播**：**预览**（观众所见的画面）、**等待画面**和 **Just Chatting**。",
         "l4": "**互动**：提醒、欢迎剪辑、命令和音效板、主播展示、聊天点播的音乐。",
         "l5": "**我的频道**：**管理**（角色、封禁、直播控制）、Twitch **日程**和观众**统计**。",
         "l6": "最底部是**应用**：**设置**（面板背景、窗口、快捷栏）、**性能**（应用占用）和**主播指南**（本书）。",
-        "note": "每个展开的分区会呈现其卡片的颜色：小组件为蓝色，平台为绿色，OBS 为金色……"
+        "note": "每个展开的分区会呈现其卡片的颜色：小组件为蓝色，平台为绿色，OBS & Rust 为金色……"
       },
       "scenes": {
         "titre": "您的场景",
@@ -1671,6 +1677,9 @@
     "sortieEtat": "{kbps} kb/s · 丢帧 {drops}",
     "sortieEncodeur": "编码器：{encodeur}",
     "sortieFichier": "文件：{chemin}",
+    "sortieFlux": "直播：{chemin}",
+    "sortieOccupeeStream": "直播正在进行——请先停止直播再录制。",
+    "sortieOccupeeEnregistrement": "正在录制——请先停止录制再直播。",
     "cap": {
       "capture_ecran": "屏幕捕获",
       "capture_fenetre": "窗口捕获",
