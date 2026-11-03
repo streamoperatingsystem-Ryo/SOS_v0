@@ -6479,6 +6479,15 @@
       /// le pop).
       function majSplitPopPos() {
         if (!splitPopRoot) return;
+        // Borne au canvas RÉEL (#stage = --canvas-w/h) : une position héritée
+        // de l'ancien éditeur calé sur 1920×1080 (ex. y=920) sortait
+        // entièrement d'un canvas 1360×768 → pop invisible, test compris.
+        var cw = stageEl.clientWidth || 1920;
+        var ch = stageEl.clientHeight || 1080;
+        splitPopGeo.largeur = Math.min(splitPopGeo.largeur, cw);
+        splitPopGeo.hauteur = Math.min(splitPopGeo.hauteur, ch);
+        splitPopGeo.x = Math.max(0, Math.min(cw - splitPopGeo.largeur, splitPopGeo.x));
+        splitPopGeo.y = Math.max(0, Math.min(ch - splitPopGeo.hauteur, splitPopGeo.y));
         splitPopRoot.style.left = splitPopGeo.x + "px";
         splitPopRoot.style.top = splitPopGeo.y + "px";
         splitPopRoot.style.width = splitPopGeo.largeur + "px";
@@ -6529,6 +6538,8 @@
         splitPopLastSig = sig;
         splitPopLastTs = now;
         if (!splitPopRoot) return;
+        // Re-borne au canvas courant (la scène a pu changer depuis le boot).
+        majSplitPopPos();
         // sans-delta : skippé (ko) ou franchi sans PB (ok) — le mot-clé
         // (SKIP/VALIDÉ) devient le hero à la place du temps.
         splitPopCarte.className = "splitpop-carte " + (ok ? "ok" : "ko") +
@@ -10232,7 +10243,11 @@
               widgetMap.forEach(function (en) {
                 if (!en0 && en.srOpts) en0 = en;
               });
-              var fakeOpts = en0 ? en0.srOpts : {};
+              // « Tester le rendu » ne doit JAMAIS être muet : on force
+              // voirPoints, sinon un pop décoché (srVoirPoints:false) sort
+              // immédiatement de srPopSplit.
+              var fakeOpts = Object.assign({}, en0 ? en0.srOpts : {},
+                { voirPoints: true });
               srPopSplit({ srOpts: fakeOpts }, 2, true,
                 srFormatDelta(-1.3, fakeOpts), "test:" + Date.now());
             } else if (msg.type === "chrono2-pos") {

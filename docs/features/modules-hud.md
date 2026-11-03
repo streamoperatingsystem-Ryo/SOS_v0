@@ -7,14 +7,21 @@
 
 > Couche d'affichage scène-persistée SÉPARÉE des widgets
 > (`Scene.modules`, pas un `type` de widget). Cinq modules (clés
-> `MODULE_IDS` : horloge, musique, objectifs, equaliseur, spots —
-> `spots` n'a PAS de carte : effet plein canvas, aperçu statique
-> seulement), chacun affichable/cachable/configuré par scène, les
+> `MODULE_IDS` : horloge, musique, objectifs, equaliseur, spots),
+> chacun affichable/cachable/configuré par scène, les
 > cartes positionnées en **px canvas** par drag/resize direct sur le
 > canvas dashboard. Rendus au z 9000+ en diffusion (au-dessus de
 > tous les widgets) + cadre optionnel réutilisant le gradient du
 > cadre de scène (jamais le CadreSVG imposé — le module est une
 > carte, pas un widget).
+>
+> **Cartes modules (2026-11-02)** : `CarteModule.svelte` remplace la
+> carte flottante du canvas (14 rem, ancrée en haut-gauche). Clic gauche
+> sur un module → carte latérale, même emplacement que `CarteEdition` ;
+> la modale `ModulesModal` reste pour le détail (lignes d'objectifs,
+> couleurs d'équaliseur) via « Configurer… ». `moduleCarteId`
+> (stores/ui.ts) porte la cible. `spots` a une carte aussi — sans X/Y/L/H
+> (effet plein canvas), avec vitesse/réaction/opacité.
 
 - **`ModuleHud` (scene.rs)** : struct UNIQUE pour les 3 modules —
   `actif/x/y/largeur/hauteur/police/taille/opacite/cadre` communs

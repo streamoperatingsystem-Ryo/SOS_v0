@@ -39,6 +39,8 @@ export interface SortieNatif {
   chemin: string | null;
   kbps: number;
   frames_perdues: number;
+  /// fps réellement tenu (mesuré par le moteur) — null tant qu'il n'y a rien.
+  fps_reel: number | null;
   encodeur: string | null;
   degradation: string | null;
   erreur: string | null;
@@ -59,6 +61,7 @@ export const sortieNatif = writable<SortieNatif>({
   chemin: null,
   kbps: 0,
   frames_perdues: 0,
+  fps_reel: null,
   encodeur: null,
   degradation: null,
   erreur: null,
@@ -376,6 +379,7 @@ export async function rafraichirSortieNatif(): Promise<void> {
       chemin: e.chemin ?? null,
       kbps: e.kbps ?? 0,
       frames_perdues: e.frames_perdues ?? 0,
+      fps_reel: e.fps_reel ?? null,
       encodeur: e.encodeur ?? null,
       degradation: e.degradation ?? null,
       erreur: e.erreur ?? null,

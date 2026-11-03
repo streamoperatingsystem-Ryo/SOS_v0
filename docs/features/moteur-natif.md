@@ -875,6 +875,8 @@ ffmpeg) était à 2,07 % / 183,5 Mo. Détails : `mesures-p0.md`.
   caméra, pas de hot-plug.
 - Conteneur **vidéo seule** : le mixage audio existe mais n'est pas muxé.
 - Timing du conteneur par `-framerate` (pas de PTS dans un H.264 élémentaire).
+  → **corrigé le 2026-11-02** par un réhorodatage au fps mesuré (§76) ; le
+  timing **par frame** reste à faire (muxeur fMP4, option B).
 - Drops non mesurables côté spike (« en retard » seulement).
 - Rien n'est branché à l'UI : le natif est refusé proprement par `moteur_basculer`.
 
@@ -3774,6 +3776,19 @@ tous les blocs PCM sont écrits, aucun saut), et la piste « pipe audio plein à
 +1,37 s » est **fausse** — c'est le **stdin vidéo** qui sature, jamais le pipe
 audio.
 
+> ⚠️ **CORRECTION (2026-11-02, mesurée)** — les deux dernières affirmations
+> valent pour le **gel** (muxeur jamais démarré), pas pour la session normale.
+> Hors gel, le pipe audio **sature bien** : mesuré, `audio_scene` 20 s produit
+> une piste de **1,57 s**, et `ReadOperationCount` de FFmpeg tombe de 142 à
+> 64 lectures/s (vidéo seule) après ~1 s. FFmpeg draine le pipe **par
+> rafales** (le muxeur retient les paquets qu'il ne peut pas ordonner) ; en
+> `PIPE_NOWAIT` chaque bloc non écrit était **jeté silencieusement** → la
+> piste se réduisait à ce qui avait été lu avant le premier arrêt.
+> Correctif (§76) : fil d'écriture + file bornée qui ne jette plus, bilan
+> `BilanAudio` et **réparation post-mux** quand la piste live est incomplète.
+> La « vérification » citée plus bas (`audio_scene` 10 s → 9,87 s) mesurait la
+> **durée du conteneur** (= durée vidéo), pas celle de la piste audio.
+
 **Correctif** (`output/ffmpeg.rs`) : le format PCM est entièrement spécifié par
 `-f/-ar/-ac`, donc `-analyzeduration 1` + `-probesize 32` sur l'entrée audio.
 La fenêtre tombe de 819 200 o (4,27 s) à **16 384 o (~0,09 s)**.
@@ -3796,3 +3811,215 @@ unitaire `son_du_pop_une_version_par_pop_et_gain_suivi`) et le harnais
 pop + audio termine désormais avec une piste AAC pleine. Le **son** du pop
 lui-même reste **non vérifié à l'oreille** : la scène du harnais n'avait pas de
 `srPointsSon`. `examples/audio_scene.rs` reste la référence qui passe.
+
+---
+
+## 76. Timing vidéo — durée réelle, drops réels, aperçu gaté (2026-11-02)
+
+**Symptôme** : un enregistrement natif se lit **accéléré** (×1,23) et
+saccadé, et l'UI affiche « drops 0 » en permanence.
+
+**Mesures** sur le fichier `StreamOS-2026-11-02_05-05-19.mp4` (scène réelle :
+capture de fenêtre + caméra + 8 médias + chat + speedrun + input viewer) :
+
+| Mesure | Valeur | Méthode |
+|---|---|---|
+| Frames vidéo | **19 199** | `ffmpeg -i … -map 0:v -c copy -f null -` |
+| Durée conteneur | **320,01 s** (`60 tbr`) | `ffmpeg -i` |
+| Durée réelle de la session | **395 s** | CreationTime → LastWriteTime NTFS |
+| fps réellement produit | **48,60** (81 % de 60) | 19 199 / 395 |
+| Accélération du fichier | **×1,234** | 395 / 320,01 |
+| Piste audio | **1,55 s** | voir §75 (correction) |
+
+**Cause** : l'encodeur n'écrit **aucun** PTS. FFmpeg les synthétise depuis
+`-framerate <fps cible>` ; un moteur qui produit 48,6 fps pendant 395 s donne
+19 199 / 60 = 320 s. La boucle ne saute jamais de tick (`clock.rs`) : en
+retard elle free-run, donc **moins de frames** que le nominal.
+
+**Correctifs** :
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| **Cadence** | `Horloge::attendre` **recale** l'échéance quand le retard dépasse une période (au lieu de laisser les échéances dépassées s'empiler) | c'est **la** cause de la saccade : N frames collées d'un seul tick → le mouvement se fige puis saute (mesuré : 240 ms de retard → ~14 frames en rafale) |
+| Drops | `compteurs.perdue_n()` : un retard de N périodes coûte **N frames** | `perdue()` n'avait **aucun appelant** en production : « drops 0 » mensonger ; et compter 1 par tick restait flatteur |
+| fps mesuré | `CompteursMoteur::maj_fps_reel` (×1000, sentinelle `u32::MAX` = **N/A**), exposé en `DiagMoteur.fps_reel` / `EtatSortieNatif.fps_reel` | le diagnostic renvoyait le fps **demandé** (`session.fps`) |
+| Bilan | `log::info!("session : …")` en fin de session (frames, écoulé, fps mesurés, drops, retard max) | un fichier accéléré ne laissait aucune trace exploitable |
+| Aperçu | readback **seulement** si `MoteurNatif::demander_apercu(true)` (fenêtre projecteur ouverte) ; `Map` en `D3D11_MAP_FLAG_DO_NOT_WAIT` + conversion relancée au tick suivant | readback **inconditionnel** à 10 Hz, même sans aucun consommateur |
+| Durée (option A) | `output::ffmpeg::rehorodater` : `-c copy -bsf:v setts=ts=TS*num/den` au fps mesuré, bascule atomique, écart < 0,5 % ignoré | durée = session réelle, sans réencodage ni nouvelle dépendance |
+
+> ⚠️ **Le recalage ne crée pas de frames** : un moteur qui tient 58 fps sur
+> 20 s produit 1 159 frames, pas 1 200 — le fichier reste plus court que la
+> session et c'est `rehorodater` qui rétablit la durée. Le recalage corrige la
+> **cadence** (trou au lieu de rafale), pas le débit.
+
+**Vérifications** (harnais `examples/parite_scene.rs`, NVENC, release) :
+
+| Scène | Durée demandée | Frames | fps mesuré | Drops | Durée fichier |
+|---|---|---|---|---|---|
+| statique 1360×768 | 30 s | 1 785 | 59,96 | 0 | **29,77 s** |
+| statique **3840×2160** (avant recalage) | 20 s | 1 177 | 58,85 | 395 « en retard » | 19,73 s |
+| statique **3840×2160** (après recalage) | 20 s | 1 159 | 57,95 | **24** (frames perdues) | **19,75 s** |
+| fichier utilisateur, commande de `rehorodater` rejouée | — | 19 199 | 48,60 | — | **395,03 s** |
+
+Le 4K est l'étalon du recalage : `retard max` passe de **98 à 37 ms** (les
+retards ne s'accumulent plus), et les drops passent de « 395 ticks en retard »
+à **24 frames réellement perdues** — deux mesures différentes, la seconde est
+la seule comparable à OBS.
+
+`cargo test -p sos-moteur-natif --lib` (309) · `cargo clippy` 0 ·
+`npm run check` 0. Sans réhorodatage, la scène 4K donnerait 1177/60 = 19,62 s
+au lieu des 19,73 s réelles.
+
+**Reste — option B** : le réhorodatage rend la **durée** juste mais
+**uniformise la grille** : la saccade de mouvement demeure (un trou de 200 ms
+est étalé, pas daté). Les vrais PTS par frame exigent le muxeur fMP4 Rust du
+§12.1 — chantier séparé, à ne pas empiler avec A.
+
+> ✅ **Fait au §77** (2026-11-03) — sans muxeur fMP4 : les PTS réels passent
+> par un enveloppeur **MPEG-TS** (`output/ts.rs`), FFmpeg remuxe en fMP4.
+
+### 76.1 Où partent les millisecondes (P5, 2026-11-02)
+
+La ligne `session : …` porte désormais des **moyennes par frame** par étage
+(`amont` ⊃ `capture`, `composition`, `conversion NV12`, `encodage+sorties`,
+`aperçu`). Mesures harnais `parite_scene`, release, NVENC, scène réelle
+(`af09059c`, 13 widgets, 6 cadres, 1 chat, 4 boîtes) :
+
+| Variante | amont | composition | conversion | encodage | total | fps |
+|---|---|---|---|---|---|---|
+| scène complète, capture morte | 0,1 | **6,6** | 0,0 | **5,7** | 12,4 | 59,95 |
+| **+ capture moniteur live** | 0,2 (dont 0,2) | 6,5 | 0,0 | 6,2 | 12,9 | 59,78 |
+| sans cadres | 0,1 | 5,2 | 0,0 | 2,5 | 7,8 | 60,05 |
+| sans perspective | 0,1 | 6,9 | 0,0 | 2,4 | 9,4 | 60,04 |
+
+Deux conclusions, mesurées et non supposées :
+
+1. **La capture ne coûte rien** sur le thread de composition (0,2 ms, WGC
+   moniteur inclus) — l'hypothèse « sortir les uploads capture du thread »
+   (P4) est **réfutée**. `UpdateSubresource` caméra et `CopyResource` WGC ne
+   sont pas le goulot.
+2. Les deux coûts réels sont la **passe D2D** (6,5 ms pour 13 widgets) et
+   l'**encodage NVENC + push** (2,4 à 6,2 ms selon la charge — la variance
+   suit le débit/complexité de l'image). La conversion NV12 est gratuite.
+3. Les cadres coûtent ~1,4 ms de composition ; la perspective est dans le
+   bruit. Le plancher de composition (4,6 ms sans cadres) est le coût de la
+   passe elle-même.
+
+> ⚠️ Ces chiffres sont ceux du harnais : la même scène enregistrée par l'app
+> tourne à 53,7 fps (18,6 ms/frame). L'écart n'est donc **pas** dans le code
+> mesuré ici — il est environnemental (contention GPU avec le jeu et la
+> webview du dashboard). La ligne `session : …` de l'app tranchera : si
+> `composition` et `encodage` y sont gonflés tous les deux, c'est la
+> contention ; si `aperçu` y apparaît, c'est le projecteur.
+
+**Pièges vérifiés — ne pas réintroduire**
+
+1. **Ne jamais fermer le stdin vidéo avant le pipe audio** : FFmpeg attend
+   alors de l'audio pour ordonner ses derniers paquets, cesse de lire le
+   stdin vidéo, et le fil d'écriture vidéo bloque dans `WriteFile` → **arrêt
+   figé** (reproduit : processus à 0 % CPU, fichier de 28 o). L'ordre correct
+   est : dernier PCM → EOF audio → `sink.fermer()`.
+2. **`-r` avec `-c copy` ne réécrit pas les PTS** (durée inchangée, vérifié :
+   320 s avant/après) ; `-itsscale` étire **aussi** l'audio. Le seul levier
+   sans réencodage est `-bsf:v setts=ts=TS*num/den` (fraction entière réduite,
+   expressions `setts` évaluées en i64).
+3. **`D3D11_MAP_FLAG_DO_NOT_WAIT` échoue si la conversion vient d'être
+   lancée** : il faut lire **au tick suivant** (conversion en vol), jamais
+   dans le même tick — sinon l'aperçu ne produit jamais rien.
+4. Le réhorodatage compte sur `frames_composites` : si un sink jetait des
+   paquets, le ratio dériverait de ce nombre de frames (négligeable, drops
+   vidéo = 0 par construction).
+5. **Réhorodater AVANT le post-mux audio, jamais après** : `muxer_audio`
+   termine par `-shortest`, donc il coupe l'audio à la longueur de la vidéo
+   **du moment**. Réhorodater ensuite étire la vidéo et laisse l'audio en
+   arrière — mesuré sur un fichier réel : vidéo 126,05 s, audio **118,46 s**,
+   soit exactement la durée d'avant réhorodatage (7,59 s d'écart).
+6. **Figer la durée de session à la sortie de boucle** : `horloge.ecoule()`
+   continue de courir pendant le teardown (flush encodeur, vidage du pipe
+   audio jusqu'à `DELAI_VIDAGE` = 2 s, fermeture des sinks). L'utiliser pour
+   le réhorodatage gonflait la durée de 5 à 8 s et **étirait** la vidéo
+   (mesuré : 1 184 frames → 24,89 s pour une session de 19,81 s, soit 1,26×
+   trop lent). `ecoule_session` est capturé juste après la boucle.
+   Corollaire : sur le fichier du 2026-11-02 20:17, les 56,38 fps du conteneur
+   n'étaient pas le fps tenu mais l'effet du teardown — la session réelle
+   était à ~59,9 fps.
+
+## 77. Saccade à l'arrêt — vrais PTS par frame + rattrapage CFR (2026-11-03)
+
+**Symptôme rapporté** : « quand j'arrête un enregistrement Rust, la vidéo en
+sortie est saccadée et rame » — alors que la session tient sa cadence.
+
+**Mesures** sur la session réelle de l'utilisateur (log `session : …`) :
+
+| Mesure | Valeur |
+|---|---|
+| Frames composées | 35 201 |
+| Durée réelle | 752,28 s |
+| fps mesurés (cible 48) | **46,79** |
+| Ticks en retard (« drops ») | **824** |
+| Retard max | **422 ms** (~20 frames d'un coup) |
+
+**Cause — deux défauts empilés** :
+
+1. **Les PTS de la vidéo étaient inventés par FFmpeg.** Le moteur pousse un
+   flux H.264 élémentaire : il ne transporte aucun horodatage. Le mode
+   `-use_wallclock_as_timestamps 1` estampillait chaque paquet à son **arrivée
+   dans le démultiplexeur** — donc quantifiée par les rafales de lecture du
+   pipe et par la file d'écriture (8 paquets). Plusieurs frames lues dans le
+   même `read` recevaient des PTS quasi identiques : durée nulle, puis trou.
+   Or `PaquetEncode.pts_us` **existait déjà** (horloge monotone, rempli par
+   NVENC et le MFT) et était **jeté** par le sink.
+2. **Les 824 ticks manqués devenaient de vrais trous.** `Horloge::attendre`
+   recale au lieu de rattraper (§76) : un retard de N périodes = N frames qui
+   n'existent jamais. En grille CFR ces trous sont invisibles (la durée dérive
+   et `rehorodater` la rétablit) ; en PTS « réels d'arrivée » ils se voient —
+   environ une saccade par seconde.
+
+**Correctifs** :
+
+| Sujet | Décision | Motif |
+|---|---|---|
+| **PTS réels** | `output/ts.rs` — enveloppeur **MPEG-TS** minimal (PAT/PMT + PES avec PTS 33 bits @90 kHz + PCR) ; le sink pousse `muxeur.envelopper(paquet)` et FFmpeg reçoit `-f mpegts -i pipe:0 -c copy` | le PTS par frame traverse enfin le pipe **sans** écrire un muxeur fMP4 (§12.1) ; TS porte le PTS dans le PES et l'Annex B reste tel quel |
+| **Grille** | rattrapage CFR : un retard de N périodes **réémet** la même texture N fois (`MAX_RATTRAPAGE = 5`), horodatée une période plus loin | une frame répétée coûte ~6 ms et remplit 20,8 ms de timeline → elle **réduit** le retard, pas d'emballement ; au-delà du plafond le reste est compté en pertes |
+| **Compteur** | `CompteursMoteur::frames_dupliquees` + `Instantane.frames_dupliquees`, distinct de `frames_perdues` | une frame dupliquée **tient sa place** : la confondre avec une perte rendrait le diagnostic faux |
+| **Un seul point de vérité** | `output::ffmpeg::Horodatage { Ts, CfrDuplique, Cfr, Reel }` + `rattrapage_cfr()` | avant, `rehorodater` s'activait dès que l'horodatage réel était off — avec le rattrapage il étirerait un fichier déjà juste (bug ×1,96 du 2026-11-03) |
+| **A/B** | `SOS_TS=0` (brut + `-framerate`), `SOS_CFR=1` (CFR + réhorodatage, sans rattrapage), `SOS_PTS=1` (wallclock, comportement d'avant) | pouvoir revenir au comportement précédent **sans rebuild** |
+
+**AV1 hors TS** : `MuxeurTs::nouveau(Codec::Av1)` rend `None` (l'AV1 en TS
+exige `stream_type 0x06` + descriptor de registration, non vérifié) → le sink
+garde le chemin brut + `-framerate`, avec le rattrapage actif.
+
+**Vérification de bout en bout** (harnais temporaire, ffmpeg sidecar) : un
+flux `libx264` 48 fps de 2 s est découpé en access units, enveloppé par
+`MuxeurTs`, puis remuxé avec **exactement** les arguments de production :
+
+```
+96 access units → 64 296 o de TS
+ffmpeg -f mpegts -analyzeduration 1000000 -probesize 1000000 -i pipe:0 \
+       -c copy -movflags +frag_keyframe+empty_moov+default_base_moof -f mp4
+→ Duration 00:00:02.00, 48 fps, 48 tbr, avc1 (SPS/PPS trouvés)
+→ framecrc : 96 frames, PTS/DTS strictement croissants, pas de 1875 ticks
+```
+
+**Pièges vérifiés — ne pas réintroduire**
+
+1. **Ne pas remettre `-use_wallclock_as_timestamps 1` par défaut** : c'est la
+   cause de la saccade, pas un correctif. Les PTS d'arrivée sont quantifiés
+   par les rafales du pipe — le flux peut être parfaitement cadencé et le
+   fichier saccader quand même.
+2. **`-framerate` et `-i pipe:0` en mode TS** : ne pas passer `-framerate` sur
+   l'entrée `mpegts` (sans objet, les PTS sont dans le PES). En mode brut il
+   reste obligatoire.
+3. **Fenêtre d'analyse bornée sur l'entrée TS** (`-analyzeduration 1000000
+   -probesize 1000000`) : sans elle `avformat_find_stream_info` peut lire
+   plusieurs secondes avant d'écrire le premier octet. Elle reste largement
+   suffisante — PAT/PMT et SPS/PPS arrivent dans les premiers Ko (vérifié).
+4. **Le réhorodatage et le rattrapage sont exclusifs** : `rehorodater` ne
+   s'applique qu'à `Horodatage::Cfr` (`SOS_CFR=1`). Les activer ensemble
+   étire un fichier dont la grille est déjà juste.
+5. **Une frame dupliquée n'est pas une perte** : `frames_perdues` et
+   `frames_dupliquees` sont deux compteurs, et `frames_session` reste le
+   nombre de **compositions** (c'est lui que `rehorodater` attend).
+6. **PTS strictement croissants** : deux frames au même PTS feraient jeter la
+   seconde par le muxeur MP4. `MuxeurTs::pts` force un tick d'écart et
+   **compte** les corrections (`pts_corriges`).

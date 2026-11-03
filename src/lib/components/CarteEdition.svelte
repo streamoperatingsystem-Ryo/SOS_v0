@@ -21,7 +21,7 @@
     setWidgetMediaPaused, setWidgetMediaTime, setWidgetMediaTimeLocal,
     setWidgetMediaLoop,
     setBgPaused, setBgTime, setBgTimeLocal, setBgLoop,
-    setWidgetTrou, deleteObsTrouSource, dupliquerWidget, rotateWidgetLocal,
+    setWidgetTrou, deleteObsTrouSource, retirerWidgetCapture, dupliquerWidget, rotateWidgetLocal,
     setWidgetSansCadre, mettreAJourCadre,
     setChatFiltre, setChatStyle, setChatTaillePoliceLocal,
     setSpeedrunPolice, setSpeedrunPoliceLocal, setSpeedrunConfig,
@@ -37,7 +37,7 @@
   } from "../stores/scene";
   import { morphMode, morphIntensite, morphRayon, morphSens } from "../stores/morph";
   import { videoRegistry } from "../stores/video";
-  import { carteEditionCible, confirmDeleteWidget, titreFondModalOpen, cadreModalOpen, speedrunLayoutModalOpen } from "../stores/ui";
+  import { carteEditionCible, confirmDeleteWidget, titreFondModalOpen, cadreModalOpen, speedrunLayoutModalOpen, interactionModalOpen, interactionModalTab } from "../stores/ui";
   import { type ChatFiltre } from "../stores/chat";
   import {
     phaseTimer, totalSplits, segmentsLss,
@@ -138,14 +138,40 @@
   let isCameraWidget = $derived(selectedType === "camera");
   let isInputViewerWidget = $derived(selectedType === "input-viewer");
 
-  // Classe CSS de la carte : dérivée de la cible + type de widget. Un widget
-  // input-viewer obtient sa propre carte jaune (cible-input-viewer) au lieu de
-  // la carte widget rouge. Les autres widgets → cible-widget (rouge), le fond
-  // → cible-fond (orange).
+  // Classe CSS de la carte : une teinte d'identité PAR TYPE (2026-11-02) —
+  // plus de carte rouge commune (splitter et média étaient indiscernables).
+  // Le rouge est réservé aux états (actif / supprimer).
   let carteClasse = $derived(
-    cible === "widget" && isInputViewerWidget ? "cible-input-viewer" : `cible-${cible}`
+    cible === "widget" ? `cible-type-${selectedType}` : `cible-${cible}`
   );
+  // Icône de type dans l'en-tête (le libellé seul ne suffit pas à balayer
+  // une colonne de cartes).
+  const ICONES_TYPE: Record<string, string> = {
+    media: "🖼",
+    chat: "💬",
+    camera: "📷",
+    "input-viewer": "⌨",
+    speedrun: "⏱",
+    goal: "🎯",
+    musique: "♫",
+  };
   let isSpeedrunWidget = $derived(selectedType === "speedrun");
+  // Libellés d'onglets adaptés au type : le splitter n'a rien à faire dans
+  // « Transformation / Effets ». Les autres gardent la grammaire commune
+  // (Contenu / Apparence / Effets).
+  let tabLibelles = $derived(
+    isSpeedrunWidget
+      ? {
+          contenu: $t("carteEdition.tabJeuRun"),
+          transformation: $t("carteEdition.affichage"),
+          effets: $t("carteEdition.tabAvance"),
+        }
+      : {
+          contenu: $t("carteEdition.tabContenu"),
+          transformation: $t("carteEdition.tabApparence"),
+          effets: $t("carteEdition.tabEffets"),
+        }
+  );
   let isGoalWidget = $derived(selectedType === "goal");
   let isMusiqueWidget = $derived(selectedType === "musique");
   let musiqueModeVal = $derived(selectedWidget?.musiqueMode ?? "player");
@@ -282,6 +308,11 @@
   let selectedKind = $derived(selectedWidget?.kind ?? "image");
   let selectedTrou = $derived(selectedWidget?.trou === true);
   let selectedObsSource = $derived(selectedWidget?.obsSource ?? null);
+  // Cible de capture **native** (mode Rust) — distincte d'`obsSource` :
+  // `setWidgetCaptureCible` laisse volontairement `obsSource` intact, donc
+  // tester `obsSource` en mode Rust affichait « supprimer la source OBS »
+  // pour un widget capturé nativement (bug 2026-11-02).
+  let selectedCaptureCible = $derived(selectedWidget?.captureCible ?? null);
   let widgetMediaPaused = $derived(selectedWidget?.mediaPaused ?? true);
   let widgetMediaTime = $derived(selectedWidget?.mediaTime ?? 0);
   let widgetLoopA = $derived(selectedWidget?.mediaLoopA ?? null);
@@ -593,6 +624,22 @@
     testerMetronome(Math.max(1, Math.min(400, srMetroBpmVal)), srMetroVolPct / 100);
   }
 
+  // ===== Pop des splits (points de validation) =====
+  // Affiché dans la DIFFUSION à chaque split franchi/skippé — même champ
+  // srVoirPoints que la modale layout (absent = actif). La position reste
+  // réglée par le squelette dédié (Interactions → Position des overlays).
+  let srPopActif = $derived(selectedWidget?.srVoirPoints !== false);
+  function onSrPopToggle() {
+    if (!selectedId) return;
+    setSpeedrunConfig(selectedId, { srVoirPoints: !srPopActif });
+  }
+  /// Ouvre la modale Interactions directement sur l'onglet « Position des
+  /// overlays » (squelette dédié du pop, laissé centralisé là-bas).
+  function onSrPopPosition() {
+    interactionModalTab.set("position");
+    interactionModalOpen.set(true);
+  }
+
   // ===== Widget input viewer =====
   let inputModeVal = $derived(selectedWidget?.inputMode ?? "clavier");
   let inputLayoutVal = $derived(selectedWidget?.inputLayout ?? "azerty");
@@ -715,6 +762,18 @@
   function onCloseObsDialog() { obsDialogOpen = false; }
   async function onDeleteObsSource() { if (!selectedId) return; await deleteObsTrouSource(selectedId); }
 
+  // ===== Capture NATIVE (mode Rust) =====
+  // Libellé lisible de la cible persistée — même vocabulaire que le
+  // sélecteur (titre de fenêtre, nom d'écran), jamais un identifiant brut.
+  function descriptionCible(c: { kind: string; name?: string; index?: number; title?: string; exe?: string }): string {
+    if (c.kind === "fenetre") return c.title || c.exe || "fenêtre";
+    return c.name || `écran ${c.index ?? ""}`.trim();
+  }
+  async function onDeleteCaptureNatif() {
+    if (!selectedId) return;
+    await retirerWidgetCapture(selectedId);
+  }
+
   // ===== Fond de scène = capture OBS (app/jeu plein canvas) =====
   // ObsSourceDialog mode "fond" → lierFondCapture/retirerFondCapture (store).
   let obsFondDialogOpen = $state(false);
@@ -735,6 +794,9 @@
     <div class="carte-entete-row">
       <button type="button" class="carte-entete" onclick={() => (ouverte = !ouverte)} aria-expanded={ouverte} title={cible === "widget" && selectedId ? selectedId : undefined}>
         <span class="carte-fleche">{ouverte ? "▼" : "▶"}</span>
+        <span class="carte-icone" aria-hidden="true">
+          {cible === "widget" ? (ICONES_TYPE[selectedType] ?? "▦") : "▧"}
+        </span>
         <span class="carte-titre">
           {#if cible === "widget"}
             {widgetLabel}
@@ -822,16 +884,152 @@
                  s'ajoute). Recette VISUELLEMENT DISTINCTE des .fit-btn —
                  la navigation doit se lire comme une navigation. -->
             <div class="tabs" class:quatre={selectedKind === "video"}>
-              <button class="tab" class:active={tabWidget === "contenu"} onclick={() => tabWidget = "contenu"} title={$t("carteEdition.tabContenu")}>{$t("carteEdition.tabContenu")}</button>
-              <button class="tab" class:active={tabWidget === "transformation"} onclick={() => tabWidget = "transformation"} title={$t("carteEdition.tabTransformation")}>{$t("carteEdition.tabTransformation")}</button>
-              <button class="tab" class:active={tabWidget === "effets"} onclick={() => tabWidget = "effets"} title={$t("carteEdition.tabEffets")}>{$t("carteEdition.tabEffets")}</button>
+              <button class="tab" class:active={tabWidget === "contenu"} onclick={() => tabWidget = "contenu"} title={tabLibelles.contenu}>{tabLibelles.contenu}</button>
+              <button class="tab" class:active={tabWidget === "transformation"} onclick={() => tabWidget = "transformation"} title={tabLibelles.transformation}>{tabLibelles.transformation}</button>
+              <button class="tab" class:active={tabWidget === "effets"} onclick={() => tabWidget = "effets"} title={tabLibelles.effets}>{tabLibelles.effets}</button>
               {#if selectedKind === "video"}
                 <button class="tab" class:active={tabWidget === "lecture"} onclick={() => tabWidget = "lecture"} title={$t("commun.lecture")}>{$t("commun.lecture")}</button>
               {/if}
             </div>
 
-            {#if tabWidget === "contenu"}
-              {#if !isCameraWidget}
+            {#if isSpeedrunWidget}
+              {#if tabWidget === "contenu"}
+                <!-- Jeu & run : ce qui sert PENDANT une tentative. -->
+                {#if $erreurSpeedrun}
+                  <p class="hint" style="color: var(--message-error-color);">⚠ {$erreurSpeedrun}</p>
+                {/if}
+                <div class="field">
+                  <span class="field-label">{$t("carteEdition.jeu")}</span>
+                  <span class="media-val">
+                    {#if $nomJeuLss || $nomCategorieLss}
+                      {$nomJeuLss}{#if $nomCategorieLss} — {$nomCategorieLss}{/if}
+                    {:else}
+                      <span class="hint">{$t("widgetSpeedrun.aucunSplits")}</span>
+                    {/if}
+                  </span>
+                </div>
+                {#if $estConnecte}
+                  <p class="hint" style="color: var(--message-ok-color);">● {$t("carteEdition.connecte")}{$nomProcessus ? ` (${$nomProcessus})` : ""}</p>
+                {:else if $estActif}
+                  <p class="hint" style="color: var(--message-user-action-color);">○ {$t("widgetSpeedrun.enAttente")}</p>
+                {/if}
+                <button class="action" onclick={onSpeedrunChoisirAsl}>
+                  {#if $cheminAsl}{$t("carteEdition.aslCharge")}{:else}{$t("carteEdition.chargerAsl")}{/if}
+                </button>
+                <button class="action" onclick={onSpeedrunChoisirLss}>
+                  {#if $cheminLss}{$t("carteEdition.lssCharge")}{:else}{$t("carteEdition.chargerLss")}{/if}
+                </button>
+                <div class="speedrun-ctrl-row">
+                  {#if !$estActif}
+                    <button class="action speedrun-start" onclick={onSpeedrunDemarrer}>▶ {$t("widgetSpeedrun.start")}</button>
+                  {:else}
+                    <button class="action speedrun-stop" onclick={onSpeedrunArreter}>■ {$t("widgetSpeedrun.stop")}</button>
+                  {/if}
+                  <button class="action" onclick={() => actionManuelle("split")} disabled={!$estActif}>{$t("widgetSpeedrun.split")}</button>
+                  <button class="action" onclick={() => actionManuelle("skip")} disabled={!$estActif}>{$t("widgetSpeedrun.skip")}</button>
+                  <button class="action" onclick={() => actionManuelle("undo")} disabled={!$estActif}>{$t("widgetSpeedrun.undo")}</button>
+                  <button class="action" onclick={() => actionManuelle("reset")} disabled={!$estActif}>{$t("widgetSpeedrun.reset")}</button>
+                  <button class="action" onclick={() => actionManuelle("pause")} disabled={!$estActif}>
+                    {#if $phaseTimer === "Paused"}{$t("widgetSpeedrun.resume")}{:else}{$t("commun.pause")}{/if}
+                  </button>
+                </div>
+              {:else if tabWidget === "transformation"}
+                <!-- Affichage : à quoi ressemble le splitter dans le stream. -->
+                <!-- Média de fond + cadre : ici pour garder « Jeu & run »
+                     limité à la tentative. -->
+                <div class="section-titre">{$t("carteEdition.sectionMedia")}</div>
+                <button class="action primary" onclick={importMedia}>{selectedWidget?.media ? $t("carteEdition.remplacerMedia") : $t("carteEdition.importerMedia")}</button>
+                {#if selectedWidget?.media}
+                  <button class="action danger" onclick={onClearMedia}>{$t("carteEdition.supprimerMedia")}</button>
+                {/if}
+                <div class="section-titre">{$t("carteEdition.sectionCadre")}</div>
+                <button type="button" class="toggle-row" onclick={onToggleCadreWidget}>
+                  <span class="toggle-label">{$t("carteEdition.cadreWidget")}</span>
+                  <span class="etat-chip" class:actif={widgetAvecCadre}>{widgetAvecCadre ? $t("commun.on") : $t("commun.off")}</span>
+                </button>
+                <button class="action" onclick={onOuvrirCadres}>{$t("carteEdition.cadrePersonnaliser")}</button>
+                {#if !cadreSceneActif}
+                  <p class="hint">{$t("carteEdition.cadreSceneInactive")}</p>
+                {/if}
+                <div class="field">
+                  <span class="field-label">{$t("commun.police")}</span>
+                  <select class="police-select" value={srPoliceVal} onchange={onSrPoliceChange}>
+                    {#each POLICES_TITRE as p (p.id)}
+                      <option value={p.id} style="font-family: '{p.id}', sans-serif;">{p.nom}</option>
+                    {/each}
+                  </select>
+                </div>
+                <div class="field">
+                  <span class="field-label">{$t("widgetSpeedrun.disposition")}</span>
+                  <select class="police-select" value={srLayoutVal} onchange={onSrLayoutChange}>
+                    <option value="auto">{$t("widgetSpeedrun.dispoAuto")}</option>
+                    <option value="colonne">{$t("widgetSpeedrun.dispoColonne")}</option>
+                    <option value="ligne">{$t("widgetSpeedrun.dispoLigne")}</option>
+                  </select>
+                </div>
+                {@render sliderLigne($t("carteEdition.taillePolice"), srTailleVal, 8, 48, 1, onSrTailleInput, onSrTailleChange, (v) => v + "px")}
+                <button class="action" onclick={() => speedrunLayoutModalOpen.set(true)}>{$t("speedrunLayout.ouvrir")}</button>
+                <div class="speedrun-toggles">
+                  <label class="setting-toggle" class:active={srPopActif}>
+                    <input type="checkbox" checked={srPopActif} onchange={onSrPopToggle} />
+                    <span>{$t("interactions.position.splitpop")}</span>
+                  </label>
+                </div>
+                <button class="lien-outil" onclick={onSrPopPosition}>
+                  {$t("interactions.tabPosition")}…
+                </button>
+                <Gizmo3D />
+                {@render controlesTransformation()}
+              {:else if tabWidget === "lecture"}
+                {@render controlesLecture()}
+              {:else}
+                <!-- Avancé : automatismes, métronome, fenêtres. -->
+                <div class="speedrun-toggles">
+                  <label class="setting-toggle" class:active={srStartActif}>
+                    <input type="checkbox" checked={srStartActif} onchange={onSpeedrunToggleStart} />
+                    <span>{$t("widgetSpeedrun.autoStart")}</span>
+                  </label>
+                  <label class="setting-toggle" class:active={srSplitActif}>
+                    <input type="checkbox" checked={srSplitActif} onchange={onSpeedrunToggleSplit} />
+                    <span>{$t("widgetSpeedrun.autoSplit")}</span>
+                  </label>
+                  <label class="setting-toggle" class:active={srResetActif}>
+                    <input type="checkbox" checked={srResetActif} onchange={onSpeedrunToggleReset} />
+                    <span>{$t("widgetSpeedrun.autoReset")}</span>
+                  </label>
+                  <label class="setting-toggle" class:active={srMetroActifVal}>
+                    <input type="checkbox" checked={srMetroActifVal} onchange={onSrMetroToggle} />
+                    <span>{$t("widgetSpeedrun.metronome")}</span>
+                  </label>
+                </div>
+                {#if srMetroActifVal}
+                  <!-- Battement BPM pendant la run — entendu sur le DASHBOARD
+                       uniquement, jamais dans le stream (hint ci-dessous).
+                       Le bouton Tester joue 4 tics sans attendre une run ;
+                       désactivé pendant une run (le vrai battement joue). -->
+                  {@render sliderLigne($t("widgetSpeedrun.metronomeBpm"), srMetroBpmVal, 1, 400, 1, onSrMetroBpmInput, onSrMetroBpmChange, (v) => Math.round(v) + " BPM")}
+                  {@render sliderLigne($t("widgetSpeedrun.metronomeVolume"), srMetroVolPct, 0, 100, 1, onSrMetroVolInput, onSrMetroVolChange, (v) => v + "%")}
+                  <button class="action" onclick={onSrMetroTest} disabled={$battementEnCours}>
+                    {$t("widgetSpeedrun.metronomeTest")}
+                  </button>
+                  <p class="hint">{$t("widgetSpeedrun.metronomeHint")}</p>
+                {/if}
+                <!-- Pop-out splitter : fenêtre toujours-au-dessus avec le
+                     rendu du splitter ET les contrôles de run (pattern
+                     raccourcis : la fenêtre émet, le dashboard exécute).
+                     Le widget de la scène et la diffusion restent inchangés. -->
+                <button class="action" onclick={onSrDetacher}>
+                  {srPopoutOpen ? $t("carteEdition.reattacher") : $t("carteEdition.detacher")}
+                </button>
+                <!-- Export HTML autonome de la tentative (tableau des
+                     splits) — dialog « Enregistrer sous » côté Rust. -->
+                <button class="action" onclick={() => exporterSplits().catch(() => {})}>
+                  {$t("widgetSpeedrun.exporter")}
+                </button>
+                {@render controlesEffetsWidget()}
+              {/if}
+            {:else if tabWidget === "contenu"}
+              {#if !isCameraWidget && !isSpeedrunWidget}
                 <div class="section-titre">{$t("carteEdition.sectionMedia")}</div>
                 <button class="action primary" onclick={importMedia}>{selectedWidget?.media ? $t("carteEdition.remplacerMedia") : $t("carteEdition.importerMedia")}</button>
                 {#if selectedWidget?.media}
@@ -890,108 +1088,6 @@
                 <p class="hint">
                   {captureActive ? $t("carteEdition.captureActiveHint") : $t("carteEdition.captureInactiveHint")}
                 </p>
-              {:else if isSpeedrunWidget}
-                {#if $erreurSpeedrun}
-                  <p class="hint" style="color: var(--message-error-color);">⚠ {$erreurSpeedrun}</p>
-                {/if}
-                <div class="field">
-                  <span class="field-label">{$t("carteEdition.jeu")}</span>
-                  <span class="media-val">
-                    {#if $nomJeuLss || $nomCategorieLss}
-                      {$nomJeuLss}{#if $nomCategorieLss} — {$nomCategorieLss}{/if}
-                    {:else}
-                      <span class="hint">{$t("widgetSpeedrun.aucunSplits")}</span>
-                    {/if}
-                  </span>
-                </div>
-                {#if $estConnecte}
-                  <p class="hint" style="color: var(--message-ok-color);">● {$t("carteEdition.connecte")}{$nomProcessus ? ` (${$nomProcessus})` : ""}</p>
-                {:else if $estActif}
-                  <p class="hint" style="color: var(--message-user-action-color);">○ {$t("widgetSpeedrun.enAttente")}</p>
-                {/if}
-                <button class="action" onclick={onSpeedrunChoisirAsl}>
-                  {#if $cheminAsl}{$t("carteEdition.aslCharge")}{:else}{$t("carteEdition.chargerAsl")}{/if}
-                </button>
-                <button class="action" onclick={onSpeedrunChoisirLss}>
-                  {#if $cheminLss}{$t("carteEdition.lssCharge")}{:else}{$t("carteEdition.chargerLss")}{/if}
-                </button>
-                <div class="speedrun-ctrl-row">
-                  {#if !$estActif}
-                    <button class="action speedrun-start" onclick={onSpeedrunDemarrer}>▶ {$t("widgetSpeedrun.start")}</button>
-                  {:else}
-                    <button class="action speedrun-stop" onclick={onSpeedrunArreter}>■ {$t("widgetSpeedrun.stop")}</button>
-                  {/if}
-                  <button class="action" onclick={() => actionManuelle("split")} disabled={!$estActif}>{$t("widgetSpeedrun.split")}</button>
-                  <button class="action" onclick={() => actionManuelle("skip")} disabled={!$estActif}>{$t("widgetSpeedrun.skip")}</button>
-                  <button class="action" onclick={() => actionManuelle("undo")} disabled={!$estActif}>{$t("widgetSpeedrun.undo")}</button>
-                  <button class="action" onclick={() => actionManuelle("reset")} disabled={!$estActif}>{$t("widgetSpeedrun.reset")}</button>
-                  <button class="action" onclick={() => actionManuelle("pause")} disabled={!$estActif}>
-                    {#if $phaseTimer === "Paused"}{$t("widgetSpeedrun.resume")}{:else}{$t("commun.pause")}{/if}
-                  </button>
-                </div>
-                <div class="speedrun-toggles">
-                  <label class="setting-toggle" class:active={srStartActif}>
-                    <input type="checkbox" checked={srStartActif} onchange={onSpeedrunToggleStart} />
-                    <span>{$t("widgetSpeedrun.autoStart")}</span>
-                  </label>
-                  <label class="setting-toggle" class:active={srSplitActif}>
-                    <input type="checkbox" checked={srSplitActif} onchange={onSpeedrunToggleSplit} />
-                    <span>{$t("widgetSpeedrun.autoSplit")}</span>
-                  </label>
-                  <label class="setting-toggle" class:active={srResetActif}>
-                    <input type="checkbox" checked={srResetActif} onchange={onSpeedrunToggleReset} />
-                    <span>{$t("widgetSpeedrun.autoReset")}</span>
-                  </label>
-                  <label class="setting-toggle" class:active={srMetroActifVal}>
-                    <input type="checkbox" checked={srMetroActifVal} onchange={onSrMetroToggle} />
-                    <span>{$t("widgetSpeedrun.metronome")}</span>
-                  </label>
-                </div>
-                {#if srMetroActifVal}
-                  <!-- Battement BPM pendant la run — entendu sur le DASHBOARD
-                       uniquement, jamais dans le stream (hint ci-dessous).
-                       Le bouton Tester joue 4 tics sans attendre une run ;
-                       désactivé pendant une run (le vrai battement joue). -->
-                  {@render sliderLigne($t("widgetSpeedrun.metronomeBpm"), srMetroBpmVal, 1, 400, 1, onSrMetroBpmInput, onSrMetroBpmChange, (v) => Math.round(v) + " BPM")}
-                  {@render sliderLigne($t("widgetSpeedrun.metronomeVolume"), srMetroVolPct, 0, 100, 1, onSrMetroVolInput, onSrMetroVolChange, (v) => v + "%")}
-                  <button class="action" onclick={onSrMetroTest} disabled={$battementEnCours}>
-                    {$t("widgetSpeedrun.metronomeTest")}
-                  </button>
-                  <p class="hint">{$t("widgetSpeedrun.metronomeHint")}</p>
-                {/if}
-                <!-- Pop-out splitter : fenêtre toujours-au-dessus avec le
-                     rendu du splitter ET les contrôles de run (pattern
-                     raccourcis : la fenêtre émet, le dashboard exécute).
-                     Le widget de la scène et la diffusion restent inchangés. -->
-                <button class="action" onclick={onSrDetacher}>
-                  {srPopoutOpen ? $t("carteEdition.reattacher") : $t("carteEdition.detacher")}
-                </button>
-                <!-- Export HTML autonome de la tentative (tableau des
-                     splits) — dialog « Enregistrer sous » côté Rust. -->
-                <button class="action" onclick={() => exporterSplits().catch(() => {})}>
-                  {$t("widgetSpeedrun.exporter")}
-                </button>
-                <div class="field">
-                  <span class="field-label">{$t("commun.police")}</span>
-                  <select class="police-select" value={srPoliceVal} onchange={onSrPoliceChange}>
-                    {#each POLICES_TITRE as p (p.id)}
-                      <option value={p.id} style="font-family: '{p.id}', sans-serif;">{p.nom}</option>
-                    {/each}
-                  </select>
-                </div>
-                <div class="field">
-                  <span class="field-label">{$t("widgetSpeedrun.disposition")}</span>
-                  <select class="police-select" value={srLayoutVal} onchange={onSrLayoutChange}>
-                    <option value="auto">{$t("widgetSpeedrun.dispoAuto")}</option>
-                    <option value="colonne">{$t("widgetSpeedrun.dispoColonne")}</option>
-                    <option value="ligne">{$t("widgetSpeedrun.dispoLigne")}</option>
-                  </select>
-                </div>
-                {@render sliderLigne($t("carteEdition.taillePolice"), srTailleVal, 8, 48, 1, onSrTailleInput, onSrTailleChange, (v) => v + "px")}
-                <!-- Layout Editor façon LiveSplit : pilote UNIQUEMENT les
-                     éléments internes du splitter (en-tête/timer/méta/
-                     segments) via les champs srXxx du widget. -->
-                <button class="action" onclick={() => speedrunLayoutModalOpen.set(true)}>{$t("speedrunLayout.ouvrir")}</button>
               {:else if isGoalWidget}
                 <div class="section-titre">{$t("carteEdition.plateforme")}</div>
                 <div class="fit-buttons">
@@ -1078,10 +1174,17 @@
                   <span class="etat-chip" class:actif={selectedTrou}>{selectedTrou ? $t("commun.on") : $t("commun.off")}</span>
                 </button>
                 {#if selectedTrou}
-                  {#if selectedObsSource}
+                  {#if natifMode}
+                    {#if selectedCaptureCible}
+                      <p class="hint">{descriptionCible(selectedCaptureCible)}</p>
+                      <button class="action danger" onclick={onDeleteCaptureNatif}>{$t("carteEdition.sourceNatifSupprimer")}</button>
+                    {:else}
+                      <button class="action" onclick={onOpenObsDialog}>{$t("carteEdition.sourceLierNatif")}</button>
+                    {/if}
+                  {:else if selectedObsSource}
                     <button class="action danger" onclick={onDeleteObsSource}>{$t("carteEdition.sourceObsSupprimer")}</button>
                   {:else}
-                    <button class="action" onclick={onOpenObsDialog}>{natifMode ? $t("carteEdition.sourceLierNatif") : $t("carteEdition.sourceObsLier")}</button>
+                    <button class="action" onclick={onOpenObsDialog}>{$t("carteEdition.sourceObsLier")}</button>
                   {/if}
                 {/if}
                 {#if isMediaWidget}
@@ -1090,6 +1193,7 @@
                   {@render carrouselBloc(widgetSlides, widgetSlidesSecVal, onAjouterSlidesMedia, retirerSlideMedia, deplacerSlideMedia, onWidgetSlidesSecInput, onWidgetSlidesSecChange, viderSlidesMedia)}
                 {/if}
               {/if}
+              {#if !isSpeedrunWidget}
               <!-- Cadre sur ce widget (sansCadre — opt-out par instance,
                    tous types) + accès modale Cadres. Généralise l'ex-toggle
                    « widget ↔ flottant » du DropBar. -->
@@ -1101,6 +1205,7 @@
               <button class="action" onclick={onOuvrirCadres}>{$t("carteEdition.cadrePersonnaliser")}</button>
               {#if !cadreSceneActif}
                 <p class="hint">{$t("carteEdition.cadreSceneInactive")}</p>
+              {/if}
               {/if}
             {:else if tabWidget === "transformation"}
               <Gizmo3D />
@@ -1140,7 +1245,7 @@
           {:else}
             <div class="tabs" class:quatre={bgKind === "video"}>
               <button class="tab" class:active={tabFond === "contenu"} onclick={() => tabFond = "contenu"} title={$t("carteEdition.tabContenu")}>{$t("carteEdition.tabContenu")}</button>
-              <button class="tab" class:active={tabFond === "transformation"} onclick={() => tabFond = "transformation"} title={$t("carteEdition.tabTransformation")}>{$t("carteEdition.tabTransformation")}</button>
+              <button class="tab" class:active={tabFond === "transformation"} onclick={() => tabFond = "transformation"} title={$t("carteEdition.tabApparence")}>{$t("carteEdition.tabApparence")}</button>
               <button class="tab" class:active={tabFond === "effets"} onclick={() => tabFond = "effets"} title={$t("carteEdition.tabEffets")}>{$t("carteEdition.tabEffets")}</button>
               {#if bgKind === "video"}
                 <button class="tab" class:active={tabFond === "lecture"} onclick={() => tabFond = "lecture"} title={$t("commun.lecture")}>{$t("commun.lecture")}</button>
@@ -1188,9 +1293,9 @@
                 <button class="fit-btn" class:active={bgMiroirV} onclick={() => onBgMiroir("v")}>{$t("carteEdition.miroirV")}</button>
               </div>
               {#if bgKind === "image"}
-                <div class="section-titre">Morphing</div>
+                <div class="section-titre">{$t("carteEdition.morphing")}</div>
                 <div class="fit-buttons">
-                  <button class="fit-btn" class:active={$morphMode} onclick={() => morphMode.update((m) => !m)}>Morphing</button>
+                  <button class="fit-btn" class:active={$morphMode} onclick={() => morphMode.update((m) => !m)}>{$t("carteEdition.morphing")}</button>
                 </div>
                 {#if $morphMode}
                   <div class="morph-bloc">
@@ -1331,9 +1436,9 @@
     </div>
   {/if}
   {#if isMediaWidget && selectedKind === "image" && selectedWidget?.media}
-    <div class="section-titre">Morphing</div>
+    <div class="section-titre">{$t("carteEdition.morphing")}</div>
     <div class="fit-buttons">
-      <button class="fit-btn" class:active={$morphMode} onclick={() => morphMode.update((m) => !m)}>Morphing</button>
+      <button class="fit-btn" class:active={$morphMode} onclick={() => morphMode.update((m) => !m)}>{$t("carteEdition.morphing")}</button>
     </div>
     {#if $morphMode}
       <div class="morph-bloc">
@@ -1364,22 +1469,30 @@
      la couleur de la carte (--accent-carte) vit dans les bordures/glows/états
      actifs uniquement (IDEA02 — repère de cible conservé). */
 
-  /* Cible widget = bordeaux foncé (pointillés + glow, palette --dash-*) */
-  .cible-widget {
-    --accent-carte: var(--dash-danger);
-    --accent-carte-glow: color-mix(in srgb, var(--dash-danger) 45%, transparent);
-  }
+  /* Une teinte d'identité PAR TYPE (2026-11-02) — le rouge est réservé aux
+     états (actif / supprimer), plus jamais à « c'est un widget ». */
+  .cible-type-media { --accent-carte: var(--type-media); }
+  .cible-type-chat { --accent-carte: var(--type-chat); }
+  .cible-type-camera { --accent-carte: var(--type-camera); }
+  .cible-type-input-viewer { --accent-carte: var(--type-input); }
+  .cible-type-speedrun { --accent-carte: var(--type-speedrun); }
+  .cible-type-goal { --accent-carte: var(--type-goal); }
+  .cible-type-musique { --accent-carte: var(--type-musique); }
 
-  /* Cible fond = orange foncé (pointillés + glow, palette --dash-*) */
+  /* Cible fond = orange (identité du fond, distincte des widgets). */
   .cible-fond {
-    --accent-carte: var(--dash-orange);
-    --accent-carte-glow: color-mix(in srgb, var(--dash-orange) 40%, transparent);
+    --accent-carte: var(--type-fond);
+    --accent-carte-glow: color-mix(in srgb, var(--type-fond) 40%, transparent);
   }
 
-  /* Cible input-viewer = jaune foncé (pointillés + glow, palette --dash-*) */
-  .cible-input-viewer {
-    --accent-carte: var(--dash-jaune);
-    --accent-carte-glow: color-mix(in srgb, var(--dash-jaune) 40%, transparent);
+  .cible-type-media,
+  .cible-type-chat,
+  .cible-type-camera,
+  .cible-type-input-viewer,
+  .cible-type-speedrun,
+  .cible-type-goal,
+  .cible-type-musique {
+    --accent-carte-glow: color-mix(in srgb, var(--accent-carte) 42%, transparent);
   }
 
   .carte-entete-row {
@@ -1415,6 +1528,13 @@
     width: 0.85rem;
     text-align: center;
     flex-shrink: 0;
+  }
+
+  .carte-icone {
+    font-size: 0.85rem;
+    line-height: 1;
+    flex-shrink: 0;
+    opacity: 0.9;
   }
 
   .carte-titre {
@@ -1924,5 +2044,21 @@
   }
   .setting-toggle input {
     margin: 0;
+  }
+  /* Lien-outil discret (ouvre la modale Interactions sur l'onglet Position). */
+  .lien-outil {
+    background: none;
+    border: none;
+    color: var(--texte);
+    opacity: 0.55;
+    font: inherit;
+    font-size: 0.68rem;
+    padding: 0;
+    cursor: pointer;
+    text-decoration: underline;
+    transition: opacity 0.15s ease;
+  }
+  .lien-outil:hover {
+    opacity: 0.95;
   }
 </style>

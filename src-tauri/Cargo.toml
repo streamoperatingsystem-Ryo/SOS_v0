@@ -105,6 +105,18 @@ windows = { version = "0.58", features = [
 [features]
 custom-protocol = ["tauri/custom-protocol"]
 
+# ⚠️ **`tauri dev` doit être représentatif** (2026-11-02) : le moteur natif est
+# temps réel, et à `opt-level = 0` il est 5 à 20× plus lent (boucle de
+# composition, mixage échantillon par échantillon, readback d'aperçu, décodage
+# média) — juger sa fluidité sur un build debug n'a aucun sens. On garde
+# `debug = true` (points d'arrêt) et les assertions de debug, mais le code est
+# optimisé. Compilation initiale plus lente : assumé.
+[profile.dev]
+opt-level = 2
+
+[profile.dev.package."*"]
+opt-level = 3
+
 # Workspace : le moteur natif se compile et se teste SANS Tauri.
 # Contrat : docs/features/moteur-natif.md §3 (règles de dépendance).
 [workspace]

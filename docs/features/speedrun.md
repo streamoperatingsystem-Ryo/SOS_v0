@@ -176,6 +176,22 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
 > à l'update ; `srMajHeader`/`srMajTimerEtPhase`/`srMajSegmentsVisuel`
 > les consomment (pas d'accès à `w`). i18n : section `speedrunLayout.*`
 > dans les 8 locales.
+>
+> **Réglage du pop rapatrié (2026-11-02)** : la section « Pop entre les
+> splits » porte AUSSI le squelette de position du pop (mini-canvas
+> `SquelettePosition.svelte` partagé avec l'onglet Position : 6 presets,
+> drag/resize, « Tester le rendu »). Le toggle est en plus exposé dans la
+> carte d'édition (chip « Pop splits », `srVoirPoints`) avec un lien
+> « Position des overlays… » qui ouvre la modale Interactions sur l'onglet
+> Position (`interactionModalTab`). ⚠️ `SquelettePosition` prend le canvas
+> **réel** (`sceneStore.canvasW/H`) — plus de 1920×1080 en dur.
+>
+> **Carte d'édition en 3 onglets (2026-11-02)** : `Jeu & run` (jeu, ASL/LSS,
+> Start/Split/Skip/Undo/Reset/Pause), `Affichage` (police, disposition,
+> taille, mise en page, pop), `Avancé` (autos, métronome, détacher, export).
+> Libellés : `carteEdition.tabJeuRun` / `carteEdition.affichage` /
+> `carteEdition.tabAvance` (8 locales). Le média de fond du widget vit dans
+> l'onglet `Affichage`, pas dans `Jeu & run`.
 
 ### Métronome du splitter — battement BPM dashboard SEUL (2026-10-19)
 
@@ -277,8 +293,10 @@ du code interpolé). `__asl_vars`/`__asl_settings`/`__deref_callback`
 > caché sur started/reset/goto/stopped. JS quasi intact (srPopSplit :
 > +classe `sans-delta` + var `--pop-couleur` inline).
 > ⚠️ Position : squelette DÉDIÉ depuis le 2026-10-19 (frame `splitpop-pos`,
-> `position_splitpop.json`, onglet Position section « Pop des splits ») —
-> plus le squelette partagé, voir « Squelette de position unifié ».
+> `position_splitpop.json`) — plus le squelette partagé, voir « Squelette de
+> position unifié ». Depuis le 2026-11-02, il se règle dans la modale
+> « Créer votre layout » (section « Pop entre les splits »), plus dans
+> l'onglet Position de la modale Interactions.
 
 - **Composition** (flex column, sans boîte — le texte flotte) : badge
   « SPLIT n » (chip ::before, letter-spacing) → **HERO = le temps gagné/

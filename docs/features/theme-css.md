@@ -18,6 +18,27 @@
 | `--message-ok-color` | `#22c55e` (vert) | Succès / état connecté | Toolbar `.obs-status.ok` + `.header.etat-ok` (en-tête section OBS connecté : texte vert), `.dot.on` partagée (bandeau top App.svelte + lignes Connexions) |
 | `--message-error-color` | `#c0392b` (rouge) | Erreur / danger | Toolbar `.header.etat-erreur` (en-tête section OBS non connecté : texte + liseré gauche rouges), boutons destructifs au survol (ConfirmDeleteWidgetModal `.action.danger:hover`, SceneBar `.ctx-item.danger:hover`), `.ctrl-btn.ctrl-arreter:hover` (topbar) |
 
+### États & identité de type (2026-11-02) — deux familles distinctes
+
+| Rôle | Token | Sémantique |
+|---|---|---|
+| `--etat-ok` | vert | OK / prêt / fonctionne (connecté, capture active) |
+| `--etat-actif` | rouge | ACTIF : EN DIRECT, ENREGISTRE, sortie qui tourne |
+| `--etat-attente` | orange | intermédiaire (connexion, démarrage) |
+| `--etat-inactif` | gris | désactivé / masqué |
+
+- `.dot.on` reste le vert « connecté/prêt » ; `.dot.actif` = rouge (sorties
+  live/record), `.dot.attente` = orange. `Toolbar` : `.output-btn.actif` =
+  rouge, `.output-btn.attente` = orange.
+- Le rouge est **réservé** à l'état actif et à la destruction — jamais à
+  « sélectionné » (la sélection vit dans `--accent-ui`).
+
+**Identité des cartes** : une teinte PAR TYPE (`--type-media`, `--type-chat`,
+`--type-camera`, `--type-input`, `--type-speedrun`, `--type-goal`,
+`--type-musique`, `--type-fond`). Elle vit dans `--accent-carte` via les
+classes `.cible-type-*` de `CarteEdition.svelte`. Rouge et vert n'y sont
+jamais utilisés — ils restent des signaux d'état.
+
 ### Système de thème `src/theme/` — 3 couches (2026-09-20, spec IDEE/IDEA02.md)
 
 > Le thème du chrome dashboard vit dans `src/theme/`, importé par `main.ts`

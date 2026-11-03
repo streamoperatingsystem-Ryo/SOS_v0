@@ -22,6 +22,7 @@
   import { get } from "svelte/store";
   import Toolbar from "./lib/components/Toolbar.svelte";
   import CarteEdition from "./lib/components/CarteEdition.svelte";
+  import CarteModule from "./lib/components/CarteModule.svelte";
   import Canvas from "./lib/components/Canvas.svelte";
   import SceneBar from "./lib/components/SceneBar.svelte";
   import DropBar from "./lib/components/DropBar.svelte";
@@ -1014,6 +1015,7 @@
   <div class="row">
     <div class="sidebar-col">
       <CarteEdition />
+      <CarteModule />
       <Toolbar />
     </div>
     <div class="canvas-col">

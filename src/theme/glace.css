@@ -92,6 +92,26 @@
   --surbrillance-orange: var(--t-orange);
   --message-ok-color: var(--t-vert);
   --message-error-color: var(--t-rouge);
+  /* ===== États — sémantique unique (2026-11-02) =====
+     Vert = OK / prêt / fonctionne · Rouge = ACTIF (direct, enregistrement) ·
+     Orange = intermédiaire (connexion, démarrage) · Gris = inactif.
+     Le rouge est RÉSERVÉ à l'état actif et à la destruction : jamais pour
+     « sélectionné » (la sélection vit dans --accent-ui). */
+  --etat-ok: var(--message-ok-color);
+  --etat-actif: var(--message-error-color);
+  --etat-attente: var(--message-user-action-color);
+  --etat-inactif: var(--gris);
+  /* ===== Identité des types de widget (2026-11-02) =====
+     Une teinte par type, portée par l'en-tête de carte. Rouge et vert sont
+     réservés aux états : aucune teinte d'identité ne les réutilise. */
+  --type-media: var(--t-bleu-500);
+  --type-chat: var(--t-violet);
+  --type-camera: var(--t-cyan-500);
+  --type-input: var(--t-jaune-500);
+  --type-speedrun: var(--t-rose-500);
+  --type-goal: var(--t-ambre);
+  --type-musique: var(--t-teal-500);
+  --type-fond: var(--t-orange);
   /* ===== Contrôles topbar + guide snap + gizmo ===== */
   --ctrl-arreter: var(--message-error-color);
   --ctrl-redemarrer: var(--accent-orange);

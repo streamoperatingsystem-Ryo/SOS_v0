@@ -19,6 +19,8 @@
   import { POLICES_TITRE } from "../fonts";
   import { t } from "../stores/langue";
   import { tauri } from "../tauri";
+  import { positionSplitpop, sauverPositionSplitpop } from "../stores/positionOverlay";
+  import SquelettePosition from "./SquelettePosition.svelte";
 
   let { onFermer }: { onFermer: () => void } = $props();
 
@@ -286,7 +288,7 @@
         </label>
       </div>
 
-      <!-- ===== Points de validation ===== -->
+      <!-- ===== Pop entre les splits (srVoirPoints) ===== -->
       <div class="modal-bloc">
         <div class="bloc-titre">{$t("speedrunLayout.secPoints")}</div>
         <label class="toggle">
@@ -321,6 +323,18 @@
             {/if}
           </div>
         </div>
+
+        <!-- Squelette DÉDIÉ du pop (position_splitpop.json) — même éditeur
+             que l'onglet Position (composant partagé), mais ici : le réglage
+             vit avec le splitter qu'il concerne. -->
+        <SquelettePosition
+          classe="squelette-splitpop"
+          label={$t("interactions.position.splitpop")}
+          config={$positionSplitpop}
+          hint={$t("interactions.position.hintSplitpop")}
+          onCommit={(cfg) => sauverPositionSplitpop(cfg)}
+          onTester={() => tauri.positionSplitpopTest()}
+        />
       </div>
     {/if}
   </div>

@@ -4,16 +4,16 @@
     sceneStore, selectWidget, selectedIdStore, ajouterMorphFond, importFond, clearFond,
     setBgFit, toggleBgMiroir, resetFondTransformation, resetFondEffets,
     resetMorphsFond, setBgPaused, retirerFondCapture,
-    dupliquerWidget, setMediaFit, toggleMediaMiroir, rotateWidgetLocal,
+    dupliquerWidget,
     commitScene, setWidgetMediaPaused, resetMediaTransformation,
     resetMediaEffets, resetMorphsWidget, importMedia, clearWidgetMedia,
     setWidgetTrou, deleteObsTrouSource, transformerEnFlottant,
     transformerEnWidget, mettreWidgetPlan, widgetPleinEcran, setCameraCachee,
-    setWidgetCachee, setModule, setModuleActif,
+    setWidgetCachee, setModuleActif,
   } from "../stores/scene";
   import {
     setCarteEdition, titreFondModalOpen, titreModalOpen, confirmDeleteWidget,
-    cadreModalOpen, modulesModalOpen, carteEditionCible,
+    cadreModalOpen, carteEditionCible, moduleCarteId,
   } from "../stores/ui";
   import { registerVideo, unregisterVideo } from "../stores/video";
   import { connexions, type Connexions } from "../stores/chat";
@@ -410,9 +410,6 @@
   // Mode natif (lot N3b) : item « Lier une capture » au lieu de « source OBS ».
   let natifMode = $derived($moteurEtat.mode === "natif");
   let wgFlottant = $derived(ctxWidget?.sansCadre === true);
-  let wgFit = $derived(ctxWidget?.mediaFit ?? "ajuster");
-  let wgMiroirH = $derived(ctxWidget?.mediaMiroirH === true);
-  let wgMiroirV = $derived(ctxWidget?.mediaMiroirV === true);
   let wgPaused = $derived(ctxWidget?.mediaPaused ?? true);
   let wgHasMorphs = $derived((ctxWidget?.morphs?.length ?? 0) > 0);
   // Branche média : musique exclue — un widget musique troué perd son
@@ -422,12 +419,6 @@
   let wgMorphable = $derived(wgType === "media" && wgHasMedia && !wgIsVideo);
 
   // Toggles : gardent le menu ouvert. Actions : ferment le menu.
-  function ctxWgFit(id: string, mode: string) { void setMediaFit(id, mode); }
-  function ctxWgMiroirMedia(id: string, sens: "h" | "v") { void toggleMediaMiroir(id, sens); }
-  function ctxWgRetourne(id: string, sens: "h" | "v" | "reset") {
-    rotateWidgetLocal(id, sens === "v" ? 180 : 0, sens === "h" ? 180 : 0);
-    void commitScene();
-  }
   function ctxWgLecture(id: string) { void setWidgetMediaPaused(id, !wgPaused); }
   function ctxWgTrou(id: string) { void setWidgetTrou(id, !wgIsTrou); }
   function ctxWgMorph() { morphMode.update((m) => !m); }
@@ -465,53 +456,22 @@
   function ctxWgSupprimer() { fermerFondMenu(); confirmDeleteWidget.set(true); }
 
   // ===== Menu contextuel MODULE (clic droit sur une carte ModuleHud) =====
-  // Deux verbes : Configurer… ouvre la modale Modules sur ce module (même
-  // cible que le clic gauche) ; Masquer = actif:false via setModuleActif —
-  // position et options conservées, le module se réaffiche depuis la
-  // modale. Actions → ferment le menu (pattern établi).
-  function ctxModuleConfigurer(id: ModuleId) { fermerFondMenu(); modulesModalOpen.set(id); }
-  async function ctxModuleMasquer(id: ModuleId) { fermerFondMenu(); await setModuleActif(id, false); }
+  // Même grammaire que les widgets : Configurer… ouvre la carte latérale du
+  // module (CarteModule.svelte) ; Masquer = actif:false, position et options
+  // conservées. Actions → ferment le menu (pattern établi).
+  function ctxModuleConfigurer(id: ModuleId) { fermerFondMenu(); moduleCarteId.set(id); }
+  async function ctxModuleToggle(id: ModuleId) {
+    fermerFondMenu();
+    await setModuleActif(id, $sceneStore.modules?.[id]?.actif !== true);
+  }
 
-  // ===== Carte flottante MODULE (clic gauche sur une carte ModuleHud) =====
-  // Panneau léger au bord gauche de la zone canvas (overlay absolute dans
-  // .canvas-wrap — hors du .canvas scalé, donc px écran). Recette
-  // .carte-edition + variante .carte-module de app.css : nom du module,
-  // afficher/masquer, position X/Y/L/H et « Configurer… » → modale
-  // Modules (le détail exhaustif reste là-bas — même rôle que le clic
-  // droit « Configurer… »). Mutuellement exclusive avec la carte
-  // d'édition widget/fond (même règle carte↔accordéon) : ouvrir l'une
-  // ferme l'autre — l'$effect ci-dessous couvre tous les chemins de
-  // fermeture (clic fond, clic widget, morph → setCarteEdition).
-  let carteModuleId = $state<ModuleId | null>(null);
-  let carteModule = $derived(carteModuleId ? $sceneStore.modules?.[carteModuleId] : undefined);
-  let carteModuleMasque = $derived(carteModule?.actif !== true);
-
+  // ===== Carte MODULE (clic gauche sur une carte ModuleHud) =====
+  // Vraie carte latérale (CarteModule.svelte, montée dans App) — même
+  // emplacement que la carte widget. Plus de carte flottante dans le canvas.
   function ouvrirCarteModule(id: ModuleId) {
-    carteModuleId = id;
+    moduleCarteId.set(id);
     selectWidget(null);
     carteEditionCible.set(null);
-  }
-  function fermerCarteModule() { carteModuleId = null; }
-  // « Configurer… » = action → ferme la carte (la modale prend le relais).
-  function carteModuleConfigurer(id: ModuleId) {
-    fermerCarteModule();
-    modulesModalOpen.set(id);
-  }
-  // Masquer/Afficher = toggle → la carte reste ouverte, le libellé suit
-  // l'état (même sémantique que l'œil du badge de survol).
-  async function carteModuleToggleActif(id: ModuleId) {
-    await setModuleActif(id, carteModule?.actif !== true);
-  }
-  const posNum = (e: Event) => Math.max(0, Math.round(+(e.target as HTMLInputElement).value || 0));
-
-  $effect(() => {
-    if ($carteEditionCible !== null) carteModuleId = null;
-  });
-
-  // Escape ferme la carte module (aucun preventDefault — plusieurs
-  // <svelte:window onkeydown> coexistent : App.svelte, CtxMenu…).
-  function onCarteModuleKey(e: KeyboardEvent) {
-    if (e.key === "Escape") carteModuleId = null;
   }
 
   // ===== Morphing du fond (rendu canvas WebGL si bgMorphs) =====
@@ -701,7 +661,6 @@
   });
 </script>
 
-<svelte:window onkeydown={onCarteModuleKey} />
 
 <div class="canvas-wrap" bind:this={containerEl}>
   {#if scale > 0}
@@ -944,51 +903,6 @@
     </div>
   {/if}
 
-  <!-- Carte flottante d'un module HUD (clic gauche sur sa carte —
-       prop onClic de ModuleHud). Overlay en px écran au bord gauche de
-       la zone canvas : absolute dans .canvas-wrap (position:relative),
-       APRÈS .canvas dans le DOM → au-dessus de tout le contenu canvas,
-       sous les menus .ctx-menu (9999) et les modales (10000). Recette
-       globale .carte-edition + variante .carte-module (app.css) —
-       ne jamais re-copier le bloc dans un composant. Hors de .canvas :
-       ses clics ne déclenchent ni sélection ni menu du canvas. -->
-  {#if carteModuleId && carteModule}
-    <div class="carte-edition carte-module">
-      <div class="carte-module-tete">
-        <span class="carte-module-titre">{$t("modules.nom." + carteModuleId)}</span>
-        <button
-          type="button"
-          class="carte-module-fermer"
-          onclick={fermerCarteModule}
-          title={$t("commun.fermer")}
-          aria-label={$t("commun.fermer")}
-        >✕</button>
-      </div>
-      <div class="carte-module-corps">
-        <button type="button" class="action" onclick={() => void carteModuleToggleActif(carteModuleId!)}>
-          {carteModuleMasque ? $t("commun.afficher") : $t("commun.masquer")}
-        </button>
-        <span class="field-label">{$t("modules.position")}</span>
-        <div class="carte-module-pos">
-          <label class="field"><span class="field-label">X</span>
-            <input type="number" min="0" value={carteModule.x} onchange={(e) => void setModule(carteModuleId!, { x: posNum(e) })} />
-          </label>
-          <label class="field"><span class="field-label">Y</span>
-            <input type="number" min="0" value={carteModule.y} onchange={(e) => void setModule(carteModuleId!, { y: posNum(e) })} />
-          </label>
-          <label class="field"><span class="field-label">{$t("commun.largeur")}</span>
-            <input type="number" min="0" value={carteModule.largeur} onchange={(e) => void setModule(carteModuleId!, { largeur: posNum(e) })} />
-          </label>
-          <label class="field"><span class="field-label">{$t("commun.hauteur")}</span>
-            <input type="number" min="0" value={carteModule.hauteur} onchange={(e) => void setModule(carteModuleId!, { hauteur: posNum(e) })} />
-          </label>
-        </div>
-        <button type="button" class="action primary centre" onclick={() => carteModuleConfigurer(carteModuleId!)}>
-          {$t("commun.configurer")}
-        </button>
-      </div>
-    </div>
-  {/if}
 </div>
 
 {#if fondMenuOpen && ctxWidgetId === null && ctxModuleId === null}
@@ -1025,7 +939,7 @@
       {#if bgIsVideo}
         <button class="ctx-item" role="menuitem" onclick={ctxToggleLecture}>{bgPaused ? $t("commun.lecture") : $t("commun.pause")}</button>
       {:else}
-        <button class="ctx-item" class:active={$morphMode} role="menuitem" onclick={ctxToggleMorph}>Morphing</button>
+        <button class="ctx-item" class:active={$morphMode} role="menuitem" onclick={ctxToggleMorph}>{$t("carteEdition.morphing")}</button>
       {/if}
       <div class="ctx-sep" role="separator"></div>
       <button class="ctx-item" role="menuitem" onclick={ctxResetTransfo}>{$t("carteEdition.resetTransformation")}</button>
@@ -1077,32 +991,12 @@
            « 3 surfaces » : aucune action exclusive au badge). -->
       <button class="ctx-item" role="menuitem" onclick={() => ctxWgCachee(ctxWidget!.id)}>{ctxWidget?.cachee === true ? $t("commun.afficher") : $t("commun.masquer")}</button>
     {/if}
-    <div class="ctx-sep" role="separator"></div>
-    {#if wgHasMedia}
-      <span class="ctx-label">{$t("carteEdition.affichage")}</span>
-      <div class="ctx-fit-grid">
-        {#each FIT_MODES as mode}
-          <button class="ctx-fit-btn" class:active={wgFit === mode} onclick={() => ctxWgFit(ctxWidget!.id, mode)}>{$t("carteEdition.fit." + mode)}</button>
-        {/each}
-      </div>
-      <span class="ctx-label">{$t("carteEdition.miroirMedia")}</span>
-      <div class="ctx-fit-grid deux">
-        <button class="ctx-fit-btn" class:active={wgMiroirH} onclick={() => ctxWgMiroirMedia(ctxWidget!.id, "h")}>{$t("carteEdition.miroirH")}</button>
-        <button class="ctx-fit-btn" class:active={wgMiroirV} onclick={() => ctxWgMiroirMedia(ctxWidget!.id, "v")}>{$t("carteEdition.miroirV")}</button>
-      </div>
-    {/if}
-    <span class="ctx-label">{$t("carteEdition.retournement")}</span>
-    <div class="ctx-fit-grid">
-      <button class="ctx-fit-btn" onclick={() => ctxWgRetourne(ctxWidget!.id, "h")}>{$t("carteEdition.miroirH")}</button>
-      <button class="ctx-fit-btn" onclick={() => ctxWgRetourne(ctxWidget!.id, "v")}>{$t("carteEdition.miroirV")}</button>
-      <button class="ctx-fit-btn" onclick={() => ctxWgRetourne(ctxWidget!.id, "reset")}>{$t("carteEdition.reset")}</button>
-    </div>
     {#if wgHasMedia}
       <div class="ctx-sep" role="separator"></div>
       {#if wgIsVideo}
         <button class="ctx-item" role="menuitem" onclick={() => ctxWgLecture(ctxWidget!.id)}>{wgPaused ? $t("commun.lecture") : $t("commun.pause")}</button>
       {:else if wgMorphable}
-        <button class="ctx-item" class:active={$morphMode} role="menuitem" onclick={ctxWgMorph}>Morphing</button>
+        <button class="ctx-item" class:active={$morphMode} role="menuitem" onclick={ctxWgMorph}>{$t("carteEdition.morphing")}</button>
       {/if}
       <button class="ctx-item" role="menuitem" onclick={() => ctxWgResetTransfo(ctxWidget!.id)}>{$t("carteEdition.resetTransformation")}</button>
       <button class="ctx-item" role="menuitem" onclick={() => ctxWgResetEffets(ctxWidget!.id)}>{$t("carteEdition.resetEffets")}</button>
@@ -1145,7 +1039,9 @@
   <CtxMenu x={fondMenuX} y={fondMenuY} onclose={fermerFondMenu}>
     <span class="ctx-label">{$t("modules.nom." + ctxModuleId)}</span>
     <button class="ctx-item" role="menuitem" onclick={() => ctxModuleConfigurer(ctxModuleId!)}>{$t("commun.configurer")}</button>
-    <button class="ctx-item" role="menuitem" onclick={() => ctxModuleMasquer(ctxModuleId!)}>{$t("commun.masquer")}</button>
+    <button class="ctx-item" role="menuitem" onclick={() => ctxModuleToggle(ctxModuleId!)}>
+      {($sceneStore.modules?.[ctxModuleId!]?.actif ?? false) ? $t("commun.masquer") : $t("commun.afficher")}
+    </button>
   </CtxMenu>
 {/if}
 

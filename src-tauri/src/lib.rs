@@ -9,6 +9,7 @@ mod ecran_attente;
 mod fenetre;
 mod fight;
 mod just_chatting;
+mod journal;
 mod pad_numerique;
 mod input_viewer;
 mod equaliseur;
@@ -4089,6 +4090,9 @@ async fn obs_create_trou_from_pc(
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    // ⚠️ **Avant tout** : sans logger, `log::*!` ne fait rien et le backend
+    // est muet en console (163 appels perdus, bilan de session compris).
+    journal::installer();
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

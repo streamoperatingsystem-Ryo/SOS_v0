@@ -1,4 +1,4 @@
-// Store communauté lecture (Helix). Followers, subs, viewers, broadcaster.
+0// Store communauté lecture (Helix). Followers, subs, viewers, broadcaster.
 // 403 → communauteErreur = "need_reauth" → le frontend affiche le banner
 // « Reconnecter Twitch pour la communauté » (bouton → reconnecterTwitch).
 import { writable } from "svelte/store";

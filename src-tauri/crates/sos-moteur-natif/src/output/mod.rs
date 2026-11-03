@@ -7,6 +7,7 @@
 
 pub mod ffmpeg;
 pub mod file;
+pub mod ts;
 
 // Contrats partagés : définis une seule fois dans `sos-moteur-api` (§3.2).
 pub use sos_moteur_api::{Conteneur, ErreurSortie, Sink};

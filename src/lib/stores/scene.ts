@@ -2126,6 +2126,20 @@ export async function setWidgetCaptureCible(
   await commitScene();
 }
 
+/// Natif (D9) : retirer une capture sans OBS — purge `captureCible` et
+/// `trou` en UNE update, puis commit. `obsSource` reste **intact** (chaque
+/// mode lit le sien : le retour en mode OBS retrouve sa source liée).
+/// Miroir de `retirerFondCapture` : aucun appel Tauri/OBS.
+export async function retirerWidgetCapture(id: string): Promise<void> {
+  sceneStore.update((s) => ({
+    ...s,
+    widgets: s.widgets.map((x) =>
+      x.id === id ? { ...x, trou: false, captureCible: undefined } : x
+    ),
+  }));
+  await commitScene();
+}
+
 // ===== Grille magnétique (snap entre widgets + canvas) =====
 // Cibles figées au début du drag (snapshot) → pas de get(sceneStore) par frame.
 // Seuil en px canvas (pas screen). Bypass si Alt enfoncé (free-drag).

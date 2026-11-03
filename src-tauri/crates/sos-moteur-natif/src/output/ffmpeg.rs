@@ -2,16 +2,30 @@
 //! (fichier) ou → FLV / MPEG-TS (flux live RTMP / SRT).
 //!
 //! Le sidecar ne reçoit que le bitstream (`-c copy`), jamais de frame brute.
-//! ⚠️ Un flux H.264 élémentaire ne transporte pas d'horodatage : le timing
-//! vient de `-framerate` (valeur passée à la création). Comme les paquets
-//! sont écrits en temps réel à la cadence de l'encodeur, les PTS synthétisés
-//! coïncident avec l'horloge murale — suffisant pour muxer FLV/TS ; la
-//! dérive d'un paquet manquant se borne à sa durée.
+//! ⚠️ Un flux H.264/HEVC élémentaire ne transporte aucun horodatage. Le
+//! défaut est donc d'**envelopper chaque paquet en MPEG-TS** avec le vrai
+//! `PaquetEncode.pts_us` (`output/ts.rs`) : FFmpeg reçoit `-f mpegts` et
+//! remuxe en fMP4/MKV sans rien inventer. La grille est tenue en plus par le
+//! moteur, qui **réémet** la dernière frame quand un tick est manqué
+//! (`moteur.rs`, compteur `frames_dupliquees`).
+//!
+//! ⚠️ **Ne pas revenir à `-use_wallclock_as_timestamps 1` par défaut** : les
+//! PTS y sont les **temps d'arrivée** dans le démultiplexeur, quantifiés par
+//! les rafales de lecture du pipe et par la file d'écriture — une session
+//! réelle (46,79 fps mesurés, 824 ticks en retard) produisait une image qui
+//! se fige puis saute. Le mode est conservé sous `SOS_PTS=1` pour l'A/B.
+//!
+//! ⚠️ **Le réhorodatage ne doit pas s'ajouter aux PTS réels** : il étirerait
+//! une seconde fois (mesuré le 2026-11-03 : 11 460 frames / 448,9 s = 25,53
+//! fps, cible 50 → ×1,96 → lecture au ralenti). `rehorodater` ne s'applique
+//! donc **qu'au** mode `SOS_CFR=1`, qui ne duplique pas et dont la durée
+//! dérive réellement.
 
+use std::collections::VecDeque;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, Command, Stdio};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 
 use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::thread::JoinHandle;
@@ -29,12 +43,55 @@ use windows::Win32::System::Pipes::{
 };
 
 use super::{Conteneur, ErreurSortie, Sink};
+use super::ts::MuxeurTs;
 use crate::audio::live::{
     chemin_pipe_audio, chemin_pipe_audio_ffmpeg, nom_pipe_audio, CANAUX_CIBLE, TAUX_CIBLE,
 };
 use crate::encode::ffmpeg::chemin_sidecar;
 use crate::encode::PaquetEncode;
 use sos_moteur_api::{Codec, ErreurMoteur};
+
+/// Mode d'horodatage de la vidéo — **un seul point de vérité**, partagé par
+/// le sink (arguments FFmpeg) et par le moteur (rattrapage CFR).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Horodatage {
+    /// Défaut : le vrai `pts_us` de chaque frame, enveloppé en **MPEG-TS**
+    /// (`output/ts.rs`). Le moteur réémet en plus la dernière frame pour
+    /// chaque tick manqué → grille uniforme **et** PTS fidèles.
+    Ts,
+    /// `SOS_TS=0` — A/B : bitstream brut + `-framerate` (grille CFR déduite
+    /// du nombre de frames), avec rattrapage. Utile si le TS se comporte mal
+    /// chez un utilisateur.
+    CfrDuplique,
+    /// `SOS_CFR=1` — A/B historique : CFR **sans** rattrapage, durée rétablie
+    /// à l'arrêt par [`rehorodater`] (`setts`, étirement uniforme).
+    Cfr,
+    /// `SOS_PTS=1` — A/B : PTS = temps d'arrivée réels
+    /// (`-use_wallclock_as_timestamps 1`). C'est ce mode qui produisait la
+    /// saccade (PTS quantifiés par les rafales de lecture du pipe).
+    Reel,
+}
+
+/// Mode courant, lu dans l'environnement à chaque appel (pas d'état figé :
+/// l'A/B doit pouvoir changer sans relancer le moteur).
+pub fn horodatage() -> Horodatage {
+    if std::env::var_os("SOS_CFR").is_some() {
+        Horodatage::Cfr
+    } else if std::env::var_os("SOS_PTS").is_some() {
+        Horodatage::Reel
+    } else if std::env::var_os("SOS_TS").is_some_and(|v| v == "0") {
+        Horodatage::CfrDuplique
+    } else {
+        Horodatage::Ts
+    }
+}
+
+/// Le moteur doit-il réémettre les frames manquées ? Oui partout **sauf** en
+/// `SOS_CFR=1` (le réhorodatage rétablit la durée, dupliquer l'étirerait) et
+/// en `SOS_PTS=1` (on mesure le comportement d'avant).
+pub fn rattrapage_cfr() -> bool {
+    matches!(horodatage(), Horodatage::Ts | Horodatage::CfrDuplique)
+}
 
 /// Taille maximale de stderr conservée par sink réseau (queue de tampon).
 const STDERR_MAX: usize = 16 * 1024;
@@ -81,11 +138,15 @@ fn nom_demuxer(codec: Codec) -> &'static str {
     }
 }
 
-/// Muxeur piloté par un processus FFmpeg (stdin = bitstream H.264).
+/// Muxeur piloté par un processus FFmpeg (stdin = bitstream ou MPEG-TS).
 pub struct FfmpegSink {
     enfant: Child,
     /// Stdin direct — `None` dès que le fil d'écriture le possède.
     entree: Option<ChildStdin>,
+    /// Enveloppe MPEG-TS des paquets — `None` = bitstream brut (A/B
+    /// `SOS_TS=0`, `SOS_CFR=1`, `SOS_PTS=1`, ou codec refusé en TS comme
+    /// AV1). Voir [`Horodatage`].
+    muxeur: Option<MuxeurTs>,
     /// Fil d'écriture du bitstream : la composition **ne bloque jamais** sur
     /// le stdin (un FFmpeg qui ne draine plus devient une dégradation
     /// explicite, jamais un gel de la boucle).
@@ -109,6 +170,26 @@ const DELAI_ECRITURE: std::time::Duration = std::time::Duration::from_secs(3);
 
 /// Profondeur de la file d'écriture, en paquets (~0,13 s à 60 fps).
 const FILE_ECRITURE: usize = 8;
+
+/// Plafond de la file d'écriture **audio**, en octets : 120 s de PCM 48 kHz
+/// stéréo s16 (~23 Mio). FFmpeg draine ce pipe par rafales séparées de
+/// plusieurs secondes ; au-delà du plafond le bloc le plus ancien est jeté et
+/// **compté** (jamais silencieux).
+const FILE_AUDIO_MAX: usize = TAUX_CIBLE as usize * CANAUX_CIBLE as usize * 2 * 120;
+
+/// Attente entre deux tentatives d'écriture sur un pipe plein (`PIPE_NOWAIT`).
+/// 2 ms : assez court pour ne pas retarder le drain, assez long pour ne pas
+/// brûler un cœur quand FFmpeg retient l'audio.
+const ATTENTE_PIPE: std::time::Duration = std::time::Duration::from_millis(2);
+
+/// Délai maximal de vidage **après fermeture** avant d'abandonner un bloc
+/// (FFmpeg figé) : l'arrêt d'un enregistrement ne doit jamais se figer.
+/// 2 s : un drain sain vide sa file en quelques dizaines de ms ; au-delà
+/// c'est un FFmpeg qui retient l'audio — le post-mux répare alors la piste.
+/// Mesuré sur une session réelle : la piste live est systématiquement
+/// incomplète, donc attendre 5 s ne sauvait rien et coûtait 3 s de plus à
+/// chaque arrêt.
+const DELAI_VIDAGE: std::time::Duration = std::time::Duration::from_secs(2);
 
 impl FfmpegSink {
     /// Démarre le sidecar. `ffmpeg` à `None` → résolution par `chemin_sidecar`.
@@ -250,18 +331,53 @@ impl FfmpegSink {
             None => chemin_sidecar().map_err(|e| ErreurSortie::Processus(e.to_string()))?,
         };
 
+        let mode = horodatage();
+        // Le TS n'est utilisé que si le codec est supporté (AV1 → `None`,
+        // chemin brut historique). `mode == Ts` et `muxeur.is_none()` ne
+        // peuvent pas diverger : les deux dérivent de cette seule valeur.
+        let muxeur = if mode == Horodatage::Ts {
+            MuxeurTs::nouveau(codec)
+        } else {
+            None
+        };
+        let ts = muxeur.is_some();
+
         let mut args: Vec<String> = vec![
             "-hide_banner".into(),
             "-loglevel".into(),
             "error".into(),
             "-y".into(),
-            "-f".into(),
-            nom_demuxer(codec).to_string(),
-            "-framerate".into(),
-            fps.to_string(),
-            "-i".into(),
-            "pipe:0".into(),
         ];
+        if ts {
+            // Entrée TS : les PTS viennent de nos en-têtes PES, `-framerate`
+            // n'a plus de sens. Fenêtre d'analyse **bornée** : sans elle
+            // `avformat_find_stream_info` peut lire plusieurs secondes avant
+            // d'écrire le premier octet. Elle reste largement suffisante —
+            // PAT/PMT et SPS/PPS arrivent dans les premiers Ko.
+            args.extend([
+                "-f".into(),
+                "mpegts".into(),
+                "-analyzeduration".into(),
+                "1000000".into(),
+                "-probesize".into(),
+                "1000000".into(),
+            ]);
+        } else {
+            args.extend([
+                "-f".into(),
+                nom_demuxer(codec).to_string(),
+                "-framerate".into(),
+                fps.to_string(),
+            ]);
+        }
+        // PTS réels = temps d'arrivée : **A/B uniquement** (`SOS_PTS=1`).
+        // **Fichiers seulement** : un flux RTMP/SRT garde la CFR exigée par
+        // les plateformes.
+        if mode == Horodatage::Reel && matches!(cible, Sortie::Fichier { .. }) {
+            args.push("-use_wallclock_as_timestamps".into());
+            args.push("1".into());
+        }
+        args.extend(["-i".into(), "pipe:0".into()]);
         match pipe_audio {
             // Interleaving live : PCM brut → AAC ; le mapping est explicite
             // (vidéo = entrée 0, audio = entrée 1). Jamais `-shortest` ici :
@@ -273,6 +389,13 @@ impl FfmpegSink {
                 TAUX_CIBLE.to_string(),
                 "-ac".into(),
                 CANAUX_CIBLE.to_string(),
+                // ⚠️ **Fenêtre d'analyse supprimée** (gel n° 2, §75) : le
+                // format est entièrement spécifié par `-f/-ar/-ac`, donc
+                // `avformat_find_stream_info` n'a rien à deviner. Sans cette
+                // option il lit ~4,3 s de PCM (819 200 o, défaut 5 s) **au
+                // rythme réel et sans lire stdin** — le tampon du stdin vidéo
+                // (~74 Ko) déborde, la composition se bloque et n'alimente
+                // plus le pipe audio : interblocage définitif.
                 // ⚠️ **Fenêtre d'analyse supprimée** (gel n° 2, §75) : le
                 // format est entièrement spécifié par `-f/-ar/-ac`, donc
                 // `avformat_find_stream_info` n'a rien à deviner. Sans cette
@@ -368,6 +491,7 @@ impl FfmpegSink {
         let mut sink = Self {
             enfant,
             entree,
+            muxeur,
             ecrivain: None,
             octets: 0,
             paquets: 0,
@@ -485,12 +609,20 @@ impl FfmpegSink {
 
 impl Sink for FfmpegSink {
     fn pousser(&mut self, paquet: &PaquetEncode) -> Result<(), ErreurMoteur> {
+        // Enveloppe MPEG-TS (PTS par frame) ou bitstream brut selon le mode.
+        // Le PTS du paquet n'est **jamais** perdu en mode TS : c'est la
+        // raison d'être de `output/ts.rs`.
+        let data = match self.muxeur.as_mut() {
+            Some(muxeur) => muxeur.envelopper(paquet),
+            None => paquet.data.clone(),
+        };
+        let taille = data.len();
         if let Some((tx, _)) = self.ecrivain.as_ref() {
             // File bornée + échéance : jamais de blocage indéfini de la
             // composition (voir `demarrer_ecrivain`). `send_timeout` est
             // instable → `try_send` + attente courte bornée.
             let debut = std::time::Instant::now();
-            let mut bloc = Some(paquet.data.clone());
+            let mut bloc = Some(data);
             while let Some(data) = bloc.take() {
                 match tx.try_send(data) {
                     Ok(()) => break,
@@ -516,10 +648,10 @@ impl Sink for FfmpegSink {
                 .ok_or_else(|| ErreurSortie::Processus("stdin deja ferme".into()))
                 .map_err(ErreurMoteur::from)?;
             entree
-                .write_all(&paquet.data)
+                .write_all(&data)
                 .map_err(|e| self.erreur_processus(format!("ecriture : {e}")))?;
         }
-        self.octets += paquet.data.len() as u64;
+        self.octets += taille as u64;
         self.paquets += 1;
         Ok(())
     }
@@ -563,11 +695,27 @@ impl Drop for FfmpegSink {
 /// contrat vie privée — et un futur sink RTMP/SRT réutilise le même
 /// transport (le muxeur y porte les PTS).
 ///
-/// `HANDLE` est un entier : `PipeAudio` est naturellement `Send`.
+/// `HANDLE` vit dans le fil d'écriture (transmis en `usize`, il n'est pas
+/// `Send`) : `PipeAudio` ne garde que la file partagée, il est `Send`.
 pub struct PipeAudio {
-    handle: HANDLE,
+    /// État partagé avec le fil d'écriture (file bornée, compteurs, arrêt).
+    partage: Arc<(Mutex<FileAudio>, Condvar)>,
     /// `\\.\pipe\sos-audio-<pid>-<n>` — affiché dans les erreurs.
     nom: String,
+    fil: Option<JoinHandle<()>>,
+}
+
+/// File d'écriture du pipe audio — partagée entre la composition (dépôt) et
+/// le fil dédié (écriture).
+struct FileAudio {
+    blocs: VecDeque<Vec<u8>>,
+    octets: usize,
+    ferme: bool,
+    /// Horodatage de la fermeture : borne **globale** du vidage final.
+    ferme_depuis: Option<std::time::Instant>,
+    ecrits: u64,
+    sautes: u64,
+    erreur: Option<String>,
 }
 
 impl PipeAudio {
@@ -599,47 +747,212 @@ impl PipeAudio {
         // FFmpeg cesse de le lire quand il attend de la vidéo — et la
         // composition, bloquée ici, ne lui en envoie plus : interblocage
         // définitif (reproduit : 389 composites puis gel). En `PIPE_NOWAIT`,
-        // un tampon plein rend la main immédiatement et le bloc est **sauté**
-        // (trou audio borné) — jamais le flux entier.
+        // un tampon plein rend la main immédiatement : le fil d'écriture
+        // **réessaie** (voir `ecrire_bloc`), la composition ne bloque jamais.
         let mode = PIPE_NOWAIT;
         if let Err(e) = unsafe { SetNamedPipeHandleState(handle, Some(&mode), None, None) } {
             // Non fatal : on garde le mode bloquant (comportement d'avant).
             log::warn!("pipe {chemin} : mode non bloquant refusé ({e})");
         }
+        let partage = Arc::new((
+            Mutex::new(FileAudio {
+                blocs: VecDeque::new(),
+                octets: 0,
+                ferme: false,
+                ferme_depuis: None,
+                ecrits: 0,
+                sautes: 0,
+                erreur: None,
+            }),
+            Condvar::new(),
+        ));
+        let fil = {
+            let partage = Arc::clone(&partage);
+            // `HANDLE` n'est pas `Send` : on le transporte en `usize` et on le
+            // reconstruit dans le fil, seul propriétaire du handle.
+            let brut = handle.0 as usize;
+            match std::thread::Builder::new()
+                .name("sos-pipe-audio".to_string())
+                .spawn(move || ecrire_file(brut, partage))
+            {
+                Ok(fil) => fil,
+                Err(e) => {
+                    unsafe {
+                        let _ = CloseHandle(handle);
+                    }
+                    return Err(ErreurSortie::Processus(format!("fil audio {chemin} : {e}")));
+                }
+            }
+        };
         Ok(Self {
-            handle,
+            partage,
             nom: chemin.to_string(),
+            fil: Some(fil),
         })
     }
 
-    /// Écrit un bloc PCM entier. Tant que FFmpeg n'a pas fait son
-    /// `CreateFile` (les ~ms entre le spawn et l'ouverture de l'entrée 1),
-    /// `WriteFile` reçoit `ERROR_PIPE_LISTENING` : le bloc est sauté —
-    /// trou bref au pire, jamais d'attente ni de casse de la voie live.
+    /// Dépose un bloc PCM dans la file du fil d'écriture — **jamais** bloquant
+    /// et **jamais** perdu sous le plafond (`FILE_AUDIO_MAX`).
     ///
-    /// Le pipe est en `PIPE_NOWAIT` (voir `creer`) : si FFmpeg stagne en
-    /// lecture, le tampon plein rend la main et le bloc est **sauté** —
-    /// `ERROR_PIPE_NOT_CONNECTED` / `ERROR_NO_DATA` / `ERROR_BUSY` ou une
-    /// écriture nulle. C'est un trou audio borné, jamais un gel de la
-    /// composition (le flux vidéo continue d'alimenter FFmpeg, qui reprend
-    /// la lecture de l'audio dès qu'il peut).
-    /// Pas de `ConnectNamedPipe` : il **bloquerait** tant qu'aucun client
-    /// n'est là, et la connexion est faite côté client par FFmpeg.
+    /// ⚠️ FFmpeg draine ce pipe **par rafales** : mesuré, il lit ~1,2 s puis
+    /// n'y touche plus pendant plusieurs secondes (le muxeur retient les
+    /// paquets). L'ancien contrat « tampon plein → bloc sauté » réduisait donc
+    /// la piste audio à la taille du tampon du pipe (1,55 s pour 320 s de
+    /// vidéo, mesuré sur `StreamOS-2026-11-02_05-05-19.mp4`). Le bloc est
+    /// maintenant **retenu** et écrit quand FFmpeg le veut.
+    ///
+    /// Une erreur réelle du pipe (client fermé) est mémorisée puis rendue au
+    /// prochain dépôt : `moteur.rs` retire alors le pipe et le post-mux
+    /// répare la piste.
     pub fn ecrire(&mut self, octets: &[u8]) -> Result<(), ErreurSortie> {
-        let mut ecrits = 0usize;
-        while ecrits < octets.len() {
-            let mut n = 0u32;
-            if let Err(e) = unsafe {
-                WriteFile(
-                    self.handle,
-                    Some(&octets[ecrits..]),
-                    Some(&mut n),
-                    None,
-                )
-            } {
-                // Pas de client / tampon plein : bloc sauté, jamais d'attente.
-                // ⚠️ Comparer des `HRESULT` (`HRESULT_FROM_WIN32`), jamais le
-                // code Win32 nu : `0x8007_00E7` ≠ `231`.
+        if octets.is_empty() {
+            return Ok(());
+        }
+        let (verrou, cond) = &*self.partage;
+        let mut file = verrou.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(e) = file.erreur.as_ref() {
+            return Err(ErreurSortie::Processus(format!(
+                "pipe audio {} : {e}",
+                self.nom
+            )));
+        }
+        // Borne mémoire : au-delà, le bloc le plus ancien est jeté et compté.
+        while file.octets + octets.len() > FILE_AUDIO_MAX {
+            match file.blocs.pop_front() {
+                Some(vieux) => {
+                    file.octets -= vieux.len();
+                    file.sautes += 1;
+                }
+                None => break,
+            }
+        }
+        file.blocs.push_back(octets.to_vec());
+        file.octets += octets.len();
+        cond.notify_one();
+        Ok(())
+    }
+
+    /// Ferme le pipe (EOF audio) **et rend le bilan** de la session.
+    ///
+    /// Le moteur décide sur ces chiffres si la piste live est complète ou si
+    /// le post-mux doit réparer (`muxer_audio`). Idempotent : `Drop` ne refait
+    /// rien après.
+    pub fn fermer(&mut self) -> BilanAudio {
+        {
+            let (verrou, cond) = &*self.partage;
+            let mut file = verrou.lock().unwrap_or_else(|e| e.into_inner());
+            if !file.ferme {
+                file.ferme = true;
+                file.ferme_depuis = Some(std::time::Instant::now());
+            }
+            cond.notify_all();
+        }
+        if let Some(fil) = self.fil.take() {
+            let _ = fil.join();
+        }
+        let file = self
+            .partage
+            .0
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        BilanAudio {
+            octets_ecrits: file.ecrits,
+            blocs_sautes: file.sautes,
+        }
+    }
+}
+
+/// Bilan d'une session audio live (voir [`PipeAudio::fermer`]).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct BilanAudio {
+    /// Octets PCM réellement remis à FFmpeg.
+    pub octets_ecrits: u64,
+    /// Blocs abandonnés (file saturée, ou FFmpeg muet après la fermeture).
+    pub blocs_sautes: u64,
+}
+
+/// Corps du fil d'écriture : vide la file vers le pipe. La composition ne
+/// touche plus jamais `WriteFile` — un FFmpeg qui retient l'audio fait grandir
+/// la file (bornée), jamais la latence de composition.
+fn ecrire_file(brut: usize, partage: Arc<(Mutex<FileAudio>, Condvar)>) {
+    let handle = HANDLE(brut as *mut core::ffi::c_void);
+    let (verrou, cond) = &*partage;
+    loop {
+        let bloc = {
+            let mut file = verrou.lock().unwrap_or_else(|e| e.into_inner());
+            while file.blocs.is_empty() && !file.ferme {
+                file = cond.wait(file).unwrap_or_else(|e| e.into_inner());
+            }
+            match file.blocs.pop_front() {
+                Some(bloc) => {
+                    file.octets -= bloc.len();
+                    bloc
+                }
+                // Fermé et vidé : plus rien à écrire.
+                None => break,
+            }
+        };
+        match ecrire_bloc(handle, &bloc, verrou) {
+            Ok(ecrits) => {
+                let mut file = verrou.lock().unwrap_or_else(|e| e.into_inner());
+                file.ecrits += ecrits as u64;
+                if ecrits < bloc.len() {
+                    file.sautes += 1;
+                }
+            }
+            Err(e) => {
+                let mut file = verrou.lock().unwrap_or_else(|e| e.into_inner());
+                file.erreur = Some(e);
+                file.blocs.clear();
+                file.octets = 0;
+                break;
+            }
+        }
+    }
+    // Fermer le handle = EOF audio pour FFmpeg.
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+    let file = verrou.lock().unwrap_or_else(|e| e.into_inner());
+    if file.sautes > 0 {
+        log::warn!(
+            "pipe audio : {} octet(s) écrits, {} bloc(s) abandonné(s) (file saturée ou FFmpeg muet)",
+            file.ecrits,
+            file.sautes
+        );
+    }
+}
+
+/// Écrit un bloc entier, en réessayant tant que le tampon est plein.
+///
+/// `PIPE_NOWAIT` rend la main au lieu d'attendre (voir `creer`) : sur tampon
+/// plein (`n == 0`) ou client pas encore connecté (`ERROR_PIPE_LISTENING`),
+/// on **réessaie** après `ATTENTE_PIPE` — le bloc n'est plus jeté.
+/// ⚠️ Comparer des `HRESULT` (`HRESULT_FROM_WIN32`), jamais le code Win32 nu :
+/// `0x8007_00E7` ≠ `231`.
+///
+/// Seule exception, après la fermeture : au-delà de `DELAI_VIDAGE` le bloc est
+/// abandonné (compté par l'appelant) pour que l'arrêt ne se fige jamais sur un
+/// FFmpeg mort. La borne est **globale** (horodatée à la fermeture), pas par
+/// bloc — sinon un FFmpeg muet ferait attendre 10 s par bloc.
+fn ecrire_bloc(
+    handle: HANDLE,
+    bloc: &[u8],
+    verrou: &Mutex<FileAudio>,
+) -> Result<usize, String> {
+    let mut ecrits = 0usize;
+    while ecrits < bloc.len() {
+        let mut n = 0u32;
+        let bloque = match unsafe { WriteFile(handle, Some(&bloc[ecrits..]), Some(&mut n), None) } {
+            Ok(()) => {
+                if n == 0 {
+                    true
+                } else {
+                    ecrits += n as usize;
+                    false
+                }
+            }
+            Err(e) => {
                 if [
                     ERROR_PIPE_LISTENING,
                     ERROR_PIPE_NOT_CONNECTED,
@@ -649,30 +962,33 @@ impl PipeAudio {
                 .iter()
                 .any(|code| e.code() == windows::core::HRESULT::from_win32(code.0))
                 {
-                    return Ok(());
+                    true
+                } else {
+                    return Err(e.message().to_string());
                 }
-                return Err(ErreurSortie::Processus(format!(
-                    "pipe audio {} : {}",
-                    self.nom,
-                    e.message()
-                )));
             }
-            if n == 0 {
-                // `PIPE_NOWAIT` sans place : rien écrit, bloc sauté.
-                return Ok(());
-            }
-            ecrits += n as usize;
+        };
+        if !bloque {
+            continue;
         }
-        Ok(())
+        let fermeture = verrou
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ferme_depuis;
+        if fermeture.is_some_and(|t| t.elapsed() >= DELAI_VIDAGE) {
+            break;
+        }
+        std::thread::sleep(ATTENTE_PIPE);
     }
+    Ok(ecrits)
 }
 
 impl Drop for PipeAudio {
     fn drop(&mut self) {
-        // Fermer le handle = EOF audio pour FFmpeg.
-        unsafe {
-            let _ = CloseHandle(self.handle);
-        }
+        // Signale la fin, laisse le fil vider la file, puis l'attend : c'est
+        // lui qui ferme le handle (EOF audio pour FFmpeg), après le dernier
+        // bloc — y compris ceux que FFmpeg n'a pas encore voulu lire.
+        let _ = self.fermer();
     }
 }
 
@@ -809,5 +1125,195 @@ pub fn muxer_audio(
             let _ = std::fs::remove_file(&temporaire);
             Err(ErreurSortie::Processus(format!("bascule : {e}")))
         }
+    }
+}
+
+/// Réhorodate la piste **vidéo** d'un fichier finalisé au fps réellement tenu.
+///
+/// ⚠️ Le moteur n'écrit aucun horodatage : FFmpeg synthétise les PTS depuis
+/// `-framerate <fps cible>`. Un moteur qui produit 48,6 fps pendant 395 s
+/// donne donc un fichier de 320 s — **accéléré ×1,23** (mesuré sur
+/// `StreamOS-2026-11-02_05-05-19.mp4` : 19 199 frames, 320,01 s pour 395 s
+/// réelles). `setts` réécrit les PTS sans réencodage : la durée redevient
+/// celle de la session, l'audio est copié tel quel.
+///
+/// Écart < 0,5 % → aucun passage (le fichier est déjà juste). Un écart plus
+/// grand laisse la **saccade de mouvement** : la grille devient uniforme, le
+/// timing par frame est perdu — c'est le lot « vrais PTS » (option B) qui le
+/// traitera.
+///
+/// ⚠️ **Réservé à `SOS_CFR=1`** : dans le mode par défaut, la grille CFR est
+/// tenue par le rattrapage du moteur et la durée est déjà juste — réétirer
+/// doublerait l'effet. En `SOS_PTS=1`, les PTS sont déjà les temps d'arrivée
+/// réels (mesuré : fichier 25,53 fps étiré ×1,96 → ralenti).
+pub fn rehorodater(
+    chemin: &Path,
+    fps_cible: u32,
+    frames: u64,
+    ecoule: std::time::Duration,
+) -> Result<(), ErreurSortie> {
+    if horodatage() != Horodatage::Cfr {
+        return Ok(());
+    }
+    let Some((num, den)) = facteur_rehorodatage(fps_cible, frames, ecoule) else {
+        return Ok(());
+    };
+
+    let binaire = chemin_sidecar().map_err(|e| ErreurSortie::Processus(e.to_string()))?;
+    let extension = chemin
+        .extension()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_else(|| "mp4".to_string());
+    let nom = chemin
+        .file_stem()
+        .map(|e| e.to_string_lossy().to_string())
+        .unwrap_or_else(|| "sortie".to_string());
+    let dossier = chemin.parent().unwrap_or_else(|| Path::new("."));
+    let temporaire = dossier.join(format!("{nom}.timing.{extension}"));
+    let sauvegarde = dossier.join(format!("{nom}.avant-timing.{extension}"));
+
+    let args: Vec<String> = vec![
+        "-hide_banner".into(),
+        "-loglevel".into(),
+        "error".into(),
+        "-y".into(),
+        "-i".into(),
+        chemin.to_string_lossy().to_string(),
+        "-c".into(),
+        "copy".into(),
+        // Vidéo seulement : l'audio porte ses propres PTS (temps réel) et ne
+        // doit surtout pas être étiré avec l'image.
+        "-bsf:v".into(),
+        format!("setts=ts=TS*{num}/{den}"),
+        temporaire.to_string_lossy().to_string(),
+    ];
+    let sortie = Command::new(&binaire)
+        .args(&args)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|e| ErreurSortie::Processus(format!("réhorodatage : {e}")))?;
+    if !sortie.status.success() {
+        let _ = std::fs::remove_file(&temporaire);
+        let detail = String::from_utf8_lossy(&sortie.stderr);
+        return Err(ErreurSortie::Processus(format!(
+            "réhorodatage : statut {:?} — {}",
+            sortie.status.code(),
+            detail.lines().last().unwrap_or("").trim()
+        )));
+    }
+
+    std::fs::rename(chemin, &sauvegarde)
+        .map_err(|e| ErreurSortie::Processus(format!("sauvegarde : {e}")))?;
+    match std::fs::rename(&temporaire, chemin) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&sauvegarde);
+            Ok(())
+        }
+        Err(e) => {
+            // Restaure l'original plutôt que de laisser l'utilisateur sans
+            // fichier.
+            let _ = std::fs::rename(&sauvegarde, chemin);
+            let _ = std::fs::remove_file(&temporaire);
+            Err(ErreurSortie::Processus(format!("bascule : {e}")))
+        }
+    }
+}
+
+/// Facteur `(num, den)` du réhorodatage — `None` si l'écart au fps cible est
+/// négligeable (< 0,5 %) ou si la mesure est inexploitable.
+///
+/// Ratio = (fps cible × écoulé) / frames, en fraction **entière réduite** :
+/// les expressions `setts` sont évaluées en i64, on garde donc les nombres
+/// petits.
+fn facteur_rehorodatage(
+    fps_cible: u32,
+    frames: u64,
+    ecoule: std::time::Duration,
+) -> Option<(u128, u128)> {
+    let millis = ecoule.as_millis();
+    if frames == 0 || fps_cible == 0 || millis == 0 {
+        return None;
+    }
+    let mut num = millis * u128::from(fps_cible);
+    let mut den = u128::from(frames) * 1000;
+    let (mut a, mut b) = (num, den);
+    while b != 0 {
+        let t = b;
+        b = a % b;
+        a = t;
+    }
+    let pgcd = a.max(1);
+    num /= pgcd;
+    den /= pgcd;
+    if ((num as f64 / den as f64) - 1.0).abs() < 0.005 {
+        return None;
+    }
+    Some((num, den))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Read;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    static COMPTEUR: AtomicU32 = AtomicU32::new(0);
+
+    /// Le facteur du réhorodatage porte les chiffres **mesurés** du fichier
+    /// utilisateur : 19 199 frames en 395 s à 60 fps de cible → ×1,2344.
+    #[test]
+    fn facteur_rehorodatage_suit_le_fps_mesure() {
+        let (num, den) = facteur_rehorodatage(60, 19_199, std::time::Duration::from_secs(395))
+            .expect("écart de 23 % → réhorodatage");
+        let facteur = num as f64 / den as f64;
+        assert!((facteur - 1.2344).abs() < 0.001, "facteur {facteur}");
+        // Durée du fichier après réhorodatage = frames × (1/fps_cible) × facteur.
+        let duree = 19_199.0 / 60.0 * facteur;
+        assert!((duree - 395.0).abs() < 0.5, "durée {duree}");
+    }
+
+    /// Un moteur qui tient sa cible ne déclenche **aucun** passage.
+    #[test]
+    fn facteur_rehorodatage_ignore_un_ecart_negligeable() {
+        assert_eq!(
+            facteur_rehorodatage(60, 1199, std::time::Duration::from_millis(20_000)),
+            None
+        );
+        assert_eq!(facteur_rehorodatage(60, 0, std::time::Duration::from_secs(1)), None);
+        assert_eq!(facteur_rehorodatage(0, 60, std::time::Duration::from_secs(1)), None);
+    }
+
+    /// Un bloc déposé **avant** que le client ne lise n'est pas perdu : c'est
+    /// exactement le défaut mesuré (piste audio réduite à la taille du tampon
+    /// du pipe, 1,55 s pour 320 s de vidéo).
+    #[test]
+    fn pipe_audio_ne_perd_pas_les_blocs_retardes() {
+        let n = COMPTEUR.fetch_add(1, Ordering::Relaxed);
+        let nom = format!("sos-test-audio-{}-{n}", std::process::id());
+        let chemin = format!(r"\\.\pipe\{nom}");
+        let mut pipe = PipeAudio::creer(&chemin).expect("pipe");
+
+        // Client « FFmpeg » : il ne se connecte qu'après 200 ms.
+        let client = chemin.clone();
+        let lecteur = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(200));
+            let mut fichier = std::fs::File::open(&client).expect("client");
+            let mut recu = Vec::new();
+            fichier.read_to_end(&mut recu).expect("lecture");
+            recu
+        });
+
+        let bloc = vec![7u8; 19_200]; // 100 ms de PCM 48 kHz stéréo s16
+        for _ in 0..5 {
+            pipe.ecrire(&bloc).expect("dépôt");
+        }
+        // La fermeture vide la file puis rend EOF au client.
+        drop(pipe);
+
+        let recu = lecteur.join().expect("fil lecteur");
+        assert_eq!(recu.len(), 5 * bloc.len());
+        assert!(recu.iter().all(|o| *o == 7));
     }
 }

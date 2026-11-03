@@ -72,6 +72,12 @@ export const cadreModalOpen = writable(false);
 /// Commandes / Présentation / Musique + outil Position des overlays).
 export const interactionModalOpen = writable(false);
 
+/// Onglet ciblé à l'ouverture de la modale Interactions (null = onglet par
+/// défaut « Alertes »). Posé par le raccourci « Position… » de la carte
+/// speedrun ; purgé par la modale à la fermeture (sinon la prochaine
+/// ouverture par la Toolbar retomberait sur « position »).
+export const interactionModalTab = writable<string | null>(null);
+
 /// Modale Modération & Rôles : true = ouverte (onglets par plateforme).
 /// Seuls les onglets des plateformes fonctionnelles sont affichés.
 export const moderationModalOpen = writable(false);
@@ -164,3 +170,9 @@ export const guideLivreOpen = writable(false);
 /// (lanceur Toolbar → "horloge" par défaut ; clic sur un module du canvas →
 /// ce module). Même pattern que titreModalOpen (cible portée par la valeur).
 export const modulesModalOpen = writable<ModuleId | null>(null);
+
+/// Carte d'édition d'un module HUD (2026-11-02) : null = fermée, sinon id
+/// du module. Remplace la carte flottante du canvas — les modules ont la
+/// même carte latérale que les widgets. Mutuellement exclusive avec
+/// `carteEditionCible` (gérée par CarteModule).
+export const moduleCarteId = writable<ModuleId | null>(null);

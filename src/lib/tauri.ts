@@ -1672,6 +1672,8 @@ export const tauri = {
     chemin: string | null;
     kbps: number;
     frames_perdues: number;
+    /// fps réellement tenu (mesuré) — `null` tant que rien n'est publié.
+    fps_reel: number | null;
     encodeur: string | null;
     degradation: string | null;
     erreur: string | null;

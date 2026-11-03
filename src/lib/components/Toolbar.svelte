@@ -44,6 +44,9 @@
   let natifMode = $derived($moteurEtat.mode === "natif");
   let enregistre = $derived(natifMode ? $sortieNatifFichierActif : recording);
   let streamActif = $derived(natifMode ? $sortieNatifFlux : streaming);
+  // État intermédiaire (démarrage/arrêt en cours) → orange, jamais vert.
+  let streamBusy = $derived(natifMode ? $sortieNatifBusy : $obsStreamBusy);
+  let recordBusy = $derived(natifMode ? $sortieNatifBusy : $obsRecordBusy);
   let open = $derived($openSection);
   let cx = $derived($connexions);
   let twitchErr = $derived($twitchErreur);
@@ -572,19 +575,21 @@
           <button
             class="action output-btn"
             class:actif={streamActif}
+            class:attente={streamBusy && !streamActif}
             onclick={onToggleStream}
             disabled={natifMode ? $sortieNatifBusy : status !== "connected" || $obsStreamBusy}
           >
-            <span class="dot" class:on={streamActif}></span>
+            <span class="dot" class:actif={streamActif} class:attente={streamBusy && !streamActif}></span>
             {streamActif ? $t("toolbar.streamStop") : $t("toolbar.streamStart")}
           </button>
           <button
             class="action output-btn"
             class:actif={enregistre}
+            class:attente={recordBusy && !enregistre}
             onclick={onToggleRecord}
             disabled={(!natifMode && status !== "connected") || $obsRecordBusy || $sortieNatifBusy}
           >
-            <span class="dot" class:on={enregistre}></span>
+            <span class="dot" class:actif={enregistre} class:attente={recordBusy && !enregistre}></span>
             {enregistre ? $t("commun.arreterEnregistrement") : $t("commun.demarrerEnregistrement")}
           </button>
           {#if natifMode}
@@ -1534,9 +1539,15 @@
     gap: 0.45rem;
   }
   .output-btn.actif {
-    --btn-border: linear-gradient(var(--accent-ui), var(--accent-ui));
-    border-color: var(--accent-ui);
-    color: var(--accent-ui);
+    --btn-border: linear-gradient(var(--etat-actif), var(--etat-actif));
+    border-color: var(--etat-actif);
+    color: var(--etat-actif);
+  }
+  /* Intermédiaire : démarrage/arrêt en cours — orange, pas vert. */
+  .output-btn.attente {
+    --btn-border: linear-gradient(var(--etat-attente), var(--etat-attente));
+    border-color: var(--etat-attente);
+    color: var(--etat-attente);
   }
   /* Le style des selects est global (app.css) — reste la largeur pleine. */
   select {

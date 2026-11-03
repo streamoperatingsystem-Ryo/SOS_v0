@@ -160,7 +160,12 @@ pub struct DiagMoteur {
     pub adaptateur: Option<String>,
     pub encodeur: Option<String>,
     pub resolution: Option<(u32, u32)>,
+    /// fps **demandé** par la session (configuration).
     pub fps: Option<u32>,
+    /// fps **mesuré** (moyenne depuis le début de la session) — `None` tant
+    /// que rien n'est mesuré. Distinct de `fps` : c'est le seul chiffre qui
+    /// dit si le moteur tient sa cible.
+    pub fps_reel: Option<f64>,
 }
 
 #[tauri::command]
@@ -170,14 +175,19 @@ pub fn moteur_diag(registre: State<'_, RegistreMoteur>) -> DiagMoteur {
         Mode::Obs => registre.obs().etat().est_actif(),
         Mode::Natif => registre.natif().etat().est_actif(),
     };
-    let (encodeur, resolution, fps) = match mode {
+    let (encodeur, resolution, fps, fps_reel) = match mode {
         Mode::Natif => {
             let encodeur = registre.natif().encodeur().map(|e| e.nom);
             let instantane = registre.natif().instantane();
             let resolution = (instantane.resolution.0 > 0).then_some(instantane.resolution);
-            (encodeur, resolution, registre.session().map(|s| s.fps))
+            (
+                encodeur,
+                resolution,
+                registre.session().map(|s| s.fps),
+                instantane.fps_reel,
+            )
         }
-        Mode::Obs => (None, None, None),
+        Mode::Obs => (None, None, None, None),
     };
     DiagMoteur {
         actif,
@@ -187,6 +197,7 @@ pub fn moteur_diag(registre: State<'_, RegistreMoteur>) -> DiagMoteur {
         encodeur,
         resolution,
         fps,
+        fps_reel,
     }
 }
 
@@ -199,7 +210,11 @@ pub struct EtatSortieNatif {
     /// d'un flux (la clé de stream n'y figure jamais).
     pub chemin: Option<String>,
     pub kbps: u32,
+    /// Frames présentées plus d'une période en retard (drops réels). Était
+    /// toujours à 0 : `CompteursMoteur::perdue` n'avait aucun appelant.
     pub frames_perdues: u64,
+    /// fps **mesuré** — `None` tant que la session n'a rien publié.
+    pub fps_reel: Option<f64>,
     pub encodeur: Option<String>,
     pub degradation: Option<String>,
     /// Erreur **terminale** du moteur natif (thread arrêté sur erreur).
@@ -227,6 +242,7 @@ pub fn moteur_sortie_etat(registre: State<'_, RegistreMoteur>) -> EtatSortieNati
         },
         kbps: if actif { instantane.kbps } else { 0 },
         frames_perdues: instantane.frames_perdues,
+        fps_reel: instantane.fps_reel,
         encodeur: registre.natif().encodeur().map(|e| e.nom),
         degradation: instantane.raison_degradation,
         erreur,
@@ -2655,6 +2671,9 @@ pub async fn apercu_fenetre_toggle(
     const LABEL: &str = "apercu-natif";
 
     if let Some(win) = app.get_webview_window(LABEL) {
+        // Fermeture : plus aucun consommateur → le moteur cesse de lire la
+        // texture d'aperçu (aucun readback GPU inutile).
+        registre.natif().demander_apercu(false);
         let _ = win.close();
         return Ok(false);
     }
@@ -2680,10 +2699,15 @@ pub async fn apercu_fenetre_toggle(
     win.on_window_event(move |event| {
         if let tauri::WindowEvent::Destroyed = event {
             if let Some(registre) = app_clone.try_state::<RegistreMoteur>() {
+                registre.natif().demander_apercu(false);
                 registre.natif().arreter_apercu();
             }
         }
     });
+
+    // Un consommateur existe : la boucle d'enregistrement (si elle tourne)
+    // alimente l'aperçu à la cadence configurée.
+    registre.natif().demander_apercu(true);
 
     Ok(true)
 }

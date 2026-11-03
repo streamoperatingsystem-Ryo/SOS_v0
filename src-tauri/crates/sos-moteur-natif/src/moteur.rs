@@ -297,6 +297,11 @@ pub struct MoteurNatif {
     arret: Mutex<Option<Arc<AtomicBool>>>,
     fil: Mutex<Option<JoinHandle<()>>>,
     apercu: Arc<Mutex<Option<ApercuFrame>>>,
+    /// Un consommateur attend-il l'aperçu ? Posé par le projecteur natif
+    /// (fenêtre ouverte). À `false`, `boucle` **ne lit pas** la texture
+    /// d'aperçu : le readback GPU est inconditionnel autrement, à ~10 Hz,
+    /// même sans aucune fenêtre ouverte.
+    apercu_demande: Arc<AtomicBool>,
     encodeur: Arc<Mutex<Option<EncodeurInfo>>>,
     /// Session « aperçu seul » du projecteur natif : `boucle` sans encodeur
     /// ni sink qui n'alimente que `apercu`. **N'est pas une sortie** :
@@ -383,6 +388,7 @@ impl MoteurNatif {
             arret: Mutex::new(None),
             fil: Mutex::new(None),
             apercu: Arc::new(Mutex::new(None)),
+            apercu_demande: Arc::new(AtomicBool::new(false)),
             encodeur: Arc::new(Mutex::new(None)),
             arret_apercu: Mutex::new(None),
             fil_apercu: Mutex::new(None),
@@ -1273,6 +1279,7 @@ impl MoteurNatif {
             Some(Arc::clone(&arret));
         let compteurs = Arc::clone(&self.compteurs);
         let apercu_partage = Arc::clone(&self.apercu);
+        let apercu_demande = Arc::clone(&self.apercu_demande);
         let encodeur_partage = Arc::clone(&self.encodeur);
         let etat_apercu = Arc::clone(&self.etat_apercu);
         let cfg = SortieCfg {
@@ -1303,6 +1310,7 @@ impl MoteurNatif {
                     maj_scene,
                     Arc::clone(&compteurs),
                     apercu_partage,
+                    apercu_demande,
                     arret,
                     encodeur_partage,
                     audio_cfg,
@@ -1334,6 +1342,14 @@ impl MoteurNatif {
             let _ = fil.join();
         }
         *self.etat_apercu.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+
+    /// Déclare (ou retire) le **consommateur** d'aperçu : la fenêtre
+    /// projecteur. À `false`, la boucle cesse de lire la texture d'aperçu —
+    /// aucun readback GPU tant que personne ne regarde (le readback était
+    /// inconditionnel, à la cadence `ApercuCfg.fps`).
+    pub fn demander_apercu(&self, actif: bool) {
+        self.apercu_demande.store(actif, Ordering::Relaxed);
     }
 
     /// Session aperçu vivante ?
@@ -1529,6 +1545,13 @@ impl Moteur for MoteurNatif {
             ));
         }
         let scene = self.scene_chargee();
+        // Snapshot dédié à la calibration de cadence : mêmes couches, mais
+        // **sans caméra** — la passe de mesure ne doit pas ouvrir le capteur
+        // (accès exclusif) que la session réelle va acquérir juste après.
+        let mut scene_calib = self.scene_chargee();
+        scene_calib
+            .sources
+            .retain(|s| !matches!(&s.cible, CibleCapture::Camera { .. }));
         for source in &scene.sources {
             source.valider()?;
         }
@@ -1559,6 +1582,7 @@ impl Moteur for MoteurNatif {
         let etat = Arc::clone(&self.etat);
         let compteurs = Arc::clone(&self.compteurs);
         let apercu = Arc::clone(&self.apercu);
+        let apercu_demande = Arc::clone(&self.apercu_demande);
         let encodeur_partage = Arc::clone(&self.encodeur);
         let audio_cfg = Arc::clone(&self.audio_cfg);
         let audio_version = Arc::clone(&self.audio_version);
@@ -1566,18 +1590,43 @@ impl Moteur for MoteurNatif {
         let fil = std::thread::Builder::new()
             .name("sos-moteur-natif".to_string())
             .spawn(move || {
-                let resultat = boucle(
-                    cfg,
-                    scene,
-                    maj_scene,
-                    Arc::clone(&compteurs),
-                    apercu,
-                    arret,
-                    encodeur_partage,
-                    audio_cfg,
-                    audio_version,
-                    audio_etat,
+                // Calibration de cadence : une passe « aperçu seul » sur la
+                // scène réelle mesure le plafond de composition. La sortie
+                // démarre ensuite à une cadence que la machine tient — jamais
+                // un fichier qui annonce 60 fps et en produit 49.
+                let fps_cible = cfg.fps;
+                let arret_reel = Arc::clone(&arret);
+                let fps_retenu = calibrer_cadence(
+                    &cfg,
+                    scene_calib,
+                    Arc::clone(&arret_reel),
                 );
+                let mut cfg = cfg;
+                if let Some(f) = fps_retenu {
+                    compteurs.degrader(format!(
+                        "cadence : cible {fps_cible} → {f} fps (calibration au démarrage)"
+                    ));
+                    cfg.fps = f;
+                }
+                // Arrêt demandé pendant la calibration : aucune session vide
+                // n'est créée (pas de sink, pas de fichier de 0 frame).
+                let resultat = if arret_reel.load(Ordering::Relaxed) {
+                    Ok(())
+                } else {
+                    boucle(
+                        cfg,
+                        scene,
+                        maj_scene,
+                        compteurs,
+                        apercu,
+                        apercu_demande,
+                        arret,
+                        encodeur_partage,
+                        audio_cfg,
+                        audio_version,
+                        audio_etat,
+                    )
+                };
                 let mut e = etat.lock().unwrap_or_else(|p| p.into_inner());
                 *e = match resultat {
                     Ok(()) => EtatInterne::Inactif,
@@ -2639,6 +2688,30 @@ fn rafraichir_entrees_media(
     }
 }
 
+/// Cumuls par étage de la boucle (P5) — moyennes par frame au bilan de
+/// session. `capture` est un sous-ensemble de `amont`.
+#[derive(Default)]
+struct DureesEtages {
+    amont: Duration,
+    capture: Duration,
+    composition: Duration,
+    conversion: Duration,
+    encodage: Duration,
+    apercu: Duration,
+    frames: u64,
+}
+
+impl DureesEtages {
+    /// Moyenne par frame, en millisecondes (0 tant qu'aucune frame).
+    fn ms(&self, duree: Duration) -> f64 {
+        if self.frames == 0 {
+            0.0
+        } else {
+            duree.as_secs_f64() * 1000.0 / self.frames as f64
+        }
+    }
+}
+
 /// Corps du fil moteur. Toute erreur remonte à l'état (`Erreur`) ; aucune
 /// panique ne doit traverser le fil.
 #[allow(clippy::too_many_arguments)]
@@ -2649,6 +2722,9 @@ fn boucle(
     maj_scene: Arc<Mutex<Option<SceneChargee>>>,
     compteurs: Arc<CompteursMoteur>,
     apercu_partage: Arc<Mutex<Option<ApercuFrame>>>,
+    // Consommateur d'aperçu actif (fenêtre projecteur) — voir
+    // `MoteurNatif::demander_apercu`.
+    apercu_demande: Arc<AtomicBool>,
     arret: Arc<AtomicBool>,
     encodeur_partage: Arc<Mutex<Option<EncodeurInfo>>>,
     // Mixeur audio : config voulue (versionnée) + état publié à l'app.
@@ -2919,24 +2995,11 @@ fn boucle(
     for (index, sink) in cfg.sinks.iter().enumerate() {
         match sink {
             SinkCfg::Fichier { chemin, conteneur } => {
-                // Voie live tentée quand l'audio est demandé ; échec → sink
-                // classique + post-mux à l'arrêt (zéro régression).
-                if audio_configure {
-                    match FfmpegSink::nouveau_avec_audio_codec(
-                        None, chemin, *conteneur, cfg.codec, fps, index,
-                    ) {
-                        Ok((s, pipe)) => {
-                            sinks.push(Box::new(s));
-                            pipes_audio.push(pipe);
-                            chemins_sortie.push(chemin.clone());
-                            continue;
-                        }
-                        Err(e) => compteurs.degrader(format!(
-                            "audio live {} : {e} — repli post-mux",
-                            chemin.display()
-                        )),
-                    }
-                }
+                // Audio **post-mux uniquement** : le pipe audio live fait
+                // stagner FFmpeg (mesuré le 2026-11-03 : 2,5 s de PCM
+                // écrites, 2 524 blocs abandonnés) et bloque le drain du
+                // stdin vidéo — la boucle tombe à 25 fps et le fichier est
+                // étiré. Le PCM est archivé et muxé à l'arrêt (`muxer_audio`).
                 let s = FfmpegSink::nouveau_codec(None, chemin, *conteneur, cfg.codec, fps)
                     .map_err(|e| format!("sortie {} : {e}", chemin.display()))?;
                 sinks.push(Box::new(s));
@@ -3050,14 +3113,60 @@ fn boucle(
         !sources_audio.is_empty(),
     );
 
+    // Bornes de session : `CompteursMoteur` vit aussi longtemps que le
+    // moteur (aperçu, sessions précédentes) et n'est jamais remis à zéro.
+    // Le bilan et le réhorodatage doivent porter sur **cette** session,
+    // jamais sur le cumul — sinon le 2ᵉ enregistrement calcule un facteur
+    // de réhorodatage faux (frames de la session 1 incluses).
+    let compteurs_avant = compteurs.instantane();
+    let frames_avant = compteurs_avant.frames_composites;
+    let drops_avant = compteurs_avant.frames_perdues;
+    let dupliquees_avant = compteurs_avant.frames_dupliquees;
+
     let debut = Instant::now();
+    // Mesure par étage (P5) : où partent les millisecondes manquantes. Six
+    // `Instant::now()` par frame, coût négligeable ; les moyennes sortent dans
+    // le bilan de session. Sans ça, choisir quoi déporter (capture, encodage,
+    // composition) est un pari.
+    let mut durees = DureesEtages::default();
     let mut dernier_echantillon = Instant::now();
     let mut dernier_controle_camera = Instant::now();
     let mut octets_fenetre: u64 = 0;
     let mut erreur_sortie: Option<String> = None;
 
     while !arret.load(Ordering::Relaxed) {
-        horloge.attendre();
+        // Un tick présenté plus d'une période en retard a coûté des frames.
+        // L'horloge **recale** l'échéance au lieu de rattraper (voir
+        // `Horloge::attendre`) : un retard de N périodes coûte N frames, que
+        // le rattrapage ci-dessous réémet ou que l'on compte en pertes.
+        let retard = horloge.attendre();
+        // **Rattrapage CFR** : les frames perdues par un retard sont
+        // réémises (même texture réencodée, horodatée une période plus loin)
+        // tant qu'elles restent peu nombreuses. Sans ça le fichier garde de
+        // vrais trous : en horodatage réel ils se voient comme une saccade,
+        // et en CFR la durée dérive. Au-delà de `MAX_RATTRAPAGE`, réencoder
+        // 20 frames d'un coup (6,5 ms pièce) recreuserait le retard qu'on
+        // cherche à combler : le reste est compté en pertes.
+        let manquantes = if retard > horloge.intervalle() {
+            (retard.as_secs_f64() / horloge.intervalle().as_secs_f64())
+                .round()
+                .max(1.0) as u64
+        } else {
+            0
+        };
+        let rattrapage = if crate::output::ffmpeg::rattrapage_cfr() {
+            manquantes.min(MAX_RATTRAPAGE)
+        } else {
+            // Modes A/B (`SOS_CFR=1`, `SOS_PTS=1`) : aucune frame réémise,
+            // tout le retard est compté en pertes (comportement d'avant).
+            0
+        };
+        if manquantes > rattrapage {
+            compteurs.perdue_n(manquantes - rattrapage);
+        }
+        // Amont = tout ce qui précède la passe D2D (scène à chaud, médias,
+        // audio, captures).
+        let t_amont = Instant::now();
         let pts_us = debut.elapsed().as_micros() as i64;
         // Horloge du flux en secondes : seule source de temps du rendu
         // (comète `animer` des cadres). Jamais l'heure système.
@@ -3241,6 +3350,7 @@ fn boucle(
                 }
             }
         }
+        let t_capture = Instant::now();
         for capture in captures.iter_mut() {
             // Copie WGC ou `UpdateSubresource` caméra — sur ce thread dans
             // les deux cas ; `false` = pas de frame neuve, texture gardée.
@@ -3249,6 +3359,7 @@ fn boucle(
                 compteurs.capture();
             }
         }
+        durees.capture += t_capture.elapsed();
         // Caméra débranchée : le fil de capture est mort, la dernière frame
         // resterait figée — signalé une fois par seconde, jamais silencieux.
         if dernier_controle_camera.elapsed() >= Duration::from_secs(1) {
@@ -3267,6 +3378,8 @@ fn boucle(
         // puis chaque entrée du plan est peinte dans l'ordre z. Aucun
         // `VideoProcessorBlt` n'est inséré dans la passe (piège §35.7.5) : la
         // conversion NV12 vient après `fin()`, et l'encodeur la consomme.
+        durees.amont += t_amont.elapsed();
+        let t_composition = Instant::now();
         voie.debut();
         voie.effacer();
         voie.effacer_persps();
@@ -3623,10 +3736,14 @@ fn boucle(
         voie.dessiner_textes_passe()
             .map_err(|e| format!("texte : {e}"))?;
         voie.fin().map_err(|e| format!("rendu : {e}"))?;
+        durees.composition += t_composition.elapsed();
+        let t_conversion = Instant::now();
         voie.convertir().map_err(|e| format!("rendu : {e}"))?;
+        durees.conversion += t_conversion.elapsed();
         compteurs.composite();
+        let t_encodage = Instant::now();
 
-        let paquets = match encodeur.as_mut() {
+        let mut paquets = match encodeur.as_mut() {
             Some(enc) => {
                 let mut resultat = encoder_actif(
                     enc,
@@ -3666,6 +3783,38 @@ fn boucle(
             // Aperçu seul : aucun encodeur, aucun paquet à pousser.
             None => Vec::new(),
         };
+        // Rattrapage CFR (voir `manquantes` en tête de boucle) : la **même**
+        // texture est réencodée pour chaque tick manqué. La composition et la
+        // conversion ne sont pas refaites — c'est une frame répétée, pas une
+        // frame recalculée. Comme elle remplit une période entière pour
+        // ~6 ms de travail, elle **réduit** le retard : pas d'emballement.
+        if rattrapage > 0 && encode_requis {
+            let periode_us = horloge.intervalle().as_micros() as i64;
+            if let Some(enc) = encodeur.as_mut() {
+                for k in 1..=rattrapage {
+                    let pts_rattrapage = pts_us + k as i64 * periode_us;
+                    match encoder_actif(
+                        enc,
+                        &mut zero_copie,
+                        convertisseur.as_ref(),
+                        &cible_encode,
+                        pts_rattrapage,
+                    ) {
+                        Ok(supplement) => {
+                            compteurs.dupliquee();
+                            paquets.extend(supplement);
+                        }
+                        Err(e) => {
+                            // Une frame de rattrapage refusée ne tue pas la
+                            // sortie : le reste est compté en pertes.
+                            compteurs.degrader(format!("rattrapage CFR : {e}"));
+                            compteurs.perdue_n(rattrapage - k + 1);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
         compteurs.maj_file_encode(paquets.len() as u32);
         for paquet in &paquets {
             octets_fenetre += paquet.data.len() as u64;
@@ -3689,9 +3838,17 @@ fn boucle(
                 });
             }
         }
+        durees.encodage += t_encodage.elapsed();
+        durees.frames += 1;
 
+        // Readback d'aperçu **seulement** si quelqu'un le consomme : une
+        // session « aperçu seul » (projecteur) le consomme par définition,
+        // un enregistrement sans fenêtre ouverte n'a aucune raison de payer
+        // une conversion + un `Map` GPU à 10 Hz.
+        let t_apercu = Instant::now();
+        let apercu_voulu = !encode_requis || apercu_demande.load(Ordering::Relaxed);
         if let Some(a) = apercu.as_mut() {
-            if horloge.ticks() % pas_apercu == 0 {
+            if apercu_voulu && horloge.ticks() % pas_apercu == 0 {
                 if let Ok(tampon) = a.lire(&cible_encode) {
                     let frame = ApercuFrame {
                         data: tampon.to_vec(),
@@ -3703,11 +3860,14 @@ fn boucle(
                 }
             }
         }
+        durees.apercu += t_apercu.elapsed();
 
         if dernier_echantillon.elapsed() >= Duration::from_secs(1) {
             let instantane = compteurs.instantane();
             compteurs.maj_kbps((octets_fenetre * 8 / 1000) as u32);
             compteurs.maj_latence(horloge.retard_max().as_millis() as u32);
+            // fps **mesuré** publié pour le diagnostic (jamais le demandé).
+            compteurs.maj_fps_reel(horloge.fps_effectif());
             octets_fenetre = 0;
 
             // Session « aperçu seul » (`SinkCfg::Apercu` uniquement) : aucun
@@ -3739,6 +3899,37 @@ fn boucle(
         }
     }
 
+    // Durée **de capture**, figée ici et pas plus tard : `horloge.ecoule()`
+    // continue de courir pendant le teardown (flush encodeur, vidage du pipe
+    // audio jusqu'à `DELAI_VIDAGE` = 5 s, fermeture des sinks). L'utiliser
+    // pour le réhorodatage gonflait la durée de 5 à 8 s et étirait la vidéo
+    // d'autant (mesuré : 1 184 frames → 24,89 s pour une session de 19,81 s).
+    let ecoule_session = horloge.ecoule();
+
+    // Bilan de session : le fps **tenu** face à la cible, les drops réels et
+    // le pire retard. Sans ça, un fichier accéléré ne laisse aucune trace
+    // exploitable (c'était le cas : ni fps mesuré ni drops).
+    let bilan = compteurs.instantane();
+    let frames_session = bilan.frames_composites.saturating_sub(frames_avant);
+    let drops_session = bilan.frames_perdues.saturating_sub(drops_avant);
+    let dupliquees_session = bilan.frames_dupliquees.saturating_sub(dupliquees_avant);
+    log::info!(
+        "session : {} frame(s) en {:.2} s → {:.2} fps mesurés (cible {}), {} drop(s), {} dupliquée(s), retard max {} ms | par frame : amont {:.1} ms (dont capture {:.1}), composition {:.1}, conversion NV12 {:.1}, encodage+sorties {:.1}, aperçu {:.1}",
+        frames_session,
+        ecoule_session.as_secs_f64(),
+        horloge.fps_effectif(),
+        fps,
+        drops_session,
+        dupliquees_session,
+        horloge.retard_max().as_millis(),
+        durees.ms(durees.amont),
+        durees.ms(durees.capture),
+        durees.ms(durees.composition),
+        durees.ms(durees.conversion),
+        durees.ms(durees.encodage),
+        durees.ms(durees.apercu)
+    );
+
     let derniers = match encodeur.as_mut() {
         Some(EncodeurActif::Nvenc(nvenc)) => nvenc.terminer(),
         Some(EncodeurActif::Mft(mft)) => mft.terminer(),
@@ -3754,15 +3945,61 @@ fn boucle(
     // Audio live : dernières frames dues puis **EOF** des pipes — ffmpeg
     // termine la piste AAC au dernier échantillon. Fermé AVANT `fermer()`
     // pour que le conteneur se finalise avec un audio complet.
+    //
+    // ⚠️ L'ordre inverse (vidéo d'abord) **interbloque** : FFmpeg attend
+    // alors de l'audio pour ordonner ses derniers paquets, cesse de lire le
+    // stdin vidéo, et le fil d'écriture vidéo bloque dans `WriteFile` —
+    // mesuré (arrêt figé, processus à 0 % CPU). Ne pas réessayer.
     if audio_live {
         let pcm = mixeur.produire();
         for pipe in &mut pipes_audio {
             let _ = pipe.ecrire(pcm);
         }
-        drop(pipes_audio);
+        // Bilan : une piste live plus courte que la session (FFmpeg retient
+        // l'audio quand il ne peut pas l'ordonner) est **réparée** par le
+        // post-mux — `muxer_audio` remplace alors la piste par les PCM
+        // archivés, complets par construction.
+        let attendu = debut.elapsed().as_secs_f64()
+            * f64::from(crate::audio::live::TAUX_CIBLE)
+            * f64::from(crate::audio::live::CANAUX_CIBLE)
+            * 2.0;
+        for pipe in pipes_audio.iter_mut() {
+            let bilan = pipe.fermer();
+            if bilan.blocs_sautes > 0 || (bilan.octets_ecrits as f64) < attendu * 0.98 {
+                audio_live_casse = true;
+                compteurs.degrader(format!(
+                    "audio live incomplet : {} o écrits pour {} o attendus ({} bloc(s) sauté(s)) — réparation post-mux",
+                    bilan.octets_ecrits, attendu as u64, bilan.blocs_sautes
+                ));
+            }
+        }
+        pipes_audio.clear();
     }
     for sink in sinks.iter_mut() {
         let _ = sink.fermer();
+    }
+
+    // Timing vidéo (option A) : le fichier doit durer la session **réelle**.
+    // L'encodeur n'écrit aucun PTS, FFmpeg les synthétise au fps cible ; un
+    // moteur à 48,6 fps pendant 395 s produisait un fichier de 320 s (×1,23).
+    // `setts` réécrit la piste vidéo au fps mesuré, sans réencodage.
+    //
+    // ⚠️ **AVANT le post-mux audio**, jamais après : `muxer_audio` termine par
+    // `-shortest`, donc il coupe l'audio à la longueur de la vidéo **du
+    // moment**. Réhorodater ensuite étire la vidéo et laisse l'audio en
+    // arrière (mesuré : 7,59 s de décalage sur 126 s, exactement la durée
+    // d'avant réhorodatage).
+    if erreur_sortie.is_none() {
+        // `frames_session`, jamais le cumul du moteur : `rehorodater` calcule
+        // `fps_cible × écoulé / frames` et une frame de trop raccourcit la
+        // vidéo.
+        for chemin in &chemins_sortie {
+            if let Err(e) =
+                crate::output::ffmpeg::rehorodater(chemin, fps, frames_session, ecoule_session)
+            {
+                compteurs.degrader(format!("réhorodatage vidéo ({}) : {e}", chemin.display()));
+            }
+        }
     }
 
     // Audio : arrêt des captures, puis muxage dans chaque fichier finalisé
@@ -4910,6 +5147,141 @@ fn taille_apercu(cw: u32, ch: u32, max: u32) -> (u32, u32) {
     (largeur, hauteur)
 }
 
+/// Cadence libre de la passe de calibration : assez haute pour mesurer le
+/// plafond de composition, jamais une cadence de sortie.
+const FPS_CALIBRATION: u32 = 240;
+
+/// Plafond de frames **réémises** pour combler un tick manqué (rattrapage
+/// CFR). Une frame répétée coûte ~6 ms : au-delà de 5, la rafale de
+/// réencodage recreuserait le retard qu'elle comble. Le reste est compté en
+/// pertes, jamais masqué.
+const MAX_RATTRAPAGE: u64 = 5;
+
+/// Durée de la passe de calibration — un échantillon de fps est publié à 1 s.
+const CALIBRATION_MS: u64 = 1_200;
+
+/// Coût d'encodage non mesuré par la passe « aperçu seul », en µs/frame.
+/// Valeur **mesurée** (encodage + sorties : 2,4 à 6,2 ms/frame, §76.1) — on
+/// prend le haut de la fourchette pour ne jamais surestimer la cadence.
+const MARGE_ENCODAGE_US: f64 = 6_000.0;
+
+/// Marge de sécurité sur le budget par frame (jitter, contention GPU).
+const MARGE_SECURITE: f64 = 1.05;
+
+/// Cadences de repli, décroissantes : une valeur tenable est arrondie **vers
+/// le bas** à la plus proche, jamais au-dessus.
+const CADENCES_REPLI: [u32; 11] = [120, 60, 50, 48, 45, 40, 30, 25, 24, 20, 15];
+
+/// Choisit la cadence de sortie à partir du plafond de composition mesuré.
+///
+/// `composition_fps` = fps atteint par la passe « aperçu seul » (sans
+/// encodeur). On y ajoute le coût d'encodage mesuré, une marge de sécurité,
+/// puis on arrondit vers le bas. `None` = aucune dégradation (la cible est
+/// tenable, ou la mesure est inexploitable).
+fn choisir_fps_tenable(cible: u32, composition_fps: f64) -> Option<u32> {
+    if cible == 0 || !composition_fps.is_finite() || composition_fps <= 0.0 {
+        return None;
+    }
+    let par_frame_us = 1_000_000.0 / composition_fps + MARGE_ENCODAGE_US;
+    let tenable = (1_000_000.0 / (par_frame_us * MARGE_SECURITE)).floor() as u32;
+    let tenable = tenable.max(15).min(cible);
+    let arrondi = CADENCES_REPLI
+        .iter()
+        .copied()
+        .find(|&c| c <= tenable)
+        .unwrap_or(15);
+    (arrondi < cible).then_some(arrondi)
+}
+
+/// Passe de calibration : une session **aperçu seul** (aucun encodeur, aucun
+/// sink, aucun audio) sur la scène réelle, à cadence libre, mesure le plafond
+/// de composition. Rend la cadence tenable, ou `None` si la cible l'est déjà.
+///
+/// Coût : ~1,2 s de pré-roll et une seconde initialisation GPU/captures. La
+/// caméra est exclue du snapshot (`demarrer_sortie`) pour ne pas disputer le
+/// capteur à la session réelle.
+fn calibrer_cadence(
+    cfg: &SortieCfg,
+    scene: SceneChargee,
+    arret_reel: Arc<AtomicBool>,
+) -> Option<u32> {
+    let mut calib = cfg.clone();
+    calib.sinks = vec![SinkCfg::Apercu];
+    calib.audio = None;
+    calib.fps = FPS_CALIBRATION;
+    // Readback d'aperçu réduit au minimum : il ne doit pas fausser la mesure.
+    calib.apercu.largeur = 240;
+    calib.apercu.fps = 1;
+
+    let compteurs_calib = Arc::new(CompteursMoteur::nouveau());
+    let arret_calib = Arc::new(AtomicBool::new(false));
+    // Minuteur détaché : il borne la mesure et relaie un arrêt utilisateur.
+    // S'il n'y a pas de fil, la mesure serait infinie — on l'abandonne.
+    let minuteur = {
+        let arret_calib = Arc::clone(&arret_calib);
+        let arret_reel = Arc::clone(&arret_reel);
+        let compteurs_calib = Arc::clone(&compteurs_calib);
+        std::thread::Builder::new()
+            .name("sos-calibration".to_string())
+            .spawn(move || {
+                // La mesure commence à la **première frame composée** : le
+                // temps d'initialisation (GPU, captures, médias) ne doit pas
+                // manger la fenêtre de mesure. Garde-fou 5 s si la boucle
+                // meurt avant d'avoir composé (erreur GPU, scène refusée).
+                let attente = Instant::now();
+                while compteurs_calib.instantane().frames_composites == 0 {
+                    if arret_reel.load(Ordering::Relaxed)
+                        || attente.elapsed() > Duration::from_secs(5)
+                    {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                let debut = Instant::now();
+                while debut.elapsed() < Duration::from_millis(CALIBRATION_MS) {
+                    if arret_reel.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                arret_calib.store(true, Ordering::Relaxed);
+            })
+    };
+    if minuteur.is_err() {
+        log::warn!("calibration cadence : minuteur indisponible — cible conservée");
+        return None;
+    }
+
+    let resultat = boucle(
+        calib,
+        scene,
+        Arc::new(Mutex::new(None)),
+        Arc::clone(&compteurs_calib),
+        Arc::new(Mutex::new(None)),
+        Arc::new(AtomicBool::new(false)),
+        Arc::clone(&arret_calib),
+        Arc::new(Mutex::new(None)),
+        Arc::new(Mutex::new(AudioCfg {
+            sources: Vec::new(),
+        })),
+        Arc::new(AtomicU64::new(0)),
+        Arc::new(Mutex::new(AudioEtatPartage::default())),
+    );
+    if let Err(e) = resultat {
+        log::warn!("calibration cadence : {e} — cible conservée");
+        return None;
+    }
+    let mesure = compteurs_calib.instantane().fps_reel?;
+    let retenu = choisir_fps_tenable(cfg.fps, mesure);
+    log::info!(
+        "calibration cadence : composition {:.2} fps, cible {} → {:?}",
+        mesure,
+        cfg.fps,
+        retenu
+    );
+    retenu
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -4952,6 +5324,63 @@ mod tests {
         assert_eq!(taille_apercu(1920, 1080, 0), (1920, 1080));
         // Un canvas plus petit que la borne garde sa résolution.
         assert_eq!(taille_apercu(640, 360, 1280), (640, 360));
+    }
+
+    #[test]
+    fn calibration_machine_rapide_ne_degrade_pas() {
+        // Composition au plafond de mesure : la cible reste tenable.
+        assert_eq!(choisir_fps_tenable(60, 240.0), None);
+        // Cible déjà basse : aucune raison de descendre plus.
+        assert_eq!(choisir_fps_tenable(30, 100.0), None);
+    }
+
+    #[test]
+    fn calibration_machine_reelle_descend_a_45() {
+        // 72 fps de composition → 13,9 ms + 6 ms d'encodage + 5 % → 45 fps.
+        assert_eq!(choisir_fps_tenable(60, 72.0), Some(45));
+    }
+
+    #[test]
+    fn calibration_lente_descend_a_24() {
+        // 30 fps de composition → 33,3 ms + 6 ms + 5 % → 24 fps.
+        assert_eq!(choisir_fps_tenable(60, 30.0), Some(24));
+    }
+
+    #[test]
+    fn calibration_mesure_inexploitable_ne_degrade_pas() {
+        assert_eq!(choisir_fps_tenable(60, 0.0), None);
+        assert_eq!(choisir_fps_tenable(60, f64::NAN), None);
+        assert_eq!(choisir_fps_tenable(0, 72.0), None);
+    }
+
+    #[test]
+    fn calibration_ne_remonte_jamais_la_cible() {
+        // Une cadence tenable supérieure à la cible ne doit pas la dépasser.
+        assert_eq!(choisir_fps_tenable(24, 240.0), None);
+    }
+
+    #[test]
+    fn bilan_session_est_un_delta_pas_un_cumul() {
+        // `CompteursMoteur` survit aux sessions : le bilan doit soustraire
+        // la borne de départ, sinon le réhorodatage inclut la session
+        // précédente et raccourcit la vidéo.
+        let compteurs = CompteursMoteur::nouveau();
+        compteurs.composite();
+        compteurs.composite();
+        compteurs.perdue_n(1);
+        let avant = compteurs.instantane();
+
+        compteurs.composite();
+        compteurs.perdue_n(2);
+        let apres = compteurs.instantane();
+
+        assert_eq!(
+            apres
+                .frames_composites
+                .saturating_sub(avant.frames_composites),
+            1
+        );
+        assert_eq!(apres.frames_perdues.saturating_sub(avant.frames_perdues), 2);
     }
 
     #[test]

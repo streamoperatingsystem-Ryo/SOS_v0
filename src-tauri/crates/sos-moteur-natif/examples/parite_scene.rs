@@ -20,7 +20,24 @@ use sos_moteur_api::{ApercuCfg, Codec, Conteneur, Moteur, SinkCfg, SortieCfg};
 use sos_moteur_natif::input::{EtatInput, EtatManette, EtatSouris};
 use sos_moteur_natif::moteur::{CibleCapture, MoteurNatif};
 
+/// Journal minimal : le crate trace via `log`, les harnais n'installent pas
+/// de logger. Sans ça, le bilan de session (fps mesurés, drops, temps par
+/// étage) reste invisible.
+struct Journal;
+impl log::Log for Journal {
+    fn enabled(&self, _: &log::Metadata) -> bool {
+        true
+    }
+    fn log(&self, enregistrement: &log::Record) {
+        eprintln!("[{}] {}", enregistrement.level(), enregistrement.args());
+    }
+    fn flush(&self) {}
+}
+static JOURNAL: Journal = Journal;
+
 fn main() {
+    let _ = log::set_logger(&JOURNAL);
+    log::set_max_level(log::LevelFilter::Info);
     let mut args = std::env::args().skip(1);
     let scene_path = args.next().unwrap_or_else(|| "scene.json".to_string());
     let base = args.next().unwrap_or_else(|| ".".to_string());

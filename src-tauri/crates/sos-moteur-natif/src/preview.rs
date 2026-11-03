@@ -13,7 +13,8 @@ use windows::Win32::Foundation::{BOOL, RECT};
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11DeviceContext, ID3D11Texture2D, ID3D11VideoContext, ID3D11VideoDevice,
     ID3D11VideoProcessor, ID3D11VideoProcessorEnumerator, ID3D11VideoProcessorInputView,
-    ID3D11VideoProcessorOutputView, D3D11_CPU_ACCESS_READ, D3D11_MAP_READ,
+    ID3D11VideoProcessorOutputView, D3D11_CPU_ACCESS_READ, D3D11_MAP_FLAG_DO_NOT_WAIT,
+    D3D11_MAP_READ,
     D3D11_MAPPED_SUBRESOURCE, D3D11_TEX2D_VPIV, D3D11_TEX2D_VPOV, D3D11_TEXTURE2D_DESC,
     D3D11_USAGE_STAGING, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE, D3D11_VIDEO_PROCESSOR_CONTENT_DESC,
     D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC, D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC_0,
@@ -56,6 +57,9 @@ pub struct Apercu {
     largeur: u32,
     hauteur: u32,
     tampon: Vec<u8>,
+    /// Conversion + copie GPU **en vol** (lancées au tick précédent, `Map`
+    /// pas encore possible). C'est ce qui rend la lecture non bloquante.
+    copie_en_vol: bool,
 }
 
 impl Apercu {
@@ -170,12 +174,14 @@ impl Apercu {
             largeur: desc_apercu.largeur,
             hauteur: desc_apercu.hauteur,
             tampon,
+            copie_en_vol: false,
         })
     }
 
-    /// Convertit la source NV12 en BGRA réduit et rend les pixels **RGBA**
-    /// serrés — `putImageData`/`ImageData` les consomment sans conversion.
-    pub fn lire(&mut self, source: &ID3D11Texture2D) -> Result<&[u8], ErreurApercu> {
+    /// Convertit la source NV12 en BGRA réduit puis **copie** le résultat dans
+    /// la texture *staging* — tout en GPU, asynchrone. La lecture CPU se fait
+    /// au tick suivant ([`Apercu::lire`]), jamais en bloquant.
+    fn convertir(&mut self, source: &ID3D11Texture2D) -> Result<(), ErreurApercu> {
         let desc_entree = D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC {
             FourCC: 0,
             ViewDimension: D3D11_VPIV_DIMENSION_TEXTURE2D,
@@ -256,33 +262,59 @@ impl Apercu {
             .map_err(|e| ErreurApercu::Gpu(format!("VideoProcessorBlt : {}", e.message())))?;
 
         unsafe { self.context.CopyResource(&self.staging, &self.sortie) };
+        self.copie_en_vol = true;
+        Ok(())
+    }
 
-        let mut mappee = D3D11_MAPPED_SUBRESOURCE::default();
-        unsafe {
-            self.context
-                .Map(&self.staging, 0, D3D11_MAP_READ, 0, Some(&mut mappee))
-        }
-        .map_err(|e| ErreurApercu::Gpu(format!("Map staging : {}", e.message())))?;
-
-        // Copie ligne par ligne (pitch du staging ≠ largeur serrée) avec
-        // swap B↔R : BGRA → RGBA. Un u32 par pixel, coût négligeable même à
-        // 1280×720@30 (~110 Mo/s de readback PCIe, trivial).
-        let ligne = self.largeur as usize * 4;
-        unsafe {
-            for y in 0..self.hauteur as usize {
-                let src = (mappee.pData as *const u8).add(y * mappee.RowPitch as usize)
-                    as *const u32;
-                let dst = self.tampon.as_mut_ptr().add(y * ligne) as *mut u32;
-                for x in 0..self.largeur as isize {
-                    let v = src.offset(x).read_unaligned();
-                    dst.offset(x)
-                        .write_unaligned((v & 0xFF00_FF00) | ((v & 0xFF) << 16) | ((v >> 16) & 0xFF));
-                }
+    /// Rend les pixels **RGBA** serrés de la conversion précédente, sans
+    /// jamais bloquer le thread de composition : `Map` est tenté en
+    /// `DO_NOT_WAIT`, et une conversion est relancée pour le tick suivant.
+    ///
+    /// `Err` = « pas encore prête » (GPU occupé, ou première frame) :
+    /// l'appelant ignore et réessaie — au pire une frame d'aperçu perdue,
+    /// jamais un à-coup de composition.
+    pub fn lire(&mut self, source: &ID3D11Texture2D) -> Result<&[u8], ErreurApercu> {
+        if self.copie_en_vol {
+            let mut mappee = D3D11_MAPPED_SUBRESOURCE::default();
+            let resultat = unsafe {
+                self.context.Map(
+                    &self.staging,
+                    0,
+                    D3D11_MAP_READ,
+                    D3D11_MAP_FLAG_DO_NOT_WAIT.0 as u32,
+                    Some(&mut mappee),
+                )
+            };
+            if let Err(e) = resultat {
+                return Err(ErreurApercu::Gpu(format!(
+                    "Map staging (non prêt) : {}",
+                    e.message()
+                )));
             }
-            self.context.Unmap(&self.staging, 0);
-        }
+            self.copie_en_vol = false;
 
-        Ok(&self.tampon)
+            // Copie ligne par ligne (pitch du staging ≠ largeur serrée) avec
+            // swap B↔R : BGRA → RGBA. Un u32 par pixel, coût négligeable.
+            let ligne = self.largeur as usize * 4;
+            unsafe {
+                for y in 0..self.hauteur as usize {
+                    let src = (mappee.pData as *const u8).add(y * mappee.RowPitch as usize)
+                        as *const u32;
+                    let dst = self.tampon.as_mut_ptr().add(y * ligne) as *mut u32;
+                    for x in 0..self.largeur as isize {
+                        let v = src.offset(x).read_unaligned();
+                        dst.offset(x).write_unaligned(
+                            (v & 0xFF00_FF00) | ((v & 0xFF) << 16) | ((v >> 16) & 0xFF),
+                        );
+                    }
+                }
+                self.context.Unmap(&self.staging, 0);
+            }
+            self.convertir(source)?;
+            return Ok(&self.tampon);
+        }
+        self.convertir(source)?;
+        Err(ErreurApercu::Gpu("conversion en cours".into()))
     }
 
     pub fn taille(&self) -> (u32, u32) {
@@ -308,8 +340,22 @@ mod tests {
         let desc = DescTexture::new(Format::Nv12, 640, 360).expect("desc");
         let source = contexte.creer_texture(&desc).expect("texture source");
         let mut apercu = Apercu::nouveau(&contexte, (640, 360), (320, 180)).expect("apercu");
-        let pixels = apercu.lire(&source).expect("lire");
-        assert_eq!(pixels.len(), 320 * 180 * 4);
+        // Le readback est **asynchrone** : la 1re lecture lance la conversion
+        // et rend « pas encore prête ». En production le tick suivant arrive
+        // ~16 ms plus tard ; ici on attend la fin du GPU sans jamais bloquer
+        // dans `Map` (c'est le thread de composition).
+        assert!(apercu.lire(&source).is_err(), "1re lecture = conversion lancée");
+        let mut octets = None;
+        for _ in 0..50 {
+            match apercu.lire(&source) {
+                Ok(pixels) => {
+                    octets = Some(pixels.len());
+                    break;
+                }
+                Err(_) => std::thread::sleep(std::time::Duration::from_millis(2)),
+            }
+        }
+        assert_eq!(octets, Some(320 * 180 * 4));
         assert_eq!(apercu.taille(), (320, 180));
         assert_eq!(apercu.octets(), 320 * 180 * 4);
     }

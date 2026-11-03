@@ -8,7 +8,9 @@
   //   (4) Présentation : inviter/présenter un streamer (favoris + diffusion),
   //   (5) Musique : demandes !rs, lecteur, bibliothèque.
   //   + « Position des overlays » : bouton-outil à droite de la barre —
-  //     squelette de position partagé des overlays (mini-canvas drag/resize).
+  //     squelette partagé (welcome/alertes/commandes/pad) + chrono 2.
+  //     Le pop des splits a son propre squelette, réglé dans « Créer votre
+  //     layout » (carte speedrun) — pas ici.
   //   Le planning Twitch vit désormais dans PlanningModal.svelte.
   import { followers, chargerFollowers, broadcaster } from "../stores/communaute";
   import {
@@ -50,10 +52,8 @@
   import {
     positionOverlay,
     positionChrono,
-    positionSplitpop,
     sauverPositionOverlay,
     sauverPositionChrono,
-    sauverPositionSplitpop,
   } from "../stores/positionOverlay";
   import {
     commandesStore,
@@ -117,27 +117,40 @@
     type CadreConfig,
     type CommandeConfig,
     type PaletteCouleur,
-    type PositionOverlayConfig,
     type ToucheConfig,
     type PresentationSearchResult,
   } from "../tauri";
   import Modal from "./Modal.svelte";
   import MusiqueTab from "./MusiqueTab.svelte";
   import FightTab from "./FightTab.svelte";
+  import SquelettePosition from "./SquelettePosition.svelte";
+  import { interactionModalTab } from "../stores/ui";
 
   let { onFermer = () => {} }: { onFermer?: () => void } = $props();
 
-  // Onglet actif (« position » n'est pas un onglet de la barre : il s'ouvre
-  // via le bouton-outil « Position des overlays » à droite de la barre).
-  let tab = $state<
+  type TabInteractions =
     | "alertes"
     | "bienvenue"
     | "commandes"
     | "presentation"
     | "musique"
     | "fight"
-    | "position"
-  >("alertes");
+    | "position";
+
+  // Onglet actif (« position » n'est pas un onglet de la barre : il s'ouvre
+  // via le bouton-outil « Position des overlays » à droite de la barre).
+  // `interactionModalTab` permet d'ouvrir la modale directement sur un
+  // onglet (raccourci « Position… » de la carte speedrun).
+  let tab = $state<TabInteractions>(
+    ($interactionModalTab as TabInteractions | null) ?? "alertes",
+  );
+
+  /// Ferme la modale en purgeant l'onglet ciblé — sinon la prochaine
+  /// ouverture par la Toolbar retomberait sur « position ».
+  function fermer() {
+    interactionModalTab.set(null);
+    onFermer();
+  }
 
   // Section sélectionnée dans les onglets master-detail (liste gauche).
   let secBienvenue = $state<
@@ -309,14 +322,6 @@
     bits: "Bits",
     gift: "Gift",
     superchat: "Super Chat",
-  };
-  const PRESETS_OVERLAY: Record<string, string> = {
-    "haut-gauche": "↖",
-    "haut-centre": "↑",
-    "haut-droite": "↗",
-    "bas-gauche": "↙",
-    "bas-centre": "↓",
-    "bas-droite": "↘",
   };
   let alertes = $derived($alertesConfig);
 
@@ -783,202 +788,13 @@
     await welcomeSetDureeAffichage(Math.round(sec * 1000));
   }
 
-  // ===== Config overlay : mini-canvas drag/resize (outil « Position des overlays ») =====
-  // Le canvas de référence est 1920x1080 (défaut diffusion). Le mini-canvas
-  // affiche une version réduite où l'utilisateur drag/resize le squelette
-  // de l'overlay. Les coordonnées sont converties en pixels canvas réels.
-  //
-  // Trois squelettes indépendants : "overlay" (partagé welcome/alertes/
-  // commandes/pad — rectangle LIBRE, hauteur auto côté diffusion),
-  // "chrono" (squelette DÉDIÉ du chrono 2 — position_chrono.json) et
-  // "splitpop" (squelette DÉDIÉ du pop de validation des splits —
-  // position_splitpop.json, séparé car le pop arrive à chaque split et
-  // pouvait chevaucher les alertes du cadre partagé).
+  // ===== Config overlay : squelette partagé + chrono 2 =====
+  // Le mini-canvas drag/resize vit dans SquelettePosition.svelte (extrait) :
+  // le pop des splits a rejoint la modale « Créer votre layout ».
   let overlay = $derived($positionOverlay);
   let overlayChrono = $derived($positionChrono);
-  let overlaySplitpop = $derived($positionSplitpop);
-
-  // Dimensions canvas de référence (récupérées depuis la scène si dispo,
-  // sinon 1920×1080).
-  const REF_W = 1920;
-  const REF_H = 1080;
-
-  // Squelette en cours d'édition : "overlay" (partagé) | "chrono" | "splitpop" (dédiés).
-  type SqueletteCible = "overlay" | "chrono" | "splitpop";
-
-  // Valeurs locales (édition fluide pendant le drag, commit au pointerup).
-  // Initialisées avec les défauts — les $effect ci-dessous sync depuis
-  // l'état Rust dès qu'il arrive.
-  let ov = $state({ x: 1480, y: 580, w: 320, h: 352 });
-  let chr = $state({ x: 760, y: 80, w: 400, h: 120 });
-  let spp = $state({ x: 660, y: 60, w: 600, h: 120 });
-  let cible = $state<SqueletteCible>("overlay");
-
-  /// Rect courant du squelette ciblé (proxy $state — mutation directe).
-  function rectSquelette(c: SqueletteCible) {
-    return c === "overlay" ? ov : c === "chrono" ? chr : spp;
-  }
-
-  // Sync depuis l'état Rust quand il change (sans écraser pendant le drag
-  // du squelette concerné).
-  let dragging = $state(false);
-  $effect(() => {
-    if (overlay && !(dragging && cible === "overlay")) {
-      ov.x = overlay.x;
-      ov.y = overlay.y;
-      ov.w = overlay.largeur;
-      ov.h = overlay.hauteur;
-    }
-  });
-  $effect(() => {
-    if (overlayChrono && !(dragging && cible === "chrono")) {
-      chr.x = overlayChrono.x;
-      chr.y = overlayChrono.y;
-      chr.w = overlayChrono.largeur;
-      chr.h = overlayChrono.hauteur;
-    }
-  });
-  $effect(() => {
-    if (overlaySplitpop && !(dragging && cible === "splitpop")) {
-      spp.x = overlaySplitpop.x;
-      spp.y = overlaySplitpop.y;
-      spp.w = overlaySplitpop.largeur;
-      spp.h = overlaySplitpop.hauteur;
-    }
-  });
-
-  // Dimensions réelles du mini-canvas (mesurées via bind:clientWidth).
-  // L'échelle utilise la largeur seule — la hauteur du mini-canvas est libre.
-  let miniW = $state(300);
-
-  // Échelle : pixels mini-canvas → pixels canvas réels.
-  let scale = $derived(miniW / REF_W);
-
-  async function onOverlayCommit(c: SqueletteCible) {
-    const r = rectSquelette(c);
-    const cfg: PositionOverlayConfig = {
-      x: Math.round(r.x),
-      y: Math.round(r.y),
-      largeur: Math.round(r.w),
-      hauteur: Math.round(r.h),
-    };
-    try {
-      if (c === "overlay") {
-        await sauverPositionOverlay(cfg);
-      } else if (c === "chrono") {
-        await sauverPositionChrono(cfg);
-      } else {
-        await sauverPositionSplitpop(cfg);
-      }
-    } catch {
-    }
-  }
-
-  /// Bouton « Tester le rendu » d'un squelette : affiche le VRAI overlay
-  /// factice côté diffusion à la position configurée — overlay partagé →
-  /// alerte follow de test (même pipeline que les boutons Test de
-  /// l'onglet Alertes ; no-op si ce type est désactivé), chrono → chrono
-  /// factice de 10 s, splitpop → pop « SPLIT 3 / −1.3 / GAGNÉ » reprenant
-  /// les options du 1er widget speedrun.
-  async function testerSquelette(c: SqueletteCible) {
-    try {
-      if (c === "overlay") {
-        await tauri.alertesTester("follow");
-      } else if (c === "chrono") {
-        await tauri.positionChronoTest();
-      } else {
-        await tauri.positionSplitpopTest();
-      }
-    } catch {
-    }
-  }
-
-  // Presets 6 positions (partagés avec l'ancien bloc alertes).
-  function presetSquelette(pos: string, c: SqueletteCible) {
-    const cw = $sceneStore.canvasW ?? 1920;
-    const ch = $sceneStore.canvasH ?? 1080;
-    const r = rectSquelette(c);
-    const w = r.w;
-    const h = r.h;
-    const marge = 40;
-    let x = r.x;
-    let y = r.y;
-    if (pos.includes("gauche")) x = marge;
-    else if (pos.includes("droite")) x = cw - w - marge;
-    else x = Math.round((cw - w) / 2);
-    if (pos.startsWith("haut")) y = marge;
-    else y = ch - h - marge;
-    r.x = x;
-    r.y = y;
-    void onOverlayCommit(c);
-  }
-
-  // ===== Drag / resize des squelettes overlay =====
-  type DragMode = "move" | "resize-se" | "resize-sw" | "resize-ne" | "resize-nw" | null;
-  let dragMode = $state<DragMode>(null);
-  let dragStart = { px: 0, py: 0, x: 0, y: 0, w: 0, h: 0 };
-
-  function onRectDown(e: PointerEvent, c: SqueletteCible) {
-    e.stopPropagation();
-    e.preventDefault();
-    cible = c;
-    dragMode = "move";
-    dragging = true;
-    const r = rectSquelette(c);
-    dragStart = { px: e.clientX, py: e.clientY, x: r.x, y: r.y, w: r.w, h: r.h };
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  }
-
-  function onHandleDown(e: PointerEvent, mode: DragMode, c: SqueletteCible) {
-    e.stopPropagation();
-    e.preventDefault();
-    cible = c;
-    dragMode = mode;
-    dragging = true;
-    const r = rectSquelette(c);
-    dragStart = { px: e.clientX, py: e.clientY, x: r.x, y: r.y, w: r.w, h: r.h };
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
-  }
-
-  function onPointerMove(e: PointerEvent) {
-    if (!dragMode) return;
-    const r = rectSquelette(cible);
-    const dx = (e.clientX - dragStart.px) / scale;
-    const dy = (e.clientY - dragStart.py) / scale;
-
-    if (dragMode === "move") {
-      r.x = Math.max(0, Math.min(REF_W - r.w, dragStart.x + dx));
-      r.y = Math.max(0, Math.min(REF_H - r.h, dragStart.y + dy));
-    } else if (dragMode === "resize-se") {
-      // Rectangle libre : largeur et hauteur suivent indépendamment la souris.
-      r.w = Math.max(80, Math.min(REF_W - r.x, dragStart.w + dx));
-      r.h = Math.max(60, Math.min(REF_H - r.y, dragStart.h + dy));
-    } else if (dragMode === "resize-sw") {
-      const newW = Math.max(80, dragStart.w - dx);
-      r.x = Math.max(0, dragStart.x + (dragStart.w - newW));
-      r.w = newW;
-      r.h = Math.max(60, Math.min(REF_H - r.y, dragStart.h + dy));
-    } else if (dragMode === "resize-ne") {
-      const newH = Math.max(60, dragStart.h - dy);
-      r.y = Math.max(0, dragStart.y + (dragStart.h - newH));
-      r.w = Math.max(80, Math.min(REF_W - r.x, dragStart.w + dx));
-      r.h = newH;
-    } else if (dragMode === "resize-nw") {
-      const newW = Math.max(80, dragStart.w - dx);
-      const newH = Math.max(60, dragStart.h - dy);
-      r.x = Math.max(0, dragStart.x + (dragStart.w - newW));
-      r.y = Math.max(0, dragStart.y + (dragStart.h - newH));
-      r.w = newW;
-      r.h = newH;
-    }
-  }
-
-  async function onPointerUp() {
-    if (!dragMode) return;
-    dragMode = null;
-    dragging = false;
-    await onOverlayCommit(cible);
-  }
+  let canvasW = $derived($sceneStore.canvasW ?? 1920);
+  let canvasH = $derived($sceneStore.canvasH ?? 1080);
 
   // ===== Bandeau premier message =====
   let bEtat = $derived($bandeauEtat);
@@ -998,7 +814,7 @@
   }
 </script>
 
-<Modal title={$t("interactions.titre")} onClose={onFermer} maxWidth="75rem" crochet="var(--crochet-rose)">
+<Modal title={$t("interactions.titre")} onClose={fermer} maxWidth="75rem" crochet="var(--crochet-rose)">
   <div class="tabs">
     <button class="tab" class:active={tab === "alertes"} onclick={() => (tab = "alertes")}>
       {$t("interactions.tabAlertes")}
@@ -2617,215 +2433,25 @@
 
         <div class="modal-bloc">
           <div class="modal-bloc-titre">{$t("interactions.tabPosition")}</div>
-          <div class="alerte-presets">
-            {#each Object.entries(PRESETS_OVERLAY) as [pos, label] (pos)}
-              <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetSquelette(pos, "overlay")}>{label}</button>
-            {/each}
-            <button class="alerte-test" onclick={() => void testerSquelette("overlay")}>{$t("interactions.position.tester")}</button>
-          </div>
-          <div
-            class="mini-canvas"
-            bind:clientWidth={miniW}
-            onpointermove={onPointerMove}
-            onpointerup={onPointerUp}
-            role="presentation"
-          >
-            <div
-              class="overlay-skeleton"
-              style="left: {ov.x * scale}px; top: {ov.y * scale}px; width: {ov.w * scale}px; height: {ov.h * scale}px;"
-              onpointerdown={(e) => onRectDown(e, "overlay")}
-              role="presentation"
-            >
-              <span class="skeleton-label">{$t("interactions.position.overlay")}</span>
-              <div class="sk-handle nw" onpointerdown={(e) => onHandleDown(e, "resize-nw", "overlay")} role="presentation"></div>
-              <div class="sk-handle ne" onpointerdown={(e) => onHandleDown(e, "resize-ne", "overlay")} role="presentation"></div>
-              <div class="sk-handle sw" onpointerdown={(e) => onHandleDown(e, "resize-sw", "overlay")} role="presentation"></div>
-              <div class="sk-handle se" onpointerdown={(e) => onHandleDown(e, "resize-se", "overlay")} role="presentation"></div>
-            </div>
-          </div>
-          <p class="hint">
-            {$t("interactions.position.hintGlisser", { w: REF_W, h: REF_H })}
-          </p>
-          <div class="alerte-4col">
-            <label class="alerte-field">
-              <span class="field-label">X</span>
-              <input
-                type="number"
-                value={Math.round(ov.x)}
-                onchange={(e) => { ov.x = +(e.target as HTMLInputElement).value; void onOverlayCommit("overlay"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">Y</span>
-              <input
-                type="number"
-                value={Math.round(ov.y)}
-                onchange={(e) => { ov.y = +(e.target as HTMLInputElement).value; void onOverlayCommit("overlay"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">{$t("commun.largeur")}</span>
-              <input
-                type="number"
-                min="80"
-                max="1920"
-                value={Math.round(ov.w)}
-                onchange={(e) => { ov.w = Math.max(80, +(e.target as HTMLInputElement).value); void onOverlayCommit("overlay"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">{$t("interactions.position.hauteurRef")}</span>
-              <input
-                type="number"
-                min="60"
-                max="1080"
-                value={Math.round(ov.h)}
-                onchange={(e) => { ov.h = Math.max(60, +(e.target as HTMLInputElement).value); void onOverlayCommit("overlay"); }}
-              />
-            </label>
-          </div>
+          <SquelettePosition
+            label={$t("interactions.position.overlay")}
+            config={overlay}
+            hint={$t("interactions.position.hintGlisser", { w: canvasW, h: canvasH })}
+            onCommit={(cfg) => sauverPositionOverlay(cfg)}
+            onTester={() => tauri.alertesTester("follow")}
+          />
         </div>
 
         <div class="modal-bloc">
           <div class="modal-bloc-titre">{$t("interactions.position.titreChrono")}</div>
-          <div class="alerte-presets">
-            {#each Object.entries(PRESETS_OVERLAY) as [pos, label] (pos)}
-              <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetSquelette(pos, "chrono")}>{label}</button>
-            {/each}
-            <button class="alerte-test" onclick={() => void testerSquelette("chrono")}>{$t("interactions.position.tester")}</button>
-          </div>
-          <div
-            class="mini-canvas"
-            bind:clientWidth={miniW}
-            onpointermove={onPointerMove}
-            onpointerup={onPointerUp}
-            role="presentation"
-          >
-            <div
-              class="overlay-skeleton squelette-chrono"
-              style="left: {chr.x * scale}px; top: {chr.y * scale}px; width: {chr.w * scale}px; height: {chr.h * scale}px;"
-              onpointerdown={(e) => onRectDown(e, "chrono")}
-              role="presentation"
-            >
-              <span class="skeleton-label">{$t("interactions.position.chrono")}</span>
-              <div class="sk-handle nw" onpointerdown={(e) => onHandleDown(e, "resize-nw", "chrono")} role="presentation"></div>
-              <div class="sk-handle ne" onpointerdown={(e) => onHandleDown(e, "resize-ne", "chrono")} role="presentation"></div>
-              <div class="sk-handle sw" onpointerdown={(e) => onHandleDown(e, "resize-sw", "chrono")} role="presentation"></div>
-              <div class="sk-handle se" onpointerdown={(e) => onHandleDown(e, "resize-se", "chrono")} role="presentation"></div>
-            </div>
-          </div>
-          <p class="hint">
-            {$t("interactions.position.hintChrono")}
-          </p>
-          <div class="alerte-4col">
-            <label class="alerte-field">
-              <span class="field-label">X</span>
-              <input
-                type="number"
-                value={Math.round(chr.x)}
-                onchange={(e) => { chr.x = +(e.target as HTMLInputElement).value; void onOverlayCommit("chrono"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">Y</span>
-              <input
-                type="number"
-                value={Math.round(chr.y)}
-                onchange={(e) => { chr.y = +(e.target as HTMLInputElement).value; void onOverlayCommit("chrono"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">{$t("commun.largeur")}</span>
-              <input
-                type="number"
-                min="80"
-                max="1920"
-                value={Math.round(chr.w)}
-                onchange={(e) => { chr.w = Math.max(80, +(e.target as HTMLInputElement).value); void onOverlayCommit("chrono"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">{$t("interactions.position.hauteurRef")}</span>
-              <input
-                type="number"
-                min="60"
-                max="1080"
-                value={Math.round(chr.h)}
-                onchange={(e) => { chr.h = Math.max(60, +(e.target as HTMLInputElement).value); void onOverlayCommit("chrono"); }}
-              />
-            </label>
-          </div>
-        </div>
-
-        <div class="modal-bloc">
-          <div class="modal-bloc-titre">{$t("interactions.position.titreSplitpop")}</div>
-          <div class="alerte-presets">
-            {#each Object.entries(PRESETS_OVERLAY) as [pos, label] (pos)}
-              <button class="alerte-test" title={get(t)("interactions.position.pos." + pos)} onclick={() => presetSquelette(pos, "splitpop")}>{label}</button>
-            {/each}
-            <button class="alerte-test" onclick={() => void testerSquelette("splitpop")}>{$t("interactions.position.tester")}</button>
-          </div>
-          <div
-            class="mini-canvas"
-            bind:clientWidth={miniW}
-            onpointermove={onPointerMove}
-            onpointerup={onPointerUp}
-            role="presentation"
-          >
-            <div
-              class="overlay-skeleton squelette-splitpop"
-              style="left: {spp.x * scale}px; top: {spp.y * scale}px; width: {spp.w * scale}px; height: {spp.h * scale}px;"
-              onpointerdown={(e) => onRectDown(e, "splitpop")}
-              role="presentation"
-            >
-              <span class="skeleton-label">{$t("interactions.position.splitpop")}</span>
-              <div class="sk-handle nw" onpointerdown={(e) => onHandleDown(e, "resize-nw", "splitpop")} role="presentation"></div>
-              <div class="sk-handle ne" onpointerdown={(e) => onHandleDown(e, "resize-ne", "splitpop")} role="presentation"></div>
-              <div class="sk-handle sw" onpointerdown={(e) => onHandleDown(e, "resize-sw", "splitpop")} role="presentation"></div>
-              <div class="sk-handle se" onpointerdown={(e) => onHandleDown(e, "resize-se", "splitpop")} role="presentation"></div>
-            </div>
-          </div>
-          <p class="hint">
-            {$t("interactions.position.hintSplitpop")}
-          </p>
-          <div class="alerte-4col">
-            <label class="alerte-field">
-              <span class="field-label">X</span>
-              <input
-                type="number"
-                value={Math.round(spp.x)}
-                onchange={(e) => { spp.x = +(e.target as HTMLInputElement).value; void onOverlayCommit("splitpop"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">Y</span>
-              <input
-                type="number"
-                value={Math.round(spp.y)}
-                onchange={(e) => { spp.y = +(e.target as HTMLInputElement).value; void onOverlayCommit("splitpop"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">{$t("commun.largeur")}</span>
-              <input
-                type="number"
-                min="80"
-                max="1920"
-                value={Math.round(spp.w)}
-                onchange={(e) => { spp.w = Math.max(80, +(e.target as HTMLInputElement).value); void onOverlayCommit("splitpop"); }}
-              />
-            </label>
-            <label class="alerte-field">
-              <span class="field-label">{$t("interactions.position.hauteurRef")}</span>
-              <input
-                type="number"
-                min="60"
-                max="1080"
-                value={Math.round(spp.h)}
-                onchange={(e) => { spp.h = Math.max(60, +(e.target as HTMLInputElement).value); void onOverlayCommit("splitpop"); }}
-              />
-            </label>
-          </div>
+          <SquelettePosition
+            classe="squelette-chrono"
+            label={$t("interactions.position.chrono")}
+            config={overlayChrono}
+            hint={$t("interactions.position.hintChrono")}
+            onCommit={(cfg) => sauverPositionChrono(cfg)}
+            onTester={() => tauri.positionChronoTest()}
+          />
         </div>
       </div>
     {/if}
@@ -3231,21 +2857,6 @@
     grid-template-columns: 1fr 1fr;
     gap: 0.4rem;
   }
-  .alerte-4col {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 0.4rem;
-  }
-  .alerte-presets {
-    display: grid;
-    grid-template-columns: repeat(6, 1fr);
-    gap: 0.25rem;
-    margin-bottom: 0.4rem;
-  }
-  .alerte-presets .alerte-test {
-    padding: 0.15rem 0;
-    text-align: center;
-  }
   .alerte-son {
     display: flex;
     align-items: center;
@@ -3380,66 +2991,6 @@
     border-color: var(--accent-ui);
     font-weight: 600;
   }
-  /* Mini-canvas overlay : drag/resize du squelette */
-  .mini-canvas {
-    position: relative;
-    width: 100%;
-    aspect-ratio: 16 / 9;
-    background: var(--fond);
-    border: 1px solid var(--bordure-ui);
-    overflow: hidden;
-    touch-action: none;
-    user-select: none;
-  }
-  .overlay-skeleton {
-    position: absolute;
-    background: color-mix(in srgb, var(--accent-ui) 12%, transparent);
-    border: 2px solid var(--bordure-ui-active);
-    cursor: move;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    touch-action: none;
-  }
-  .overlay-skeleton:hover {
-    background: color-mix(in srgb, var(--accent-ui) 18%, transparent);
-  }
-  /* Squelette DÉDIÉ du chrono 2 — teinte ambre pour le distinguer du
-     squelette partagé (accueil/alertes/commandes/pad). */
-  .overlay-skeleton.squelette-chrono {
-    background: color-mix(in srgb, var(--message-user-action-color) 12%, transparent);
-    border-color: var(--message-user-action-color);
-  }
-  .overlay-skeleton.squelette-chrono:hover {
-    background: color-mix(in srgb, var(--message-user-action-color) 18%, transparent);
-  }
-  /* Squelette DÉDIÉ du pop de validation des splits — teinte verte
-     (couleur des gains speedrun) pour le distinguer du partagé et du
-     chrono 2 (ambre). */
-  .overlay-skeleton.squelette-splitpop {
-    background: color-mix(in srgb, var(--message-ok-color) 12%, transparent);
-    border-color: var(--message-ok-color);
-  }
-  .overlay-skeleton.squelette-splitpop:hover {
-    background: color-mix(in srgb, var(--message-ok-color) 18%, transparent);
-  }
-  .skeleton-label {
-    font-size: 0.7rem;
-    opacity: 0.6;
-    pointer-events: none;
-  }
-  .sk-handle {
-    position: absolute;
-    width: 10px;
-    height: 10px;
-    background: var(--accent-ui);
-    border: 1px solid var(--fond);
-  }
-  .sk-handle.nw { top: -6px; left: -6px; cursor: nwse-resize; }
-  .sk-handle.ne { top: -6px; right: -6px; cursor: nesw-resize; }
-  .sk-handle.sw { bottom: -6px; left: -6px; cursor: nesw-resize; }
-  .sk-handle.se { bottom: -6px; right: -6px; cursor: nwse-resize; }
-
   /* File d'attente — boutons style CadresModal (border var(--accent-ui), hover accent) */
   .current {
     margin-bottom: 0.4rem;

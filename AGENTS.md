@@ -559,6 +559,7 @@ propres, l'anneau éventuel (`cameraBord`) dérive du cadre de scène.
 | H | **FAIT** (2026-11-02) | **Lot H complet.** **H1** : titres de widget dans l'**ordre z** — `GenreCalque::Titre` entre le contenu et la bordure, une entrée par titre à son `z` ; les titres de **fond** (`bgTitre*`, `z = i32::MIN+1`) restent en passe finale. **H2/H2b/H2c** : les cinq contenus de widget (chat, input viewer, goal, speedrun, musique) **et** les titres de widget dessinent **dans** l'offscreen du plan `perspective(d) rotateX/Y` (`groupe_de(rect, z)`) — `cible_rt` étant une vue `ID2D1RenderTarget` du même `ID2D1DeviceContext`, le `SetTarget` redirige le texte DirectWrite sans blit ; clé `(rect, z)` verrouillée par test (titre = `TexteCfg.cadre`). **H3** : `line-height: 1.1` des titres (`SetLineSpacing` UNIFORM + baseline demi-interligne), boîte CSS distincte de la texture (marge contour), `margin-*: ±2px` des titres de widget. **H4** : contour **exact** par géométrie de glyphes (`GetGlyphRunOutline` + `Widen`), repli 16 passes pour les polices **simulées** (gras/oblique synthétique). Corrigé au passage : chat cassé par deux `inline.push(brush.cast())` (lot G) + espacement 2 px pseudo/`:` du DOM. 298 + 246 tests, clippy 0, svelte-check 0. | `moteur.rs`, `scene_sources.rs`, `texte/mod.rs`, `texte/chat.rs` |
 | I | **en cours** — I-a + I-b faits (2026-11-02) | **I-a** : gel de composition avec `audio_live` — le pipe audio nommé était en `PIPE_WAIT` : FFmpeg cessait de le drainer en attendant de la vidéo, la composition bloquait dans `WriteFile` → interblocage (388 composites puis gel). Passé en `PIPE_NOWAIT` + « bloc sauté » sur tampon plein. Vérifié : 890 composites en 15 s, MP4 à deux flux. **Son du pop de split (`srPointsSon`) porté** (§68) : contrat + rendu + entrée de mixeur, test unitaire. **I-b** : `FfmpegSink` écrit par un **fil dédié** + file bornée (8 paquets, échéance 3 s) → la composition ne bloque plus jamais sur le stdin vidéo, un FFmpeg figé devient une dégradation explicite ; cause d'arrêt conservée dans l'erreur. **Gel n° 2 levé** : la cause n'était ni le pop ni l'audio mais la **fenêtre d'analyse PCM** de FFmpeg (819 200 o = 4,27 s lus au rythme réel **sans lire stdin**) — le stdin vidéo débordait (74 055 o absorbés), la composition bloquée n'alimentait plus le pipe audio → interblocage. Correctif : `-analyzeduration 1` + `-probesize 32` sur l'entrée audio (§75). **Reste** : `FILE_ECRITURE` en octets (marge nulle à 6 000 kbps), décalage audio au démarrage (~1 s de PCM sautée, à vérifier), canvas différent en cours de sortie, `hwnd` périmé, PlayerBar/seek, `capture_jeu`, relance caméra sans mutation. | `output/ffmpeg.rs`, `moteur.rs`, `texte/splitpop.rs`, `texte/speedrun.rs`, `scene_sources.rs`, `texte/mod.rs` |
 | J | plus tard | **Fond vert sans OBS** — solution maison (décision utilisateur 2026-11-01), remplace le plugin OBS `background_removal`. | à définir |
+| K | **fait** (2026-11-02) | **Timing vidéo + piste audio + cadence** (§76). Audio : `PipeAudio` = fil d'écriture + file bornée (ne jette plus sous 120 s), `fermer()` rend `BilanAudio`, réparation **post-mux** quand la piste live est incomplète (mesuré : 1,57 s → **19,86 s** sur 20 s). Vidéo : **recalage d'horloge** au lieu de rattraper (la cause de la saccade : 4K → `retard max` 98→37 ms, 395 « en retard » → **24 frames perdues**), drops réels (`perdue_n`, N frames par retard), fps **mesuré** (`DiagMoteur.fps_reel` / `EtatSortieNatif.fps_reel`), bilan `log::info!`, aperçu **gaté** sur `demander_apercu` + `Map` `DO_NOT_WAIT`, **réhorodatage** au fps mesuré (option A, `setts`) → fichier de durée réelle. UI : carte capture branchée sur `captureCible` en mode Rust (`retirerWidgetCapture`). `[profile.dev] opt-level = 2` : `tauri dev` n'est plus 5-20× plus lent. 309 tests, clippy 0, svelte-check 0. Reste : gouverneur qui applique, projecteur sans readback (swapchain). **Option B faite au §77** (PTS réels via `output/ts.rs` + rattrapage CFR). | `clock.rs`, `compteurs.rs`, `moteur.rs`, `preview.rs`, `output/ffmpeg.rs`, `src-tauri/src/moteur/mod.rs`, `src-tauri/Cargo.toml`, `src/lib/stores/{scene,moteur}.ts`, `src/lib/components/CarteEdition.svelte`, `src/lib/tauri.ts`, `src/lib/i18n/*.json` |
 
 ### Reprise — prochaine fenêtre de contexte
 
@@ -695,6 +696,53 @@ exact par géométrie de glyphes) — chacun une tranche à part (§70), puis **
   à deux flux (mesuré : 1,5 s puis gel définitif). `FfmpegSink` écrit par un
   **fil dédié** + file bornée + échéance de 3 s (§75). Même règle pour tout
   futur sink bloquant.
+- **Une horloge à échéances absolues qui ne se recale pas transforme chaque
+  retard en rafale** : les échéances dépassées restent dans le passé, la
+  boucle part en N frames collées puis dort — le mouvement se fige et saute
+  (mesuré : 240 ms → ~14 frames d'un coup, 48,6 fps moyens pour 60 demandés).
+  `Horloge::attendre` **recale** (`debut = maintenant − intervalle × tick`) ;
+  la durée de session reste ancrée à `origine`, sinon `ecoule()` et
+  `fps_effectif()` mentiraient. Recaler ne crée pas de frames : le fichier
+  reste plus court, c'est `rehorodater` qui rétablit la durée.
+- **Le pipe audio est drainé PAR RAFALES — ne jamais jeter un bloc** : FFmpeg
+  retient l'audio qu'il ne peut pas ordonner et ne relit le pipe que quelques
+  secondes plus tard (mesuré : 142 lectures la 1ʳᵉ s, puis 64/s = vidéo seule).
+  En `PIPE_NOWAIT` un bloc non écrit était jeté silencieusement → piste de
+  **1,55 s pour 320 s** de vidéo. `PipeAudio` a maintenant un fil d'écriture +
+  file bornée (120 s) et `fermer()` rend `BilanAudio` ; le moteur **force le
+  post-mux** (`muxer_audio`) quand la piste live est incomplète. Ne pas
+  « optimiser » en jetant les blocs (§76).
+- **Fermer le stdin vidéo AVANT le pipe audio fige l'arrêt** : FFmpeg attend
+  alors de l'audio pour ordonner ses derniers paquets, cesse de lire le stdin
+  vidéo, le fil d'écriture vidéo bloque dans `WriteFile` (reproduit : 0 % CPU,
+  fichier de 28 o). L'ordre est : dernier PCM → EOF audio → `sink.fermer()`.
+- **`-r` avec `-c copy` ne réécrit pas les PTS** (durée inchangée) et
+  `-itsscale` étire aussi l'audio : le seul réhorodatage sans réencodage est
+  `-bsf:v setts=ts=TS*num/den` (`rehorodater`, §76).
+- **Ne JAMAIS remettre `-use_wallclock_as_timestamps 1` par défaut**
+  (2026-11-03, §77) : les PTS y sont les **temps d'arrivée** dans le
+  démultiplexeur, quantifiés par les rafales de lecture du pipe et par la
+  file d'écriture → un flux parfaitement cadencé produit quand même un
+  fichier qui se fige puis saute (mesuré : 46,79 fps, 824 ticks en retard).
+  Le défaut est `Horodatage::Ts` : `PaquetEncode.pts_us` (déjà rempli par
+  NVENC et le MFT, et **jeté** avant) est enveloppé en MPEG-TS par
+  `output/ts.rs`, FFmpeg reçoit `-f mpegts -i pipe:0 -c copy`. A/B :
+  `SOS_TS=0` (brut + `-framerate`), `SOS_CFR=1` (CFR + réhorodatage),
+  `SOS_PTS=1` (wallclock).
+- **Le réhorodatage et le rattrapage CFR sont exclusifs** (2026-11-03) :
+  `rehorodater` ne s'applique qu'à `Horodatage::Cfr` (`SOS_CFR=1`). Un
+  retard de tick est comblé par la **réémission** de la dernière frame
+  (`MAX_RATTRAPAGE = 5`, compteur `frames_dupliquees`) — dupliquer **et**
+  réhorodater étire un fichier déjà juste (bug ×1,96 du 2026-11-03). Une
+  frame dupliquée n'est pas une perte : `frames_perdues` et
+  `frames_dupliquees` sont deux compteurs, et `frames_session` reste le
+  nombre de **compositions** (c'est lui que `rehorodater` attend).
+- **Le réhorodatage passe AVANT le post-mux audio** : `muxer_audio` finit par
+  `-shortest` et coupe l'audio à la longueur de la vidéo *du moment* — après
+  réhorodatage, l'audio reste en arrière (mesuré : 7,59 s d'écart sur 126 s).
+  Et la durée de session doit être **figée à la sortie de boucle** :
+  `horloge.ecoule()` continue de courir pendant le teardown (vidage audio
+  jusqu'à 5 s), ce qui étirait la vidéo de 1,26× sur un fichier réel.
 - **Une entrée PCM de FFmpeg doit avoir son analyse coupée** : `-f s16le
   -ar -ac` spécifie tout, mais `avformat_find_stream_info` lisait quand même
   **819 200 o (4,27 s de PCM) au rythme réel sans lire stdin**. Le stdin

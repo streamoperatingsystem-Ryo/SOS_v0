@@ -28,7 +28,7 @@
     sceneStore,
     couleursEqualiseur,
   } from "../stores/scene";
-  import { modulesModalOpen } from "../stores/ui";
+  import { modulesModalOpen, moduleCarteId, carteEditionCible } from "../stores/ui";
   import { valeursGoals, goalsTwitch } from "../stores/objectifs";
   import { connexions, connecterTwitch } from "../stores/chat";
   import { POLICES_TITRE } from "../fonts";
@@ -141,6 +141,11 @@
     <div class="mod-detail">
       <div class="modal-bloc">
         <div class="bloc-titre">{$t("modules.nom." + sel)}</div>
+        <button
+          type="button"
+          class="action"
+          onclick={() => { carteEditionCible.set(null); moduleCarteId.set(sel); modulesModalOpen.set(null); }}
+        >{$t("modules.ouvrirCarte")}</button>
         <label class="toggle">
           <input type="checkbox" checked={m?.actif ?? false} onchange={(e) => patch({ actif: e.currentTarget.checked })} />
           <span>{$t("modules.afficher")}</span>
